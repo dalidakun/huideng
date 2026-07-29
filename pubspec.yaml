@@ -1,0 +1,54 @@
+name: my_flutter_app
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  file_picker: ^8.0.0+1
+  shared_preferences: ^2.2.2
+  scrollable_positioned_list: ^0.3.0
+  webview_flutter: ^4.10.0
+  webview_flutter_android: ^4.10.0
+  webview_flutter_wkwebview: ^3.16.0
+  path_provider: ^2.1.1
+  flutter_file_dialog: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_native_splash: ^2.4.6
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/sutra_book.png
+    - assets/images/sutra_book_selected.png
+    - assets/images/chat.png
+    - assets/images/chat_selected.png
+    - assets/images/splash.png
+    - assets/sutras_ascii/
+    - assets/tool.html
+
+flutter_native_splash:
+  color: "#EDEDED"
+  image: assets/images/splash.png
+  fullscreen: false
+
+  android: true
+  android_gravity: fill
+
+  ios: true
+  ios_content_mode: scaleAspectFill
+
+  # Android 12+ 的系统 Splash 只能显示"居中的方形图标"，无法全屏铺满。
+  # 这里先不强行塞入 1080x2340 的长图（会被挤压/裁成一块），默认回退为 app icon。
+  android_12:
+    color: "#EDEDED"

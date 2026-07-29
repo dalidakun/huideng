@@ -1,0 +1,37 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub/
+build/
+*.iml
+.idea/
+.metadata
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Node (if any)
+node_modules/
+
+# Environment
+.env
+
+# Sutra text assets (large data files, keep local only)
+assets/sutras_ascii/
+assets/sutras/
+assets/大正藏经简体txt/
+
+# Generated / temp files
+*.log
+*.png
+missing_sutras.txt
+sutras.json
+temp_methods.txt
+lib/temp_methods.txt
+lib/temp_*.dart
+
+# IDE
+.vscode/

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>全屏文本工具（华为P30优化版）</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: #f0f2f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #333;
+            touch-action: manipulation;
+        }
+        textarea {
+            width: 100vw;
+            height: 100vh;
+            padding: 12px;
+            margin: 0;
+            border: none;
+            outline: none;
+            border-radius: 0;
+            font-size: 17px;
+            box-sizing: border-box;
+            resize: none;
+            background: #fff;
+        }
+        textarea:focus {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+    </style>
+</head>
+<body>
+    <textarea id="textcontent"></textarea>
+</body>
+</html>
