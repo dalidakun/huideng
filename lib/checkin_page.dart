@@ -11,9 +11,10 @@ class CheckInPage extends StatefulWidget {
 
 class _CheckInPageState extends State<CheckInPage> {
   final List<Map<String, String>> _types = [
-    {'key': 'reading', 'label': '读经', 'icon': '📖'},
+    {'key': 'meditation', 'label': '静坐', 'icon': '🧘'},
+    {'key': 'reading', 'label': '诵经', 'icon': '📖'},
     {'key': 'mantra', 'label': '持咒', 'icon': '🔔'},
-    {'key': 'buddha', 'label': '念佛', 'icon': '🙏'},
+    {'key': 'buddha', 'label': '称名', 'icon': '🙏'},
     {'key': 'copying', 'label': '抄经', 'icon': '✍️'},
   ];
 

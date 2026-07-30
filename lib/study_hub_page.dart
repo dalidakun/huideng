@@ -22,17 +22,21 @@ class StudyHubPage extends StatefulWidget {
   const StudyHubPage({super.key});
 
   @override
-  State<StudyHubPage> createState() => _StudyHubPageState();
+  State<StudyHubPage> createState() => StudyHubPageState();
 }
 
-class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixin {
+class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixin {
+  void reload() => _loadData();
   String? _currentTitle;
   String? _currentFilePath;
   double _progress = 0.0;
   List<Map<String, String>> _todayCheckIns = [];
   List<Map<String, dynamic>> _recentNotes = [];
   int _checkinStreak = 0;
+  int _studyDays = 0;
   int _notesCount = 0;
+  String? _lockedTitle;
+  String? _lockedFilePath;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
@@ -53,14 +57,35 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
+
+    final lastDate = prefs.getString('study_last_date') ?? '';
+    final today = _today();
+    if (today != lastDate) {
+      final count = prefs.getInt('study_day_count') ?? 0;
+      await prefs.setInt('study_day_count', count + 1);
+      await prefs.setString('study_last_date', today);
+    }
+
     setState(() {
-      _currentTitle = prefs.getString('current_sutra_title');
-      _currentFilePath = prefs.getString('current_sutra_file_path');
+      final lockTitle = prefs.getString('locked_sutra_title');
+      final lockPath = prefs.getString('locked_sutra_file_path');
+      if (lockTitle != null) {
+        _currentTitle = lockTitle;
+        _currentFilePath = lockPath;
+        _lockedTitle = lockTitle;
+        _lockedFilePath = lockPath;
+      } else {
+        _currentTitle = prefs.getString('current_sutra_title');
+        _currentFilePath = prefs.getString('current_sutra_file_path');
+        _lockedTitle = null;
+        _lockedFilePath = null;
+      }
       if (_currentFilePath != null) {
         _progress = prefs.getDouble('progress_$_currentFilePath') ?? 0.0;
       }
       _todayCheckIns = _loadTodayCheckIns(prefs);
       _checkinStreak = _calcStreak(prefs);
+      _studyDays = prefs.getInt('study_day_count') ?? 0;
       _recentNotes = _loadRecentNotes(prefs);
       _notesCount = (jsonDecode(prefs.getString('notes') ?? '[]') as List).length;
     });
@@ -102,6 +127,96 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
   void _openSutra() {
     if (_currentTitle == null) return;
     Navigator.push(context, MaterialPageRoute(builder: (_) => ReadingPage(title: _currentTitle!, filePath: _currentFilePath)));
+  }
+
+  Future<void> _openSutraByPath(String title, String? filePath) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => ReadingPage(title: title, filePath: filePath)));
+    _loadData();
+  }
+
+  Future<void> _showRecentSutras() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('daily_sutra_history') ?? '{}';
+    final Map<String, dynamic> history = jsonDecode(raw);
+    if (history.isEmpty) return;
+    final dates = history.keys.toList()..sort((a, b) => b.compareTo(a));
+    final latestDate = dates.first;
+    final List<dynamic> sutras = history[latestDate] as List<dynamic>;
+
+    if (!mounted || sutras.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+                child: Row(
+                  children: [
+                    Text('$latestDate 阅读', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                    const Spacer(),
+                    Text('${sutras.length} 部', style: TextStyle(fontSize: 13, color: _textHint)),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: _border),
+              ...sutras.map((s) {
+                final title = s['title'] as String? ?? '';
+                final fp = s['filePath'] as String?;
+                final progress = (s['progress'] as num?)?.toDouble() ?? 0.0;
+                return InkWell(
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    if (title.isNotEmpty) _openSutraByPath(title, fp);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
+                              const SizedBox(height: 4),
+                              Text('已读 ${(progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint)),
+                            ],
+                          ),
+                        ),
+                        Icon(Icons.chevron_right, color: _textHint, size: 20),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _toggleLock() async {
+    if (_currentTitle == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (_lockedTitle != null) {
+      await prefs.remove('locked_sutra_title');
+      await prefs.remove('locked_sutra_file_path');
+      setState(() {
+        _lockedTitle = null;
+        _lockedFilePath = null;
+      });
+    } else {
+      await prefs.setString('locked_sutra_title', _currentTitle!);
+      await prefs.setString('locked_sutra_file_path', _currentFilePath ?? '');
+      _loadData();
+    }
   }
 
   @override
@@ -165,7 +280,7 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
                   child: const Icon(Icons.menu_book_rounded, size: 17, color: _primary),
                 ),
                 const SizedBox(width: 10),
-                Text('当前学佛经', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                Text('当前读经', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
                 const Spacer(),
                 if (_currentTitle != null)
                   Container(
@@ -176,7 +291,7 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
                       children: [
                         Icon(Icons.today, size: 12, color: _primaryLight),
                         const SizedBox(width: 4),
-                        Text('已学1天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
+                        Text('已学$_studyDays天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
                       ],
                     ),
                   ),
@@ -187,42 +302,61 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
           if (_currentTitle != null) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: GestureDetector(
+                onTap: _openSutra,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_currentTitle!, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(2),
+                            child: LinearProgressIndicator(
+                              value: _progress,
+                              minHeight: 5,
+                              backgroundColor: _border,
+                              valueColor: const AlwaysStoppedAnimation<Color>(_gold),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text('${(_progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint, fontWeight: FontWeight.w500)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(left: 20),
+              child: Row(
                 children: [
-                  Text(_currentTitle!, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-                  const SizedBox(height: 14),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: _progress,
-                      minHeight: 5,
-                      backgroundColor: _border,
-                      valueColor: const AlwaysStoppedAnimation<Color>(_gold),
+                  TextButton(
+                    onPressed: _toggleLock,
+                    style: TextButton.styleFrom(
+                      foregroundColor: _lockedTitle != null ? _gold : _textSec,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(_lockedTitle != null ? Icons.lock : Icons.lock_open, size: 13),
+                        const SizedBox(width: 4),
+                        Text(_lockedTitle != null ? '已锁定' : '锁定经书', style: TextStyle(fontSize: 13)),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('已读 ${(_progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint)),
-                      TextButton(
-                        onPressed: _openSutra,
-                        style: TextButton.styleFrom(
-                          foregroundColor: _primary,
-                          padding: EdgeInsets.zero,
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Row(
-                          children: [
-                            Text('继续阅读', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                            SizedBox(width: 2),
-                            Icon(Icons.arrow_forward_ios, size: 12),
-                          ],
-                        ),
-                      ),
-                    ],
+                  const Spacer(),
+                  TextButton(
+                    onPressed: _showRecentSutras,
+                    style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
+                    child: Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
                   ),
                 ],
               ),
@@ -279,9 +413,10 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
 
   Widget _buildCheckInCard() {
     final types = [
-      {'key': 'reading', 'label': '读经', 'icon': Icons.chrome_reader_mode_outlined},
+      {'key': 'meditation', 'label': '静坐', 'icon': Icons.self_improvement_outlined},
+      {'key': 'reading', 'label': '诵经', 'icon': Icons.chrome_reader_mode_outlined},
       {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
-      {'key': 'buddha', 'label': '念佛', 'icon': Icons.spa_outlined},
+      {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
       {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
     ];
     final doneCount = _todayCheckIns.length;
@@ -309,23 +444,15 @@ class _StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMix
                 const SizedBox(width: 10),
                 Text('功课打卡', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
                 const Spacer(),
-                if (_checkinStreak > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(colors: [_gold, const Color(0xFFE8C49A)]),
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(color: _gold.withValues(alpha: 0.3), blurRadius: 6, offset: const Offset(0, 2)),
-                      ],
-                    ),
+                Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(12)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.local_fire_department, size: 14, color: Colors.white),
+                        Icon(Icons.today, size: 12, color: _primaryLight),
                         const SizedBox(width: 4),
-                        Text('$_checkinStreak', style: TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w700)),
-                        Text('天', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.9))),
+                        Text('打卡$_checkinStreak天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
                       ],
                     ),
                   ),

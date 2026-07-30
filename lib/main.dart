@@ -87,16 +87,17 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   int _currentIndex = 0;
-
-  final List<Widget> _pages = [
-    const StudyHubPage(),
-    const SutraListPage(),
-    const DiscussionPage(),
-  ];
+  final _studyHubKey = GlobalKey<StudyHubPageState>();
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    _pages = [
+      StudyHubPage(key: _studyHubKey),
+      const SutraListPage(),
+      const DiscussionPage(),
+    ];
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
@@ -159,12 +160,14 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     setState(() {
       _currentIndex = index;
     });
+    if (index == 0) _studyHubKey.currentState?.reload();
   }
 
   void switchToTab(int index) {
     setState(() {
       _currentIndex = index;
     });
+    if (index == 0) _studyHubKey.currentState?.reload();
   }
 
   @override

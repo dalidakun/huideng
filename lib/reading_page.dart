@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -75,6 +76,17 @@ class _ReadingPageState extends State<ReadingPage> {
       recent.insert(0, '${widget.title}|||${widget.filePath}');
       if (recent.length > 20) recent.removeRange(20, recent.length);
       await prefs.setStringList('recent_sutras', recent);
+
+      final now = DateTime.now();
+      final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final raw = prefs.getString('daily_sutra_history') ?? '{}';
+      final Map<String, dynamic> history = jsonDecode(raw);
+      final List<dynamic> dayList = (history[today] as List<dynamic>?) ?? [];
+      dayList.removeWhere((e) => e['filePath'] == widget.filePath);
+      final progress = prefs.getDouble('progress_${widget.filePath}') ?? 0.0;
+      dayList.insert(0, {'title': widget.title, 'filePath': widget.filePath, 'progress': progress});
+      history[today] = dayList;
+      await prefs.setString('daily_sutra_history', jsonEncode(history));
     });
   }
 
