@@ -10,7 +10,7 @@ class CheckInPage extends StatefulWidget {
 }
 
 class _CheckInPageState extends State<CheckInPage> {
-  final List<Map<String, String>> _types = [
+  List<Map<String, String>> _types = [
     {'key': 'meditation', 'label': '静坐', 'icon': '🧘'},
     {'key': 'reading', 'label': '诵经', 'icon': '📖'},
     {'key': 'mantra', 'label': '持咒', 'icon': '🔔'},
@@ -38,8 +38,20 @@ class _CheckInPageState extends State<CheckInPage> {
     final raw = prefs.getString('checkin_records') ?? '[]';
     final List<dynamic> allRecords = jsonDecode(raw);
 
+    final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
+    final List<dynamic> customTypes = jsonDecode(customRaw);
+    final customList = customTypes.map((t) => {'key': t['key'].toString(), 'label': t['label'].toString(), 'icon': t['icon'].toString()}).toList();
+
     final today = _today();
     setState(() {
+      _types = [
+        {'key': 'meditation', 'label': '静坐', 'icon': '🧘'},
+        {'key': 'reading', 'label': '诵经', 'icon': '📖'},
+        {'key': 'mantra', 'label': '持咒', 'icon': '🔔'},
+        {'key': 'buddha', 'label': '称名', 'icon': '🙏'},
+        {'key': 'copying', 'label': '抄经', 'icon': '✍️'},
+        ...customList,
+      ];
       _todayRecords = allRecords.where((r) => r['date'] == today).cast<Map<String, dynamic>>().toList();
       _recentDays = _buildRecentDays(allRecords.cast<Map<String, dynamic>>());
       _streak = _calcStreak(allRecords.cast<Map<String, dynamic>>());

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'reading_page.dart';
 import 'checkin_page.dart';
+import 'checkin_settings_page.dart';
 import 'notes_page.dart';
 import 'sutra_list_page.dart';
 import 'calendar_page.dart';
@@ -37,6 +38,7 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
   int _notesCount = 0;
   String? _lockedTitle;
   String? _lockedFilePath;
+  List<Map<String, dynamic>> _customTypes = [];
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
@@ -88,6 +90,8 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
       _studyDays = prefs.getInt('study_day_count') ?? 0;
       _recentNotes = _loadRecentNotes(prefs);
       _notesCount = (jsonDecode(prefs.getString('notes') ?? '[]') as List).length;
+      final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
+      _customTypes = (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
     });
   }
 
@@ -418,6 +422,7 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
       {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
       {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
       {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
+      ..._customTypes.map((t) => {'key': t['key'], 'label': t['label'], 'emoji': t['icon']}),
     ];
     final doneCount = _todayCheckIns.length;
 
@@ -467,7 +472,8 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
                 final checked = _todayCheckIns.any((r) => r['type'] == t['key']);
                 return Expanded(
                   child: _CheckInButton(
-                    icon: t['icon'] as IconData,
+                    icon: t['icon'] as IconData?,
+                    emoji: t['emoji'] as String?,
                     label: t['label'] as String,
                     checked: checked,
                     onTap: () => _toggleCheckIn(t['key'] as String, t['label'] as String),
@@ -498,12 +504,29 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
             ),
           ),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInPage())),
-              style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
-              child: Text('查看详情 ›', style: TextStyle(fontSize: 13)),
+          Padding(
+            padding: const EdgeInsets.only(left: 20),
+            child: Row(
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInSettingsPage())),
+                  style: TextButton.styleFrom(foregroundColor: _textSec, padding: EdgeInsets.zero, minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.tune, size: 13),
+                      const SizedBox(width: 4),
+                      Text('设置功课', style: TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInPage())),
+                  style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
+                  child: Text('查看详情 ›', style: TextStyle(fontSize: 13)),
+                ),
+              ],
             ),
           ),
         ],
@@ -663,12 +686,13 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
 }
 
 class _CheckInButton extends StatefulWidget {
-  final IconData icon;
+  final IconData? icon;
+  final String? emoji;
   final String label;
   final bool checked;
   final VoidCallback onTap;
 
-  const _CheckInButton({required this.icon, required this.label, required this.checked, required this.onTap});
+  const _CheckInButton({this.icon, this.emoji, required this.label, required this.checked, required this.onTap});
 
   @override
   State<_CheckInButton> createState() => _CheckInButtonState();
@@ -720,7 +744,10 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
           ),
           child: Column(
             children: [
-              Icon(widget.icon, size: 24, color: checked ? Colors.white : _primary),
+              if (widget.icon != null)
+                Icon(widget.icon, size: 24, color: checked ? Colors.white : _primary)
+              else
+                Text(widget.emoji ?? '', style: TextStyle(fontSize: 22)),
               const SizedBox(height: 6),
               Text(widget.label, style: TextStyle(
                 fontSize: 13,
