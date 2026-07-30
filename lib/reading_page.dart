@@ -59,9 +59,23 @@ class _ReadingPageState extends State<ReadingPage> {
             : widget.filePath);
     _scrollController = ScrollController();
     _scrollController.addListener(_scrollListener);
+    _saveCurrentSutra();
     _loadSettings();
     _loadSavedScrollState();
     _loadContent();
+  }
+
+  void _saveCurrentSutra() {
+    if (widget.filePath == null) return;
+    SharedPreferences.getInstance().then((prefs) async {
+      await prefs.setString('current_sutra_title', widget.title);
+      await prefs.setString('current_sutra_file_path', widget.filePath!);
+      final recent = prefs.getStringList('recent_sutras') ?? [];
+      recent.removeWhere((e) => e.startsWith('${widget.title}|||'));
+      recent.insert(0, '${widget.title}|||${widget.filePath}');
+      if (recent.length > 20) recent.removeRange(20, recent.length);
+      await prefs.setStringList('recent_sutras', recent);
+    });
   }
 
   Future<void> _loadSavedScrollState() async {

@@ -6,6 +6,7 @@ import 'theme.dart';
 import 'sutra_list_page.dart';
 import 'discussion_page.dart';
 import 'splash_image_page.dart';
+import 'study_hub_page.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -88,6 +89,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   final List<Widget> _pages = [
+    const StudyHubPage(),
     const SutraListPage(),
     const DiscussionPage(),
   ];
@@ -96,7 +98,6 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // 监听返回结果，切换到经文标签
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
     });
@@ -108,13 +109,12 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-
   void _checkForResult() {
     SharedPreferences.getInstance().then((prefs) {
       final shouldSwitchToSutra = prefs.getBool('switch_to_sutra');
       if (shouldSwitchToSutra == true) {
         setState(() {
-          _currentIndex = 0;
+          _currentIndex = 1;
         });
         prefs.setBool('switch_to_sutra', false);
       }
@@ -122,7 +122,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       final shouldSwitchToAssistant = prefs.getBool('switch_to_assistant');
       if (shouldSwitchToAssistant == true) {
         setState(() {
-          _currentIndex = 1;
+          _currentIndex = 2;
         });
         prefs.setBool('switch_to_assistant', false);
       }
@@ -133,12 +133,16 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      // 应用从后台恢复时，检查是否需要切换tab
       _checkForResult();
     }
   }
 
   final List<BottomNavigationBarItem> _bottomNavItems = [
+    const BottomNavigationBarItem(
+      icon: Icon(Icons.auto_stories_outlined),
+      activeIcon: Icon(Icons.auto_stories),
+      label: '修学',
+    ),
     BottomNavigationBarItem(
       icon: Image.asset('assets/images/sutra_book.png', width: 18, height: 18),
       activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 18, height: 18),
@@ -157,7 +161,6 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     });
   }
 
-  // 公开方法，允许外部切换tab
   void switchToTab(int index) {
     setState(() {
       _currentIndex = index;
@@ -186,10 +189,10 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
               selectedItemColor: const Color(0xFF5D4037),
               unselectedItemColor: const Color(0xFF424242),
               selectedLabelStyle: const TextStyle(
-                fontSize: 12,
+                fontSize: 11,
               ),
               unselectedLabelStyle: const TextStyle(
-                fontSize: 12,
+                fontSize: 11,
               ),
               showUnselectedLabels: true,
               elevation: 0,
