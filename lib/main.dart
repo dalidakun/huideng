@@ -182,14 +182,10 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                 children: _pages,
               ),
             ),
-            Container(
-              height: 1,
-              color: const Color(0xFFF0F0F0),
-            ),
             BottomNavigationBar(
               currentIndex: _currentIndex,
               onTap: _switchToTab,
-              backgroundColor: const Color(0xFFf7f7f7),
+              backgroundColor: const Color(0xFFFFFAF5),
               selectedItemColor: const Color(0xFF5D4037),
               unselectedItemColor: const Color(0xFF424242),
               selectedLabelStyle: const TextStyle(

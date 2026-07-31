@@ -57,13 +57,27 @@ class SutraListPage extends StatefulWidget {
   State<SutraListPage> createState() => _SutraListPageState();
 }
 
-class _SutraListPageState extends State<SutraListPage> {
+class _SutraListPageState extends State<SutraListPage> with SingleTickerProviderStateMixin {
   static const MethodChannel _appChannel = MethodChannel('app_channel');
   static const String _kApkLastUpdateTimeKey = 'apk_last_update_time';
   final TextEditingController _searchController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  double _scrollOffset = 0.0;
-  bool _showSearchBar = false;
+  bool _drawerOpen = false;
+  late final AnimationController _drawerController;
+  late final Animation<Offset> _drawerSlide;
+  late final Animation<double> _overlayOpacity;
+  String? _lastReadTitle;
+  String? _lastReadFilePath;
+
+  static const List<Map<String, String>> _dailyRecommendations = [
+    {'key': '般若波罗蜜多心经T08n0251_001', 'name': '般若波罗蜜多心经', 'intro': '二百六十字摄尽般若空慧，观五蕴皆空，入门首选。'},
+    {'key': '金刚般若波罗蜜经T08n0235_001', 'name': '金刚般若波罗蜜经', 'intro': '以金刚喻般若之智，断疑生信，破除一切执着。'},
+    {'key': '佛说阿弥陀经T12n0366_001', 'name': '佛说阿弥陀经', 'intro': '略说极乐净土依正庄严，为持名念佛所依止。'},
+    {'key': '佛说无量寿经T12n0360_001', 'name': '佛说无量寿经', 'intro': '详述阿弥陀佛因地大愿与净土因果。'},
+    {'key': '妙法莲华经T09n0262_001', 'name': '妙法莲华经', 'intro': '开权显实、会三归一，开示一切众生皆可成佛。'},
+    {'key': '地藏菩萨本愿经T13n0412_001', 'name': '地藏菩萨本愿经', 'intro': '赞叹地藏菩萨大愿，明因果轮回，为孝亲修福所依。'},
+    {'key': '药师琉璃光如来本愿功德经T14n0450_001', 'name': '药师琉璃光如来本愿功德经', 'intro': '药师如来十二大愿，消灾延寿、所求圆满。'},
+    {'key': '四十二章经T17n0784_001', 'name': '佛说四十二章经', 'intro': '最早传入汉地的经典，章章如珠，适合日常熏习。'},
+  ];
 
   Set<String>? _assetKeys;
   // Cache: resolved asset key -> exists?
@@ -9299,7 +9313,6 @@ class _SutraListPageState extends State<SutraListPage> {
 
   bool _isFavoriteExpanded = false;
   bool _isReadExpanded = false;
-  bool _isUnreadExpanded = true;
   final Map<String, bool> _folderExpanded = {};
 
   // 文件夹名称映射
@@ -9367,20 +9380,26 @@ class _SutraListPageState extends State<SutraListPage> {
     super.initState();
     _initFolders();
     _loadSutras();
+    _loadLastRead();
     _loadAssetManifest();
     _searchController.addListener(_filterSutras);
-    _scrollController.addListener(_scrollListener);
-  }
-
-  void _scrollListener() {
-    setState(() {
-      _scrollOffset = _scrollController.offset;
-    });
+    _drawerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    final drawerCurve = CurvedAnimation(
+      parent: _drawerController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _drawerSlide =
+        Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero).animate(drawerCurve);
+    _overlayOpacity = Tween<double>(begin: 0, end: 1).animate(drawerCurve);
   }
 
   @override
   void dispose() {
-    _scrollController.dispose();
+    _drawerController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -9521,10 +9540,6 @@ class _SutraListPageState extends State<SutraListPage> {
     for (var folder in _folders) {
       _folderExpanded[folder] = foldersWithResults.contains(folder);
     }
-
-    // 确保"待阅经文"主文件夹是展开的，这样用户才能看到子文件夹
-    // 注意：_isUnreadExpanded是"待阅经文"文件夹的展开状态
-    _isUnreadExpanded = foldersWithResults.isNotEmpty;
 
     // 如果有收藏夹中的经文匹配，也展开收藏夹
     bool hasFavoriteResults = _filteredSutras.any((sutra) => sutra.isFavorite);
@@ -9912,47 +9927,201 @@ class _SutraListPageState extends State<SutraListPage> {
     return _filteredSutras.where((sutra) => sutra.folder == folder && !sutra.isRead).toList();
   }
 
-  Widget _buildAllSutrasFolder() {
-    return Column(
-      children: [
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              _isUnreadExpanded = !_isUnreadExpanded;
-              if (!_isUnreadExpanded) {
-                for (var folder in _folders) {
-                  _folderExpanded[folder] = false;
-                }
-              }
-            });
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            color: const Color(0xFFcec6c3),
-            child: Row(
+  Future<void> _loadLastRead() async {
+    final prefs = await SharedPreferences.getInstance();
+    final t = prefs.getString('last_read_title');
+    final fp = prefs.getString('last_read_filePath');
+    if (!mounted) return;
+    if (t != null && t.isNotEmpty) {
+      setState(() {
+        _lastReadTitle = t;
+        _lastReadFilePath = fp;
+      });
+    }
+  }
+
+  String _displayTitle(String title) =>
+      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+
+  Sutra? _findSutra(String title) {
+    for (final s in _allSutras) {
+      if (s.title == title) return s;
+    }
+    return null;
+  }
+
+  void _openSutra(Sutra sutra) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ReadingPage(
+          title: sutra.title,
+          filePath: _filePathForReading(sutra),
+        ),
+      ),
+    );
+  }
+
+  Map<String, String> get _todayRecommendation {
+    final now = DateTime.now();
+    final days = DateTime(now.year, now.month, now.day).millisecondsSinceEpoch ~/ Duration.millisecondsPerDay;
+    return _dailyRecommendations[days % _dailyRecommendations.length];
+  }
+
+  Widget _buildRecentReadCard() {
+    if (_lastReadTitle == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ReadingPage(
+                title: _lastReadTitle!,
+                filePath: _lastReadFilePath,
+              ),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF5d4037).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.history, color: Color(0xFF5d4037), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '最近阅读 · 继续上次',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _displayTitle(_lastReadTitle!),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF5d4037),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Color(0xFF999999), size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDailySutraCard() {
+    final rec = _todayRecommendation;
+    final sutra = _findSutra(rec['key']!);
+    if (sutra == null) return const SizedBox.shrink();
+    final now = DateTime.now();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF5d4037), Color(0xFF7a5c4e)],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: const Color(0xFF5d4037).withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          _openSutra(sutra);
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                const Icon(Icons.book, color: const Color(0xFF5d4037), size: 20),
-                const SizedBox(width: 8),
+                const Icon(Icons.wb_sunny, color: Color(0xFFF4E6D3), size: 16),
+                const SizedBox(width: 6),
                 Text(
-                  '待阅经文 (${_getAllSutras().length})',
-                  style: const TextStyle(
-                    color: Color(0xFF5d4037),
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  '今日推荐 · ${now.month}月${now.day}日',
+                  style: const TextStyle(color: Color(0xFFF4E6D3), fontSize: 12),
                 ),
                 const Spacer(),
-                Icon(
-                  _isUnreadExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                  color: const Color(0xFF999999),
-                  size: 20,
+                const Text(
+                  '开始阅读 ›',
+                  style: TextStyle(color: Color(0xFFF4E6D3), fontSize: 12),
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            Text(
+              rec['name']!,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              rec['intro']!,
+              style: const TextStyle(color: Color(0xFFE8D9C4), fontSize: 13, height: 1.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAllSutrasFolder() {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          color: const Color(0xFFcec6c3),
+          child: Row(
+            children: [
+              const Icon(Icons.book, color: Color(0xFF5d4037), size: 20),
+              const SizedBox(width: 8),
+              Text(
+                '待阅经文 (${_getAllSutras().length})',
+                style: const TextStyle(
+                  color: Color(0xFF5d4037),
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ),
-        if (_isUnreadExpanded)
-          ..._folders.map((folder) => _buildSubFolder(folder)).toList(),
+        ..._folders.map((folder) => _buildSubFolder(folder)),
       ],
     );
   }
@@ -10002,7 +10171,7 @@ class _SutraListPageState extends State<SutraListPage> {
         if (isExpanded && sutras.isNotEmpty)
           Container(
             padding: const EdgeInsets.only(left: 8, right: 8, top: 0, bottom: 15),
-             color: const Color(0xFFededed),
+             color: const Color(0xFFF5EDE3),
              child: Column(
                children: sutras.map((sutra) {
                  final allSutrasIndex = _filteredSutras.indexOf(sutra);
@@ -10165,132 +10334,177 @@ class _SutraListPageState extends State<SutraListPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFededed),
-      floatingActionButton: Container(
-        width: 36,
-        height: 36,
-        child: FloatingActionButton(
-          heroTag: 'sutra_scroll_top',
-          onPressed: () {
-            _scrollController.animateTo(0.0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
-          },
-          backgroundColor: const Color(0xFF9d5f4b),
-          elevation: 8,
-          highlightElevation: 12,
-          shape: const CircleBorder(),
-          child: const Center(
-            child: Icon(
-              Icons.keyboard_arrow_up,
-              color: Colors.white,
-              size: 20,
+    final drawerWidth = MediaQuery.of(context).size.width * 0.82;
+    return Stack(
+      children: [
+        Scaffold(
+          backgroundColor: const Color(0xFFF5EDE3),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFFF5EDE3),
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            iconTheme: const IconThemeData(color: Color(0xFF212121)),
+            leading: IconButton(
+              icon: const Icon(Icons.menu, color: Color(0xFF5d4037), size: 22),
+              tooltip: '经藏',
+              onPressed: _toggleDrawer,
+            ),
+            title: const Text(
+              '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
+              style: TextStyle(
+                color: Color(0xFF616161),
+                fontSize: 12,
+                fontWeight: FontWeight.normal,
+              ),
+              softWrap: false,
+              overflow: TextOverflow.visible,
+            ),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: Text(
+                  '${(_allSutras.where((s) => s.isRead).length / 8982 * 100).toStringAsFixed(1)}%',
+                  style: const TextStyle(
+                    color: Color(0xFF616161),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 40),
+            child: Column(
+              children: [
+                _buildRecentReadCard(),
+                _buildDailySutraCard(),
+              ],
             ),
           ),
         ),
-      ),
-      appBar: AppBar(
-        backgroundColor: _scrollOffset > 0 ? const Color(0xFFFFFFFF) : const Color(0xFFf0f3f8),
-        elevation: 0,
-        shadowColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF212121)),
-        title: const Text(
-          '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
-          style: TextStyle(
-            color: Color(0xFF616161),
-            fontSize: 12,
-            fontWeight: FontWeight.normal,
-          ),
-          softWrap: false,
-          overflow: TextOverflow.visible,
-        ),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.search, color: Color(0xFF616161), size: 20),
-            onPressed: () {
-              setState(() {
-                _showSearchBar = !_showSearchBar;
-              });
-            },
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Text(
-              '${(_allSutras.where((s) => s.isRead).length / 8982 * 100).toStringAsFixed(1)}%',
-              style: const TextStyle(
-                color: Color(0xFF616161),
-                fontSize: 12,
+        Positioned.fill(
+          child: IgnorePointer(
+            ignoring: !_drawerOpen,
+            child: FadeTransition(
+              opacity: _overlayOpacity,
+              child: GestureDetector(
+                onTap: _closeDrawer,
+                child: const ColoredBox(color: Colors.black38),
               ),
             ),
           ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (_showSearchBar)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          width: drawerWidth,
+          child: SlideTransition(
+            position: _drawerSlide,
+            child: _buildDrawerPanel(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _toggleDrawer() {
+    if (_drawerOpen) {
+      _closeDrawer();
+    } else {
+      _openDrawer();
+    }
+  }
+
+  void _openDrawer() {
+    if (_searchController.text.isNotEmpty) {
+      _searchController.clear();
+    }
+    setState(() {
+      _drawerOpen = true;
+      for (final folder in _folders) {
+        _folderExpanded[folder] = false;
+      }
+    });
+    _drawerController.forward();
+  }
+
+  void _closeDrawer() {
+    FocusScope.of(context).unfocus();
+    _drawerController.reverse();
+    setState(() {
+      _drawerOpen = false;
+      _isFavoriteExpanded = false;
+      _isReadExpanded = false;
+    });
+  }
+
+  Widget _buildDrawerPanel() {
+    return Material(
+      color: Colors.white,
+      elevation: 16,
+      borderRadius: const BorderRadius.horizontal(right: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 4),
               child: Container(
-                height: 40,
+                height: 38,
                 decoration: BoxDecoration(
                   color: const Color(0xFFf8f8f8),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: TextField(
                   controller: _searchController,
+                  textAlignVertical: TextAlignVertical.center,
                   decoration: const InputDecoration(
                     hintText: '搜索经文',
-                    hintStyle: TextStyle(color: Color.fromARGB(255, 184, 184, 184), fontSize: 14),
-                    prefixIcon: Icon(Icons.search, color: Color(0xFF616161), size: 20),
+                    hintStyle: TextStyle(color: Color(0xFFB8B8B8), fontSize: 13),
+                    prefixIcon: Padding(
+                      padding: EdgeInsets.only(left: 8, right: 4),
+                      child: Icon(Icons.search, color: Color(0xFF616161), size: 18),
+                    ),
                     border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
                   ),
                   style: const TextStyle(color: Color(0xFF212121), fontSize: 14),
                 ),
               ),
             ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                if (_showSearchBar) {
-                  _dismissKeyboard();
-                  setState(() {
-                    _showSearchBar = false;
-                  });
-                }
-              },
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                child: Column(
-                  children: [
-                    _buildFolder(
-                      title: '我的收藏',
-                      sutras: _getFavoriteSutras(),
-                      isExpanded: _isFavoriteExpanded,
-                      onToggle: () {
-                        setState(() {
-                          _isFavoriteExpanded = !_isFavoriteExpanded;
-                        });
-                      },
-                       icon: Icons.favorite,
-                     ),
-                     _buildFolder(
-                       title: '已阅经文',
-                      sutras: _getReadSutras(),
-                      isExpanded: _isReadExpanded,
-                      onToggle: () {
-                        setState(() {
-                          _isReadExpanded = !_isReadExpanded;
-                        });
-                      },
-                      icon: Icons.check_circle,
-                    ),
-                    _buildAllSutrasFolder(),
-                  ],
-                ),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  _buildFolder(
+                    title: '我的收藏',
+                    sutras: _getFavoriteSutras(),
+                    isExpanded: _isFavoriteExpanded,
+                    onToggle: () {
+                      setState(() {
+                        _isFavoriteExpanded = !_isFavoriteExpanded;
+                      });
+                    },
+                    icon: Icons.favorite,
+                  ),
+                  _buildFolder(
+                    title: '已阅经文',
+                    sutras: _getReadSutras(),
+                    isExpanded: _isReadExpanded,
+                    onToggle: () {
+                      setState(() {
+                        _isReadExpanded = !_isReadExpanded;
+                      });
+                    },
+                    icon: Icons.check_circle,
+                  ),
+                  _buildAllSutrasFolder(),
+                ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -141,7 +141,7 @@ class _DiscussionPageState extends State<DiscussionPage> {
             // Jump back to last read
             Positioned(
               right: 16,
-              bottom: 150,
+              bottom: 75,
               child: SizedBox(
                 width: 36,
                 height: 36,

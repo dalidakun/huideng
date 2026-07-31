@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_file_dialog/flutter_file_dialog.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'sutra_asset_path.dart';
+import 'sutra_edit_page.dart';
 
 class ReadingPage extends StatefulWidget {
   final String title;
@@ -35,6 +39,7 @@ class _ReadingPageState extends State<ReadingPage> {
   late final String? _resolvedFilePath;
   Future<AssetManifest>? _manifestFuture;
   bool _isLoadingContent = true;
+  bool _isEdited = false;
   double? _savedPosition;
   double? _savedProgress;
   int _restoreAttempts = 0;
@@ -193,6 +198,27 @@ class _ReadingPageState extends State<ReadingPage> {
 
     final filePath = _resolvedFilePath ?? widget.filePath;
     if (filePath != null) {
+      // 优先加载已编辑的副本（如果存在）
+      final editedPath = await editedSutraFilePath(filePath);
+      final editedFile = File(editedPath);
+      final hasEdited = await editedFile.exists();
+      if (hasEdited) {
+        try {
+          final content = await editedFile.readAsString();
+          if (mounted) {
+            setState(() {
+              _content = content;
+              _isEdited = true;
+              _isLoadingContent = false;
+            });
+            WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+          }
+          return;
+        } catch (_) {
+          // 读取失败则回退到原始文件
+        }
+      }
+      _isEdited = false;
       if (filePath.startsWith('assets/')) {
         try {
           String content = await rootBundle.loadString(filePath);
@@ -240,6 +266,115 @@ class _ReadingPageState extends State<ReadingPage> {
           _content = '这是《${widget.title}》的预览内容。\n\n暂无实际文件，请添加本地文件。';
           _isLoadingContent = false;
         });
+      }
+    }
+  }
+
+  Future<void> _openEditor() async {
+    final filePath = _resolvedFilePath ?? widget.filePath;
+    if (filePath == null) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SutraEditPage(
+          title: widget.title,
+          content: _content,
+          keyPath: filePath,
+        ),
+      ),
+    );
+    if (changed == true && mounted) {
+      await _loadContent();
+    }
+  }
+
+  void _scrollToStart() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
+  Future<void> _exportTxt() async {
+    final trimmed = _content.trim();
+    if (trimmed.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('没有可导出的内容'), duration: Duration(seconds: 2)),
+        );
+      }
+      return;
+    }
+
+    final safeTitle = widget.title
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'\s+'), '');
+    final filename = '$safeTitle.txt';
+
+    // UTF-8 BOM 防乱码
+    final bytes = <int>[0xEF, 0xBB, 0xBF, ...utf8.encode(trimmed)];
+
+    // 优先：用原生保存对话框选择位置，由插件直接写入
+    try {
+      final savedPath = await FlutterFileDialog.saveFile(
+        params: SaveFileDialogParams(
+          data: Uint8List.fromList(bytes),
+          fileName: filename,
+          mimeTypesFilter: const ['text/plain'],
+        ),
+      );
+      if (savedPath != null && savedPath.isNotEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('已保存：$savedPath'), duration: const Duration(seconds: 3)),
+          );
+        }
+        return;
+      }
+    } catch (_) {
+      // ignore and fallback
+    }
+
+    // 兜底1：file_picker 保存对话框
+    try {
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: '导出TXT',
+        fileName: filename,
+        type: FileType.custom,
+        allowedExtensions: const ['txt'],
+      );
+      if (savePath != null && savePath.isNotEmpty && !savePath.startsWith('content:')) {
+        final file = File(savePath);
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(bytes, flush: true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('已保存：$savePath'), duration: const Duration(seconds: 3)),
+          );
+        }
+        return;
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    // 兜底2：保存到应用文档目录
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}${Platform.pathSeparator}$filename');
+      await file.writeAsBytes(bytes, flush: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已保存到应用目录：${file.path}'), duration: const Duration(seconds: 4)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存失败：$e'), duration: const Duration(seconds: 4)),
+        );
       }
     }
   }
@@ -297,13 +432,28 @@ class _ReadingPageState extends State<ReadingPage> {
                     ),
                   );
                 },
-                child: Text(
-                  widget.title,
-                  style: TextStyle(
-                    color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.title,
+                        style: TextStyle(
+                          color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (_isEdited)
+                      const Padding(
+                        padding: EdgeInsets.only(left: 6),
+                        child: Text(
+                          '已编辑',
+                          style: TextStyle(color: Color(0xFFD4A06A), fontSize: 11),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               actions: [
@@ -483,6 +633,48 @@ class _ReadingPageState extends State<ReadingPage> {
                     ],
                   ),
 
+                Positioned(
+                  right: 16,
+                  bottom: 179,
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: FloatingActionButton(
+                      heroTag: 'sutra_to_start',
+                      backgroundColor: const Color(0xFFD4A06A),
+                      onPressed: _scrollToStart,
+                      child: const Icon(Icons.vertical_align_top, color: Colors.white, size: 18),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: 127,
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: FloatingActionButton(
+                      heroTag: 'sutra_export',
+                      backgroundColor: const Color(0xFFD4A06A),
+                      onPressed: _exportTxt,
+                      child: const Icon(Icons.save_alt, color: Colors.white, size: 18),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: 75,
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: FloatingActionButton(
+                      heroTag: 'sutra_edit',
+                      backgroundColor: const Color(0xFFD4A06A),
+                      onPressed: _openEditor,
+                      child: const Icon(Icons.edit, color: Colors.white, size: 18),
+                    ),
+                  ),
+                ),
                 ],
               ),
             ),

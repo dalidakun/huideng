@@ -266,15 +266,18 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
         elevation: 0,
         shadowColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Color(0xFF212121)),
-        title: const Text(
-          '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
-          style: TextStyle(
-            color: Color(0xFF616161),
-            fontSize: 12,
-            fontWeight: FontWeight.normal,
+        title: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: const Text(
+            '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
+            style: TextStyle(
+              color: Color(0xFF616161),
+              fontSize: 12,
+              fontWeight: FontWeight.normal,
+            ),
+            softWrap: false,
+            overflow: TextOverflow.visible,
           ),
-          softWrap: false,
-          overflow: TextOverflow.visible,
         ),
         actions: [
           Padding(

@@ -88,8 +88,8 @@ class AppTheme {
         ),
       ),
       
-      splashColor: const Color(0xFFF5F5F5),
-      highlightColor: const Color(0xFFF5F5F5).withValues(alpha: 0.3),
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
     );
   }
 }
