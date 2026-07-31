@@ -1,10 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'reading_page.dart';
-import 'checkin_page.dart';
 import 'checkin_settings_page.dart';
+import 'checkin_goals_page.dart';
 import 'notes_page.dart';
+import 'note_edit_page.dart';
 import 'sutra_list_page.dart';
 import 'calendar_page.dart';
 
@@ -27,6 +29,12 @@ class StudyHubPage extends StatefulWidget {
 }
 
 class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixin {
+  static SharedPreferences? _warmPrefs;
+
+  static Future<void> warmPrefs() async {
+    _warmPrefs = await SharedPreferences.getInstance();
+  }
+
   void reload() => _loadData();
   String? _currentTitle;
   String? _currentFilePath;
@@ -39,6 +47,7 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
   String? _lockedTitle;
   String? _lockedFilePath;
   List<Map<String, dynamic>> _customTypes = [];
+  bool _loaded = false;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
@@ -58,17 +67,19 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
   }
 
   Future<void> _loadData() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = _warmPrefs ?? await SharedPreferences.getInstance();
+    _warmPrefs = prefs;
 
     final lastDate = prefs.getString('study_last_date') ?? '';
     final today = _today();
     if (today != lastDate) {
       final count = prefs.getInt('study_day_count') ?? 0;
-      await prefs.setInt('study_day_count', count + 1);
-      await prefs.setString('study_last_date', today);
+      unawaited(prefs.setInt('study_day_count', count + 1));
+      unawaited(prefs.setString('study_last_date', today));
     }
 
     setState(() {
+      _loaded = true;
       final lockTitle = prefs.getString('locked_sutra_title');
       final lockPath = prefs.getString('locked_sutra_file_path');
       if (lockTitle != null) {
@@ -104,11 +115,11 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
 
   int _calcStreak(SharedPreferences prefs) {
     final raw = prefs.getString('checkin_records') ?? '[]';
-    final records = (jsonDecode(raw) as List<dynamic>).map((r) => r['date'].toString()).toSet().toList()..sort();
-    if (records.isEmpty) return 0;
+    final records = (jsonDecode(raw) as List<dynamic>).map((r) => r['date'].toString()).toSet();
     int streak = 0;
     final today = DateTime.now();
-    for (int i = 0; i < 365; i++) {
+    final startIndex = records.contains(_today()) ? 0 : 1;
+    for (int i = startIndex; i < 365; i++) {
       final day = today.subtract(Duration(days: i));
       final ds = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
       if (records.contains(ds)) { streak++; } else { break; }
@@ -121,6 +132,29 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
     final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
     notes.sort((a, b) => b['updatedAt'].compareTo(a['updatedAt']));
     return notes.take(3).toList();
+  }
+
+  Future<void> _deleteNote(Map<String, dynamic> note) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: Text('确定删除「${note['title']}」吗？', style: const TextStyle(color: _textSec)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('notes') ?? '[]';
+    final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
+    notes.removeWhere((n) => n['id'] == note['id']);
+    await prefs.setString('notes', jsonEncode(notes));
+    _loadData();
   }
 
   String _today() {
@@ -243,9 +277,12 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
           overflow: TextOverflow.visible,
         ),
         actions: [
-          IconButton(
-            icon: Icon(Icons.calendar_month_outlined, color: Color(0xFF616161), size: 20),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarPage())),
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: IconButton(
+              icon: Icon(Icons.calendar_month_outlined, color: Color(0xFF616161), size: 20),
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarPage())),
+            ),
           ),
         ],
       ),
@@ -263,6 +300,27 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
   }
 
   Widget _buildCurrentSutraCard() {
+    if (!_loaded) {
+      return Container(
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+          ],
+        ),
+        child: const Padding(
+          padding: EdgeInsets.all(40),
+          child: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
+            ),
+          ),
+        ),
+      );
+    }
     return Container(
       decoration: BoxDecoration(
         color: _card,
@@ -465,21 +523,24 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
             ),
           ),
           const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: types.map((t) {
+          SizedBox(
+            height: 76,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              itemCount: types.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (context, i) {
+                final t = types[i];
                 final checked = _todayCheckIns.any((r) => r['type'] == t['key']);
-                return Expanded(
-                  child: _CheckInButton(
-                    icon: t['icon'] as IconData?,
-                    emoji: t['emoji'] as String?,
-                    label: t['label'] as String,
-                    checked: checked,
-                    onTap: () => _toggleCheckIn(t['key'] as String, t['label'] as String),
-                  ),
+                return _CheckInButton(
+                  icon: t['icon'] as IconData?,
+                  emoji: t['emoji'] as String?,
+                  label: t['label'] as String,
+                  checked: checked,
+                  onTap: () => _toggleCheckIn(t['key'] as String, t['label'] as String),
                 );
-              }).toList(),
+              },
             ),
           ),
           const SizedBox(height: 14),
@@ -516,15 +577,15 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
                     children: [
                       Icon(Icons.tune, size: 13),
                       const SizedBox(width: 4),
-                      Text('设置功课', style: TextStyle(fontSize: 13)),
+                      Text('设置每日功课', style: TextStyle(fontSize: 13)),
                     ],
                   ),
                 ),
                 const Spacer(),
                 TextButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInPage())),
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInGoalsPage())),
                   style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
-                  child: Text('查看详情 ›', style: TextStyle(fontSize: 13)),
+                  child: Text('打卡目标 ›', style: TextStyle(fontSize: 13)),
                 ),
               ],
             ),
@@ -544,10 +605,46 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
     if (idx >= 0) {
       allRecords.removeAt(idx);
     } else {
-      allRecords.add({'date': today, 'type': typeKey, 'label': label});
+      allRecords.add({
+        'date': today,
+        'type': typeKey,
+        'label': label,
+        'amount': _checkInAmount(typeKey, prefs),
+      });
     }
     await prefs.setString('checkin_records', jsonEncode(allRecords));
     _loadData();
+  }
+
+  double _checkInAmount(String typeKey, SharedPreferences prefs) {
+    switch (typeKey) {
+      case 'meditation':
+        final list = jsonDecode(prefs.getString('setting_meditation_minutes') ?? '[]') as List<dynamic>;
+        return list.fold<double>(0, (s, e) => s + (double.tryParse(e.toString()) ?? 0));
+      case 'reading':
+        return _sumNamedCount(prefs.getString('setting_reading_titles'));
+      case 'mantra':
+        return _sumNamedCount(prefs.getString('setting_mantra_items'));
+      case 'buddha':
+        return _sumNamedCount(prefs.getString('setting_buddha_items'));
+      case 'copying':
+        final list = jsonDecode(prefs.getString('setting_copying_titles') ?? '[]') as List<dynamic>;
+        return list.length.toDouble();
+      default:
+        final customs = (jsonDecode(prefs.getString('custom_checkin_types') ?? '[]') as List<dynamic>).cast<Map<String, dynamic>>();
+        for (final c in customs) {
+          if (c['key'] == typeKey) {
+            return double.tryParse((c['count'] ?? '').toString()) ?? 0;
+          }
+        }
+        return 0;
+    }
+  }
+
+  double _sumNamedCount(String? raw) {
+    if (raw == null || raw.isEmpty) return 0;
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.fold<double>(0, (s, e) => s + (double.tryParse((e['count'] ?? '').toString()) ?? 0));
   }
 
   Widget _buildNotesCard() {
@@ -637,7 +734,8 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
                 children: [
                   InkWell(
                     borderRadius: BorderRadius.circular(8),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotesPage())),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => NoteEditPage(note: note))).then((_) => _loadData()),
+                    onLongPress: () => _deleteNote(note),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       child: Row(
@@ -733,26 +831,24 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
         animation: _scale,
         builder: (context, child) => Transform.scale(scale: _scale.value, child: child),
         child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          padding: const EdgeInsets.symmetric(vertical: 14),
+          width: 60,
+          padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-            color: checked ? _primary : _overlay,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: checked
-                ? [BoxShadow(color: _primary.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 3))]
-                : [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4, offset: const Offset(0, 1))],
+            color: checked ? _gold : _overlay,
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (widget.icon != null)
-                Icon(widget.icon, size: 24, color: checked ? Colors.white : _primary)
+                Icon(widget.icon, size: 22, color: checked ? _primary : _primaryLight)
               else
-                Text(widget.emoji ?? '', style: TextStyle(fontSize: 22)),
-              const SizedBox(height: 6),
+                Text(widget.emoji ?? '', style: TextStyle(fontSize: 20)),
+              const SizedBox(height: 4),
               Text(widget.label, style: TextStyle(
-                fontSize: 13,
-                color: checked ? Colors.white : _textSec,
-                fontWeight: checked ? FontWeight.w600 : FontWeight.w500,
+                fontSize: 12,
+                color: checked ? _primary : _textSec,
+                fontWeight: checked ? FontWeight.w600 : FontWeight.w400,
               )),
             ],
           ),

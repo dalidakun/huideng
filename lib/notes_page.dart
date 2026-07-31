@@ -3,6 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'note_edit_page.dart';
 
+const Color _card = Color(0xFFFFFAF5);
+const Color _text = Color(0xFF3E2723);
+const Color _textSec = Color(0xFF8B6B5A);
+const Color _textHint = Color(0xFFC4B5A8);
+const Color _gold = Color(0xFFD4A06A);
+
 class NotesPage extends StatefulWidget {
   const NotesPage({super.key});
 
@@ -32,11 +38,13 @@ class _NotesPageState extends State<NotesPage> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除笔记'),
-        content: Text('确定删除「${_notes[index]['title']}」吗？'),
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: Text('确定删除「${_notes[index]['title']}」吗？', style: const TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
         ],
       ),
     );
@@ -56,10 +64,8 @@ class _NotesPageState extends State<NotesPage> {
       MaterialPageRoute(
         builder: (_) => NoteEditPage(note: index != null ? _notes[index] : null),
       ),
-    ).then((result) {
-      if (result != null) {
-        _loadNotes();
-      }
+    ).then((_) {
+      _loadNotes();
     });
   }
 
@@ -69,47 +75,94 @@ class _NotesPageState extends State<NotesPage> {
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(title: const Text('我的笔记')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _openEdit(),
-        backgroundColor: const Color(0xFF5D4037),
-        child: const Icon(Icons.add, color: Colors.white),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 36),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: FloatingActionButton(
+            onPressed: () => _openEdit(),
+            heroTag: 'notes_fab',
+            backgroundColor: const Color(0xFF5D4037),
+            elevation: 8,
+            highlightElevation: 12,
+            shape: const CircleBorder(),
+            child: const Icon(Icons.add, color: Colors.white, size: 24),
+          ),
+        ),
       ),
       body: _notes.isEmpty
           ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.note_add_outlined, size: 48, color: const Color(0xFFBDBDBD)),
+                  Icon(Icons.note_add_outlined, size: 48, color: _textHint),
                   const SizedBox(height: 12),
-                  Text('还没有笔记', style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF757575))),
+                  Text('还没有笔记', style: theme.textTheme.bodyMedium?.copyWith(color: _textSec)),
                   const SizedBox(height: 4),
-                  Text('点击右下角 + 创建', style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFFBDBDBD))),
+                  Text('点击右下角 + 创建', style: theme.textTheme.bodyMedium?.copyWith(color: _textHint)),
                 ],
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
               itemCount: _notes.length,
               itemBuilder: (context, index) {
                 final note = _notes[index];
                 final content = note['content'] as String? ?? '';
-                final preview = content.length > 80 ? '${content.substring(0, 80)}...' : content;
+                final preview = content.length > 60 ? '${content.substring(0, 60)}...' : content;
                 final date = note['updatedAt'].toString().substring(0, 10);
-                return Card(
-                  child: ListTile(
-                    title: Text(note['title'] ?? '', style: theme.textTheme.titleMedium),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 4),
-                        Text(preview, style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF757575)), maxLines: 2),
-                        const SizedBox(height: 4),
-                        Text(date, style: TextStyle(fontSize: 12, color: const Color(0xFFBDBDBD))),
+                return GestureDetector(
+                  onTap: () => _openEdit(index: index),
+                  onLongPress: () => _deleteNote(index),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _card,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
                       ],
                     ),
-                    isThreeLine: true,
-                    onTap: () => _openEdit(index: index),
-                    onLongPress: () => _deleteNote(index),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                note['title'] ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _text),
+                              ),
+                            ),
+                            Icon(Icons.edit_outlined, size: 15, color: _textHint),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          preview,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, color: _textSec, height: 1.5),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Icon(Icons.schedule, size: 12, color: _textHint),
+                            const SizedBox(width: 4),
+                            Text(date, style: TextStyle(fontSize: 12, color: _textHint)),
+                            const Spacer(),
+                            Container(
+                              width: 6, height: 6,
+                              decoration: BoxDecoration(color: _gold, shape: BoxShape.circle),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },

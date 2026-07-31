@@ -33,6 +33,8 @@ flutter:
     - assets/images/sutra_book_selected.png
     - assets/images/chat.png
     - assets/images/chat_selected.png
+    - assets/images/study.png
+    - assets/images/study_selected.png
     - assets/images/splash.png
     - assets/sutras_ascii/
     - assets/tool.html

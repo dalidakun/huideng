@@ -1,0 +1,236 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const Color _primary = Color(0xFF5C4033);
+const Color _gold = Color(0xFFD4A06A);
+const Color _bg = Color(0xFFF5EDE3);
+const Color _card = Color(0xFFFFFAF5);
+const Color _text = Color(0xFF3E2723);
+const Color _textSec = Color(0xFF8B6B5A);
+const Color _textHint = Color(0xFFC4B5A8);
+const Color _border = Color(0xFFEBE1D6);
+
+class CheckInGoalsPage extends StatefulWidget {
+  const CheckInGoalsPage({super.key});
+
+  @override
+  State<CheckInGoalsPage> createState() => _CheckInGoalsPageState();
+}
+
+class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
+  List<_GoalType> _types = [];
+  Map<String, double> _goals = {};
+  Map<String, double> _totals = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final customs = (jsonDecode(prefs.getString('custom_checkin_types') ?? '[]') as List<dynamic>).cast<Map<String, dynamic>>();
+    final types = <_GoalType>[
+      _GoalType(key: 'meditation', label: '静坐', unit: '分钟', icon: Icons.self_improvement_outlined),
+      _GoalType(key: 'reading', label: '诵经', unit: '遍', icon: Icons.chrome_reader_mode_outlined),
+      _GoalType(key: 'mantra', label: '持咒', unit: '遍', icon: Icons.notifications_none_outlined),
+      _GoalType(key: 'buddha', label: '称名', unit: '遍', icon: Icons.spa_outlined),
+      _GoalType(key: 'copying', label: '抄经', unit: '篇', icon: Icons.edit_outlined),
+      ...customs.map((c) => _GoalType(
+        key: c['key'].toString(),
+        label: c['label'].toString(),
+        unit: (c['unit'] ?? '遍').toString(),
+        icon: Icons.playlist_add,
+      )),
+    ];
+
+    final goalsRaw = prefs.getString('checkin_goals') ?? '{}';
+    final goalsJson = jsonDecode(goalsRaw) as Map<String, dynamic>;
+    final goals = goalsJson.map((k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
+
+    final raw = prefs.getString('checkin_records') ?? '[]';
+    final records = jsonDecode(raw) as List<dynamic>;
+    final totals = <String, double>{};
+    for (final r in records) {
+      final key = r['type'].toString();
+      final amt = double.tryParse((r['amount'] ?? '1').toString()) ?? 1;
+      totals[key] = (totals[key] ?? 0) + amt;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _types = types;
+      _goals = goals;
+      _totals = totals;
+    });
+  }
+
+  Future<void> _setGoal(_GoalType t) async {
+    final current = _goals[t.key] ?? 0;
+    final ctrl = TextEditingController(text: current > 0 ? _fmt(current) : '');
+    final result = await showDialog<dynamic>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('设置目标', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          autofocus: true,
+          style: TextStyle(color: _text),
+          decoration: InputDecoration(
+            labelText: '目标（${t.unit}）',
+            labelStyle: TextStyle(color: _textSec),
+            hintText: '如：100',
+            hintStyle: TextStyle(color: _textHint),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _primary)),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: _border)),
+          ),
+        ),
+        actions: [
+          if (current > 0)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'clear'),
+              child: Text('清除目标', style: TextStyle(color: _textHint)),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(
+            onPressed: () {
+              if (ctrl.text.trim().isEmpty) return;
+              Navigator.pop(ctx, ctrl.text.trim());
+            },
+            child: Text('确定', style: TextStyle(color: _primary, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      if (result == 'clear') {
+        _goals.remove(t.key);
+      } else {
+        _goals[t.key] = double.tryParse(result.toString()) ?? 0;
+      }
+    });
+    await prefs.setString('checkin_goals', jsonEncode(_goals));
+  }
+
+  String _fmt(double v) {
+    if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+    return v.toStringAsFixed(1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: _bg,
+        elevation: 0,
+        title: const Text('打卡目标', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, color: _text),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 10),
+            child: Text('设定目标，并依据每天打卡累计进度', style: TextStyle(fontSize: 12, color: _textHint)),
+          ),
+          for (final t in _types) _buildTypeCard(t),
+          const SizedBox(height: 40),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTypeCard(_GoalType t) {
+    final goal = _goals[t.key] ?? 0;
+    final total = _totals[t.key] ?? 0;
+    final progress = goal > 0 ? (total / goal).clamp(0.0, 1.0) : 0.0;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32, height: 32,
+                decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+                child: Icon(t.icon, size: 17, color: _primary),
+              ),
+              const SizedBox(width: 10),
+              Text(t.label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+              const Spacer(),
+              if (goal > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(color: _gold.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(12)),
+                  child: Text('目标 ${_fmt(goal)}${t.unit}', style: TextStyle(fontSize: 12, color: _gold, fontWeight: FontWeight.w600)),
+                )
+              else
+                Text('未设置目标', style: TextStyle(fontSize: 12, color: _textHint)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: _border,
+              valueColor: AlwaysStoppedAnimation<Color>(goal > 0 ? _primary : _textHint),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text('已累计 ${_fmt(total)} ${t.unit}', style: TextStyle(fontSize: 12, color: _textSec)),
+              const Spacer(),
+              if (goal > 0)
+                Text('${(progress * 100).toStringAsFixed(0)}%', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _primary)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: () => _setGoal(t),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: _primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: Text(goal > 0 ? '修改目标' : '设置目标', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _primary)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GoalType {
+  final String key;
+  final String label;
+  final String unit;
+  final IconData icon;
+  _GoalType({required this.key, required this.label, required this.unit, required this.icon});
+}

@@ -10171,6 +10171,7 @@ class _SutraListPageState extends State<SutraListPage> {
         width: 36,
         height: 36,
         child: FloatingActionButton(
+          heroTag: 'sutra_scroll_top',
           onPressed: () {
             _scrollController.animateTo(0.0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
           },

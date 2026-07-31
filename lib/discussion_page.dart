@@ -7,7 +7,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import 'reading_page.dart';
-import 'tool_page.dart';
 
 class DiscussionPage extends StatefulWidget {
   const DiscussionPage({super.key});
@@ -17,7 +16,7 @@ class DiscussionPage extends StatefulWidget {
 }
 
 class _DiscussionPageState extends State<DiscussionPage> {
-  static const String _kGeminiUrl = 'https://gemini.google.com/app';
+  static const String _kChatUrl = 'https://chat.deepseek.com/';
 
   late final WebViewController _controller;
   bool _isLoading = true;
@@ -59,7 +58,7 @@ class _DiscussionPageState extends State<DiscussionPage> {
       platform.setOnShowFileSelector(_androidFilePickerHandler);
     }
 
-    _controller.loadRequest(Uri.parse(_kGeminiUrl));
+    _controller.loadRequest(Uri.parse(_kChatUrl));
   }
 
   Future<List<String>> _androidFilePickerHandler(FileSelectorParams params) async {
@@ -138,40 +137,6 @@ class _DiscussionPageState extends State<DiscussionPage> {
                     child: WebViewWidget(controller: _controller),
                   ),
             if (_isLoading && !kIsWeb) const Center(child: CircularProgressIndicator()),
-
-            // Tool page button (T icon)
-            Positioned(
-              right: 16,
-              bottom: 198,
-              child: SizedBox(
-                width: 36,
-                height: 36,
-                child: FloatingActionButton(
-                  heroTag: 'assistant_tool',
-                  onPressed: () {
-                    if (!kIsWeb) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => const ToolPage(),
-                        ),
-                      );
-                    }
-                  },
-                  backgroundColor: const Color(0xFFf7f7f7),
-                  elevation: 8,
-                  highlightElevation: 12,
-                  shape: const CircleBorder(),
-                  child: const Text(
-                    'T',
-                    style: TextStyle(
-                      color: Color(0xFF5d4037),
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ),
-            ),
 
             // Jump back to last read
             Positioned(

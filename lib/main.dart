@@ -10,8 +10,9 @@ import 'study_hub_page.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await StudyHubPageState.warmPrefs();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Color(0xFFededed),
@@ -139,15 +140,15 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   }
 
   final List<BottomNavigationBarItem> _bottomNavItems = [
-    const BottomNavigationBarItem(
-      icon: Icon(Icons.auto_stories_outlined),
-      activeIcon: Icon(Icons.auto_stories),
+    BottomNavigationBarItem(
+      icon: Image.asset('assets/images/study.png', width: 18, height: 18),
+      activeIcon: Image.asset('assets/images/study_selected.png', width: 18, height: 18),
       label: '修学',
     ),
     BottomNavigationBarItem(
       icon: Image.asset('assets/images/sutra_book.png', width: 18, height: 18),
       activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 18, height: 18),
-      label: '经文',
+      label: '经藏',
     ),
     BottomNavigationBarItem(
       icon: Image.asset('assets/images/chat.png', width: 18, height: 18),
