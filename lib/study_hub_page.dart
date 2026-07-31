@@ -422,7 +422,7 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
       {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
       {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
       {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
-      ..._customTypes.map((t) => {'key': t['key'], 'label': t['label'], 'emoji': t['icon']}),
+      ..._customTypes.map((t) => {'key': t['key'], 'label': t['label'], 'icon': Icons.playlist_add}),
     ];
     final doneCount = _todayCheckIns.length;
 

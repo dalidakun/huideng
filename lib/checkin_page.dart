@@ -40,7 +40,7 @@ class _CheckInPageState extends State<CheckInPage> {
 
     final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
     final List<dynamic> customTypes = jsonDecode(customRaw);
-    final customList = customTypes.map((t) => {'key': t['key'].toString(), 'label': t['label'].toString(), 'icon': t['icon'].toString()}).toList();
+    final customList = customTypes.map((t) => {'key': t['key'].toString(), 'label': t['label'].toString(), 'icon': ''}).toList();
 
     final today = _today();
     setState(() {
@@ -139,7 +139,7 @@ class _CheckInPageState extends State<CheckInPage> {
                   Text('今日功课', style: theme.textTheme.titleMedium),
                   const SizedBox(height: 12),
                   ..._types.map((t) => CheckboxListTile(
-                    title: Text('${t['icon']}  ${t['label']}'),
+                    title: Text(t['icon']!.isEmpty ? t['label']! : '${t['icon']}  ${t['label']}'),
                     value: _isChecked(t['key']!),
                     onChanged: (_) => _toggleCheckIn(t['key']!, t['label']!),
                     activeColor: const Color(0xFF5D4037),
@@ -189,8 +189,7 @@ class _CheckInPageState extends State<CheckInPage> {
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(t['icon']!,
-                                    style: TextStyle(fontSize: hasRecord ? 14 : 12, color: hasRecord ? Colors.white : const Color(0xFFBDBDBD))),
-                              ),
+                                    style: TextStyle(fontSize: hasRecord ? 14 : 12, color: hasRecord ? Colors.white : const Color(0xFFBDBDBD))),                              ),
                             );
                           }),
                         ],

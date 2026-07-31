@@ -21,7 +21,7 @@ class CheckInSettingsPage extends StatefulWidget {
 
 class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
   List<_Item> _meditationItems = [];
-  List<_Item> _readingItems = [];
+  List<_NamedCountItem> _readingItems = [];
   List<_NamedCountItem> _mantraItems = [];
   List<_NamedCountItem> _buddhaItems = [];
   List<_Item> _copyingItems = [];
@@ -38,8 +38,8 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     setState(() {
       _meditationItems = _decodeItems(prefs.getString('setting_meditation_minutes'));
       if (_meditationItems.isEmpty) _meditationItems.add(_Item(ctrl: TextEditingController(text: '30')));
-      _readingItems = _decodeItems(prefs.getString('setting_reading_titles'));
-      if (_readingItems.isEmpty) _readingItems.add(_Item(ctrl: TextEditingController()));
+      _readingItems = _decodeReading(prefs.getString('setting_reading_titles'));
+      if (_readingItems.isEmpty) _readingItems.add(_NamedCountItem(nameCtrl: TextEditingController(), countCtrl: TextEditingController()));
       _mantraItems = _decodeNamedCount(prefs.getString('setting_mantra_items'));
       if (_mantraItems.isEmpty) _mantraItems.add(_NamedCountItem(nameCtrl: TextEditingController(), countCtrl: TextEditingController(text: '108')));
       _buddhaItems = _decodeNamedCount(prefs.getString('setting_buddha_items'));
@@ -65,26 +65,147 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     )).toList();
   }
 
+  List<_NamedCountItem> _decodeReading(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.map((e) {
+      if (e is String) {
+        return _NamedCountItem(nameCtrl: TextEditingController(text: e), countCtrl: TextEditingController());
+      }
+      return _NamedCountItem(
+        nameCtrl: TextEditingController(text: e['name'] ?? ''),
+        countCtrl: TextEditingController(text: (e['count'] ?? '').toString()),
+      );
+    }).toList();
+  }
+
   List<_CustomType> _decodeCustom(String? raw) {
     if (raw == null || raw.isEmpty) return [];
     final list = jsonDecode(raw) as List<dynamic>;
-    return list.map((e) => _CustomType(key: e['key'], label: e['label'], icon: e['icon'])).toList();
+    return list.map((e) => _CustomType(
+      key: e['key'],
+      label: e['label'] ?? '',
+      unit: e['unit'] ?? '遍',
+      count: (e['count'] ?? '').toString(),
+    )).toList();
   }
 
   Future<void> _save() async {
+    final lines = <String>[];
+    for (final e in _meditationItems) {
+      final v = e.text.trim();
+      if (v.isNotEmpty) lines.add('静坐 $v分钟');
+    }
+    for (final e in _readingItems) {
+      final n = e.name.trim();
+      if (n.isNotEmpty) lines.add('诵经 $n ${e.count}遍');
+    }
+    for (final e in _mantraItems) {
+      final n = e.name.trim();
+      if (n.isNotEmpty) lines.add('持咒 $n ${e.count}遍');
+    }
+    for (final e in _buddhaItems) {
+      final n = e.name.trim();
+      if (n.isNotEmpty) lines.add('称名 $n ${e.count}遍');
+    }
+    for (final e in _copyingItems) {
+      final v = e.text.trim();
+      if (v.isNotEmpty) lines.add('抄经 $v');
+    }
+    for (final e in _customTypes) {
+      final n = e.label.trim();
+      if (n.isNotEmpty) lines.add('$n ${e.count.trim().isEmpty ? '0' : e.count.trim()}${e.unit}');
+    }
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('确认功课', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: lines.map((l) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle_outline, size: 16, color: _primaryLight),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(l, style: TextStyle(fontSize: 15, color: _text))),
+                  ],
+                ),
+              )).toList(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('确认保存', style: TextStyle(color: _primary, fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('setting_meditation_minutes', jsonEncode(_meditationItems.map((e) => e.text).toList()));
-    await prefs.setString('setting_reading_titles', jsonEncode(_readingItems.map((e) => e.text).toList()));
+    await prefs.setString('setting_reading_titles', jsonEncode(_readingItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_mantra_items', jsonEncode(_mantraItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_buddha_items', jsonEncode(_buddhaItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_copying_titles', jsonEncode(_copyingItems.map((e) => e.text).toList()));
-    await prefs.setString('custom_checkin_types', jsonEncode(_customTypes.map((e) => {'key': e.key, 'label': e.label, 'icon': e.icon}).toList()));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('设置已保存', style: TextStyle(color: _card)),
-          backgroundColor: _primary, behavior: SnackBarBehavior.floating),
-      );
-    }
+    await prefs.setString('custom_checkin_types', jsonEncode(_customTypes.map((e) => {'key': e.key, 'label': e.label, 'unit': e.unit, 'count': e.count}).toList()));
+    if (mounted) _showSavedToast();
+  }
+
+  void _showSavedToast() {
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final topInset = MediaQuery.of(ctx).padding.top;
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Material(
+                color: _primary,
+                borderRadius: BorderRadius.circular(20),
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check_circle, size: 14, color: Colors.white),
+                      const SizedBox(width: 5),
+                      Text('功课已保存',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          decoration: TextDecoration.none,
+                          decorationColor: Colors.transparent,
+                        )),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    Future.delayed(const Duration(milliseconds: 1600), () {
+      if (entry.mounted) entry.remove();
+    });
   }
 
   Future<void> _addCustomType() async {
@@ -95,24 +216,25 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     if (result != null) {
       final key = 'custom_${DateTime.now().millisecondsSinceEpoch}';
       setState(() {
-        _customTypes.add(_CustomType(key: key, label: result['label']!, icon: result['icon']!));
+        _customTypes.add(_CustomType(key: key, label: result['label']!, unit: result['unit']!));
       });
     }
   }
 
   void _removeCustomType(int index) {
-    _customTypes[index].ctrl.dispose();
+    _customTypes[index].labelCtrl.dispose();
+    _customTypes[index].countCtrl.dispose();
     setState(() => _customTypes.removeAt(index));
   }
 
   @override
   void dispose() {
     for (final e in _meditationItems) e.ctrl.dispose();
-    for (final e in _readingItems) e.ctrl.dispose();
+    for (final e in _readingItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _mantraItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _buddhaItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _copyingItems) e.ctrl.dispose();
-    for (final e in _customTypes) e.ctrl.dispose();
+    for (final e in _customTypes) { e.labelCtrl.dispose(); e.countCtrl.dispose(); }
     super.dispose();
   }
 
@@ -318,11 +440,27 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
           icon: Icon(Icons.arrow_back, color: _text),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 26),
+            child: GestureDetector(
+              onTap: _save,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+                decoration: BoxDecoration(
+                  color: _primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Text('保存', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _primary)),
+              ),
+            ),
+          ),
+        ],
       ),
       floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 80),
+        padding: const EdgeInsets.only(bottom: 16),
         child: SizedBox(
-          width: 36, height: 36,
+          width: 48, height: 48,
           child: FloatingActionButton(
             onPressed: _addCustomType,
             heroTag: 'settings_fab',
@@ -330,7 +468,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
-            child: Icon(Icons.add, size: 20, color: _primary),
+            child: Icon(Icons.add, size: 24, color: _primary),
           ),
         ),
       ),
@@ -341,7 +479,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '30', suffix: '分钟', keyboardType: TextInputType.number)),
           ]),
           _buildSection(Icons.chrome_reader_mode_outlined, '诵经', [
-            ..._readingItems.asMap().entries.map((e) => _buildItemRow(e.key, _readingItems, '经书名')),
+            ..._readingItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _readingItems)),
           ]),
           _buildSection(Icons.notifications_none_outlined, '持咒', [
             ..._mantraItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _mantraItems)),
@@ -353,92 +491,76 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             ..._copyingItems.asMap().entries.map((e) => _buildItemRow(e.key, _copyingItems, '经书名')),
           ]),
           if (_customTypes.isNotEmpty) ...[
-            Container(
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(
-                color: _card,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-                    child: Row(
-                      children: [
-                        Icon(Icons.playlist_add, size: 22, color: _primary),
-                        const SizedBox(width: 10),
-                        Text('自定义', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
-                    child: Column(
-                      children: _customTypes.asMap().entries.map((e) {
-                        final idx = e.key;
-                        final t = e.value;
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                            child: Row(
-                              children: [
-                                Text(t.icon, style: TextStyle(fontSize: 18)),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: _bg,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                                    child: TextField(
-                                      controller: t.ctrl,
-                                      style: TextStyle(fontSize: 14, color: _text),
-                                      decoration: InputDecoration(
-                                        border: InputBorder.none,
-                                        contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                                        isDense: true,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                GestureDetector(
-                                onTap: () => _removeCustomType(idx),
-                                child: Container(
-                                  width: 32, height: 32,
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.withValues(alpha: 0.08),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Icon(Icons.remove, size: 18, color: Colors.red.withValues(alpha: 0.7)),
-                                ),
-                              ),
-                            ],
+            ..._customTypes.asMap().entries.map((e) {
+              final t = e.value;
+              return _buildSection(Icons.playlist_add, t.label, [
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: _bg,
+                            borderRadius: BorderRadius.circular(10),
                           ),
-                        );
-                      }).toList(),
-                    ),
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: TextField(
+                            controller: t.labelCtrl,
+                            style: TextStyle(fontSize: 14, color: _text),
+                            decoration: InputDecoration(
+                              hintText: '名称',
+                              hintStyle: TextStyle(color: _textHint, fontSize: 14),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                              isDense: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: _bg,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: TextField(
+                            controller: t.countCtrl,
+                            keyboardType: TextInputType.number,
+                            style: TextStyle(fontSize: 14, color: _text),
+                            decoration: InputDecoration(
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                              isDense: true,
+                              suffixText: t.unit,
+                              suffixStyle: TextStyle(fontSize: 13, color: _textHint),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () => _removeCustomType(e.key),
+                        child: Container(
+                          width: 32, height: 32,
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(Icons.remove, size: 18, color: Colors.red.withValues(alpha: 0.7)),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              ]);
+            }),
           ],
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton(
-              onPressed: _save,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _primary,
-                foregroundColor: _card,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                elevation: 0,
-              ),
-              child: const Text('保存', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-            ),
-          ),
           const SizedBox(height: 40),
         ],
       ),
@@ -462,10 +584,14 @@ class _NamedCountItem {
 
 class _CustomType {
   final String key;
-  final TextEditingController ctrl;
-  final String icon;
-  _CustomType({required this.key, required String label, required this.icon}) : ctrl = TextEditingController(text: label);
-  String get label => ctrl.text;
+  final TextEditingController labelCtrl;
+  final TextEditingController countCtrl;
+  final String unit;
+  _CustomType({required this.key, required String label, required this.unit, String count = ''})
+      : labelCtrl = TextEditingController(text: label),
+        countCtrl = TextEditingController(text: count);
+  String get label => labelCtrl.text;
+  String get count => countCtrl.text;
 }
 
 class _AddTypeDialog extends StatefulWidget {
@@ -476,12 +602,12 @@ class _AddTypeDialog extends StatefulWidget {
 
 class _AddTypeDialogState extends State<_AddTypeDialog> {
   final _nameCtrl = TextEditingController();
-  final _icons = ['🙏', '📿', '🪷', '☸️', '🕉️', '🔥', '💧', '🌿', '🪐', '⭐', '🌙', '☀️', '⚡', '🎵', '🕯️'];
-  String _selected = '🙏';
+  final _unitCtrl = TextEditingController(text: '遍');
 
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _unitCtrl.dispose();
     super.dispose();
   }
 
@@ -505,24 +631,17 @@ class _AddTypeDialogState extends State<_AddTypeDialog> {
             ),
           ),
           const SizedBox(height: 16),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _icons.map((ic) {
-              final sel = ic == _selected;
-              return GestureDetector(
-                onTap: () => setState(() => _selected = ic),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: sel ? _primary.withValues(alpha: 0.1) : _bg,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: sel ? _primary : _border, width: sel ? 2 : 1),
-                  ),
-                  child: Text(ic, style: TextStyle(fontSize: 22)),
-                ),
-              );
-            }).toList(),
+          TextField(
+            controller: _unitCtrl,
+            style: TextStyle(color: _text),
+            decoration: InputDecoration(
+              labelText: '单位',
+              hintText: '如：遍、声、分钟、次',
+              hintStyle: TextStyle(color: _textHint),
+              labelStyle: TextStyle(color: _textSec),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _primary)),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: _border)),
+            ),
           ),
         ],
       ),
@@ -530,7 +649,10 @@ class _AddTypeDialogState extends State<_AddTypeDialog> {
         TextButton(onPressed: () => Navigator.pop(context), child: Text('取消', style: TextStyle(color: _textSec))),
         TextButton(onPressed: () {
           if (_nameCtrl.text.trim().isEmpty) return;
-          Navigator.pop(context, {'label': _nameCtrl.text.trim(), 'icon': _selected});
+          Navigator.pop(context, {
+            'label': _nameCtrl.text.trim(),
+            'unit': _unitCtrl.text.trim().isEmpty ? '遍' : _unitCtrl.text.trim(),
+          });
         }, child: Text('添加', style: TextStyle(color: _primary, fontWeight: FontWeight.w600))),
       ],
     );
