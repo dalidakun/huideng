@@ -5,8 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'reading_page.dart';
 import 'checkin_settings_page.dart';
 import 'checkin_goals_page.dart';
-import 'notes_page.dart';
-import 'note_edit_page.dart';
 import 'sutra_list_page.dart';
 import 'calendar_page.dart';
 
@@ -41,10 +39,8 @@ class StudyHubPageState extends State<StudyHubPage>
   String? _currentFilePath;
   double _progress = 0.0;
   List<Map<String, String>> _todayCheckIns = [];
-  List<Map<String, dynamic>> _recentNotes = [];
   int _checkinStreak = 0;
   int _studyDays = 0;
-  int _notesCount = 0;
   String? _lockedTitle;
   String? _lockedFilePath;
   List<Map<String, dynamic>> _customTypes = [];
@@ -114,8 +110,6 @@ class StudyHubPageState extends State<StudyHubPage>
       _todayCheckIns = _loadTodayCheckIns(prefs);
       _checkinStreak = _calcStreak(prefs);
       _studyDays = prefs.getInt('study_day_count') ?? 0;
-      _recentNotes = _loadRecentNotes(prefs);
-      _notesCount = (jsonDecode(prefs.getString('notes') ?? '[]') as List).length;
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes = (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
     });
@@ -140,36 +134,6 @@ class StudyHubPageState extends State<StudyHubPage>
       if (records.contains(ds)) { streak++; } else { break; }
     }
     return streak;
-  }
-
-  List<Map<String, dynamic>> _loadRecentNotes(SharedPreferences prefs) {
-    final raw = prefs.getString('notes') ?? '[]';
-    final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
-    notes.sort((a, b) => b['updatedAt'].compareTo(a['updatedAt']));
-    return notes.take(3).toList();
-  }
-
-  Future<void> _deleteNote(Map<String, dynamic> note) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('确定删除「${note['title']}」吗？', style: const TextStyle(color: _textSec)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('notes') ?? '[]';
-    final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
-    notes.removeWhere((n) => n['id'] == note['id']);
-    await prefs.setString('notes', jsonEncode(notes));
-    _loadData();
   }
 
   String _today() {
@@ -316,8 +280,6 @@ class StudyHubPageState extends State<StudyHubPage>
           _buildCurrentSutraCard(),
           const SizedBox(height: 14),
           _buildCheckInCard(),
-          const SizedBox(height: 14),
-          _buildNotesCard(),
         ],
       ),
     );
@@ -676,140 +638,6 @@ class StudyHubPageState extends State<StudyHubPage>
     return list.fold<double>(0, (s, e) => s + (double.tryParse((e['count'] ?? '').toString()) ?? 0));
   }
 
-  Widget _buildNotesCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-            child: Row(
-              children: [
-                Container(
-                  width: 30, height: 30,
-                  decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.edit_note_rounded, size: 17, color: _primary),
-                ),
-                const SizedBox(width: 10),
-                Text('我的笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-                const Spacer(),
-                Text('共 $_notesCount 篇', style: TextStyle(fontSize: 12, color: _textHint)),
-              ],
-            ),
-          ),
-          if (_recentNotes.isEmpty) ...[
-            const SizedBox(height: 24),
-            Center(
-              child: Column(
-                children: [
-                  Container(
-                    width: 72, height: 72,
-                    decoration: BoxDecoration(
-                      color: _overlay,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Icon(Icons.auto_stories, size: 36, color: _primaryLight.withValues(alpha: 0.4)),
-                        Positioned(
-                          right: 16, bottom: 18,
-                          child: Icon(Icons.edit, size: 18, color: _primaryLight.withValues(alpha: 0.6)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text('笔记是修行的足迹', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: _text)),
-                  const SizedBox(height: 4),
-                  Text('记录你的心得与体悟吧', style: TextStyle(fontSize: 14, color: _textSec)),
-                  const SizedBox(height: 20),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotesPage())),
-                        icon: const Icon(Icons.add_rounded, size: 20),
-                        label: const Text('创建第一篇笔记', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _gold,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          elevation: 0,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 28),
-                ],
-              ),
-            ),
-          ] else ...[
-            const SizedBox(height: 12),
-            ..._recentNotes.asMap().entries.map((entry) {
-              final note = entry.value;
-              final content = (note['content'] as String? ?? '');
-              final preview = content.length > 30 ? '${content.substring(0, 30)}...' : content;
-              return Column(
-                children: [
-                  InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => NoteEditPage(note: note))).then((_) => _loadData()),
-                    onLongPress: () => _deleteNote(note),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 4, height: 44,
-                            decoration: BoxDecoration(color: _gold, borderRadius: BorderRadius.circular(2)),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(note['title'] ?? '', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
-                                const SizedBox(height: 4),
-                                Text(preview, style: TextStyle(fontSize: 13, color: _textSec), maxLines: 1),
-                              ],
-                            ),
-                          ),
-                          Icon(Icons.chevron_right, color: _textHint, size: 20),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }),
-            TextButton(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotesPage())),
-              style: TextButton.styleFrom(foregroundColor: _primary, padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text('查看全部笔记', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                  const SizedBox(width: 4),
-                  Icon(Icons.arrow_forward_ios, size: 12, color: _primary),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 }
 
 class _CheckInButton extends StatefulWidget {

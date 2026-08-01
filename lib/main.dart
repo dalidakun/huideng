@@ -7,6 +7,7 @@ import 'sutra_list_page.dart';
 import 'discussion_page.dart';
 import 'splash_image_page.dart';
 import 'study_hub_page.dart';
+import 'my_page.dart';
 import 'app_state.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -105,6 +106,7 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   int _currentIndex = 0;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
+  final _myKey = GlobalKey<MyPageState>();
   late final ValueNotifier<int> _tabIndex;
   late final List<Widget> _pages;
 
@@ -115,7 +117,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     _pages = [
       StudyHubPage(key: _studyHubKey),
       SutraListPage(activeTab: _tabIndex),
-      const _MyPage(),
+      MyPage(key: _myKey),
     ];
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -181,6 +183,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       _currentIndex = index;
     });
     if (index == 0) _studyHubKey.currentState?.reload();
+    if (index == 2) _myKey.currentState?.reload();
   }
 
   void switchToTab(int index) {
@@ -189,6 +192,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       _currentIndex = index;
     });
     if (index == 0) _studyHubKey.currentState?.reload();
+    if (index == 2) _myKey.currentState?.reload();
   }
 
   @override
@@ -285,19 +289,6 @@ class _BottomNavBar extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 「我的」Tab：暂为空白占位页，后续再设计。
-class _MyPage extends StatelessWidget {
-  const _MyPage();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Color(0xFFF5EDE3),
-      body: SizedBox.expand(),
     );
   }
 }

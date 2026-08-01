@@ -460,7 +460,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 16),
         child: SizedBox(
-          width: 48, height: 48,
+          width: 42, height: 42,
           child: FloatingActionButton(
             onPressed: _addCustomType,
             heroTag: 'settings_fab',
@@ -468,7 +468,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
-            child: Icon(Icons.add, size: 24, color: _primary),
+            child: Icon(Icons.add, size: 20, color: _primary),
           ),
         ),
       ),
