@@ -7,6 +7,7 @@ import 'sutra_list_page.dart';
 import 'discussion_page.dart';
 import 'splash_image_page.dart';
 import 'study_hub_page.dart';
+import 'app_state.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -35,8 +36,23 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       navigatorKey: navigatorKey,
+      navigatorObservers: [routeObserver],
+      // AI 面板常驻在 Navigator 之上：WebView 不随阅读页销毁，会话可跨页面延续。
+      builder: (context, child) {
+        return Stack(
+          children: [
+            if (child != null) child,
+            const _AssistantPanelOverlay(),
+          ],
+        );
+      },
       home: WillPopScope(
         onWillPop: () async {
+          // AI 面板展开时，先收起它而不是退出应用。
+          if (assistantVisible.value) {
+            assistantVisible.value = false;
+            return false;
+          }
           // 最小化应用到后台，模拟从底部滑动的行为
           if (Platform.isAndroid) {
             const platform = MethodChannel('app_channel');
@@ -74,8 +90,8 @@ class _AppEntryState extends State<_AppEntry> {
 
   @override
   Widget build(BuildContext context) {
-    if (_showMain) return const MainPage();
-    return SplashImagePage(onFinished: _finishSplash);
+    if (!_showMain) return SplashImagePage(onFinished: _finishSplash);
+    return const MainPage();
   }
 }
 
@@ -89,15 +105,17 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   int _currentIndex = 0;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
+  late final ValueNotifier<int> _tabIndex;
   late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    _tabIndex = ValueNotifier<int>(0);
     _pages = [
       StudyHubPage(key: _studyHubKey),
-      const SutraListPage(),
-      const DiscussionPage(),
+      SutraListPage(activeTab: _tabIndex),
+      const _MyPage(),
     ];
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -151,13 +169,14 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       label: '经藏',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/chat.png', width: 18, height: 18),
-      activeIcon: Image.asset('assets/images/chat_selected.png', width: 18, height: 18),
-      label: '助手',
+      icon: const Icon(Icons.person_outline, size: 24, color: Color(0xFF424242)),
+      activeIcon: const Icon(Icons.person, size: 24, color: Color(0xFF5D4037)),
+      label: '我的',
     ),
   ];
 
   void _switchToTab(int index) {
+    _tabIndex.value = index;
     setState(() {
       _currentIndex = index;
     });
@@ -165,6 +184,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   }
 
   void switchToTab(int index) {
+    _tabIndex.value = index;
     setState(() {
       _currentIndex = index;
     });
@@ -182,24 +202,194 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                 children: _pages,
               ),
             ),
-            BottomNavigationBar(
+            _BottomNavBar(
+              items: _bottomNavItems,
               currentIndex: _currentIndex,
               onTap: _switchToTab,
-              backgroundColor: const Color(0xFFFFFAF5),
-              selectedItemColor: const Color(0xFF5D4037),
-              unselectedItemColor: const Color(0xFF424242),
-              selectedLabelStyle: const TextStyle(
-                fontSize: 11,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 11,
-              ),
-              showUnselectedLabels: true,
-              elevation: 0,
-              type: BottomNavigationBarType.fixed,
-              items: _bottomNavItems,
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// 自定义底部导航栏：按屏幕尺寸自适应高度，统一处理安全区并加分隔线/阴影。
+class _BottomNavBar extends StatelessWidget {
+  final List<BottomNavigationBarItem> items;
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  const _BottomNavBar({
+    required this.items,
+    required this.currentIndex,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    // 大屏（高度 ≥ 820 或很宽）适当加高，避免与内容区比例失调。
+    final large = media.size.height >= 820 || media.size.width >= 430;
+    final base = large ? 62.0 : 54.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFAF5),
+        border: const Border(
+          top: BorderSide(color: Color(0xFFE8E0D5), width: 0.8),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: base,
+          child: Row(
+            children: List.generate(items.length, (i) {
+              final selected = i == currentIndex;
+              final item = items[i];
+              final Widget icon = selected
+                  ? (item.activeIcon ?? item.icon)
+                  : item.icon;
+              return Expanded(
+                child: InkWell(
+                  onTap: () => onTap(i),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(width: 24, height: 24, child: Center(child: icon)),
+                      const SizedBox(height: 2),
+                      Text(
+                        item.label ?? '',
+                        style: TextStyle(
+                          fontSize: selected ? 11.5 : 11,
+                          color: selected
+                              ? const Color(0xFF5D4037)
+                              : const Color(0xFF424242),
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「我的」Tab：暂为空白占位页，后续再设计。
+class _MyPage extends StatelessWidget {
+  const _MyPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Color(0xFFF5EDE3),
+      body: SizedBox.expand(),
+    );
+  }
+}
+
+/// 全局 AI 助手面板：常驻在 Navigator 之上，WebView 不销毁。
+/// 从底部向上滑出，顶部停在 AppBar 之下；展开时右下角显示收起按钮。
+class _AssistantPanelOverlay extends StatefulWidget {
+  const _AssistantPanelOverlay();
+
+  @override
+  State<_AssistantPanelOverlay> createState() => _AssistantPanelOverlayState();
+}
+
+class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    assistantVisible.addListener(_onVisible);
+  }
+
+  void _onVisible() {
+    if (!mounted) return;
+    if (assistantVisible.value) {
+      _ctrl.forward();
+    } else {
+      _ctrl.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    assistantVisible.removeListener(_onVisible);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final topInset = MediaQuery.of(context).padding.top + kToolbarHeight;
+    return SizedBox.expand(
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (context, child) {
+          final t = Curves.easeInOutCubic.transform(_ctrl.value);
+          final full = MediaQuery.of(context).size.height - topInset;
+          return Stack(
+            children: [
+              // 面板：从底部升起，顶部边缘滑到 AppBar 之下。
+              Positioned(
+                left: 0,
+                right: 0,
+                top: topInset + full * (1 - t),
+                bottom: 0,
+                child: child!,
+              ),
+              // 展开时右下角的收起按钮（与阅读页 AI 按钮同位）。
+              if (t > 0.5)
+                Positioned(
+                  right: 16,
+                  bottom: 111,
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: FloatingActionButton(
+                      heroTag: 'sutra_ai_assistant_overlay',
+                      onPressed: () => assistantVisible.value = false,
+                      backgroundColor: const Color(0xFFf7f7f7),
+                      elevation: 8,
+                      highlightElevation: 12,
+                      shape: const CircleBorder(),
+                      child: const Text(
+                        'AI',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF5d4037),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+        child: const DiscussionPage(),
       ),
     );
   }

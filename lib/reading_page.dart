@@ -8,7 +8,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'sutra_asset_path.dart';
+import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart';
+import 'app_state.dart';
 
 class ReadingPage extends StatefulWidget {
   final String title;
@@ -33,27 +35,20 @@ class _ReadingPageState extends State<ReadingPage> {
   late ScrollController _scrollController;
   final TextEditingController _searchController = TextEditingController();
   bool _showSearchBar = false;
+  bool _showMoreMenu = false;
+  final GlobalKey _moreMenuKey = GlobalKey();
   List<int> _searchMatches = [];
   int _currentMatchIndex = 0;
   double _scrollProgress = 0.0;
   late final String? _resolvedFilePath;
-  Future<AssetManifest>? _manifestFuture;
   bool _isLoadingContent = true;
   bool _isEdited = false;
+  bool _needsDownload = false;
+  bool _isDownloading = false;
+  double _downloadProgress = 0;
   double? _savedPosition;
   double? _savedProgress;
   int _restoreAttempts = 0;
-
-  Future<bool> _assetListedInManifest(String key) async {
-    try {
-      _manifestFuture ??= AssetManifest.loadFromAssetBundle(rootBundle);
-      final manifest = await _manifestFuture!;
-      final assets = await manifest.listAssets();
-      return assets.contains(key);
-    } catch (_) {
-      return false;
-    }
-  }
 
   @override
   void initState() {
@@ -113,6 +108,8 @@ class _ReadingPageState extends State<ReadingPage> {
   void dispose() {
     _scrollController.dispose();
     _searchController.dispose();
+    // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
+    assistantVisible.value = false;
     super.dispose();
   }
 
@@ -198,7 +195,7 @@ class _ReadingPageState extends State<ReadingPage> {
 
     final filePath = _resolvedFilePath ?? widget.filePath;
     if (filePath != null) {
-      // 优先加载已编辑的副本（如果存在）
+      // 1. 优先加载已编辑的副本（如果存在）
       final editedPath = await editedSutraFilePath(filePath);
       final editedFile = File(editedPath);
       final hasEdited = await editedFile.exists();
@@ -219,6 +216,29 @@ class _ReadingPageState extends State<ReadingPage> {
         }
       }
       _isEdited = false;
+
+      // 2. 其次加载已下载到本地的副本
+      File? localCopy;
+      if (filePath.startsWith('assets/sutras_ascii/')) {
+        localCopy = await SutraDownloader.localFileForAssetPath(filePath);
+      }
+      if (localCopy != null) {
+        try {
+          final content = await localCopy.readAsString();
+          if (mounted) {
+            setState(() {
+              _content = content;
+              _isLoadingContent = false;
+            });
+            WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+          }
+          return;
+        } catch (_) {
+          // 读取失败则回退到打包资源
+        }
+      }
+
+      // 3. 再回退到打包资源
       if (filePath.startsWith('assets/')) {
         try {
           String content = await rootBundle.loadString(filePath);
@@ -230,11 +250,11 @@ class _ReadingPageState extends State<ReadingPage> {
             WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
           }
         } catch (e) {
-          final inManifest = await _assetListedInManifest(filePath);
           if (mounted) {
             setState(() {
-              _content = '无法加载assets文件内容\n\n路径: $filePath\nAssetManifest包含该路径: $inManifest\n错误: $e';
+              _content = '该经文正文尚未下载，请点击上方“下载”按钮获取后再阅读。';
               _isLoadingContent = false;
+              _needsDownload = true;
             });
           }
         }
@@ -250,6 +270,12 @@ class _ReadingPageState extends State<ReadingPage> {
               });
               WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
             }
+          } else if (mounted) {
+            setState(() {
+              _content = '该经文正文尚未下载。';
+              _isLoadingContent = false;
+              _needsDownload = true;
+            });
           }
         } catch (e) {
           if (mounted) {
@@ -268,6 +294,99 @@ class _ReadingPageState extends State<ReadingPage> {
         });
       }
     }
+  }
+
+  Future<void> _downloadContent() async {
+    if (_isDownloading) return;
+    final id = SutraDownloader.extractId(widget.title, _resolvedFilePath ?? widget.filePath);
+    if (id == null) return;
+    setState(() {
+      _isDownloading = true;
+      _downloadProgress = 0;
+    });
+    try {
+      await SutraDownloader.download(id, onProgress: (received, total) {
+        if (!mounted) return;
+        setState(() {
+          _downloadProgress = total > 0 ? received / total : 0;
+        });
+      });
+      if (!mounted) return;
+      setState(() {
+        _isDownloading = false;
+        _needsDownload = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('下载完成')),
+      );
+      await _loadContent();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isDownloading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('下载失败：$e')),
+      );
+    }
+  }
+
+  Widget _buildDownloadBanner() {
+    if (!_needsDownload) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _isDarkMode ? const Color(0xFF2c2c2c) : const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _isDownloading
+                ? Text(
+                    '下载中… ${(_downloadProgress * 100).toStringAsFixed(0)}%',
+                    style: TextStyle(
+                      color: _isDarkMode ? Colors.white : const Color(0xFF5d4037),
+                      fontSize: 13,
+                    ),
+                  )
+                : Text(
+                    '该经文正文未打包，需要联网下载。',
+                    style: TextStyle(
+                      color: _isDarkMode ? Colors.white : const Color(0xFF5d4037),
+                      fontSize: 13,
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 8),
+          if (_isDownloading)
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                value: _downloadProgress > 0 ? _downloadProgress : null,
+                color: const Color(0xFFD4A06A),
+              ),
+            )
+          else
+            SizedBox(
+              height: 30,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFD4A06A),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  textStyle: const TextStyle(fontSize: 13),
+                ),
+                onPressed: _downloadContent,
+                child: const Text('下载'),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openEditor() async {
@@ -416,11 +535,24 @@ class _ReadingPageState extends State<ReadingPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        // AI 面板展开时，系统返回先收起它（回到阅读页）；否则正常退出阅读页。
+        if (assistantVisible.value) {
+          assistantVisible.value = false;
+        } else {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
             backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFededed),
             appBar: AppBar(
               backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFededed),
               elevation: 0,
+              leadingWidth: 48,
+              titleSpacing: 0,
               iconTheme: IconThemeData(color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121)),
               title: GestureDetector(
                 onLongPress: () {
@@ -468,43 +600,32 @@ class _ReadingPageState extends State<ReadingPage> {
                     splashRadius: 16,
                   ),
                 ),
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: IconButton(
-                    icon: Icon(_isDarkMode ? Icons.light_mode : Icons.dark_mode, size: 18),
-                    onPressed: _toggleTheme,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    splashRadius: 16,
-                  ),
-                ),
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: IconButton(
-                    icon: const Icon(Icons.text_fields, size: 18),
-                    onPressed: _showFontSizeDialog,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    splashRadius: 16,
-                  ),
-                ),
                 Padding(
-                  padding: const EdgeInsets.only(right: 16),
-                  child: Text(
-                    '${(_scrollProgress * 100).toStringAsFixed(1)}%',
-                    style: TextStyle(
-                      color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
+                  padding: const EdgeInsets.only(right: 12),
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: IconButton(
+                      icon: const Icon(Icons.more_horiz, size: 20),
+                      onPressed: _toggleMoreMenu,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      splashRadius: 16,
                     ),
                   ),
                 ),
               ],
             ),
             body: SafeArea(
-              child: Stack(
+              child: Listener(
+                onPointerDown: (event) {
+                  if (_showMoreMenu && !_isPointerInsideMenu(event.position)) {
+                    setState(() {
+                      _showMoreMenu = false;
+                    });
+                  }
+                },
+                child: Stack(
                 children: [
                   Column(
                     children: [
@@ -565,19 +686,21 @@ class _ReadingPageState extends State<ReadingPage> {
                             ],
                           ),
                         ),
+                      _buildDownloadBanner(),
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: GestureDetector(
                             onTap: () {
-                              if (_showSearchBar) {
-                                setState(() {
+                              setState(() {
+                                _showMoreMenu = false;
+                                if (_showSearchBar) {
                                   _showSearchBar = false;
-                                });
-                                _searchController.clear();
-                                _searchMatches.clear();
-                                _currentMatchIndex = 0;
-                              }
+                                  _searchController.clear();
+                                  _searchMatches.clear();
+                                  _currentMatchIndex = 0;
+                                }
+                              });
                             },
                             child: SingleChildScrollView(
                               controller: _scrollController,
@@ -625,60 +748,139 @@ class _ReadingPageState extends State<ReadingPage> {
                                           ],
                                         );
                                       },
-                                    )),
+                                     )),
                             ),
                           ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(3),
+                                child: LinearProgressIndicator(
+                                  value: _scrollProgress,
+                                  minHeight: 5,
+                                  backgroundColor: _isDarkMode
+                                      ? Colors.white.withOpacity(0.15)
+                                      : const Color(0xFFE8D9C4),
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(Color(0xFFD4A06A)),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${(_scrollProgress * 100).toStringAsFixed(1)}%',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _isDarkMode
+                                    ? Colors.white.withOpacity(0.7)
+                                    : const Color(0xFF8B6B5A),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
 
+                if (_showMoreMenu)
+                  Positioned(
+                    top: 4,
+                    right: 16,
+                    child: Material(
+                      key: _moreMenuKey,
+                      elevation: 6,
+                      borderRadius: BorderRadius.circular(12),
+                      color: _isDarkMode ? const Color(0xFF2c2c2c) : Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildMoreMenuItem(
+                              icon: Icon(
+                                _isDarkMode ? Icons.light_mode : Icons.dark_mode,
+                                size: 18,
+                              ),
+                              label: _isDarkMode ? '日间模式' : '夜间模式',
+                              onTap: _toggleTheme,
+                            ),
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.text_fields, size: 18),
+                              label: '字体',
+                              onTap: _showFontSizeDialog,
+                            ),
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.save_alt, size: 18),
+                              label: '导出TXT',
+                              onTap: _exportTxt,
+                            ),
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.edit, size: 18),
+                              label: '编辑',
+                              onTap: _openEditor,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 Positioned(
                   right: 16,
-                  bottom: 179,
+                  bottom: 111,
                   child: SizedBox(
                     width: 36,
                     height: 36,
-                    child: FloatingActionButton(
+                    child: _buildFloatingIcon(
+                      tooltip: 'AI 助手',
+                      heroTag: 'sutra_ai_assistant',
+                      onTap: _openAssistant,
+                      child: const Text(
+                        'AI',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: 57,
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: _buildFloatingIcon(
+                      tooltip: '回到顶部',
                       heroTag: 'sutra_to_start',
-                      backgroundColor: const Color(0xFFD4A06A),
-                      onPressed: _scrollToStart,
-                      child: const Icon(Icons.vertical_align_top, color: Colors.white, size: 18),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: 16,
-                  bottom: 127,
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: FloatingActionButton(
-                      heroTag: 'sutra_export',
-                      backgroundColor: const Color(0xFFD4A06A),
-                      onPressed: _exportTxt,
-                      child: const Icon(Icons.save_alt, color: Colors.white, size: 18),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: 16,
-                  bottom: 75,
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: FloatingActionButton(
-                      heroTag: 'sutra_edit',
-                      backgroundColor: const Color(0xFFD4A06A),
-                      onPressed: _openEditor,
-                      child: const Icon(Icons.edit, color: Colors.white, size: 18),
+                      onTap: _scrollToStart,
+                      child: const Icon(Icons.vertical_align_top, size: 18),
                     ),
                   ),
                 ),
                 ],
               ),
             ),
-          );
+          ),
+      ),
+    );
+  }
+
+  /// 判断点击位置是否落在「⋯」展开菜单内。
+  bool _isPointerInsideMenu(Offset position) {
+    final ctx = _moreMenuKey.currentContext;
+    if (ctx == null) return false;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null) return false;
+    final local = box.globalToLocal(position);
+    return local.dx >= 0 &&
+        local.dy >= 0 &&
+        local.dx <= box.size.width &&
+        local.dy <= box.size.height;
   }
 
   void _toggleSearch() {
@@ -697,6 +899,68 @@ class _ReadingPageState extends State<ReadingPage> {
       _isDarkMode = !_isDarkMode;
     });
     _saveSettings();
+  }
+
+  void _toggleMoreMenu() {
+    setState(() {
+      _showMoreMenu = !_showMoreMenu;
+    });
+  }
+
+  /// 右下角浮动图标：与助手页底部圆圈按钮同款（浅色圆底 + 阴影）。
+  Widget _buildFloatingIcon({
+    required Widget child,
+    required String tooltip,
+    required String heroTag,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: FloatingActionButton(
+        heroTag: heroTag,
+        onPressed: onTap,
+        backgroundColor:
+            _isDarkMode ? const Color(0xFF2c2c2c) : const Color(0xFFf7f7f7),
+        elevation: 8,
+        highlightElevation: 12,
+        shape: const CircleBorder(),
+        child: IconTheme(
+          data: IconThemeData(
+            color: _isDarkMode ? Colors.white.withOpacity(0.85) : const Color(0xFF5d4037),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  void _openAssistant() {
+    // 唤出全局常驻的 AI 面板（WebView 不销毁，会话跨页面延续）；再次点击收起。
+    assistantVisible.value = !assistantVisible.value;
+  }
+
+  /// 更多菜单里的带文字条目。
+  Widget _buildMoreMenuItem({
+    required Widget icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final fg = _isDarkMode ? Colors.white : const Color(0xFF5d4037);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconTheme(data: IconThemeData(color: fg), child: icon),
+            const SizedBox(width: 10),
+            Text(label, style: TextStyle(color: fg, fontSize: 14)),
+          ],
+        ),
+      ),
+    );
   }
 
   void _performSearch(String query) {

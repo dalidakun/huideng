@@ -41,19 +41,6 @@ android {
     dependencies {
         implementation("androidx.core:core:1.12.0")
     }
-
-    applicationVariants.all {
-        val variant = this
-        variant.mergeAssetsProvider.configure {
-            doLast {
-                copy {
-                    from("../../assets/sutras_ascii")
-                    into("${outputDir.get()}/flutter_assets/assets/sutras_ascii")
-                    include("**/*.txt")
-                }
-            }
-        }
-    }
 }
 
 flutter {

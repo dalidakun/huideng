@@ -28,7 +28,8 @@ class StudyHubPage extends StatefulWidget {
   State<StudyHubPage> createState() => StudyHubPageState();
 }
 
-class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixin {
+class StudyHubPageState extends State<StudyHubPage>
+    with TickerProviderStateMixin, RouteAware {
   static SharedPreferences? _warmPrefs;
 
   static Future<void> warmPrefs() async {
@@ -61,7 +62,21 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  /// 从阅读页等路由返回时立即刷新“当前读经”进度。
+  @override
+  void didPopNext() {
+    _loadData();
+  }
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _pulseController.dispose();
     super.dispose();
   }
@@ -203,35 +218,41 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
                 ),
               ),
               const Divider(height: 1, color: _border),
-              ...sutras.map((s) {
-                final title = s['title'] as String? ?? '';
-                final fp = s['filePath'] as String?;
-                final progress = (s['progress'] as num?)?.toDouble() ?? 0.0;
-                return InkWell(
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    if (title.isNotEmpty) _openSutraByPath(title, fp);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
-                              const SizedBox(height: 4),
-                              Text('已读 ${(progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint)),
-                            ],
-                          ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  children: sutras.map((s) {
+                    final title = s['title'] as String? ?? '';
+                    final fp = s['filePath'] as String?;
+                    final progress = (s['progress'] as num?)?.toDouble() ?? 0.0;
+                    return InkWell(
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        if (title.isNotEmpty) _openSutraByPath(title, fp);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
+                                  const SizedBox(height: 4),
+                                  Text('已读 ${(progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint)),
+                                ],
+                              ),
+                            ),
+                            Icon(Icons.chevron_right, color: _textHint, size: 20),
+                          ],
                         ),
-                        Icon(Icons.chevron_right, color: _textHint, size: 20),
-                      ],
-                    ),
-                  ),
-                );
-              }),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
               const SizedBox(height: 8),
             ],
           ),
@@ -283,7 +304,7 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: IconButton(
-              icon: Icon(Icons.calendar_month_outlined, color: Color(0xFF616161), size: 20),
+              icon: const Icon(Icons.calendar_month_outlined, color: Color(0xFF616161), size: 20),
               onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarPage())),
             ),
           ),
@@ -335,64 +356,69 @@ class StudyHubPageState extends State<StudyHubPage> with TickerProviderStateMixi
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-            child: Row(
-              children: [
-                Container(
-                  width: 30, height: 30,
-                  decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.menu_book_rounded, size: 17, color: _primary),
-                ),
-                const SizedBox(width: 10),
-                Text('当前读经', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-                const Spacer(),
-                if (_currentTitle != null)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _currentTitle != null ? _openSutra : null,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+              child: Row(
+                children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(12)),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.today, size: 12, color: _primaryLight),
-                        const SizedBox(width: 4),
-                        Text('已学$_studyDays天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
-                      ],
-                    ),
+                    width: 30, height: 30,
+                    decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+                    child: const Icon(Icons.menu_book_rounded, size: 17, color: _primary),
                   ),
-              ],
+                  const SizedBox(width: 10),
+                  Text('当前学习', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                  const Spacer(),
+                  if (_currentTitle != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(12)),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.today, size: 12, color: _primaryLight),
+                          const SizedBox(width: 4),
+                          Text('已学$_studyDays天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 20),
           if (_currentTitle != null) ...[
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _openSutra,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(_currentTitle!, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: GestureDetector(
-                onTap: _openSutra,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_currentTitle!, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(2),
-                            child: LinearProgressIndicator(
-                              value: _progress,
-                              minHeight: 5,
-                              backgroundColor: _border,
-                              valueColor: const AlwaysStoppedAnimation<Color>(_gold),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text('${(_progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint, fontWeight: FontWeight.w500)),
-                      ],
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: _progress,
+                        minHeight: 5,
+                        backgroundColor: _border,
+                        valueColor: const AlwaysStoppedAnimation<Color>(_gold),
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('${(_progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint, fontWeight: FontWeight.w500)),
+                ],
               ),
             ),
             const SizedBox(height: 4),

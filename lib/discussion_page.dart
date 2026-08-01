@@ -2,11 +2,8 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-
-import 'reading_page.dart';
 
 class DiscussionPage extends StatefulWidget {
   const DiscussionPage({super.key});
@@ -109,74 +106,27 @@ class _DiscussionPageState extends State<DiscussionPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(7),
-        child: AppBar(
-          backgroundColor: const Color(0xFFf0f3f8),
-          elevation: 0,
-          automaticallyImplyLeading: false,
-        ),
-      ),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            kIsWeb 
-                ? const Center(
-                    child: Text(
-                      'WebView 功能暂不支持 Web 平台\n请在移动设备上查看',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                  )
-                : GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onDoubleTap: () {
-                      _controller.reload();
-                    },
-                    child: WebViewWidget(controller: _controller),
+    return ColoredBox(
+      color: const Color(0xFFf0f3f8),
+      child: Stack(
+        children: [
+          kIsWeb
+              ? const Center(
+                  child: Text(
+                    'WebView 功能暂不支持 Web 平台\n请在移动设备上查看',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: Colors.grey),
                   ),
-            if (_isLoading && !kIsWeb) const Center(child: CircularProgressIndicator()),
-
-            // Jump back to last read
-            Positioned(
-              right: 16,
-              bottom: 75,
-              child: SizedBox(
-                width: 36,
-                height: 36,
-                child: FloatingActionButton(
-                  heroTag: 'assistant_last_read',
-                  onPressed: () async {
-                    final prefs = await SharedPreferences.getInstance();
-                    final lastReadTitle = prefs.getString('last_read_title');
-                    final lastReadFilePath = prefs.getString('last_read_filePath');
-
-                    if (!context.mounted) return;
-                    if (lastReadTitle != null) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => ReadingPage(
-                            title: lastReadTitle,
-                            filePath: lastReadFilePath,
-                            fromAssistant: true,
-                          ),
-                        ),
-                      );
-                    } else {
-                      Navigator.of(context).pop();
-                    }
+                )
+              : GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onDoubleTap: () {
+                    _controller.reload();
                   },
-                  backgroundColor: const Color(0xFFf7f7f7),
-                  elevation: 8,
-                  highlightElevation: 12,
-                  shape: const CircleBorder(),
-                  child: const Icon(Icons.radio_button_unchecked, color: Color(0xFF5d4037), size: 18),
+                  child: WebViewWidget(controller: _controller),
                 ),
-              ),
-            ),
-          ],
-        ),
+          if (_isLoading && !kIsWeb) const Center(child: CircularProgressIndicator()),
+        ],
       ),
     );
   }

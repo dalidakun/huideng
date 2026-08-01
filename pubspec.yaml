@@ -36,7 +36,7 @@ flutter:
     - assets/images/study.png
     - assets/images/study_selected.png
     - assets/images/splash.png
-    - assets/sutras_ascii/
+    - assets/sutras_catalog.json
     - assets/tool.html
 
 flutter_native_splash:
