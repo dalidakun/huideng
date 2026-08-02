@@ -1,11 +1,17 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
+import 'auth_service.dart';
+import 'favorites_page.dart';
+import 'login_page.dart';
 import 'notes_page.dart';
-import 'note_edit_page.dart';
+import 'reader_settings_page.dart';
+import 'checkin_reminder_page.dart';
+import 'account_info_page.dart';
+import 'change_phone_page.dart';
+import 'about_page.dart';
+import 'notification_service.dart';
+import 'settings_widgets.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -15,8 +21,25 @@ const Color _card = Color(0xFFFFFAF5);
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-const Color _overlay = Color(0xFFFFF5EC);
+
+/// 从左侧边缘滑入的页面路由。
+Route<T> slideInFromLeft<T>(Widget page) {
+  return PageRouteBuilder<T>(
+    transitionDuration: const Duration(milliseconds: 280),
+    reverseTransitionDuration: const Duration(milliseconds: 220),
+    pageBuilder: (context, animation, secondaryAnimation) => page,
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(-1, 0),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      );
+    },
+  );
+}
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -26,10 +49,6 @@ class MyPage extends StatefulWidget {
 }
 
 class MyPageState extends State<MyPage> {
-  List<Map<String, dynamic>> _recentNotes = [];
-  int _notesCount = 0;
-  int _studyDays = 0;
-  int _checkinStreak = 0;
   String? _avatarPath;
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
@@ -40,145 +59,86 @@ class MyPageState extends State<MyPage> {
   void initState() {
     super.initState();
     _loadData();
+    AuthService.instance.currentUser.addListener(_onAuthChanged);
   }
+
+  @override
+  void dispose() {
+    AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() => _loadData();
+
+  bool get _isLoggedIn => AuthService.instance.isLoggedIn;
+
+  AuthUser? get _authUser => AuthService.instance.currentUser.value;
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _recentNotes = _loadRecentNotes(prefs);
-      _notesCount = (jsonDecode(prefs.getString('notes') ?? '[]') as List).length;
-      _studyDays = prefs.getInt('study_day_count') ?? 0;
-      _checkinStreak = _calcStreak(prefs);
       _avatarPath = prefs.getString('user_avatar_path');
-      _nickname = prefs.getString('user_nickname') ?? '同修';
-      _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+      if (_isLoggedIn) {
+        _nickname = _authUser?.displayName ?? '同修';
+        _tagline = (_authUser?.tagline?.isNotEmpty ?? false)
+            ? _authUser!.tagline!
+            : '与经为伴，与法同行';
+      } else {
+        _nickname = prefs.getString('user_nickname') ?? '同修';
+        _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+      }
     });
   }
 
-  int _calcStreak(SharedPreferences prefs) {
-    final raw = prefs.getString('checkin_records') ?? '[]';
-    final records = (jsonDecode(raw) as List<dynamic>).map((r) => r['date'].toString()).toSet();
-    int streak = 0;
-    final today = DateTime.now();
-    final startIndex = records.contains(_today()) ? 0 : 1;
-    for (int i = startIndex; i < 365; i++) {
-      final day = today.subtract(Duration(days: i));
-      final ds = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      if (records.contains(ds)) { streak++; } else { break; }
-    }
-    return streak;
-  }
-
-  String _today() {
-    final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-  }
-
-  Future<void> _pickAvatar() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
-    );
-    if (result == null || result.files.single.path == null) return;
-    try {
-      final src = File(result.files.single.path!);
-      final ext = src.path.split('.').last;
-      final docs = await getApplicationDocumentsDirectory();
-      final dest = File('${docs.path}/avatar.$ext');
-      if (dest.existsSync()) dest.deleteSync();
-      await src.copy(dest.path);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_avatar_path', dest.path);
-      _loadData();
-    } catch (_) {}
-  }
-
-  Future<void> _editProfile() async {
-    final nameController = TextEditingController(text: _nickname);
-    final taglineController = TextEditingController(text: _tagline);
-    final result = await showDialog<Map<String, String>>(
+  Future<void> _viewAvatar() async {
+    await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('编辑个人资料', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              autofocus: true,
-              maxLength: 12,
-              style: const TextStyle(color: _text),
-              decoration: const InputDecoration(
-                labelText: '昵称',
-                labelStyle: TextStyle(color: _textSec),
-                hintText: '输入你的昵称',
-                hintStyle: TextStyle(color: _textHint),
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        behavior: HitTestBehavior.opaque,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _card,
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 24),
+                  ],
+                  image: _avatarPath != null
+                      ? DecorationImage(image: FileImage(File(_avatarPath!)), fit: BoxFit.cover)
+                      : null,
+                ),
+                child: _avatarPath == null
+                    ? const Icon(Icons.person, size: 140, color: _primaryLight)
+                    : null,
               ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: taglineController,
-              maxLength: 20,
-              style: const TextStyle(color: _text),
-              decoration: const InputDecoration(
-                labelText: '签名',
-                labelStyle: TextStyle(color: _textSec),
-                hintText: '一句修学感悟',
-                hintStyle: TextStyle(color: _textHint),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: _textSec))),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, {
-              'nickname': nameController.text.trim(),
-              'tagline': taglineController.text.trim(),
-            }),
-            child: const Text('保存', style: TextStyle(color: _primary, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 16),
+              const Text('轻触任意处关闭', style: TextStyle(fontSize: 13, color: Colors.white70)),
+            ],
           ),
-        ],
+        ),
       ),
     );
-    if (result == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    if (result['nickname']!.isNotEmpty) await prefs.setString('user_nickname', result['nickname']!);
-    await prefs.setString('user_tagline', result['tagline']!.isEmpty ? '与经为伴，与法同行' : result['tagline']!);
-    _loadData();
   }
 
-  List<Map<String, dynamic>> _loadRecentNotes(SharedPreferences prefs) {
-    final raw = prefs.getString('notes') ?? '[]';
-    final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
-    notes.sort((a, b) => b['updatedAt'].compareTo(a['updatedAt']));
-    return notes.take(3).toList();
+  void _openFavorites() {
+    Navigator.push(context, slideInFromLeft(const FavoritesPage()));
   }
 
-  Future<void> _deleteNote(Map<String, dynamic> note) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('确定删除「${note['title']}」吗？', style: const TextStyle(color: _textSec)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('notes') ?? '[]';
-    final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
-    notes.removeWhere((n) => n['id'] == note['id']);
-    await prefs.setString('notes', jsonEncode(notes));
-    _loadData();
+  void _openNotes() {
+    Navigator.push(context, slideInFromLeft(const NotesPage())).then((_) => reload());
+  }
+
+  void _openSettings() {
+    Navigator.push(context, slideInFromLeft(const _SettingsPage()));
   }
 
   @override
@@ -192,12 +152,31 @@ class MyPageState extends State<MyPage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(0, 18, 0, 32),
               children: [
-                _buildNotesCard(),
+                _buildMenuList(),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  void _promptLogin() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+  }
+
+  Widget _buildLoginButton() {
+    return FilledButton(
+      onPressed: _promptLogin,
+      style: FilledButton.styleFrom(
+        backgroundColor: _gold,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        minimumSize: const Size(0, 36),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        elevation: 0,
+      ),
+      child: const Text('登录', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
     );
   }
 
@@ -219,57 +198,61 @@ class MyPageState extends State<MyPage> {
           child: Column(
             children: [
               Row(
-                children: [
-                  GestureDetector(
-                    onTap: _pickAvatar,
-                    child: Container(
-                      width: 62, height: 62,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _card,
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 10, offset: const Offset(0, 2)),
-                        ],
-                        image: _avatarPath != null
-                            ? DecorationImage(image: FileImage(File(_avatarPath!)), fit: BoxFit.cover)
-                            : null,
-                      ),
-                      child: _avatarPath == null
-                          ? const Icon(Icons.person, size: 32, color: _primaryLight)
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_nickname, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
-                        const SizedBox(height: 5),
-                        Text(
-                          _tagline,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13, color: _textSec),
+                children: _isLoggedIn
+                    ? [
+                        GestureDetector(
+                          onTap: _viewAvatar,
+                          child: Container(
+                            width: 62, height: 62,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _card,
+                              boxShadow: [
+                                BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 10, offset: const Offset(0, 2)),
+                              ],
+                              image: _avatarPath != null
+                                  ? DecorationImage(image: FileImage(File(_avatarPath!)), fit: BoxFit.cover)
+                                  : null,
+                            ),
+                            child: _avatarPath == null
+                                ? const Icon(Icons.person, size: 32, color: _primaryLight)
+                                : null,
+                          ),
                         ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_nickname, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+                              const SizedBox(height: 5),
+                              Text(
+                                _tagline,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13, color: _textSec),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ]
+                    : [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('未登录',
+                                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+                              SizedBox(height: 5),
+                              Text('登录即可体验完整功能',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 13, color: _textSec)),
+                            ],
+                          ),
+                        ),
+                        _buildLoginButton(),
                       ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _editProfile,
-                    icon: const Icon(Icons.edit_outlined, size: 18, color: _textHint),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  _HeaderStat(value: '$_studyDays', label: '学习天数'),
-                  Container(width: 1, height: 30, color: _border),
-                  _HeaderStat(value: '$_checkinStreak', label: '连续打卡'),
-                  Container(width: 1, height: 30, color: _border),
-                  _HeaderStat(value: '$_notesCount', label: '笔记'),
-                ],
               ),
             ],
           ),
@@ -278,7 +261,7 @@ class MyPageState extends State<MyPage> {
     );
   }
 
-  Widget _buildNotesCard() {
+  Widget _buildMenuList() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
@@ -289,121 +272,376 @@ class MyPageState extends State<MyPage> {
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-            child: Row(
-              children: [
-                Container(
-                  width: 30, height: 30,
-                  decoration: BoxDecoration(color: _primary.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.edit_note_rounded, size: 17, color: _primary),
-                ),
-                const SizedBox(width: 10),
-                const Text('我的笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-                const Spacer(),
-                Text('共 $_notesCount 篇', style: const TextStyle(fontSize: 12, color: _textHint)),
-              ],
-            ),
+          _buildMenuItem(
+            icon: Icons.star_rounded,
+            iconColor: _gold,
+            title: '收藏',
+            onTap: _openFavorites,
           ),
-          const SizedBox(height: 6),
-          if (_recentNotes.isEmpty)
-            _buildEmptyNotes()
-          else ...[
-            for (final note in _recentNotes) _buildNoteRow(note),
-            Center(
-              child: TextButton(
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotesPage())).then((_) => reload()),
-                style: TextButton.styleFrom(foregroundColor: _primary, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('查看全部笔记', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.arrow_forward_ios, size: 12, color: _primary),
-                  ],
-                ),
-              ),
-            ),
-          ],
+          _buildMenuDivider(),
+          _buildMenuItem(
+            icon: Icons.edit_note_rounded,
+            iconColor: _primary,
+            title: '笔记',
+            onTap: _openNotes,
+          ),
+          _buildMenuDivider(),
+          _buildMenuItem(
+            icon: Icons.settings_outlined,
+            iconColor: _primaryLight,
+            title: '设置',
+            onTap: _openSettings,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildEmptyNotes() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 28),
-      child: SizedBox(
-        width: double.infinity,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
+  Widget _buildMenuItem({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+        child: Row(
           children: [
             Container(
-              width: 64, height: 64,
+              width: 34,
+              height: 34,
               decoration: BoxDecoration(
-                color: _overlay,
-                shape: BoxShape.circle,
+                color: iconColor.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Icon(Icons.auto_stories_rounded, size: 28, color: _primaryLight.withValues(alpha: 0.55)),
-                  Positioned(
-                    right: 12, bottom: 13,
-                    child: Icon(Icons.edit, size: 14, color: _primaryLight.withValues(alpha: 0.65)),
-                  ),
-                ],
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500),
               ),
             ),
-            const SizedBox(height: 14),
-            const Text('暂无笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-            const SizedBox(height: 6),
-            const Text('记录每日心得，见证修学成长', style: TextStyle(fontSize: 13, color: _textSec)),
-            const SizedBox(height: 18),
-            ElevatedButton.icon(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotesPage())).then((_) => reload()),
-              icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text('创建第一篇笔记', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _gold,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                elevation: 0,
-              ),
-            ),
-            const SizedBox(height: 6),
+            const Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildNoteRow(Map<String, dynamic> note) {
-    final content = (note['content'] as String? ?? '');
-    final preview = content.length > 30 ? '${content.substring(0, 30)}...' : content;
+  Widget _buildMenuDivider() {
+    return Padding(
+      padding: const EdgeInsets.only(left: 68),
+      child: const Divider(height: 1, thickness: 0.5, color: Color(0xFFEFE6DB)),
+    );
+  }
+}
+
+class _SettingsPage extends StatefulWidget {
+  const _SettingsPage();
+
+  @override
+  State<_SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<_SettingsPage> {
+  bool _notifOn = false;
+  bool _reminderOn = false;
+  String _reminderTime = '21:00';
+  bool _loaded = false;
+
+  bool get _isLoggedIn => AuthService.instance.isLoggedIn;
+
+  AuthUser? get _authUser => AuthService.instance.currentUser.value;
+
+  bool get notifOn => _notifOn;
+  bool get reminderOn => _reminderOn;
+  String get reminderTime => _reminderTime;
+
+  void reloadForSettings() => _load();
+
+  void requireLogin() => _pushLogin();
+
+  Future<void> toggleNotif(bool v) => _toggleNotif(v);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    AuthService.instance.currentUser.addListener(_onAuthChanged);
+  }
+
+  @override
+  void dispose() {
+    AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _load() async {
+    _notifOn = await NotificationService.instance.isMasterEnabled();
+    _reminderOn = await NotificationService.instance.isReminderEnabled();
+    _reminderTime = await NotificationService.instance.getReminderTime();
+    if (mounted) setState(() => _loaded = true);
+  }
+
+  void _pushLogin() {
+    _showToast('请先登录');
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+  }
+
+  Future<void> _toggleNotif(bool value) async {
+    final ok = await NotificationService.instance.setMasterEnabled(value);
+    if (!mounted) return;
+    if (!ok) {
+      _showToast('未获得通知权限，请在系统设置中开启');
+      return;
+    }
+    setState(() => _notifOn = value);
+    await _load();
+  }
+
+  void _showToast(String text) {
+    if (!mounted) return;
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final topInset = MediaQuery.of(ctx).padding.top;
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Material(
+                color: _primary,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  child: Text(
+                    text,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    Future.delayed(const Duration(milliseconds: 2000), () {
+      if (entry.mounted) entry.remove();
+    });
+  }
+
+  Widget _sectionTitle(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Text(text,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _textSec)),
+    );
+  }
+
+  Widget _buildLogoutRow() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+        leading: const Icon(Icons.logout, size: 20, color: Colors.redAccent),
+        title: const Text('退出登录', style: TextStyle(fontSize: 15, color: Colors.redAccent)),
+        trailing: const Icon(Icons.chevron_right, color: _textHint, size: 20),
+        onTap: _confirmLogout,
+      ),
+    );
+  }
+
+  Future<void> _confirmLogout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('退出登录', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: const Text('退出后需重新登录才能管理云端笔记', style: TextStyle(color: _textSec)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('退出', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await AuthService.instance.logout();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+              ),
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 10, 20, 18),
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+                    ),
+                    const SizedBox(width: 4),
+                    const Text('设置', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _loaded
+                ? ListView(
+                    padding: const EdgeInsets.only(top: 4, bottom: 32),
+                    children: [
+                      _sectionTitle('阅读与提醒'),
+                      SettingsCard(
+                        children: [
+                          _SettingsLinkTile(
+                            icon: Icons.text_fields,
+                            iconColor: _gold,
+                            title: '阅读偏好',
+                            subtitle: '字号 · 行距 · 背景 · 翻页方式',
+                            page: const ReaderSettingsPage(),
+                          ),
+                          const SettingsDivider(),
+                          const _SettingsReminderTile(),
+                        ],
+                      ),
+                      _sectionTitle('账号'),
+                      SettingsCard(
+                        children: [
+                          _SettingsLinkTile(
+                            icon: Icons.person_outline,
+                            iconColor: _primary,
+                            title: '账号信息',
+                            subtitle: _isLoggedIn
+                                ? (_authUser?.displayName ?? '同修')
+                                : '未登录',
+                            page: const AccountInfoPage(),
+                          ),
+                          const SettingsDivider(),
+                          _SettingsPhoneTile(),
+                          const SettingsDivider(),
+                          _SettingsNotifTile(),
+                        ],
+                      ),
+                      _sectionTitle('其他'),
+                      SettingsCard(
+                        children: [
+                          _SettingsLinkTile(
+                            icon: Icons.info_outline,
+                            iconColor: _primaryLight,
+                            title: '关于我们',
+                            subtitle: '版本 · 介绍 · 版权',
+                            page: const AboutPage(),
+                          ),
+                        ],
+                      ),
+                      if (_isLoggedIn) ...[
+                        const SizedBox(height: 14),
+                        _buildLogoutRow(),
+                      ],
+                    ],
+                  )
+                : const Center(child: CircularProgressIndicator()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsLinkTile extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final Widget page;
+
+  const _SettingsLinkTile({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.page,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => NoteEditPage(note: note))).then((_) => reload()),
-      onLongPress: () => _deleteNote(note),
+      onTap: () {
+        Navigator.push(context, slideInFromLeft(page)).then((_) {
+          if (context.mounted) {
+            context.findAncestorStateOfType<_SettingsPageState>()?.reloadForSettings();
+          }
+        });
+      },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 4, height: 44,
-              decoration: BoxDecoration(color: _gold, borderRadius: BorderRadius.circular(2)),
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: iconColor, size: 20),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(note['title'] ?? '', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
-                  const SizedBox(height: 4),
-                  Text(preview, style: const TextStyle(fontSize: 13, color: _textSec), maxLines: 1),
+                  Text(title, style: const TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
             ),
@@ -415,20 +653,141 @@ class MyPageState extends State<MyPage> {
   }
 }
 
-class _HeaderStat extends StatelessWidget {
-  final String value;
-  final String label;
-
-  const _HeaderStat({required this.value, required this.label});
+/// 打卡提醒行：显示开关状态与时间，点击进入设置。
+class _SettingsReminderTile extends StatelessWidget {
+  const _SettingsReminderTile();
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
+    final state = context.findAncestorStateOfType<_SettingsPageState>()!;
+    return InkWell(
+      onTap: () {
+        Navigator.push(context, slideInFromLeft(const CheckinReminderPage()))
+            .then((_) => state.reloadForSettings());
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _gold.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.alarm_outlined, color: _gold, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('打卡提醒', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text(
+                    state.reminderOn ? '每日 ${state.reminderTime}' : '未开启',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: _textHint),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 更换手机号行：未登录时引导登录。
+class _SettingsPhoneTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_SettingsPageState>()!;
+    return InkWell(
+      onTap: () {
+        if (!AuthService.instance.isLoggedIn) {
+          state.requireLogin();
+          return;
+        }
+        Navigator.push(context, slideInFromLeft(const ChangePhonePage()))
+            .then((_) => state.reloadForSettings());
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _primaryLight.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.phone_iphone_outlined, color: _primaryLight, size: 20),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('更换手机号', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  SizedBox(height: 2),
+                  Text('更换后数据自动保留', style: TextStyle(fontSize: 12, color: _textHint)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 消息通知总开关行。
+class _SettingsNotifTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_SettingsPageState>()!;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
         children: [
-          Text(value, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: _text)),
-          const SizedBox(height: 3),
-          Text(label, style: const TextStyle(fontSize: 12, color: _textSec)),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _gold.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.notifications_outlined, color: _gold, size: 20),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('消息通知', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                SizedBox(height: 2),
+                Text('打卡提醒等系统通知', style: TextStyle(fontSize: 12, color: _textHint)),
+              ],
+            ),
+          ),
+          SwitchTheme(
+            data: SwitchThemeData(
+              trackOutlineColor: WidgetStateProperty.resolveWith((_) => Colors.transparent),
+            ),
+            child: Switch(
+              value: state.notifOn,
+              activeThumbColor: _card,
+              activeTrackColor: _gold,
+              onChanged: state.toggleNotif,
+            ),
+          ),
         ],
       ),
     );

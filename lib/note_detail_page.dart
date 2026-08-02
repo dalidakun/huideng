@@ -1,0 +1,936 @@
+import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
+
+import 'auth_service.dart';
+import 'cloud_notes_service.dart';
+import 'login_page.dart';
+
+const Color _primary = Color(0xFF5C4033);
+const Color _primaryLight = Color(0xFF8B6B5A);
+const Color _gold = Color(0xFFD4A06A);
+const Color _bg = Color(0xFFF5EDE3);
+const Color _card = Color(0xFFFFFAF5);
+const Color _text = Color(0xFF3E2723);
+const Color _textSec = Color(0xFF8B6B5A);
+const Color _textHint = Color(0xFFC4B5A8);
+const Color _border = Color(0xFFEBE1D6);
+
+class NoteDetailPage extends StatefulWidget {
+  final String noteId;
+  const NoteDetailPage({super.key, required this.noteId});
+
+  @override
+  State<NoteDetailPage> createState() => _NoteDetailPageState();
+}
+
+class _NoteDetailPageState extends State<NoteDetailPage> {
+  PlazaNote? _note;
+  List<PlazaComment> _comments = [];
+  bool _loading = true;
+  bool _error = false;
+  bool _liking = false;
+  bool _favoriting = false;
+  bool _reposting = false;
+  final TextEditingController _commentController = TextEditingController();
+  bool _sendingComment = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = false;
+    });
+    try {
+      await CloudNotesService.instance.refreshFavoriteNoteIds();
+      await CloudNotesService.instance.refreshFollowStates();
+      final note = await CloudNotesService.instance.getNoteById(widget.noteId);
+      final comments =
+          await CloudNotesService.instance.getComments(widget.noteId);
+      int viewCount = note.viewCount;
+      try {
+        viewCount = await CloudNotesService.instance.incView(widget.noteId);
+      } catch (_) {}
+      if (!mounted) return;
+      setState(() {
+        _note = PlazaNote(
+          id: note.id,
+          ownerUserId: note.ownerUserId,
+          title: note.title,
+          content: note.content,
+          authorName: note.authorName,
+          visibility: note.visibility,
+          status: note.status,
+          likeCount: note.likeCount,
+          commentCount: note.commentCount,
+          viewCount: viewCount,
+          repostCount: note.repostCount,
+          repostOf: note.repostOf,
+          repostSourceAuthor: note.repostSourceAuthor,
+          createdAt: note.createdAt,
+          updatedAt: note.updatedAt,
+        );
+        _comments = comments;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = true;
+      });
+    }
+  }
+
+  Future<void> _toggleLike() async {
+    final note = _note;
+    if (note == null) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    if (_liking) return;
+    setState(() => _liking = true);
+    try {
+      final (liked, count) =
+          await CloudNotesService.instance.toggleLike(note.id);
+      if (!mounted) return;
+      setState(() {
+        _note = PlazaNote(
+          id: note.id,
+          ownerUserId: note.ownerUserId,
+          title: note.title,
+          content: note.content,
+          authorName: note.authorName,
+          visibility: note.visibility,
+          status: note.status,
+          likeCount: count,
+          commentCount: note.commentCount,
+          viewCount: note.viewCount,
+          repostCount: note.repostCount,
+          repostOf: note.repostOf,
+          repostSourceAuthor: note.repostSourceAuthor,
+          createdAt: note.createdAt,
+          updatedAt: note.updatedAt,
+        );
+        _liking = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _liking = false);
+      _showToast(e.toString());
+    }
+  }
+
+  Future<void> _sendComment() async {
+    final content = _commentController.text.trim();
+    if (content.isEmpty) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    if (_sendingComment) return;
+    setState(() => _sendingComment = true);
+    try {
+      final comment =
+          await CloudNotesService.instance.createComment(widget.noteId, content);
+      if (!mounted) return;
+      setState(() {
+        _comments.add(comment);
+        _commentController.clear();
+        _sendingComment = false;
+        _note = _note == null
+            ? null
+            : PlazaNote(
+                id: _note!.id,
+                ownerUserId: _note!.ownerUserId,
+                title: _note!.title,
+                content: _note!.content,
+                authorName: _note!.authorName,
+                visibility: _note!.visibility,
+                status: _note!.status,
+                likeCount: _note!.likeCount,
+                commentCount: _note!.commentCount + 1,
+                viewCount: _note!.viewCount,
+                repostCount: _note!.repostCount,
+                repostOf: _note!.repostOf,
+                repostSourceAuthor: _note!.repostSourceAuthor,
+                createdAt: _note!.createdAt,
+                updatedAt: _note!.updatedAt,
+              );
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sendingComment = false);
+      _showToast(e.toString());
+    }
+  }
+
+  Future<void> _deleteComment(PlazaComment comment) async {
+    final note = _note;
+    final me = AuthService.instance.currentUser.value;
+    if (me == null) return;
+    if (comment.authorId != me.id && note?.ownerUserId != me.id) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除评论',
+            style: TextStyle(
+                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: const Text('确定删除这条评论吗？',
+            style: TextStyle(color: _textSec)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('删除',
+                  style: TextStyle(
+                      color: Colors.red, fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await CloudNotesService.instance.deleteComment(comment.id);
+      if (!mounted) return;
+      setState(() => _comments.removeWhere((c) => c.id == comment.id));
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(e.toString());
+    }
+  }
+
+  Future<void> _report() async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    final reasons = ['内容与修学无关', '不当言论', '广告/骚扰', '其他'];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text('举报笔记',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            ...reasons.map((r) => InkWell(
+                  onTap: () => Navigator.pop(ctx, r),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(r,
+                          style: TextStyle(fontSize: 15, color: _text)),
+                    ),
+                  ),
+                )),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selected == null) return;
+    try {
+      await CloudNotesService.instance
+          .reportNote(widget.noteId, selected);
+      _showToast('举报已提交，感谢反馈');
+    } catch (e) {
+      _showToast(e.toString());
+    }
+  }
+
+  void _promptLogin() {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => const LoginPage()));
+  }
+
+  Future<void> _toggleFavorite() async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    if (_favoriting) return;
+    setState(() => _favoriting = true);
+    try {
+      final favorited =
+          await CloudNotesService.instance.toggleNoteFavorite(widget.noteId);
+      if (!mounted) return;
+      setState(() => _favoriting = false);
+      _showToast(favorited ? '已收藏' : '已取消收藏');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _favoriting = false);
+      _showToast(e.toString());
+    }
+  }
+
+  Future<void> _repost() async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    if (_reposting) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('转发笔记',
+            style: TextStyle(
+                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: const Text('转发后将以你的名义在菩提空间分享这条笔记，确定转发吗？',
+            style: TextStyle(color: _textSec)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('转发',
+                  style: TextStyle(
+                      color: _gold, fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _reposting = true);
+    try {
+      final newId = await CloudNotesService.instance.repostNote(widget.noteId);
+      if (!mounted) return;
+      setState(() => _reposting = false);
+      _showToast('已转发到菩提空间');
+      if (newId.isNotEmpty) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: newId)),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _reposting = false);
+      _showToast(e.toString());
+    }
+  }
+
+  Future<void> _share() async {
+    final note = _note;
+    if (note == null) return;
+    final text = '《${note.title}》\n'
+        '${note.content.length > 120 ? '${note.content.substring(0, 120)}…' : note.content}\n'
+        '—— 来自「慧灯」App · ${note.authorName} 的修学分享';
+    try {
+      await SharePlus.instance.share(ShareParams(text: text));
+    } catch (e) {
+      if (!mounted) return;
+      _showToast('分享失败：$e');
+    }
+  }
+
+  void _showToast(String text) {
+    if (!mounted) return;
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final topInset = MediaQuery.of(ctx).padding.top;
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Material(
+                color: _primary,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  child: Text(
+                    text,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    Future.delayed(const Duration(milliseconds: 2000), () {
+      if (entry.mounted) entry.remove();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: _bg,
+        elevation: 0,
+        title: const Text('笔记详情',
+            style: TextStyle(
+                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.report_outlined,
+                color: _textSec, size: 20),
+            onPressed: _report,
+          ),
+        ],
+      ),
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: _gold));
+    }
+    if (_error || _note == null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 48, color: _textHint),
+            const SizedBox(height: 12),
+            Text('加载失败', style: TextStyle(fontSize: 15, color: _textSec)),
+            const SizedBox(height: 12),
+            TextButton(onPressed: _load, child: const Text('重试')),
+          ],
+        ),
+      );
+    }
+    final note = _note!;
+    final liked =
+        CloudNotesService.instance.likedNoteIds.contains(note.id);
+    return Column(
+      children: [
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            children: [
+              _buildUserHeader(note),
+              if (note.repostOf.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.repeat, size: 13, color: _gold),
+                    const SizedBox(width: 4),
+                    Text('转发自 ${note.repostSourceAuthor}',
+                        style: const TextStyle(fontSize: 12, color: _gold)),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 14),
+              Text(note.title,
+                  style: const TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      height: 1.4,
+                      color: _text)),
+              const SizedBox(height: 10),
+              Text(note.content,
+                  style: const TextStyle(
+                      fontSize: 15, color: _text, height: 1.75)),
+              const SizedBox(height: 8),
+              Text(_formatTime(note.createdAt),
+                  style: const TextStyle(fontSize: 11, color: _textHint)),
+              const SizedBox(height: 16),
+              const Divider(height: 1, color: _border),
+              const SizedBox(height: 6),
+              _buildActionsRow(note, liked),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Text('评论 ${_comments.length}',
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: _text)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (_comments.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: Center(
+                    child: Text('还没有评论，来说两句吧',
+                        style:
+                            TextStyle(fontSize: 13, color: _textHint)),
+                  ),
+                )
+              else
+                for (final c in _comments) _buildCommentRow(c),
+            ],
+          ),
+        ),
+        _buildBottomBar(),
+      ],
+    );
+  }
+
+  Widget _buildCommentRow(PlazaComment c) {
+    final me = AuthService.instance.currentUser.value;
+    final canDelete = me != null &&
+        (c.authorId == me.id || _note?.ownerUserId == me.id);
+    return InkWell(
+      onLongPress: canDelete ? () => _deleteComment(c) : null,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: _primary.withValues(alpha: 0.10),
+              child: Icon(Icons.person, size: 15, color: _primaryLight),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(c.authorName,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _primaryLight)),
+                      const SizedBox(width: 8),
+                      Text(_formatTime(c.createdAt),
+                          style: const TextStyle(
+                              fontSize: 11, color: _textHint)),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(c.content,
+                      style: const TextStyle(
+                          fontSize: 14, color: _text, height: 1.5)),
+                ],
+              ),
+            ),
+            if (canDelete)
+              GestureDetector(
+                onTap: () => _deleteComment(c),
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.delete_outline,
+                      size: 15, color: _textHint),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomBar() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: _card,
+        border: Border(top: BorderSide(color: _border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 40,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: _bg,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: TextField(
+                    controller: _commentController,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _sendComment(),
+                    style: const TextStyle(fontSize: 14, color: _text),
+                    decoration: const InputDecoration(
+                      hintText: '说点什么…',
+                      hintStyle: TextStyle(color: _textHint),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding:
+                          EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                onPressed: _sendingComment ? null : _sendComment,
+                icon: _sendingComment
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: _gold))
+                    : const Icon(Icons.send_rounded,
+                        color: _primary, size: 22),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUserHeader(PlazaNote note) {
+    final me = AuthService.instance.currentUser.value;
+    final isSelf = me != null && note.ownerUserId == me.id;
+    return Row(
+      children: [
+        CircleAvatar(
+          radius: 18,
+          backgroundColor: _primary.withValues(alpha: 0.12),
+          child: Icon(Icons.person, size: 20, color: _primaryLight),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(note.authorName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ],
+          ),
+        ),
+        if (!isSelf)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _showUserMenu(note),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.more_horiz, size: 22, color: _textSec),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _showUserMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null) {
+      _promptLogin();
+      return;
+    }
+    if (me.id == note.ownerUserId) return;
+    final following =
+        CloudNotesService.instance.followingUserIds.contains(note.ownerUserId);
+    final blocked =
+        CloudNotesService.instance.blockedUserIds.contains(note.ownerUserId);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(note.authorName,
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(
+              ctx,
+              following ? 'unfollow' : 'follow',
+              Icons.person_add_alt,
+              following ? '取消关注' : '关注该用户',
+            ),
+            _menuItem(
+              ctx,
+              blocked ? 'unblock' : 'block',
+              Icons.block_outlined,
+              blocked ? '取消屏蔽' : '屏蔽该用户',
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      if (choice == 'follow' || choice == 'unfollow') {
+        final ok =
+            await CloudNotesService.instance.toggleFollow(note.ownerUserId);
+        if (!mounted) return;
+        setState(() {});
+        _showToast(ok ? '已关注' : '已取消关注');
+      } else if (choice == 'block') {
+        final ok =
+            await CloudNotesService.instance.toggleBlockUser(note.ownerUserId);
+        if (!mounted) return;
+        _showToast(ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+        if (ok) Navigator.pop(context);
+      } else if (choice == 'unblock') {
+        final ok =
+            await CloudNotesService.instance.toggleBlockUser(note.ownerUserId);
+        if (!mounted) return;
+        setState(() {});
+        _showToast(ok ? '已屏蔽' : '已取消屏蔽');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(e.toString());
+    }
+  }
+
+  Widget _menuItem(
+      BuildContext ctx, String value, IconData icon, String label) {
+    return InkWell(
+      onTap: () => Navigator.pop(ctx, value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: _textSec),
+            const SizedBox(width: 12),
+            Text(label, style: TextStyle(fontSize: 15, color: _text)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionsRow(PlazaNote note, bool liked) {
+    final favorited =
+        CloudNotesService.instance.favoriteNoteIds.contains(note.id);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildActionCell(
+                    _CommentBubbleIcon(color: _textSec),
+                    _textSec,
+                    '${_comments.length}',
+                    null),
+                _buildActionCell(
+                    Icon(Icons.repeat_rounded, size: 20, color: _textSec),
+                    _textSec,
+                    note.repostCount > 0 ? '${note.repostCount}' : '',
+                    _reposting ? null : _repost),
+                _buildActionCell(
+                    Icon(
+                        liked
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        size: 20,
+                        color: liked ? _gold : _textSec),
+                    liked ? _gold : _textSec,
+                    '${note.likeCount}',
+                    _liking ? null : _toggleLike),
+                _buildActionCell(
+                    _ThinBarsIcon(color: _textSec),
+                    _textSec,
+                    '${note.viewCount}',
+                    null),
+              ],
+            ),
+          ),
+          const SizedBox(width: 36),
+          _buildActionCell(
+              Icon(
+                  favorited
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  size: 20,
+                  color: favorited ? _gold : _textSec),
+              favorited ? _gold : _textSec,
+              '',
+              _favoriting ? null : _toggleFavorite),
+          const SizedBox(width: 6),
+          _buildActionCell(
+              Icon(Icons.share_rounded, size: 20, color: _textSec),
+              _textSec,
+              '',
+              _share),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionCell(Widget icon, Color color, String text,
+      VoidCallback? onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(width: 20, height: 20, child: icon),
+            if (text.isNotEmpty) ...[
+              const SizedBox(width: 4),
+              Text(text, style: TextStyle(fontSize: 12, color: color)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(t.year, t.month, t.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) {
+      return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    }
+    if (diff == 1) return '昨天';
+    if (t.year == now.year) return '${t.month}月${t.day}日';
+    return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Twitter 风格的评论气泡：略微圆润的椭圆气泡 + 左下小尾巴。
+class _CommentBubbleIcon extends StatelessWidget {
+  final Color color;
+  const _CommentBubbleIcon({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(painter: _CommentBubblePainter(color));
+  }
+}
+
+class _CommentBubblePainter extends CustomPainter {
+  final Color color;
+  _CommentBubblePainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final w = size.width;
+    final h = size.height;
+
+    // 气泡主体：圆润的椭圆（左右两侧弧度大，接近 Twitter 样式）
+    final rect = RRect.fromRectAndCorners(
+      Rect.fromLTWH(1, 1.5, w - 2, h - 6),
+      topLeft: Radius.circular(w * 0.45),
+      topRight: Radius.circular(w * 0.45),
+      bottomLeft: Radius.circular(w * 0.45),
+      bottomRight: Radius.circular(w * 0.45),
+    );
+    canvas.drawRRect(rect, paint);
+
+    // 左下小尾巴：真正的三角符号，底边贴合气泡底部，顶点向下
+    final tail = Path()
+      ..moveTo(w * 0.20, h - 4.5)
+      ..lineTo(w * 0.30, h - 4.5)
+      ..lineTo(w * 0.15, h - 1.2)
+      ..close();
+    canvas.drawPath(tail, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CommentBubblePainter old) =>
+      old.color != color;
+}
+
+/// Twitter 风格的数据图：三根细长的竖状柱，高度递增。
+class _ThinBarsIcon extends StatelessWidget {
+  final Color color;
+  const _ThinBarsIcon({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(painter: _ThinBarsPainter(color));
+  }
+}
+
+class _ThinBarsPainter extends CustomPainter {
+  final Color color;
+  _ThinBarsPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+
+    final w = size.width;
+    final h = size.height;
+    final baseY = h - 2.5;
+    final xs = [w * 0.2, w * 0.5, w * 0.8];
+    final tops = [h * 0.38, h * 0.24, h * 0.10];
+
+    for (int i = 0; i < xs.length; i++) {
+      canvas.drawLine(
+        Offset(xs[i], tops[i]),
+        Offset(xs[i], baseY),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ThinBarsPainter old) => old.color != color;
+}

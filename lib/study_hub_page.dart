@@ -1,12 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_service.dart';
+import 'login_page.dart';
 import 'reading_page.dart';
 import 'checkin_settings_page.dart';
 import 'checkin_goals_page.dart';
 import 'sutra_list_page.dart';
 import 'calendar_page.dart';
+import 'plaza_page.dart';
+import 'cloud_notes_service.dart';
+import 'note_detail_page.dart';
+import 'note_edit_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -18,6 +27,23 @@ const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 const Color _overlay = Color(0xFFFFF5EC);
+
+const Map<String, String> _plazaTabMeta = {
+  'discover': '发现',
+  'follow': '关注',
+  'announce': '公告',
+};
+
+/// 每个广场栏目的笔记流缓存：切换栏目时不重新拉取，直接展示已缓存内容，
+/// 离开栏目时后台预取，回到栏目时数据已经就绪。
+class _PlazaFeedCache {
+  PlazaNote? pinned;
+  List<PlazaNote> notes = [];
+  int page = 1;
+  bool hasMore = true;
+  bool initial = true;
+  bool error = false;
+}
 
 class StudyHubPage extends StatefulWidget {
   const StudyHubPage({super.key});
@@ -34,7 +60,10 @@ class StudyHubPageState extends State<StudyHubPage>
     _warmPrefs = await SharedPreferences.getInstance();
   }
 
-  void reload() => _loadData();
+  void reload() {
+    _loadData();
+    _refreshCurrentSmooth();
+  }
   String? _currentTitle;
   String? _currentFilePath;
   double _progress = 0.0;
@@ -43,8 +72,22 @@ class StudyHubPageState extends State<StudyHubPage>
   int _studyDays = 0;
   String? _lockedTitle;
   String? _lockedFilePath;
+  bool _currentFavorite = false;
   List<Map<String, dynamic>> _customTypes = [];
   bool _loaded = false;
+  int _tabIndex = 0;
+  List<String> _plazaTabs = ['discover', 'follow', 'announce'];
+  final Map<String, _PlazaFeedCache> _tabCaches = {};
+  PlazaNote? _pinnedNote;
+  final List<PlazaNote> _feedNotes = [];
+  final Set<String> _followedIds = {};
+  final ScrollController _feedScroll = ScrollController();
+  int _feedPage = 1;
+  bool _feedHasMore = true;
+  bool _feedInitial = true;
+  bool _feedLoading = false;
+  bool _feedError = false;
+  static const int _feedPageSize = 20;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
@@ -54,7 +97,9 @@ class StudyHubPageState extends State<StudyHubPage>
     _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
+    _feedScroll.addListener(_onFeedScroll);
     _loadData();
+    _loadFeed();
   }
 
   @override
@@ -68,12 +113,14 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void didPopNext() {
     _loadData();
+    _refreshCurrentSmooth();
   }
 
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
     _pulseController.dispose();
+    _feedScroll.dispose();
     super.dispose();
   }
 
@@ -89,29 +136,146 @@ class StudyHubPageState extends State<StudyHubPage>
       unawaited(prefs.setString('study_last_date', today));
     }
 
+    String? title;
+    String? path;
+    final lockTitle = prefs.getString('locked_sutra_title');
+    final lockPath = prefs.getString('locked_sutra_file_path');
+    String? lockT;
+    String? lockP;
+    if (lockTitle != null) {
+      title = lockTitle;
+      path = lockPath;
+      lockT = lockTitle;
+      lockP = lockPath;
+    } else {
+      title = prefs.getString('current_sutra_title');
+      path = prefs.getString('current_sutra_file_path');
+    }
+    final fav = await _isCurrentFavorite(title);
+
+    var plazaTabs = <String>['discover', 'follow', 'announce'];
+    final tabOrderRaw = prefs.getString('plaza_tab_order');
+    if (tabOrderRaw != null && tabOrderRaw.isNotEmpty) {
+      try {
+        final saved = (jsonDecode(tabOrderRaw) as List<dynamic>).cast<String>();
+        final valid = <String>[];
+        for (final k in saved) {
+          if (_plazaTabMeta.containsKey(k) && !valid.contains(k)) valid.add(k);
+        }
+        for (final k in _plazaTabMeta.keys) {
+          if (!valid.contains(k)) valid.add(k);
+        }
+        plazaTabs = valid;
+      } catch (_) {}
+    }
+
     setState(() {
       _loaded = true;
-      final lockTitle = prefs.getString('locked_sutra_title');
-      final lockPath = prefs.getString('locked_sutra_file_path');
-      if (lockTitle != null) {
-        _currentTitle = lockTitle;
-        _currentFilePath = lockPath;
-        _lockedTitle = lockTitle;
-        _lockedFilePath = lockPath;
-      } else {
-        _currentTitle = prefs.getString('current_sutra_title');
-        _currentFilePath = prefs.getString('current_sutra_file_path');
-        _lockedTitle = null;
-        _lockedFilePath = null;
-      }
+      _currentTitle = title;
+      _currentFilePath = path;
+      _lockedTitle = lockT;
+      _lockedFilePath = lockP;
       if (_currentFilePath != null) {
         _progress = prefs.getDouble('progress_$_currentFilePath') ?? 0.0;
       }
+      _currentFavorite = fav;
       _todayCheckIns = _loadTodayCheckIns(prefs);
       _checkinStreak = _calcStreak(prefs);
       _studyDays = prefs.getInt('study_day_count') ?? 0;
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes = (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
+      _plazaTabs = plazaTabs;
+    });
+  }
+
+  Future<bool> _isCurrentFavorite(String? title) async {
+    if (title == null) return false;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      if (!await file.exists()) return false;
+      final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+      for (final e in decoded) {
+        if (e is Map && e['title'] == title) {
+          return e['isFavorite'] == true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _toggleFavoriteCurrent() async {
+    final title = _currentTitle;
+    if (title == null) return;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      if (!await file.exists()) {
+        _showTopToast('未找到经书列表，无法收藏', isError: true);
+        return;
+      }
+      final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+      final list = decoded.map((e) => (e as Map<String, dynamic>)).toList();
+      final idx = list.indexWhere((e) => e['title'] == title);
+      if (idx < 0) {
+        _showTopToast('未找到该经书，无法收藏', isError: true);
+        return;
+      }
+      final wasFav = list[idx]['isFavorite'] == true;
+      list[idx]['isFavorite'] = !wasFav;
+      list[idx]['favoriteTime'] = wasFav ? null : DateTime.now().toIso8601String();
+      await file.writeAsString(jsonEncode(list));
+      if (!mounted) return;
+      setState(() => _currentFavorite = !wasFav);
+    } catch (_) {
+      _showTopToast('收藏失败，请重试', isError: true);
+    }
+  }
+
+  void _showTopToast(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final topPad = MediaQuery.of(context).padding.top;
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => Positioned(
+        top: topPad + kToolbarHeight + 10,
+        left: 20,
+        right: 20,
+        child: IgnorePointer(
+          child: Material(
+            color: Colors.transparent,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                decoration: BoxDecoration(
+                  color: _text.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.14), blurRadius: 14, offset: const Offset(0, 4)),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(isError ? Icons.info_outline : Icons.star, size: 16, color: _gold),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(msg, style: const TextStyle(fontSize: 13, color: Colors.white)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    overlay.insert(entry);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (entry.mounted) entry.remove();
     });
   }
 
@@ -141,9 +305,392 @@ class StudyHubPageState extends State<StudyHubPage>
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
 
+  String _displayTitle(String title) =>
+      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+
   void _openSutra() {
     if (_currentTitle == null) return;
     Navigator.push(context, MaterialPageRoute(builder: (_) => ReadingPage(title: _currentTitle!, filePath: _currentFilePath)));
+  }
+
+  void _onFeedScroll() {
+    if (_feedScroll.position.pixels >= _feedScroll.position.maxScrollExtent - 200) {
+      _loadMoreFeed();
+    }
+  }
+
+  /// 加载当前 tab 的笔记流。发现：热门第一篇 + 全部最新（无限分页）。
+  /// 关注：仅展示已关注同修的笔记。公告：暂为占位 UI。
+  Future<void> _loadFeed() async {
+    await CloudNotesService.instance.refreshLikedNoteIds();
+    if (!mounted) return;
+    final tab = _plazaTabs[_tabIndex];
+    setState(() {
+      _feedInitial = true;
+      _feedError = false;
+      _pinnedNote = null;
+      _feedNotes.clear();
+      _feedPage = 1;
+      _feedHasMore = true;
+      _feedLoading = false;
+    });
+    try {
+      if (tab == 'discover') {
+        final (hot, _) = await CloudNotesService.instance
+            .getPlazaNotes(page: 1, pageSize: 1, sort: 'hot');
+        final pinned = hot.isNotEmpty ? hot.first : null;
+        final (list, hasMore) = await CloudNotesService.instance
+            .getPlazaNotes(page: 1, pageSize: _feedPageSize);
+        if (mounted) {
+          setState(() {
+            _pinnedNote = pinned;
+            _feedNotes.addAll(list.where((n) => n.id != pinned?.id));
+            _feedPage = 2;
+            _feedHasMore = hasMore;
+            _feedInitial = false;
+          });
+        }
+      } else if (tab == 'follow') {
+        await _loadFollowedIds();
+        if (mounted) setState(() => _feedInitial = false);
+        if (mounted && _followedIds.isNotEmpty) {
+          await _loadFollowingNotes();
+        }
+      } else {
+        if (mounted) setState(() => _feedInitial = false);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _feedInitial = false;
+          _feedError = true;
+        });
+      }
+    }
+    _saveFeedToCache(tab);
+  }
+
+  _PlazaFeedCache _cacheFor(String tab) =>
+      _tabCaches.putIfAbsent(tab, _PlazaFeedCache.new);
+
+  /// 把当前正在展示的栏目内容快照进缓存，供切换栏目后恢复。
+  void _saveFeedToCache(String tab) {
+    final c = _cacheFor(tab);
+    c.pinned = _pinnedNote;
+    c.notes = List.of(_feedNotes);
+    c.page = _feedPage;
+    c.hasMore = _feedHasMore;
+    c.initial = _feedInitial;
+    c.error = _feedError;
+  }
+
+  /// 把某栏目的缓存内容恢复到当前展示状态（不触发网络请求）。
+  void _restoreFeedFromCache(String tab) {
+    final c = _cacheFor(tab);
+    _pinnedNote = c.pinned;
+    _feedNotes
+      ..clear()
+      ..addAll(c.notes);
+    _feedPage = c.page;
+    _feedHasMore = c.hasMore;
+    _feedInitial = c.initial;
+    _feedError = c.error;
+    _feedLoading = false;
+  }
+
+  /// 平滑刷新当前栏目：已有缓存就后台刷新（不闪加载态），首次才全量加载。
+  void _refreshCurrentSmooth() {
+    final tab = _plazaTabs[_tabIndex];
+    if (_cacheFor(tab).initial) {
+      _loadFeed();
+    } else {
+      _refreshFeedInBackground(tab);
+    }
+  }
+
+  /// 后台预取指定栏目的最新数据，直接写入缓存；若用户正好在该栏目则同步到界面。
+  Future<void> _refreshFeedInBackground(String tab) async {
+    if (tab == 'announce') return;
+    final c = _cacheFor(tab);
+    try {
+      if (tab == 'discover') {
+        final (hot, _) = await CloudNotesService.instance
+            .getPlazaNotes(page: 1, pageSize: 1, sort: 'hot');
+        final pinned = hot.isNotEmpty ? hot.first : null;
+        final (list, hasMore) = await CloudNotesService.instance
+            .getPlazaNotes(page: 1, pageSize: _feedPageSize);
+        if (!mounted) return;
+        c.pinned = pinned;
+        c.notes = list.where((n) => n.id != pinned?.id).toList();
+        c.page = 2;
+        c.hasMore = hasMore;
+        c.initial = false;
+        c.error = false;
+      } else {
+        final prefs = await SharedPreferences.getInstance();
+        final raw = prefs.getString('followed_user_ids') ?? '';
+        final ids = raw.isEmpty
+            ? <String>{}
+            : raw.split(',').where((s) => s.isNotEmpty).toSet();
+        final all = <PlazaNote>[];
+        final seen = <String>{};
+        var page = 1;
+        var hasMore = true;
+        while (hasMore && page <= 50) {
+          final (list, more) = await CloudNotesService.instance
+              .getPlazaNotes(page: page, pageSize: _feedPageSize);
+          for (final n in list) {
+            if (ids.contains(n.ownerUserId) && seen.add(n.id)) all.add(n);
+          }
+          hasMore = more;
+          page++;
+        }
+        if (!mounted) return;
+        c.notes = all;
+        c.hasMore = false;
+        c.initial = false;
+        c.error = false;
+      }
+      if (!mounted) return;
+      if (_plazaTabs[_tabIndex] == tab) {
+        _restoreFeedFromCache(tab);
+        setState(() {});
+      }
+    } catch (_) {
+      if (!mounted) return;
+      c.error = true;
+      c.initial = false;
+      if (_plazaTabs[_tabIndex] == tab) {
+        _restoreFeedFromCache(tab);
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _loadFollowedIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('followed_user_ids') ?? '';
+    final ids = raw.isEmpty
+        ? <String>{}
+        : raw.split(',').where((s) => s.isNotEmpty).toSet();
+    if (!mounted) return;
+    setState(() => _followedIds
+      ..clear()
+      ..addAll(ids));
+  }
+
+  /// 关注 tab：拉取全部公开笔记并筛选出关注同修的作品。
+  Future<void> _loadFollowingNotes() async {
+    setState(() => _feedLoading = true);
+    try {
+      final all = <PlazaNote>[];
+      final seen = <String>{};
+      var page = 1;
+      var hasMore = true;
+      while (hasMore && page <= 50) {
+        final (list, more) = await CloudNotesService.instance
+            .getPlazaNotes(page: page, pageSize: _feedPageSize);
+        for (final n in list) {
+          if (_followedIds.contains(n.ownerUserId) && seen.add(n.id)) {
+            all.add(n);
+          }
+        }
+        hasMore = more;
+        page++;
+      }
+      if (!mounted) return;
+      setState(() {
+        _feedNotes
+          ..clear()
+          ..addAll(all);
+        _feedHasMore = false;
+        _feedLoading = false;
+        _feedInitial = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _feedLoading = false;
+        _feedInitial = false;
+        _feedError = true;
+      });
+    }
+  }
+
+  Future<void> _loadMoreFeed() async {
+    if (_plazaTabs[_tabIndex] != 'discover' ||
+        _feedLoading ||
+        !_feedHasMore ||
+        _feedInitial) {
+      return;
+    }
+    setState(() => _feedLoading = true);
+    try {
+      final (list, hasMore) = await CloudNotesService.instance
+          .getPlazaNotes(page: _feedPage, pageSize: _feedPageSize);
+      if (!mounted) return;
+      setState(() {
+        _feedNotes.addAll(list.where((n) => n.id != _pinnedNote?.id));
+        _feedPage++;
+        _feedHasMore = hasMore;
+        _feedLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _feedLoading = false);
+    }
+  }
+
+  void _onTabChanged(int i) {
+    if (_tabIndex == i) return;
+    final prevTab = _plazaTabs[_tabIndex];
+    _saveFeedToCache(prevTab);
+    setState(() {
+      _tabIndex = i;
+      _restoreFeedFromCache(_plazaTabs[i]);
+    });
+    if (_cacheFor(_plazaTabs[i]).initial) {
+      // 该栏目从未加载过，首次进入才全量加载。
+      _loadFeed();
+    }
+    // 后台预取刚离开的栏目，等再次回来时已是最新。
+    _refreshFeedInBackground(prevTab);
+  }
+
+  /// 弹出栏目排序面板，长按拖动调整顺序并持久化。
+  Future<void> _showTabSortDialog() async {
+    final result = await showModalBottomSheet<List<String>>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        var items = List<String>.from(_plazaTabs);
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('栏目排序',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: _text)),
+                    const SizedBox(height: 4),
+                    const Text('长按拖动调整栏目顺序',
+                        style: TextStyle(fontSize: 12, color: _textSec)),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: items.length * 56.0,
+                      child: ReorderableListView(
+                        shrinkWrap: true,
+                        buildDefaultDragHandles: false,
+                        onReorder: (o, n) {
+                          setModalState(() {
+                            if (n > o) n -= 1;
+                            final item = items.removeAt(o);
+                            items.insert(n, item);
+                          });
+                        },
+                        children: [
+                          for (var i = 0; i < items.length; i++)
+                            ListTile(
+                              key: ValueKey(items[i]),
+                              contentPadding:
+                                  const EdgeInsets.symmetric(horizontal: 4),
+                              leading: ReorderableDragStartListener(
+                                index: i,
+                                child: const Icon(Icons.drag_handle,
+                                    color: _textHint),
+                              ),
+                              title: Text(
+                                  _plazaTabMeta[items[i]] ?? items[i],
+                                  style: const TextStyle(
+                                      fontSize: 15, color: _text)),
+                              trailing: const Icon(Icons.unfold_more,
+                                  color: _textHint),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 44,
+                      child: FilledButton(
+                        onPressed: () => Navigator.pop(ctx, items),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _gold,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                        ),
+                        child: const Text('完成', style: TextStyle(fontSize: 15)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (result == null || result.isEmpty) return;
+    final currentType = _plazaTabs[_tabIndex];
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _plazaTabs = result;
+      _tabIndex = _plazaTabs.indexOf(currentType);
+      if (_tabIndex < 0) _tabIndex = 0;
+      _restoreFeedFromCache(_plazaTabs[_tabIndex]);
+    });
+    await prefs.setString('plaza_tab_order', jsonEncode(_plazaTabs));
+    if (_cacheFor(_plazaTabs[_tabIndex]).initial) {
+      _loadFeed();
+    }
+  }
+
+  Future<void> _toggleFollow(PlazaNote note) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _showTopToast('请先登录后再关注同修');
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('followed_user_ids') ?? '';
+    final ids = raw.isEmpty
+        ? <String>{}
+        : raw.split(',').where((s) => s.isNotEmpty).toSet();
+    final following = !ids.contains(note.ownerUserId);
+    if (following) {
+      ids.add(note.ownerUserId);
+    } else {
+      ids.remove(note.ownerUserId);
+    }
+    await prefs.setString('followed_user_ids', ids.join(','));
+    if (!mounted) return;
+    setState(() => _followedIds
+      ..clear()
+      ..addAll(ids));
+    if (_plazaTabs[_tabIndex] == 'follow') {
+      setState(() => _feedNotes.removeWhere((n) => n.id == note.id));
+    }
+    _showTopToast(following ? '已关注' : '已取消关注');
+  }
+
+  void _openPlaza() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const PlazaPage()));
+  }
+
+  void _openPlazaNote(PlazaNote note) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)));
   }
 
   Future<void> _openSutraByPath(String title, String? filePath) async {
@@ -274,15 +821,69 @@ class StudyHubPageState extends State<StudyHubPage>
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-        children: [
-          _buildCurrentSutraCard(),
-          const SizedBox(height: 14),
-          _buildCheckInCard(),
-        ],
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 60),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: FloatingActionButton(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NoteEditPage()),
+            ).then((_) => _refreshCurrentSmooth()),
+            heroTag: 'plaza_fab',
+            backgroundColor: const Color(0xFF5D4037),
+            elevation: 8,
+            highlightElevation: 12,
+            shape: const CircleBorder(),
+            child: const Icon(Icons.add, color: Colors.white, size: 24),
+          ),
+        ),
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final viewportH = constraints.maxHeight;
+          return RefreshIndicator(
+            onRefresh: _loadFeed,
+            color: _gold,
+            child: CustomScrollView(
+              controller: _feedScroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                    child: Column(
+                      children: [
+                        _buildCurrentSutraCard(),
+                        const SizedBox(height: 14),
+                        _buildCheckInCard(),
+                      ],
+                    ),
+                  ),
+                ),
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _PlazaHeaderDelegate(
+                    tabIndex: _tabIndex,
+                    tabs: _plazaTabs,
+                    onTabChanged: _onTabChanged,
+                    onReorderPressed: () => _showTabSortDialog(),
+                    textScale: MediaQuery.textScalerOf(context).scale(1.0),
+                  ),
+                ),
+                ..._buildFeedSlivers(viewportH),
+              ],
+            ),
+          );
+        },
       ),
     );
+  }
+
+  double _headerHeight() {
+    final scale = MediaQuery.textScalerOf(context).scale(1.0);
+    return (48 * scale).clamp(48.0, 88.0);
   }
 
   Widget _buildCurrentSutraCard() {
@@ -322,27 +923,27 @@ class StudyHubPageState extends State<StudyHubPage>
             behavior: HitTestBehavior.opaque,
             onTap: _currentTitle != null ? _openSutra : null,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
               child: Row(
                 children: [
                   Container(
-                    width: 30, height: 30,
+                    width: 28, height: 28,
                     decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.menu_book_rounded, size: 17, color: _primary),
+                    child: const Icon(Icons.menu_book_rounded, size: 16, color: _primary),
                   ),
                   const SizedBox(width: 10),
-                  Text('当前学习', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                  const Text('当前学习', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
                   const Spacer(),
                   if (_currentTitle != null)
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                      decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(12)),
+                      decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(11)),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.today, size: 12, color: _primaryLight),
+                          const Icon(Icons.today, size: 12, color: _primaryLight),
                           const SizedBox(width: 4),
-                          Text('已学$_studyDays天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
+                          Text('已学$_studyDays天', style: const TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
                         ],
                       ),
                     ),
@@ -351,18 +952,22 @@ class StudyHubPageState extends State<StudyHubPage>
             ),
           ),
           if (_currentTitle != null) ...[
+            const SizedBox(height: 6),
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _openSutra,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(_currentTitle!, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(_displayTitle(_currentTitle!), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _textSec, height: 1.4)),
+                    ),
+                  ],
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -379,7 +984,7 @@ class StudyHubPageState extends State<StudyHubPage>
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Text('${(_progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint, fontWeight: FontWeight.w500)),
+                  Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12, color: _textHint, fontWeight: FontWeight.w500)),
                 ],
               ),
             ),
@@ -401,7 +1006,25 @@ class StudyHubPageState extends State<StudyHubPage>
                       children: [
                         Icon(_lockedTitle != null ? Icons.lock : Icons.lock_open, size: 13),
                         const SizedBox(width: 4),
-                        Text(_lockedTitle != null ? '已锁定' : '锁定经书', style: TextStyle(fontSize: 13)),
+                        Text(_lockedTitle != null ? '已锁定' : '锁定经书', style: const TextStyle(fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 18),
+                  TextButton(
+                    onPressed: _toggleFavoriteCurrent,
+                    style: TextButton.styleFrom(
+                      foregroundColor: _currentFavorite ? _gold : _textSec,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(_currentFavorite ? Icons.star_rounded : Icons.star_outline_rounded, size: 13),
+                        const SizedBox(width: 4),
+                        Text(_currentFavorite ? '已收藏' : '收藏', style: const TextStyle(fontSize: 13)),
                       ],
                     ),
                   ),
@@ -409,7 +1032,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   TextButton(
                     onPressed: _showRecentSutras,
                     style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
-                    child: Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
+                    child: const Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
                   ),
                 ],
               ),
@@ -418,47 +1041,48 @@ class StudyHubPageState extends State<StudyHubPage>
             Center(
               child: Column(
                 children: [
+                  const SizedBox(height: 2),
                   AnimatedBuilder(
                     animation: _pulseAnim,
                     builder: (context, child) => Transform.scale(scale: _pulseAnim.value, child: child),
                     child: Container(
-                      width: 80, height: 80,
+                      width: 56, height: 56,
                       decoration: BoxDecoration(
                         color: _overlay,
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      child: Icon(Icons.auto_stories_rounded, size: 40, color: _primaryLight.withValues(alpha: 0.8)),
+                      child: Icon(Icons.auto_stories_rounded, size: 30, color: _primaryLight.withValues(alpha: 0.8)),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Text('今日尚未开启经文之旅', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: _text)),
-                  const SizedBox(height: 6),
-                  Text('选择一部经文，开始今日修学', style: TextStyle(fontSize: 14, color: _textSec)),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 10),
+                  Text('今日尚未开启经文之旅', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
+                  const SizedBox(height: 4),
+                  Text('选择一部经文，开始今日修学', style: TextStyle(fontSize: 13, color: _textSec)),
+                  const SizedBox(height: 14),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SutraListPage())),
-                        icon: const Icon(Icons.explore, size: 18),
-                        label: const Text('浏览经藏', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                        icon: const Icon(Icons.explore, size: 17),
+                        label: const Text('浏览经藏', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _gold,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           elevation: 0,
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                 ],
               ),
             ),
           ],
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
         ],
       ),
     );
@@ -513,9 +1137,9 @@ class StudyHubPageState extends State<StudyHubPage>
               ],
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
           SizedBox(
-            height: 76,
+            height: 66,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -534,7 +1158,7 @@ class StudyHubPageState extends State<StudyHubPage>
               },
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
@@ -555,7 +1179,7 @@ class StudyHubPageState extends State<StudyHubPage>
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.only(left: 20),
             child: Row(
@@ -584,6 +1208,416 @@ class StudyHubPageState extends State<StudyHubPage>
         ],
       ),
     );
+  }
+
+  /// 构建当前栏目的笔记流 slivers。为保证“发现/关注/公告”栏目栏被吸顶后，
+  /// 点击任意子项都不掉落，内容较少时用 spacer 补足滚动量，
+  /// 使内容高度至少达到视口高度（视口 - 栏目栏高度），从而始终能吸顶。
+  List<Widget> _buildFeedSlivers(double viewportH) {
+    final tab = _plazaTabs[_tabIndex];
+    if (tab == 'announce') {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: math.max(0.0, viewportH - _headerHeight()),
+              ),
+              child: _buildAnnounceBody(),
+            ),
+          ),
+        ),
+      ];
+    }
+    final pinnedVisible = tab == 'discover' && _pinnedNote != null;
+    final hasNotes = pinnedVisible || _feedNotes.isNotEmpty;
+    final minFeed = math.max(0.0, viewportH - _headerHeight());
+
+    if (!hasNotes) {
+      if (_feedInitial || _feedLoading) {
+        return [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: minFeed),
+                child: const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child:
+                      CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+                ),
+              ),
+            ),
+          ),
+        ];
+      }
+      if (_feedError) {
+        return [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: minFeed),
+                child: _buildFeedError(),
+              ),
+            ),
+          ),
+        ];
+      }
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: minFeed),
+              child: _buildFeedEmpty(),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    final feedLen = _feedNotes.length;
+    final showFooter = _feedLoading || !_feedHasMore || _feedError;
+    // 保守估计每条笔记高度，保证补足后的内容高度一定够吸顶。
+    final feedEstimate =
+        ((pinnedVisible ? 1 : 0) + feedLen) * 110.0 + (showFooter ? 70.0 : 0.0);
+    final spacerH = math.max(0.0, minFeed - feedEstimate);
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              if (pinnedVisible && index == 0) {
+                return _buildFeedTile(_pinnedNote!, featured: true);
+              }
+              final noteIndex = index - (pinnedVisible ? 1 : 0);
+              if (noteIndex < feedLen) {
+                return _buildFeedTile(_feedNotes[noteIndex]);
+              }
+              return _buildFeedFooter();
+            },
+            childCount:
+                (pinnedVisible ? 1 : 0) + feedLen + (showFooter ? 1 : 0),
+          ),
+        ),
+      ),
+      if (spacerH > 0)
+        SliverToBoxAdapter(child: SizedBox(height: spacerH)),
+    ];
+  }
+
+  Widget _buildFeedFooter() {
+    if (_feedLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _gold),
+          ),
+        ),
+      );
+    }
+    if (_feedError) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: TextButton.icon(
+            onPressed: _loadFeed,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('加载失败，点击重试', style: TextStyle(fontSize: 13)),
+            style: TextButton.styleFrom(foregroundColor: _textSec),
+          ),
+        ),
+      );
+    }
+    if (!_feedHasMore) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: Text('— 到底了 —',
+              style: const TextStyle(fontSize: 12, color: _textHint)),
+        ),
+      );
+    }
+    return const SizedBox(height: 12);
+  }
+
+  Widget _buildFeedEmpty() {
+    final isFollowing = _plazaTabs[_tabIndex] == 'follow';
+    final notLoggedIn = !AuthService.instance.isLoggedIn;
+    return Padding(
+      padding: const EdgeInsets.only(top: 60, bottom: 40),
+      child: Column(
+        children: [
+          Icon(Icons.auto_awesome_outlined, size: 52, color: _textHint),
+          const SizedBox(height: 14),
+          Text(
+            isFollowing
+                ? (notLoggedIn ? '登录后关注同修' : '还没有关注的笔记')
+                : '菩提空间还没有笔记',
+            style: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w600, color: _text),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            isFollowing
+                ? '关注同修后，这里会显示他们的新笔记'
+                : '分享你的修学心得，让大家一起受益',
+            style: const TextStyle(fontSize: 13, color: _textSec),
+          ),
+          const SizedBox(height: 18),
+          if (isFollowing && notLoggedIn)
+            FilledButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+              ),
+              icon: const Icon(Icons.login, size: 17),
+              label: const Text('登录',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              style: FilledButton.styleFrom(
+                backgroundColor: _gold,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+            )
+          else
+            OutlinedButton.icon(
+              onPressed: _openPlaza,
+              icon: const Icon(Icons.explore, size: 17),
+              label: const Text('去菩提空间看看', style: TextStyle(fontSize: 13)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF9A6B3F),
+                side: const BorderSide(color: Color(0xFF9A6B3F)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 公告 tab：管理员发布公告的展示位，功能暂未接入，先出占位 UI。
+  Widget _buildAnnounceBody() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 64,
+          height: 64,
+          decoration: BoxDecoration(
+            color: _gold.withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.campaign_outlined,
+              size: 30, color: Color(0xFF9A6B3F)),
+        ),
+        const SizedBox(height: 16),
+        const Text('暂无公告',
+            style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+        const SizedBox(height: 8),
+        const Text('管理员发布的公告将在这里显示',
+            style: TextStyle(fontSize: 13, color: _textSec)),
+      ],
+    );
+  }
+
+  Widget _buildFeedError() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 60, bottom: 40),
+      child: Column(
+        children: [
+          Icon(Icons.wifi_off_outlined, size: 52, color: _textHint),
+          const SizedBox(height: 14),
+          const Text('加载失败',
+              style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: _loadFeed,
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('重试', style: TextStyle(fontSize: 14)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _gold,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              elevation: 0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeedTile(PlazaNote note, {bool featured = false}) {
+    final preview = note.content.length > 60
+        ? '${note.content.substring(0, 60)}...'
+        : note.content;
+    final isMine =
+        AuthService.instance.currentUser.value?.id == note.ownerUserId;
+    final isLoggedIn = AuthService.instance.isLoggedIn;
+    final followed = _followedIds.contains(note.ownerUserId);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _openPlazaNote(note),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 13, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      note.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: _text),
+                    ),
+                  ),
+                  if (featured) ...[
+                    Container(
+                      margin: const EdgeInsets.only(left: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _gold.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text('热门',
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: Color(0xFF9A6B3F),
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                  if (isLoggedIn && !isMine) ...[
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () => _toggleFollow(note),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: followed
+                              ? Colors.transparent
+                              : _gold.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: followed
+                                  ? _border
+                                  : _gold.withValues(alpha: 0.4)),
+                        ),
+                        child: Text(
+                          followed ? '已关注' : '关注',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: followed
+                                ? _textHint
+                                : const Color(0xFF9A6B3F),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (note.content.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  preview,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13, color: _textSec, height: 1.5),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.person_outline, size: 13, color: _textHint),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(note.authorName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(fontSize: 12, color: _textSec)),
+                  ),
+                  const SizedBox(width: 12),
+                  const Icon(Icons.schedule, size: 12, color: _textHint),
+                  const SizedBox(width: 4),
+                  Text(_formatNoteTime(note.createdAt),
+                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                  const Spacer(),
+                  Icon(
+                    CloudNotesService.instance
+                            .likedNoteIds
+                            .contains(note.id)
+                        ? Icons.favorite
+                        : Icons.favorite_border,
+                    size: 13,
+                    color: _primaryLight,
+                  ),
+                  const SizedBox(width: 3),
+                  Text('${note.likeCount}',
+                      style: const TextStyle(fontSize: 12, color: _textSec)),
+                  const SizedBox(width: 10),
+                  const Icon(Icons.mode_comment_outlined,
+                      size: 12, color: _textHint),
+                  const SizedBox(width: 3),
+                  Text('${note.commentCount}',
+                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatNoteTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(t.year, t.month, t.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) {
+      return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    }
+    if (diff == 1) return '昨天';
+    if (t.year == now.year) return '${t.month}月${t.day}日';
+    return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
   }
 
   Future<void> _toggleCheckIn(String typeKey, String label) async {
@@ -638,6 +1672,101 @@ class StudyHubPageState extends State<StudyHubPage>
     return list.fold<double>(0, (s, e) => s + (double.tryParse((e['count'] ?? '').toString()) ?? 0));
   }
 
+}
+
+class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final int tabIndex;
+  final List<String> tabs;
+  final ValueChanged<int> onTabChanged;
+  final VoidCallback onReorderPressed;
+  final double textScale;
+
+  const _PlazaHeaderDelegate({
+    required this.tabIndex,
+    required this.tabs,
+    required this.onTabChanged,
+    required this.onReorderPressed,
+    this.textScale = 1.0,
+  });
+
+  double get _height => (48 * textScale).clamp(48.0, 88.0);
+
+  @override
+  double get minExtent => _height;
+
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: _bg,
+      ),
+      child: Align(
+        alignment: Alignment.bottomLeft,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 4, 0),
+          child: Row(
+            children: [
+              for (var i = 0; i < tabs.length; i++)
+                _buildTab(context, _plazaTabMeta[tabs[i]] ?? tabs[i], i),
+              const Spacer(),
+              IconButton(
+                onPressed: onReorderPressed,
+                tooltip: '排序',
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 40, height: 40),
+                icon: const Icon(Icons.menu, color: Color(0xFF8B6B5A), size: 20),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTab(BuildContext context, String label, int index) {
+    final selected = tabIndex == index;
+    return GestureDetector(
+      onTap: () => onTabChanged(index),
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                color: selected ? _text : _textSec,
+              ),
+            ),
+            const SizedBox(height: 3),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 18,
+              height: 3,
+              decoration: BoxDecoration(
+                color: selected ? _gold : Colors.transparent,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _PlazaHeaderDelegate oldDelegate) =>
+      oldDelegate.tabIndex != tabIndex ||
+      oldDelegate.textScale != textScale ||
+      oldDelegate.tabs.join(',') != tabs.join(',');
 }
 
 class _CheckInButton extends StatefulWidget {

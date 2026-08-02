@@ -63,10 +63,10 @@ class SutraListPage extends StatefulWidget {
   const SutraListPage({super.key, this.activeTab});
 
   @override
-  State<SutraListPage> createState() => _SutraListPageState();
+  State<SutraListPage> createState() => SutraListPageState();
 }
 
-class _SutraListPageState extends State<SutraListPage>
+class SutraListPageState extends State<SutraListPage>
     with SingleTickerProviderStateMixin, RouteAware {
   static const MethodChannel _appChannel = MethodChannel('app_channel');
   static const String _kApkLastUpdateTimeKey = 'apk_last_update_time';
@@ -489,7 +489,6 @@ class _SutraListPageState extends State<SutraListPage>
   List<Sutra> _filteredSutras = [];
   List<File> txtFiles = [];
 
-  bool _isFavoriteExpanded = false;
   bool _isReadExpanded = false;
   final Map<String, bool> _folderExpanded = {};
 
@@ -567,8 +566,7 @@ class _SutraListPageState extends State<SutraListPage>
     _loadLastRead();
     _loadAssetManifest();
     _loadDownloadedIds();
-    widget.activeTab?.addListener(_onActiveTabChanged);
-    _searchController.addListener(_filterSutras);
+    widget.activeTab?.addListener(_onActiveTabChanged);    _searchController.addListener(_filterSutras);
     _drawerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 320),
@@ -665,6 +663,12 @@ class _SutraListPageState extends State<SutraListPage>
     _bestAssetPathByTitleCache.clear();
     _missingComputed = false;
     _recomputeMissingSutrasIfReady();
+  }
+
+  /// 云端同步拉取后刷新经书列表与最近阅读。
+  Future<void> reload() async {
+    await _loadSutras();
+    await _loadLastRead();
   }
 
   Future<File> _sutraListFile() async {
@@ -804,12 +808,6 @@ class _SutraListPageState extends State<SutraListPage>
     // 更新文件夹展开状态
     for (var folder in _folders) {
       _folderExpanded[folder] = foldersWithResults.contains(folder);
-    }
-
-    // 如果有收藏夹中的经文匹配，也展开收藏夹
-    bool hasFavoriteResults = _filteredSutras.any((sutra) => sutra.isFavorite);
-    if (hasFavoriteResults) {
-      _isFavoriteExpanded = true;
     }
 
     // 如果有已读经文匹配，也展开已读文件夹
@@ -1160,17 +1158,6 @@ class _SutraListPageState extends State<SutraListPage>
       });
       _saveSutras();
     }
-  }
-
-  List<Sutra> _getFavoriteSutras() {
-    List<Sutra> favoriteSutras = _filteredSutras.where((sutra) => sutra.isFavorite).toList();
-    favoriteSutras.sort((a, b) {
-      if (a.favoriteTime == null && b.favoriteTime == null) return 0;
-      if (a.favoriteTime == null) return 1;
-      if (b.favoriteTime == null) return -1;
-      return b.favoriteTime!.compareTo(a.favoriteTime!);
-    });
-    return favoriteSutras;
   }
 
   List<Sutra> _getReadSutras() {
@@ -1797,7 +1784,6 @@ class _SutraListPageState extends State<SutraListPage>
     _drawerController.reverse();
     setState(() {
       _drawerOpen = false;
-      _isFavoriteExpanded = false;
       _isReadExpanded = false;
     });
   }
@@ -1856,17 +1842,6 @@ class _SutraListPageState extends State<SutraListPage>
               child: ListView(
                 padding: EdgeInsets.zero,
                 children: [
-                  _buildFolder(
-                    title: '我的收藏',
-                    sutras: _getFavoriteSutras(),
-                    isExpanded: _isFavoriteExpanded,
-                    onToggle: () {
-                      setState(() {
-                        _isFavoriteExpanded = !_isFavoriteExpanded;
-                      });
-                    },
-                    icon: Icons.favorite,
-                  ),
                   _buildFolder(
                     title: '已阅经文',
                     sutras: _getReadSutras(),

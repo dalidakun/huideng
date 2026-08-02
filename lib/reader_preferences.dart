@@ -1,44 +1,53 @@
-import 'dart:math';
-import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// 阅读偏好统一存储。阅读页与设置页共用同一套键，保证设置即时生效。
 class ReaderPreferences {
-  static const String _fontSizeKey = 'reader_font_size';
-  static const String _isNightModeKey = 'reader_night_mode';
-  static const String _progressKeyPrefix = 'progress_';
+  static const String fontSizeKey = 'fontSize';
+  static const String isDarkModeKey = 'isDarkMode';
+  static const String lineHeightKey = 'reader_line_height';
+  static const String pageModeKey = 'reader_page_mode';
+
+  /// 翻页方式：0=纵向滚动，1=左右翻页。
+  static const int pageModeScroll = 0;
+  static const int pageModeFlip = 1;
 
   static Future<double> getFontSize() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_fontSizeKey) ?? 14.0;
+    return prefs.getDouble(fontSizeKey) ?? 16.0;
   }
 
   static Future<void> setFontSize(double size) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_fontSizeKey, size);
+    await prefs.setDouble(fontSizeKey, size);
   }
 
-  static Future<bool> isNightMode() async {
+  static Future<bool> isDarkMode() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_isNightModeKey) ?? false;
+    return prefs.getBool(isDarkModeKey) ?? false;
   }
 
-  static Future<void> setNightMode(bool isNight) async {
+  static Future<void> setDarkMode(bool isDark) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_isNightModeKey, isNight);
+    await prefs.setBool(isDarkModeKey, isDark);
   }
 
-  static Future<int?> getProgress(String title) async {
+  static Future<double> getLineHeight() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('$_progressKeyPrefix${title}');
+    return prefs.getDouble(lineHeightKey) ?? 1.8;
   }
 
-  static Future<void> setProgress(String title, int position) async {
+  static Future<void> setLineHeight(double height) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('$_progressKeyPrefix${title}', position);
+    await prefs.setDouble(lineHeightKey, height);
   }
 
-  static Future<void> clearProgress(String title) async {
+  static Future<int> getPageMode() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_progressKeyPrefix${title}');
+    return prefs.getInt(pageModeKey) ?? pageModeScroll;
+  }
+
+  static Future<void> setPageMode(int mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(pageModeKey, mode);
   }
 }

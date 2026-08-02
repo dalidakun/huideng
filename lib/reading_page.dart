@@ -11,6 +11,7 @@ import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart';
 import 'app_state.dart';
+import 'reader_preferences.dart';
 
 class ReadingPage extends StatefulWidget {
   final String title;
@@ -31,8 +32,11 @@ class ReadingPage extends StatefulWidget {
 class _ReadingPageState extends State<ReadingPage> {
   String _content = '';
   double _fontSize = 16.0;
+  double _lineHeight = 1.8;
+  int _pageMode = ReaderPreferences.pageModeScroll;
   bool _isDarkMode = false;
   late ScrollController _scrollController;
+  PageController? _pageController;
   final TextEditingController _searchController = TextEditingController();
   bool _showSearchBar = false;
   bool _showMoreMenu = false;
@@ -50,6 +54,12 @@ class _ReadingPageState extends State<ReadingPage> {
   double? _savedProgress;
   int _restoreAttempts = 0;
 
+  // 翻页模式：分页结果与缓存，避免每帧重算。
+  List<String> _flipPages = [];
+  String _flipCacheKey = '';
+  int _currentFlipPage = 0;
+  bool _flipPageRestored = false;
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +70,7 @@ class _ReadingPageState extends State<ReadingPage> {
             : widget.filePath);
     _scrollController = ScrollController();
     _scrollController.addListener(_scrollListener);
+    _pageController = PageController();
     _saveCurrentSutra();
     _loadSettings();
     _loadSavedScrollState();
@@ -107,6 +118,7 @@ class _ReadingPageState extends State<ReadingPage> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _pageController?.dispose();
     _searchController.dispose();
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
     assistantVisible.value = false;
@@ -166,6 +178,8 @@ class _ReadingPageState extends State<ReadingPage> {
     setState(() {
       _fontSize = prefs.getDouble('fontSize') ?? 16.0;
       _isDarkMode = prefs.getBool('isDarkMode') ?? false;
+      _lineHeight = prefs.getDouble('reader_line_height') ?? 1.8;
+      _pageMode = prefs.getInt('reader_page_mode') ?? ReaderPreferences.pageModeScroll;
     });
   }
 
@@ -182,6 +196,8 @@ class _ReadingPageState extends State<ReadingPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('fontSize', _fontSize);
     await prefs.setBool('isDarkMode', _isDarkMode);
+    await prefs.setDouble('reader_line_height', _lineHeight);
+    await prefs.setInt('reader_page_mode', _pageMode);
   }
 
   Future<void> _loadContent() async {
@@ -547,9 +563,9 @@ class _ReadingPageState extends State<ReadingPage> {
         }
       },
       child: Scaffold(
-            backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFededed),
+            backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFFFF3E0),
             appBar: AppBar(
-              backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFededed),
+              backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFFFF3E0),
               elevation: 0,
               leadingWidth: 48,
               titleSpacing: 0,
@@ -702,19 +718,32 @@ class _ReadingPageState extends State<ReadingPage> {
                                 }
                               });
                             },
-                            child: SingleChildScrollView(
-                              controller: _scrollController,
-                              child: _isLoadingContent
-                                  ? const Center(
-                                      child: CircularProgressIndicator(),
-                                    )
-                                  : (_searchController.text.isEmpty
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                if (_isLoadingContent) {
+                                  return const Center(child: CircularProgressIndicator());
+                                }
+                                if (_pageMode == ReaderPreferences.pageModeFlip &&
+                                    _searchController.text.isEmpty) {
+                                  final pages = _getFlipPages(
+                                      constraints.maxWidth, constraints.maxHeight);
+                                  return PageView.builder(
+                                    controller: _pageController,
+                                    itemCount: pages.length,
+                                    onPageChanged: _onFlipPageChanged,
+                                    itemBuilder: (context, index) =>
+                                        _buildFlipPage(pages[index]),
+                                  );
+                                }
+                                return SingleChildScrollView(
+                                  controller: _scrollController,
+                                  child: _searchController.text.isEmpty
                                       ? SelectableText(
                                           _content,
                                           style: TextStyle(
                                             color: _isDarkMode ? Colors.white : const Color(0xFF212121),
                                             fontSize: _fontSize,
-                                            height: 1.8,
+                                            height: _lineHeight,
                                             letterSpacing: 0.5,
                                           ),
                                         )
@@ -723,7 +752,7 @@ class _ReadingPageState extends State<ReadingPage> {
                                             style: TextStyle(
                                               color: _isDarkMode ? Colors.white : const Color(0xFF212121),
                                               fontSize: _fontSize,
-                                              height: 1.8,
+                                              height: _lineHeight,
                                               letterSpacing: 0.5,
                                             ),
                                             children: _highlightText(_content),
@@ -748,7 +777,9 @@ class _ReadingPageState extends State<ReadingPage> {
                                           ],
                                         );
                                       },
-                                     )),
+                                     ),
+                                );
+                              },
                             ),
                           ),
                         ),
@@ -919,14 +950,13 @@ class _ReadingPageState extends State<ReadingPage> {
       child: FloatingActionButton(
         heroTag: heroTag,
         onPressed: onTap,
-        backgroundColor:
-            _isDarkMode ? const Color(0xFF2c2c2c) : const Color(0xFFf7f7f7),
+        backgroundColor: _isDarkMode ? Colors.white : const Color(0xFFf7f7f7),
         elevation: 8,
         highlightElevation: 12,
         shape: const CircleBorder(),
         child: IconTheme(
-          data: IconThemeData(
-            color: _isDarkMode ? Colors.white.withOpacity(0.85) : const Color(0xFF5d4037),
+          data: const IconThemeData(
+            color: Color(0xFF5d4037),
           ),
           child: child,
         ),
@@ -1055,5 +1085,107 @@ class _ReadingPageState extends State<ReadingPage> {
     }
 
     return spans;
+  }
+
+  TextStyle get _flipTextStyle => TextStyle(
+        color: _isDarkMode ? Colors.white : const Color(0xFF212121),
+        fontSize: _fontSize,
+        height: _lineHeight,
+        letterSpacing: 0.5,
+      );
+
+  /// 把全文按视口高度切成若干页（按行分页，保证分页间不丢字）。
+  List<String> _paginateContent(String text, double width, double height) {
+    if (text.isEmpty) return [text];
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: _flipTextStyle),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: width);
+    final lines = tp.computeLineMetrics();
+    if (lines.isEmpty) return [text];
+
+    final totalHeight = lines.fold<double>(0.0, (s, l) => s + l.height);
+    if (totalHeight <= height) return [text];
+
+    final pages = <String>[];
+    var startLine = 0;
+    while (startLine < lines.length) {
+      var endLine = startLine;
+      var acc = 0.0;
+      while (endLine < lines.length) {
+        final h = lines[endLine].height;
+        if (acc + h > height) break;
+        acc += h;
+        endLine++;
+      }
+      if (endLine == startLine) endLine = startLine + 1;
+
+      var top = 0.0;
+      for (var i = 0; i < startLine; i++) {
+        top += lines[i].height;
+      }
+      final bottom = top + acc;
+
+      final startPos = tp.getPositionForOffset(Offset(0, top + 1));
+      final endPos = tp.getPositionForOffset(Offset(width - 1, bottom - 1));
+      pages.add(text.substring(startPos.offset, endPos.offset));
+      startLine = endLine;
+    }
+    return pages.isEmpty ? [text] : pages;
+  }
+
+  /// 获取（并缓存）翻页模式的页面列表，首次时恢复上次阅读进度。
+  List<String> _getFlipPages(double width, double height) {
+    final key =
+        '$_fontSize|$_lineHeight|${width.toStringAsFixed(1)}|${height.toStringAsFixed(1)}';
+    if (key == _flipCacheKey && _flipPages.isNotEmpty) return _flipPages;
+    _flipCacheKey = key;
+    _flipPages = _paginateContent(_content, width, height);
+
+    if (!_flipPageRestored &&
+        _savedProgress != null &&
+        _flipPages.length > 1) {
+      _flipPageRestored = true;
+      final target = (_savedProgress! * _flipPages.length)
+          .floor()
+          .clamp(0, _flipPages.length - 1);
+      _currentFlipPage = target;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && (_pageController?.hasClients ?? false)) {
+          _pageController?.jumpToPage(target);
+        }
+      });
+      _scrollProgress = (target + 1) / _flipPages.length;
+    } else if (_currentFlipPage >= _flipPages.length) {
+      _currentFlipPage = _flipPages.length - 1;
+    }
+    return _flipPages;
+  }
+
+  void _onFlipPageChanged(int index) {
+    setState(() {
+      _currentFlipPage = index;
+      _scrollProgress = _flipPages.length > 1 ? (index + 1) / _flipPages.length : 1.0;
+    });
+    _saveFlipProgress();
+    if (index == _flipPages.length - 1) {
+      _markAsRead();
+    }
+  }
+
+  Future<void> _saveFlipProgress() async {
+    final keyPath = _resolvedFilePath ?? widget.filePath;
+    if (keyPath == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('progress_$keyPath', _scrollProgress);
+  }
+
+  Widget _buildFlipPage(String text) {
+    return SingleChildScrollView(
+      child: SelectableText(
+        text,
+        style: _flipTextStyle,
+      ),
+    );
   }
 }

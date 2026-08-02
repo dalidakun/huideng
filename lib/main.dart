@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 import 'dart:io';
 import 'theme.dart';
 import 'sutra_list_page.dart';
@@ -9,6 +10,9 @@ import 'splash_image_page.dart';
 import 'study_hub_page.dart';
 import 'my_page.dart';
 import 'app_state.dart';
+import 'auth_service.dart';
+import 'sync_service.dart';
+import 'notification_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -25,6 +29,12 @@ void main() async {
     ),
   );
   runApp(const MyApp());
+  // 后台静默恢复登录会话（不阻塞启动，登录态通过 ValueNotifier 广播）。
+  unawaited(AuthService.instance.restoreSession());
+  // 本地数据云同步：监听登录态变化 + 定时推送 + 生命周期冲刷。
+  SyncService.instance.init();
+  // 本地通知（打卡提醒）初始化与调度恢复。
+  unawaited(NotificationService.instance.init());
 }
 
 class MyApp extends StatelessWidget {
@@ -107,6 +117,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   int _currentIndex = 0;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
   final _myKey = GlobalKey<MyPageState>();
+  final _sutraListKey = GlobalKey<SutraListPageState>();
   late final ValueNotifier<int> _tabIndex;
   late final List<Widget> _pages;
 
@@ -116,10 +127,11 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     _tabIndex = ValueNotifier<int>(0);
     _pages = [
       StudyHubPage(key: _studyHubKey),
-      SutraListPage(activeTab: _tabIndex),
+      SutraListPage(key: _sutraListKey, activeTab: _tabIndex),
       MyPage(key: _myKey),
     ];
     WidgetsBinding.instance.addObserver(this);
+    SyncService.instance.dataVersion.addListener(_onCloudDataChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
     });
@@ -127,8 +139,17 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  /// 云端同步拉取完成后刷新各页面展示的数据。
+  void _onCloudDataChanged() {
+    if (!mounted) return;
+    _studyHubKey.currentState?.reload();
+    _myKey.currentState?.reload();
+    unawaited(_sutraListKey.currentState?.reload());
   }
 
   void _checkForResult() {
@@ -171,8 +192,8 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       label: '经藏',
     ),
     BottomNavigationBarItem(
-      icon: const Icon(Icons.person_outline, size: 24, color: Color(0xFF424242)),
-      activeIcon: const Icon(Icons.person, size: 24, color: Color(0xFF5D4037)),
+      icon: Image.asset('assets/images/my.png', width: 18, height: 18),
+      activeIcon: Image.asset('assets/images/my_selected.png', width: 18, height: 18),
       label: '我的',
     ),
   ];

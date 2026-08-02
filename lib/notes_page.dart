@@ -1,13 +1,16 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'cloud_notes_service.dart';
 import 'note_edit_page.dart';
+import 'recycle_bin_page.dart';
 
 const Color _card = Color(0xFFFFFAF5);
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _gold = Color(0xFFD4A06A);
+const Color _divider = Color(0xFFEDE3D6);
 
 class NotesPage extends StatefulWidget {
   const NotesPage({super.key});
@@ -34,14 +37,24 @@ class _NotesPageState extends State<NotesPage> {
     });
   }
 
+  void _openRecycleBin() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const RecycleBinPage()),
+    ).then((_) {
+      _loadNotes();
+    });
+  }
+
   Future<void> _deleteNote(int index) async {
+    final note = _notes[index];
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('确定删除「${_notes[index]['title']}」吗？', style: const TextStyle(color: _textSec)),
+        content: Text('确定将「${note['title']}」移入回收站吗？', style: const TextStyle(color: _textSec)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
@@ -49,7 +62,23 @@ class _NotesPageState extends State<NotesPage> {
       ),
     );
     if (confirm != true) return;
-    _notes.removeAt(index);
+
+    final cloudId = note['cloudId'] as String?;
+    if (note['shared'] == true && cloudId != null && cloudId.isNotEmpty) {
+      try {
+        await CloudNotesService.instance.hideCloudNote(cloudId);
+      } catch (_) {}
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final trashRaw = prefs.getString('trash_notes') ?? '[]';
+    final trash = (jsonDecode(trashRaw) as List<dynamic>).cast<Map<String, dynamic>>();
+    trash.add({...note, 'deletedAt': DateTime.now().toIso8601String()});
+    await prefs.setString('trash_notes', jsonEncode(trash));
+
+    setState(() {
+      _notes.removeAt(index);
+    });
     await _saveNotes();
   }
 
@@ -74,7 +103,16 @@ class _NotesPageState extends State<NotesPage> {
     final theme = Theme.of(context);
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(title: const Text('我的笔记')),
+      appBar: AppBar(
+        title: const Text('我的笔记'),
+        actions: [
+          IconButton(
+            onPressed: _openRecycleBin,
+            tooltip: '回收站',
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      ),
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 36),
         child: SizedBox(
@@ -105,7 +143,7 @@ class _NotesPageState extends State<NotesPage> {
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
+              padding: const EdgeInsets.only(top: 4, bottom: 100),
               itemCount: _notes.length,
               itemBuilder: (context, index) {
                 final note = _notes[index];
@@ -116,14 +154,11 @@ class _NotesPageState extends State<NotesPage> {
                   onTap: () => _openEdit(index: index),
                   onLongPress: () => _deleteNote(index),
                   child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                     decoration: BoxDecoration(
-                      color: _card,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
-                      ],
+                      border: Border(
+                        bottom: BorderSide(color: _divider, width: 0.5),
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -141,7 +176,7 @@ class _NotesPageState extends State<NotesPage> {
                             Icon(Icons.edit_outlined, size: 15, color: _textHint),
                           ],
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 5),
                         Text(
                           preview,
                           maxLines: 2,
@@ -155,6 +190,18 @@ class _NotesPageState extends State<NotesPage> {
                             const SizedBox(width: 4),
                             Text(date, style: TextStyle(fontSize: 12, color: _textHint)),
                             const Spacer(),
+                            if (note['shared'] == true) ...[
+                              Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1.5),
+                                decoration: BoxDecoration(
+                                  color: _gold.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Text('菩提空间',
+                                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF9A6B3F))),
+                              ),
+                            ],
                             Container(
                               width: 6, height: 6,
                               decoration: BoxDecoration(color: _gold, shape: BoxShape.circle),
