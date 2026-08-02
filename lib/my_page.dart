@@ -1,21 +1,21 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
-import 'bodhi_space_page.dart';
 import 'cloud_notes_service.dart';
-import 'favorites_page.dart';
-import 'favorite_notes_page.dart';
 import 'login_page.dart';
-import 'notes_page.dart';
 import 'reader_settings_page.dart';
 import 'checkin_reminder_page.dart';
-import 'account_info_page.dart';
+import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
 import 'about_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
 import 'user_list_page.dart';
+import 'note_detail_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -52,18 +52,30 @@ class MyPage extends StatefulWidget {
   State<MyPage> createState() => MyPageState();
 }
 
-class MyPageState extends State<MyPage> {
+class MyPageState extends State<MyPage>
+    with TickerProviderStateMixin {
   String? _avatarPath;
+  String? _bannerPath;
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
+  String _phone = '';
+  String _joinedDate = '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
 
   MyCounts _counts = const MyCounts();
 
-  void reload() => _loadData();
+  late TabController _tabController;
+
+  final ValueNotifier<int> _reloadNotifier = ValueNotifier<int>(0);
+
+  void reload() {
+    _loadData();
+    _reloadNotifier.value++;
+  }
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 4, vsync: this);
     _loadData();
     _loadCounts();
     AuthService.instance.currentUser.addListener(_onAuthChanged);
@@ -71,7 +83,9 @@ class MyPageState extends State<MyPage> {
 
   @override
   void dispose() {
+    _reloadNotifier.dispose();
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -87,16 +101,30 @@ class MyPageState extends State<MyPage> {
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
+    final user = _authUser;
     setState(() {
       _avatarPath = prefs.getString('user_avatar_path');
+      _bannerPath = prefs.getString('user_banner_path');
       if (_isLoggedIn) {
-        _nickname = _authUser?.displayName ?? '同修';
-        _tagline = (_authUser?.tagline?.isNotEmpty ?? false)
-            ? _authUser!.tagline!
+        _nickname = user?.displayName ?? '同修';
+        _tagline = (user?.tagline?.isNotEmpty ?? false)
+            ? user!.tagline!
             : '与经为伴，与法同行';
+        _phone = user?.mobilePhoneNumber ?? '';
       } else {
         _nickname = prefs.getString('user_nickname') ?? '同修';
         _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+        _phone = '';
+      }
+      final createdMs = prefs.getInt('user_created_at');
+      if (createdMs != null) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(createdMs);
+        _joinedDate = '${dt.year}年${dt.month}月${dt.day}日加入';
+      } else {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        prefs.setInt('user_created_at', now);
+        final dt = DateTime.fromMillisecondsSinceEpoch(now);
+        _joinedDate = '${dt.year}年${dt.month}月${dt.day}日加入';
       }
     });
   }
@@ -150,18 +178,44 @@ class MyPageState extends State<MyPage> {
     );
   }
 
-  void _openFavorites() {
-    Navigator.push(context, slideInFromLeft(const FavoritesPage()));
-  }
-
-  void _openFavoriteNotes() {
-    Navigator.push(context, slideInFromLeft(const FavoriteNotesPage()))
-        .then((_) => reload());
-  }
-
-  void _openBodhiSpace() {
-    Navigator.push(context, slideInFromLeft(const BodhiSpacePage()))
-        .then((_) => _loadCounts());
+  Future<void> _viewBanner() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        behavior: HitTestBehavior.opaque,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: 300,
+                  height: 170,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD2C5B3),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 24),
+                    ],
+                    image: _bannerPath != null
+                        ? DecorationImage(image: FileImage(File(_bannerPath!)), fit: BoxFit.cover)
+                        : null,
+                  ),
+                  child: _bannerPath == null
+                      ? const Icon(Icons.image, size: 48, color: Colors.white38)
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('轻触任意处关闭', style: TextStyle(fontSize: 13, color: Colors.white70)),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _openFollowing() {
@@ -178,29 +232,232 @@ class MyPageState extends State<MyPage> {
     ).then((_) => _loadCounts());
   }
 
-  void _openNotes() {
-    Navigator.push(context, slideInFromLeft(const NotesPage())).then((_) => reload());
-  }
-
   void _openSettings() {
     Navigator.push(context, slideInFromLeft(const _SettingsPage()));
   }
 
+  void _openEditProfile() {
+    Navigator.push(context, slideInFromLeft(const EditProfilePage()));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isLoggedIn = _isLoggedIn;
+
     return Scaffold(
       backgroundColor: _bg,
-      body: Column(
-        children: [
-          _buildHeader(),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(0, 18, 0, 32),
-              children: [
-                _buildMenuList(),
+      body: SafeArea(
+        top: true,
+        child: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) {
+          return [
+            SliverToBoxAdapter(
+              child: _buildProfileHeader(isLoggedIn),
+            ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _TabBarDelegate(
+                controller: _tabController,
+                backgroundColor: _bg,
+              ),
+            ),
+          ];
+        },
+        body: TabBarView(
+          controller: _tabController,
+          children: [
+            _TabContent(child: _MyPostsTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+            _TabContent(child: _MyRepliesTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+            _TabContent(child: _MyLikesTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+            _TabContent(child: _MyBookmarksTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+          ],
+        ),
+      ),
+      ),
+    );
+  }
+
+  Widget _buildProfileHeader(bool isLoggedIn) {
+    final phoneDisplay = _phone.isNotEmpty
+        ? '${_phone.substring(0, math.min(3, _phone.length))}****${_phone.length >= 7 ? _phone.substring(_phone.length - 4) : ''}'
+        : '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: _viewBanner,
+          child: Stack(
+            children: [
+              Container(
+                width: double.infinity,
+                height: 160,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD2C5B3),
+                  image: _bannerPath != null
+                      ? DecorationImage(
+                          image: FileImage(File(_bannerPath!)),
+                          fit: BoxFit.cover,
+                        )
+                      : null,
+                ),
+                child: _bannerPath == null
+                    ? const Center(
+                        child: Icon(Icons.camera_alt_outlined, size: 28, color: Colors.white38),
+                      )
+                    : null,
+              ),
+              Positioned(
+                right: 20,
+                bottom: 12,
+                child: GestureDetector(
+                  onTap: _openEditProfile,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Text(
+                      '编辑个人资料',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 20),
+          child: Transform.translate(
+            offset: const Offset(0, -38),
+            child: GestureDetector(
+              onTap: _viewAvatar,
+              child: Container(
+                width: 76,
+                height: 76,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _card,
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.12),
+                        blurRadius: 12,
+                        offset: const Offset(0, 2)),
+                  ],
+                  image: _avatarPath != null
+                      ? DecorationImage(
+                          image: FileImage(File(_avatarPath!)),
+                          fit: BoxFit.cover)
+                      : null,
+                ),
+                child: _avatarPath == null
+                    ? const Icon(Icons.person, size: 38, color: _primaryLight)
+                    : null,
+              ),
+            ),
+          ),
+        ),
+        Transform.translate(
+          offset: const Offset(0, -24),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isLoggedIn) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(_nickname,
+                          style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: _text)),
+                    ),
+                    IconButton(
+                      onPressed: _openSettings,
+                      icon: const Icon(Icons.settings_outlined,
+                          size: 20, color: _textHint),
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+                if (phoneDisplay.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.phone_iphone_outlined,
+                          size: 13, color: _textHint),
+                      const SizedBox(width: 4),
+                      Text(phoneDisplay,
+                          style: const TextStyle(
+                              fontSize: 13, color: _textHint)),
+                    ],
+                  ),
+                ],
+              ] else ...[
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('未登录',
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: _text)),
+                    ),
+                    _buildLoginButton(),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 6),
+              Text(
+                _tagline,
+                style: const TextStyle(fontSize: 13, color: _textSec),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (_joinedDate.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _joinedDate,
+                  style: const TextStyle(fontSize: 13, color: _textHint),
+                ),
+              ],
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 0),
+      ],
+    );
+  }
+
+  Widget _buildStatItem(String value, String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: _text)),
+          const SizedBox(width: 4),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 13,
+                  color: _textSec)),
         ],
       ),
     );
@@ -224,215 +481,1138 @@ class MyPageState extends State<MyPage> {
       child: const Text('登录', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
     );
   }
+}
 
-  Widget _buildHeader() {
+/// 吸顶的 TabBar 委托。
+class _TabBarDelegate extends SliverPersistentHeaderDelegate {
+  final TabController controller;
+  final Color backgroundColor;
+
+  _TabBarDelegate({required this.controller, required this.backgroundColor});
+
+  @override
+  double get minExtent => 40;
+  @override
+  double get maxExtent => 40;
+
+  @override
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Container(
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+      color: backgroundColor,
+      child: TabBar(
+        controller: controller,
+        labelColor: _text,
+        unselectedLabelColor: _textSec,
+        dividerColor: const Color(0x1A000000),
+        dividerHeight: 0.5,
+        indicator: const _FixedWidthIndicator(
+          color: Color(0xFF71867A),
+          lineWidth: 2.5,
+          barWidth: 60,
         ),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 22),
-          child: Column(
-            children: [
-              Row(
-                children: _isLoggedIn
-                    ? [
-                        GestureDetector(
-                          onTap: _viewAvatar,
-                          child: Container(
-                            width: 62, height: 62,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: _card,
-                              boxShadow: [
-                                BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 10, offset: const Offset(0, 2)),
-                              ],
-                              image: _avatarPath != null
-                                  ? DecorationImage(image: FileImage(File(_avatarPath!)), fit: BoxFit.cover)
-                                  : null,
-                            ),
-                            child: _avatarPath == null
-                                ? const Icon(Icons.person, size: 32, color: _primaryLight)
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(_nickname, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
-                              const SizedBox(height: 5),
-                              Text(
-                                _tagline,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 13, color: _textSec),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ]
-                    : [
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('未登录',
-                                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
-                              SizedBox(height: 5),
-                              Text('登录即可体验完整功能',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontSize: 13, color: _textSec)),
-                            ],
-                          ),
-                        ),
-                        _buildLoginButton(),
-                      ],
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  _buildHeaderEntry(
-                    value: _counts.unread,
-                    label: '互动',
-                    emphasize: _counts.unread > 0,
-                    onTap: _openBodhiSpace,
-                  ),
-                  _buildHeaderEntry(
-                    value: _counts.following,
-                    label: '关注',
-                    onTap: _openFollowing,
-                  ),
-                  _buildHeaderEntry(
-                    value: _counts.followers,
-                    label: '粉丝',
-                    onTap: _openFollowers,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+        labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+        unselectedLabelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
+        tabs: const [
+          Tab(text: '帖子'),
+          Tab(text: '回复'),
+          Tab(text: '喜欢'),
+          Tab(text: '书签'),
+        ],
       ),
     );
   }
 
-  Widget _buildHeaderEntry({
-    required int value,
-    required String label,
-    required VoidCallback onTap,
-    bool emphasize = false,
-  }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '$value',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: emphasize ? _gold : _text,
-              ),
+  @override
+  bool shouldRebuild(covariant _TabBarDelegate oldDelegate) {
+    return controller != oldDelegate.controller ||
+        backgroundColor != oldDelegate.backgroundColor;
+  }
+}
+
+/// 固定宽度的 TabBar 指示条，静止/动画状态宽度一致。
+class _FixedWidthIndicator extends Decoration {
+  final Color color;
+  final double lineWidth;
+  final double barWidth;
+  const _FixedWidthIndicator({
+    required this.color,
+    this.lineWidth = 2.5,
+    this.barWidth = 60,
+  });
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) =>
+      _FixedWidthPainter(color, lineWidth, barWidth, onChanged);
+}
+
+class _FixedWidthPainter extends BoxPainter {
+  final Color color;
+  final double lineWidth;
+  final double barWidth;
+  _FixedWidthPainter(this.color, this.lineWidth, this.barWidth, VoidCallback? onChanged)
+      : super(onChanged);
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    final rect = offset & configuration.size!;
+    final x = rect.center.dx - barWidth / 2;
+    final y = rect.bottom - lineWidth;
+    canvas.drawRect(
+      Rect.fromLTWH(x, y, barWidth, lineWidth),
+      Paint()..color = color,
+    );
+  }
+}
+
+/// NestedScrollView 内部 Tab 内容包装器。
+class _TabContent extends StatelessWidget {
+  final Widget child;
+  const _TabContent({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return child;
+  }
+}
+
+/// 帖子 Tab：我自己发布的广场笔记。
+class _MyPostsTab extends StatefulWidget {
+  final bool isLoggedIn;
+  final ValueNotifier<int> reloadNotifier;
+  const _MyPostsTab({required this.isLoggedIn, required this.reloadNotifier});
+
+  @override
+  State<_MyPostsTab> createState() => _MyPostsTabState();
+}
+
+class _MyPostsTabState extends State<_MyPostsTab> {
+  final List<PlazaNote> _notes = [];
+  bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  int _page = 1;
+  String? _error;
+  static const int _pageSize = 20;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    widget.reloadNotifier.addListener(_onReload);
+  }
+
+  @override
+  void dispose() {
+    widget.reloadNotifier.removeListener(_onReload);
+    super.dispose();
+  }
+
+  void _onReload() => _load();
+
+  @override
+  void didUpdateWidget(covariant _MyPostsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
+    if (widget.reloadNotifier != oldWidget.reloadNotifier) {
+      oldWidget.reloadNotifier.removeListener(_onReload);
+      widget.reloadNotifier.addListener(_onReload);
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+      _notes.clear();
+      _page = 1;
+      _hasMore = true;
+    });
+    // 本地笔记始终加载（未登录/未同步时也显示）
+    final localNotes = await _loadLocalNotes();
+    if (!mounted) return;
+
+    List<PlazaNote> cloudNotes = [];
+    bool hasMore = false;
+    String? errorText;
+    if (widget.isLoggedIn) {
+      try {
+        final (list, more) = await CloudNotesService.instance.getMyNotes(
+          page: 1,
+          pageSize: _pageSize,
+        );
+        cloudNotes = list;
+        hasMore = more;
+      } catch (e) {
+        errorText = '云端加载失败';
+      }
+    }
+    if (!mounted) return;
+
+    final cloudIds = cloudNotes.map((n) => n.id).toSet();
+    final merged = <PlazaNote>[
+      ...cloudNotes,
+      ...localNotes.where((n) => !cloudIds.contains(n.id)),
+    ];
+    merged.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+    setState(() {
+      _notes.addAll(merged);
+      _hasMore = hasMore;
+      _page = 2;
+      _error = errorText;
+      _loading = false;
+    });
+  }
+
+  Future<List<PlazaNote>> _loadLocalNotes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('notes') ?? '[]';
+      final List<dynamic> list = jsonDecode(raw);
+      final uid = AuthService.instance.currentUser.value?.id ?? 'local';
+      return list.reversed.map<PlazaNote>((n) {
+        final tsStr = n['updatedAt']?.toString() ?? '';
+        final ts = DateTime.tryParse(tsStr)?.millisecondsSinceEpoch ?? 0;
+        return PlazaNote(
+          id: n['id']?.toString() ?? '',
+          ownerUserId: uid,
+          title: n['title']?.toString() ?? '无标题',
+          content: n['content']?.toString() ?? '',
+          authorName: '我',
+          visibility: 'public',
+          status: 'normal',
+          likeCount: 0,
+          commentCount: 0,
+          createdAt: ts,
+          updatedAt: ts,
+        );
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore || !widget.isLoggedIn) return;
+    setState(() => _loadingMore = true);
+    try {
+      final (list, more) = await CloudNotesService.instance.getMyNotes(
+        page: _page,
+        pageSize: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _notes.addAll(list);
+        _hasMore = more;
+        _page++;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingMore = false);
+    }
+  }
+
+  void _openNote(PlazaNote note) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
+    );
+  }
+
+  Widget _tabLoading() {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          const SliverFillRemaining(
+            child: Center(
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
             ),
-            const SizedBox(height: 5),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 12.5,
-                    color: _textSec,
-                    fontWeight: FontWeight.w500)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMenuList() {
-    return Container(
-      color: _bg,
-      child: Column(
-        children: [
-          _buildMenuItem(
-            icon: Icons.bookmark_rounded,
-            iconColor: _gold,
-            title: '书签',
-            onTap: _openFavoriteNotes,
-          ),
-          _buildMenuDivider(),
-          _buildMenuItem(
-            icon: Icons.star_rounded,
-            iconColor: _gold,
-            title: '收藏',
-            onTap: _openFavorites,
-          ),
-          _buildMenuDivider(),
-          _buildMenuItem(
-            icon: Icons.edit_note_rounded,
-            iconColor: _primary,
-            title: '笔记',
-            onTap: _openNotes,
-          ),
-          _buildMenuDivider(),
-          _buildMenuItem(
-            icon: Icons.settings_outlined,
-            iconColor: _primaryLight,
-            title: '设置',
-            onTap: _openSettings,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMenuItem({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 52),
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          children: [
-            Icon(icon, color: iconColor, size: 22),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500),
+  Widget _tabEmpty(String text, IconData icon) {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          SliverFillRemaining(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 48, color: _textHint),
+                  const SizedBox(height: 12),
+                  Text(text,
+                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return _tabLoading();
+    if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
+    if (_notes.isEmpty) return _tabEmpty('还没有发布过帖子', Icons.post_add_outlined);
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is ScrollEndNotification &&
+            notification.metrics.pixels >=
+                notification.metrics.maxScrollExtent - 200) {
+          _loadMore();
+        }
+        return false;
+      },
+      child: Builder(
+        builder: (context) => CustomScrollView(
+          slivers: [
+            SliverOverlapInjector(
+              handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    if (index == _notes.length) {
+                      return const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: _gold),
+                          ),
+                        ),
+                      );
+                    }
+                    return _buildNoteCard(_notes[index]);
+                  },
+                  childCount: _notes.length + (_hasMore && widget.isLoggedIn ? 1 : 0),
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMenuDivider() {
-    return const Divider(
-      height: 1,
-      thickness: 0.5,
-      color: Color(0xFFEFE6DB),
-      indent: 58,
-      endIndent: 0,
+  Widget _buildNoteCard(PlazaNote note) {
+    final content = note.content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+    final preview = content.length > 60
+        ? '${content.substring(0, 60)}...'
+        : content;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 8,
+              offset: const Offset(0, 1)),
+        ],
+      ),
+      child: InkWell(
+        onTap: () => _openNote(note),
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(note.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: _text)),
+            if (preview.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(preview,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13, color: _textSec, height: 1.4)),
+            ],
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Icon(Icons.schedule, size: 12, color: _textHint),
+                const SizedBox(width: 3),
+                Text(_fmtTime(note.createdAt),
+                    style: const TextStyle(fontSize: 11, color: _textHint)),
+                const Spacer(),
+                Icon(
+                  CloudNotesService.instance.likedNoteIds.contains(note.id)
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  size: 13,
+                  color: CloudNotesService.instance.likedNoteIds.contains(note.id)
+                      ? _gold
+                      : _textHint,
+                ),
+                const SizedBox(width: 2),
+                Text('${note.likeCount}',
+                    style: const TextStyle(fontSize: 11, color: _textHint)),
+                const SizedBox(width: 12),
+                const Icon(Icons.chat_bubble_outline, size: 12, color: _textHint),
+                const SizedBox(width: 2),
+                Text('${note.commentCount}',
+                    style: const TextStyle(fontSize: 11, color: _textHint)),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
+  }
+
+  String _fmtTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    final now = DateTime.now();
+    final diff = DateTime(now.year, now.month, now.day)
+        .difference(DateTime(t.year, t.month, t.day))
+        .inDays;
+    if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    if (diff == 1) return '昨天';
+    return '${t.month}月${t.day}日';
+  }
+}
+
+/// 回复 Tab：我的互动动态（转发 + 评论/回复）。
+class _MyRepliesTab extends StatefulWidget {
+  final bool isLoggedIn;
+  final ValueNotifier<int> reloadNotifier;
+  const _MyRepliesTab({required this.isLoggedIn, required this.reloadNotifier});
+
+  @override
+  State<_MyRepliesTab> createState() => _MyRepliesTabState();
+}
+
+class _MyRepliesTabState extends State<_MyRepliesTab> {
+  final List<PlazaActivity> _activities = [];
+  bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  int _page = 1;
+  String? _error;
+  static const int _pageSize = 20;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isLoggedIn) _load();
+    widget.reloadNotifier.addListener(_onReload);
+  }
+
+  @override
+  void dispose() {
+    widget.reloadNotifier.removeListener(_onReload);
+    super.dispose();
+  }
+
+  void _onReload() {
+    if (widget.isLoggedIn) _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MyRepliesTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
+    if (widget.reloadNotifier != oldWidget.reloadNotifier) {
+      oldWidget.reloadNotifier.removeListener(_onReload);
+      widget.reloadNotifier.addListener(_onReload);
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+      _activities.clear();
+      _page = 1;
+      _hasMore = true;
+    });
+    try {
+      final (list, more) = await CloudNotesService.instance.getMyActivities(
+        page: 1,
+        pageSize: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _activities.addAll(list);
+        _hasMore = more;
+        _page = 2;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '加载失败';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final (list, more) = await CloudNotesService.instance.getMyActivities(
+        page: _page,
+        pageSize: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _activities.addAll(list);
+        _hasMore = more;
+        _page++;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingMore = false);
+    }
+  }
+
+  void _openNote(String noteId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: noteId)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.isLoggedIn) {
+      return _tabEmpty('请先登录', Icons.lock_outlined);
+    }
+    if (_loading) return _tabLoading();
+    if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
+    if (_activities.isEmpty) {
+      return _tabEmpty('还没有互动记录', Icons.reply_outlined);
+    }
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is ScrollEndNotification &&
+            notification.metrics.pixels >=
+                notification.metrics.maxScrollExtent - 200) {
+          _loadMore();
+        }
+        return false;
+      },
+      child: Builder(
+        builder: (context) => CustomScrollView(
+          slivers: [
+            SliverOverlapInjector(
+              handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    if (index == _activities.length) {
+                      return const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(
+                          child: SizedBox(
+                            width: 20, height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: _gold),
+                          ),
+                        ),
+                      );
+                    }
+                    return _buildActivityCard(_activities[index]);
+                  },
+                  childCount: _activities.length + (_hasMore ? 1 : 0),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tabLoading() {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          const SliverFillRemaining(
+            child: Center(
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabEmpty(String text, IconData icon) {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          SliverFillRemaining(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 48, color: _textHint),
+                  const SizedBox(height: 12),
+                  Text(text,
+                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActivityCard(PlazaActivity activity) {
+    final typeIcon = activity.type == 'repost'
+        ? Icons.repeat_rounded
+        : Icons.chat_bubble_outline;
+    final typeLabel = activity.type == 'repost' ? '转发' : '回复';
+    Color typeColor;
+    switch (activity.type) {
+      case 'repost':
+        typeColor = _gold;
+        break;
+      case 'comment':
+        typeColor = _primaryLight;
+        break;
+      default:
+        typeColor = _primary;
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 8,
+              offset: const Offset(0, 1)),
+        ],
+      ),
+      child: InkWell(
+        onTap: () => _openNote(activity.noteId),
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(typeIcon, size: 14, color: typeColor),
+                const SizedBox(width: 4),
+                Text(typeLabel,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: typeColor)),
+                const Spacer(),
+                Text(_fmtTime(activity.createdAt),
+                    style: const TextStyle(
+                        fontSize: 11, color: _textHint)),
+              ],
+            ),
+            if (activity.content.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(activity.content,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13, color: _text, height: 1.5)),
+            ],
+            if (activity.noteTitle.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _bg,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.article_outlined,
+                        size: 13, color: _textHint),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(activity.noteTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: _textSec)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _fmtTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    final now = DateTime.now();
+    final diff = DateTime(now.year, now.month, now.day)
+        .difference(DateTime(t.year, t.month, t.day))
+        .inDays;
+    if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    if (diff == 1) return '昨天';
+    return '${t.month}月${t.day}日';
+  }
+}
+
+/// 喜欢 Tab：我点赞过的帖子列表。
+class _MyLikesTab extends StatefulWidget {
+  final bool isLoggedIn;
+  final ValueNotifier<int> reloadNotifier;
+  const _MyLikesTab({required this.isLoggedIn, required this.reloadNotifier});
+
+  @override
+  State<_MyLikesTab> createState() => _MyLikesTabState();
+}
+
+class _MyLikesTabState extends State<_MyLikesTab> {
+  List<PlazaNote>? _notes;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isLoggedIn) _load();
+    widget.reloadNotifier.addListener(_onReload);
+  }
+
+  @override
+  void dispose() {
+    widget.reloadNotifier.removeListener(_onReload);
+    super.dispose();
+  }
+
+  void _onReload() {
+    if (widget.isLoggedIn) _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MyLikesTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
+    if (widget.reloadNotifier != oldWidget.reloadNotifier) {
+      oldWidget.reloadNotifier.removeListener(_onReload);
+      widget.reloadNotifier.addListener(_onReload);
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final notes = await CloudNotesService.instance.getLikedNotes();
+      if (!mounted) return;
+      setState(() {
+        _notes = notes;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _error = '加载失败';
+        _loading = false;
+      });
+    }
+  }
+
+  void _openNote(PlazaNote note) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.isLoggedIn) {
+      return _tabEmpty('请先登录', Icons.lock_outlined);
+    }
+    if (_loading) return _tabLoading();
+    if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
+    if (_notes == null || _notes!.isEmpty) {
+      return _tabEmpty('还没有点赞过帖子', Icons.favorite_border);
+    }
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final note = _notes![index];
+                  final content = note.content.replaceAll(
+                      RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+                  final preview = content.length > 60
+                      ? '${content.substring(0, 60)}...'
+                      : content;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _card,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 1)),
+                      ],
+                    ),
+                    child: InkWell(
+                      onTap: () => _openNote(note),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.person_outline, size: 13, color: _textHint),
+                              const SizedBox(width: 4),
+                              Text(note.authorName,
+                                  style: const TextStyle(fontSize: 12, color: _textSec)),
+                              const Spacer(),
+                              const Icon(Icons.favorite_rounded, size: 12, color: _gold),
+                              const SizedBox(width: 2),
+                              Text('${note.likeCount}',
+                                  style: const TextStyle(fontSize: 11, color: _textHint)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(note.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: _text)),
+                          if (preview.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(preview,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 13, color: _textSec, height: 1.4)),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                },
+                childCount: _notes!.length,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }  // _MyLikesTab build
+
+  Widget _tabLoading() {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          const SliverFillRemaining(
+            child: Center(
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabEmpty(String text, IconData icon) {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          SliverFillRemaining(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 48, color: _textHint),
+                  const SizedBox(height: 12),
+                  Text(text,
+                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 书签 Tab：我收藏的笔记（已登录）。
+class _MyBookmarksTab extends StatefulWidget {
+  final bool isLoggedIn;
+  final ValueNotifier<int> reloadNotifier;
+  const _MyBookmarksTab({required this.isLoggedIn, required this.reloadNotifier});
+
+  @override
+  State<_MyBookmarksTab> createState() => _MyBookmarksTabState();
+}
+
+class _MyBookmarksTabState extends State<_MyBookmarksTab> {
+  List<PlazaNote>? _notes;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isLoggedIn) _load();
+    widget.reloadNotifier.addListener(_onReload);
+  }
+
+  @override
+  void dispose() {
+    widget.reloadNotifier.removeListener(_onReload);
+    super.dispose();
+  }
+
+  void _onReload() {
+    if (widget.isLoggedIn) _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MyBookmarksTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
+    if (widget.reloadNotifier != oldWidget.reloadNotifier) {
+      oldWidget.reloadNotifier.removeListener(_onReload);
+      widget.reloadNotifier.addListener(_onReload);
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final notes = await CloudNotesService.instance.getFavoriteNotes();
+      if (!mounted) return;
+      setState(() {
+        _notes = notes;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _error = '加载失败';
+        _loading = false;
+      });
+    }
+  }
+
+  void _openNote(PlazaNote note) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
+    ).then((_) => _load());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.isLoggedIn) {
+      return _tabEmpty('请先登录', Icons.lock_outlined);
+    }
+    if (_loading) return _tabLoading();
+    if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
+    if (_notes == null || _notes!.isEmpty) {
+      return _tabEmpty('还没有收藏过帖子', Icons.bookmark_border);
+    }
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final note = _notes![index];
+                  final content = note.content.replaceAll(
+                      RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+                  final preview = content.length > 60
+                      ? '${content.substring(0, 60)}...'
+                      : content;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _card,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 1)),
+                      ],
+                    ),
+                    child: InkWell(
+                      onTap: () => _openNote(note),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.bookmark_rounded, size: 13, color: _gold),
+                              const SizedBox(width: 4),
+                              Text(note.authorName,
+                                  style: const TextStyle(fontSize: 12, color: _textSec)),
+                              const Spacer(),
+                              Text(_fmtTime(note.createdAt),
+                                  style: const TextStyle(fontSize: 11, color: _textHint)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(note.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: _text)),
+                          if (preview.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(preview,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 13, color: _textSec, height: 1.4)),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                },
+                childCount: _notes!.length,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabLoading() {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          const SliverFillRemaining(
+            child: Center(
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabEmpty(String text, IconData icon) {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverOverlapInjector(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          ),
+          SliverFillRemaining(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 48, color: _textHint),
+                  const SizedBox(height: 12),
+                  Text(text,
+                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmtTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    final now = DateTime.now();
+    final diff = DateTime(now.year, now.month, now.day)
+        .difference(DateTime(t.year, t.month, t.day))
+        .inDays;
+    if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    if (diff == 1) return '昨天';
+    return '${t.month}月${t.day}日';
   }
 }
 
@@ -450,8 +1630,6 @@ class _SettingsPageState extends State<_SettingsPage> {
   bool _loaded = false;
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
-
-  AuthUser? get _authUser => AuthService.instance.currentUser.value;
 
   bool get notifOn => _notifOn;
   bool get reminderOn => _reminderOn;
@@ -649,16 +1827,6 @@ class _SettingsPageState extends State<_SettingsPage> {
                       _sectionTitle('账号'),
                       SettingsCard(
                         children: [
-                          _SettingsLinkTile(
-                            icon: Icons.person_outline,
-                            iconColor: _primary,
-                            title: '账号信息',
-                            subtitle: _isLoggedIn
-                                ? (_authUser?.displayName ?? '同修')
-                                : '未登录',
-                            page: const AccountInfoPage(),
-                          ),
-                          const SettingsDivider(),
                           _SettingsPhoneTile(),
                           const SettingsDivider(),
                           _SettingsNotifTile(),

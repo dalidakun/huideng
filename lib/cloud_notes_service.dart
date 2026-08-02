@@ -1,4 +1,5 @@
 import 'package:cloudbase_flutter/cloudbase_flutter.dart';
+import 'package:flutter/foundation.dart';
 
 import 'auth_service.dart';
 
@@ -66,7 +67,7 @@ class PlazaNote {
         status: json['status']?.toString() ?? 'normal',
         likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
         commentCount: (json['commentCount'] as num?)?.toInt() ?? 0,
-        viewCount: (json['viewCount'] as num?)?.toInt() ?? 0,
+        viewCount: _parseViewCount(json['viewCount']),
         repostCount: (json['repostCount'] as num?)?.toInt() ?? 0,
         repostOf: json['repostOf']?.toString() ?? '',
         repostSourceAuthor: json['repostSourceAuthor']?.toString() ?? '',
@@ -76,6 +77,10 @@ class PlazaNote {
         createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
         updatedAt: (json['updatedAt'] as num?)?.toInt() ?? 0,
       );
+
+  /// 把云端返回的 viewCount 安全转成数字（容忍字符串脏数据）。
+  static int _parseViewCount(dynamic v) =>
+      v is num ? v.toInt() : int.tryParse('$v') ?? 0;
 }
 
 /// 广场评论。
@@ -321,7 +326,11 @@ class CloudNotesService {
   /// 阅读量 +1（打开详情页时调用）。返回最新阅读量。
   Future<int> incView(String noteId) async {
     final res = await _call('incView', params: {'id': noteId});
-    return (res['viewCount'] as num?)?.toInt() ?? 0;
+    final v = res['viewCount'];
+    // 云端可能返回字符串（历史脏数据），统一转数字；并打印原始值便于排查。
+    final count = v is num ? v.toInt() : int.tryParse('$v');
+    debugPrint('[incView] noteId=$noteId viewCount=$v -> $count');
+    return count ?? 0;
   }
 
   /// 转发笔记。quote 为空 → 直接转发；quote 非空 → 引用转发（引言 + 原笔记）。返回新笔记 id。
@@ -375,6 +384,34 @@ class CloudNotesService {
         .whereType<Map<String, dynamic>>()
         .map(PlazaNote.fromJson)
         .toList();
+  }
+
+  /// 拉取当前用户点赞过的笔记列表。
+  Future<List<PlazaNote>> getLikedNotes() async {
+    if (!AuthService.instance.isLoggedIn) return [];
+    final res = await _call('getLikedNotes');
+    return (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+  }
+
+  /// 拉取当前用户自己发布的笔记列表（含私密笔记）。
+  Future<(List<PlazaNote>, bool hasMore)> getMyNotes({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) return (<PlazaNote>[], false);
+    final res = await _call('getMyNotes', params: {
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final notes = (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+    final hasMore = res['hasMore'] == true;
+    return (notes, hasMore);
   }
 
   /// 预取当前登录用户的关注/屏蔽记录。未登录时清空。

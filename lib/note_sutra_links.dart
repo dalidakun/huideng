@@ -1,0 +1,221 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'sutra_asset_path.dart';
+
+/// 一部可被 @ 引用的经书。title 为展示名，filePath 为打包的 ASCII 路径。
+class NoteSutraLink {
+  final String title;
+  final String size;
+  final String folder;
+  final String filePath;
+
+  const NoteSutraLink({
+    required this.title,
+    required this.filePath,
+    this.size = '',
+    this.folder = '',
+  });
+}
+
+/// 经书目录加载与检索（@经书 功能）。
+///
+/// 目录来源与经藏页一致：assets/sutras_catalog.json（约九千部）。
+class NoteSutraCatalog {
+  NoteSutraCatalog._();
+
+  static List<NoteSutraLink>? _cache;
+
+  static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
+
+  static Future<List<NoteSutraLink>> _load() async {
+    final cached = _cache;
+    if (cached != null) return cached;
+    final raw = await rootBundle.loadString('assets/sutras_catalog.json');
+    final decoded = jsonDecode(raw) as List<dynamic>;
+    final byTitle = <String, NoteSutraLink>{};
+    for (final e in decoded) {
+      final m = e as Map<String, dynamic>;
+      final rawTitle = (m['t'] as String?) ?? '';
+      final title = rawTitle.replaceAll(_idSuffixRe, '');
+      if (title.isEmpty) continue;
+      if (byTitle.containsKey(title)) continue; // 多卷经书只保留第一部
+      final path = SutraAssetPath.resolve(title: rawTitle);
+      if (!path.startsWith('assets/')) continue;
+      byTitle[title] = NoteSutraLink(
+        title: title,
+        size: (m['s'] as String?) ?? '',
+        folder: (m['f'] as String?) ?? '',
+        filePath: path,
+      );
+    }
+    final list = byTitle.values.toList();
+    _cache = list;
+    return list;
+  }
+
+  /// 检索以 query 开头的经书；结果不足时补充包含匹配。最多返回 30 部。
+  static Future<List<NoteSutraLink>> search(String query) async {
+    final all = await load();
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    final prefix = <NoteSutraLink>[];
+    final contains = <NoteSutraLink>[];
+    for (final s in all) {
+      final t = s.title.toLowerCase();
+      if (t.startsWith(q)) {
+        prefix.add(s);
+      } else if (t.contains(q)) {
+        contains.add(s);
+      }
+    }
+    return [...prefix, ...contains].take(30).toList();
+  }
+
+  /// 加载全部经书（已按经书去重），带缓存。
+  static Future<List<NoteSutraLink>> load() => _load();
+
+  /// 目录已加载时，返回「经书名 -> 经书」的同步映射；未加载时返回 null（适合列表卡片快速提取）。
+  static Map<String, NoteSutraLink>? get cachedTitleMap {
+    final c = _cache;
+    if (c == null) return null;
+    return {for (final s in c) s.title: s};
+  }
+
+  /// 经书名 -> 经书的映射，用于点击 @经书 时定位正文路径。
+  static Future<Map<String, NoteSutraLink>> titleMap() async {
+    final all = await _load();
+    return {for (final s in all) s.title: s};
+  }
+}
+
+/// 笔记正文中的 @经书 标记的编码与渲染。
+///
+/// 新格式为纯经书名：@地藏菩萨本愿经（不带路径）。
+/// 为兼容旧保存的数据，仍会识别旧式的 `[@经名](assets/...路径)` 标记。
+class NoteSutraLinks {
+  NoteSutraLinks._();
+
+  static final RegExp _legacyTokenRe = RegExp(r'\[@([^\]]+)\]\(([^)]+)\)');
+
+  /// 生成可在正文中保存的 @经书 标记（纯经书名，不带路径）。
+  static String encode(String title) => '@$title';
+
+  /// 将正文中的 @经书 标记转成纯文本（@经书名），用于列表摘要等。
+  static String plainText(String text) =>
+      text.replaceAllMapped(_legacyTokenRe, (m) => '@${m.group(1)}');
+
+  /// 提取正文中引用的经书（旧式 [@经名](路径) 和新式 @经书名 均支持）。
+  /// 目录对应路径来自 [NoteSutraCatalog] 的缓存；若目录未加载，新式标记暂时退化为不可提取。
+  static List<(String, String)> extract(String text) {
+    final results = _legacyTokenRe
+        .allMatches(text)
+        .map((m) => (m.group(1)!, m.group(2)!))
+        .toList();
+    final lib = NoteSutraCatalog.cachedTitleMap;
+    if (lib != null) {
+      // 新式 @经书名：扫描全文，匹配已知经书名称（最长匹配优先）。
+      var i = 0;
+      while (i < text.length) {
+        if (text[i] == '@' && i + 1 < text.length) {
+          var best = '';
+          for (final t in lib.keys) {
+            if (t.length <= best.length) continue;
+            if (text.startsWith('@$t', i)) best = t;
+          }
+          if (best.isNotEmpty) {
+            final entry = lib[best]!;
+            // 避免旧式已提过的重复
+            final already = results.any((r) => r.$1 == best && r.$2 == entry.filePath);
+            if (!already) results.add((best, entry.filePath));
+            i += 1 + best.length;
+            continue;
+          }
+        }
+        i++;
+      }
+    }
+    return results;
+  }
+
+  /// 渲染正文，@经书名 标记显示为金色可点击链接。
+  ///
+  /// [library] 为「经书名 -> 经书」的映射，来自 [NoteSutraCatalog.titleMap]。
+  /// 目录中不存在的 @文本 会按普通文字处理，不渲染成链接。
+  static Widget buildRichText(
+    String text, {
+    required TextStyle style,
+    required Map<String, NoteSutraLink> library,
+    required void Function(String title, String filePath) onTap,
+    Color linkColor = const Color(0xFFD4A06A),
+    int? maxLines,
+    TextOverflow overflow = TextOverflow.clip,
+  }) {
+    WidgetSpan linkSpan(String title, String filePath) {
+      final linkStyle = style.copyWith(
+        color: linkColor,
+        fontWeight: FontWeight.w600,
+      );
+      return WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onTap(title, filePath),
+          child: Text('@$title', style: linkStyle),
+        ),
+      );
+    }
+
+    // 在 [from]（text[from] == '@'）处解析 `@ + 经书名`，返回最长的已知经书名。
+    String? titleAt(int from) {
+      var best = '';
+      for (final t in library.keys) {
+        if (t.length <= best.length) continue;
+        if (text.startsWith('@$t', from)) best = t;
+      }
+      return best.isEmpty ? null : best;
+    }
+
+    final spans = <InlineSpan>[];
+    var i = 0;
+    var litStart = 0;
+    void flushLit() {
+      if (litStart < i) spans.add(TextSpan(text: text.substring(litStart, i)));
+    }
+
+    while (i < text.length) {
+      // 旧式标记：[@经名](路径)
+      if (text[i] == '[' && i + 1 < text.length && text[i + 1] == '@') {
+        final m = _legacyTokenRe.matchAsPrefix(text, i);
+        if (m != null) {
+          flushLit();
+          spans.add(linkSpan(m.group(1)!, m.group(2)!));
+          i = m.end;
+          litStart = i;
+          continue;
+        }
+      }
+      // 新式标记：@经书名（需能在目录中解析）
+      if (text[i] == '@' && i + 1 < text.length) {
+        final t = titleAt(i);
+        if (t != null) {
+          flushLit();
+          spans.add(linkSpan(t, library[t]!.filePath));
+          i += 1 + t.length;
+          litStart = i;
+          continue;
+        }
+      }
+      i++;
+    }
+    flushLit();
+
+    return Text.rich(
+      TextSpan(children: spans, style: style),
+      maxLines: maxLines,
+      overflow: overflow,
+    );
+  }
+}

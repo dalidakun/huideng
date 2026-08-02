@@ -4,6 +4,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'note_detail_page.dart';
+import 'note_sutra_links.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -52,6 +53,7 @@ class _PlazaPageState extends State<PlazaPage> {
   }
 
   Future<void> _load() async {
+    await NoteSutraCatalog.load(); // 确保经书目录已缓存
     setState(() {
       _loading = true;
       _error = false;
@@ -285,9 +287,10 @@ class _PlazaPageState extends State<PlazaPage> {
   }
 
   Widget _buildCard(PlazaNote note) {
-    final preview = note.content.length > 60
-        ? '${note.content.substring(0, 60)}...'
-        : note.content;
+    final content = NoteSutraLinks.plainText(note.content);
+    final preview = content.length > 60
+        ? '${content.substring(0, 60)}...'
+        : content;
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -383,20 +386,53 @@ class _PlazaPageState extends State<PlazaPage> {
               ),
               if (note.quoteContent.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                Container(
-                  width: double.infinity,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _border),
-                  ),
-                  child: Text('@${note.repostSourceAuthor}：《${note.quoteOfTitle}》',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _textSec)),
-                ),
+                Builder(builder: (_) {
+                  final quoteSutras =
+                      NoteSutraLinks.extract(note.quoteOfContent);
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _bg,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                            '@${note.repostSourceAuthor}：《${note.quoteOfTitle}》',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, color: _textSec)),
+                        for (final q in quoteSutras) ...[
+                          const SizedBox(height: 5),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.menu_book_rounded,
+                                  size: 13, color: _gold),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  '@${q.$1}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF9A6B3F),
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                }),
               ],
               const SizedBox(height: 10),
               Row(

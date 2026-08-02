@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -6,8 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
-import 'change_phone_page.dart';
-import 'login_page.dart';
 import 'settings_widgets.dart';
 
 /// 账号信息：头像、昵称、签名、绑定手机号。
@@ -20,8 +19,10 @@ class AccountInfoPage extends StatefulWidget {
 
 class _AccountInfoPageState extends State<AccountInfoPage> {
   String? _avatarPath;
+  String? _bannerPath;
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
+  String _phone = '';
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
 
@@ -46,10 +47,12 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
     if (!mounted) return;
     setState(() {
       _avatarPath = prefs.getString('user_avatar_path');
+      _bannerPath = prefs.getString('user_banner_path');
       _nickname = user?.displayName ?? prefs.getString('user_nickname') ?? '同修';
       _tagline = user?.tagline?.isNotEmpty == true
           ? user!.tagline!
           : prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+      _phone = user?.mobilePhoneNumber ?? '';
     });
   }
 
@@ -72,6 +75,24 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
     } catch (_) {
       if (mounted) _showToast('头像设置失败');
     }
+  }
+
+  Future<void> _pickBanner() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final picked = File(result.files.single.path!);
+      final dir = await getApplicationDocumentsDirectory();
+      final dest = File('${dir.path}/user_banner_${DateTime.now().millisecondsSinceEpoch}.png');
+      await picked.copy(dest.path);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_banner_path', dest.path);
+      if (!mounted) return;
+      setState(() => _bannerPath = dest.path);
+    } catch (_) {}
   }
 
   Future<void> _editName() async {
@@ -141,15 +162,6 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
     _load();
   }
 
-  void _changePhone() {
-    if (!_isLoggedIn) {
-      _showToast('请先登录');
-      Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
-      return;
-    }
-    Navigator.push(context, MaterialPageRoute(builder: (_) => const ChangePhonePage()));
-  }
-
   void _showToast(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -157,115 +169,182 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
     );
   }
 
-  String _maskPhone(String phone) {
-    final digits = phone.replaceAll(RegExp(r'\D'), '');
-    if (digits.length < 7) return phone;
-    return '${digits.substring(0, 3)}****${digits.substring(digits.length - 4)}';
-  }
-
   @override
   Widget build(BuildContext context) {
-    final user = AuthService.instance.currentUser.value;
-    final phone = user?.mobilePhoneNumber;
-    return SettingsPageScaffold(
-      title: '账号信息',
-      child: ListView(
-        padding: const EdgeInsets.only(top: 16, bottom: 40),
-        children: [
-          SettingsCard(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+    final phoneDisplay = _phone.isNotEmpty
+        ? '${_phone.substring(0, math.min(3, _phone.length))}****${_phone.length >= 7 ? _phone.substring(_phone.length - 4) : ''}'
+        : '';
+
+    return Scaffold(
+      backgroundColor: sBg,
+      body: SafeArea(
+        top: true,
+        child: Column(
+          children: [
+            // back button
+            Container(
+              color: sBg,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 10, 20, 10),
                 child: Row(
                   children: [
-                    GestureDetector(
-                      onTap: _pickAvatar,
-                      child: Stack(
-                        children: [
-                          Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: sCard,
-                              boxShadow: [
-                                BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 10, offset: const Offset(0, 2)),
-                              ],
-                              image: _avatarPath != null
-                                  ? DecorationImage(image: FileImage(File(_avatarPath!)), fit: BoxFit.cover)
-                                  : null,
-                            ),
-                            child: _avatarPath == null
-                                ? const Icon(Icons.person, size: 34, color: sTextHint)
-                                : null,
-                          ),
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: sGold,
-                                border: Border.all(color: sCard, width: 2),
-                              ),
-                              child: const Icon(Icons.edit_outlined, size: 13, color: Colors.white),
-                            ),
-                          ),
-                        ],
-                      ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.arrow_back_ios_new, color: sText, size: 20),
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(_nickname, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: sText)),
-                          const SizedBox(height: 4),
-                          Text(_tagline, maxLines: 1, overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 13, color: sTextSec)),
-                        ],
-                      ),
-                    ),
+                    const SizedBox(width: 4),
+                    const Text('账号信息',
+                        style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: sText)),
                   ],
                 ),
               ),
-              const SettingsDivider(indent: 20),
-              SettingsTile(
-                icon: Icons.badge_outlined,
-                iconColor: sGold,
-                title: '昵称',
-                subtitle: _nickname,
-                onTap: _editName,
-              ),
-              const SettingsDivider(),
-              SettingsTile(
-                icon: Icons.format_quote_outlined,
-                iconColor: sGold,
-                title: '签名',
-                subtitle: _tagline,
-                onTap: _editName,
-              ),
-              const SettingsDivider(),
-              SettingsTile(
-                icon: Icons.phone_iphone_outlined,
-                iconColor: sGold,
-                title: '更换手机号',
-                subtitle: phone != null && phone.isNotEmpty ? _maskPhone(phone) : '未登录',
-                onTap: _changePhone,
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              _isLoggedIn ? '昵称与签名修改后会同步到云端，更换手机号不会影响现有数据。' : '登录后可查看并管理账号信息',
-              style: const TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
             ),
-          ),
-        ],
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  // banner
+                  GestureDetector(
+                    onTap: _pickBanner,
+                    child: Container(
+                      width: double.infinity,
+                      height: 160,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD2C5B3),
+                        image: _bannerPath != null
+                            ? DecorationImage(
+                                image: FileImage(File(_bannerPath!)),
+                                fit: BoxFit.cover,
+                              )
+                            : null,
+                      ),
+                      child: _bannerPath == null
+                          ? const Center(
+                              child: Icon(Icons.camera_alt_outlined, size: 28, color: Colors.white38),
+                            )
+                          : null,
+                    ),
+                  ),
+                  // avatar overlapping banner
+                  Padding(
+                    padding: const EdgeInsets.only(left: 20),
+                    child: Transform.translate(
+                      offset: const Offset(0, -38),
+                      child: GestureDetector(
+                        onTap: _pickAvatar,
+                        child: Stack(
+                          children: [
+                            Container(
+                              width: 76,
+                              height: 76,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: sCard,
+                                border: Border.all(color: Colors.white, width: 3),
+                                boxShadow: [
+                                  BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.12),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 2)),
+                                ],
+                                image: _avatarPath != null
+                                    ? DecorationImage(
+                                        image: FileImage(File(_avatarPath!)),
+                                        fit: BoxFit.cover)
+                                    : null,
+                              ),
+                              child: _avatarPath == null
+                                  ? const Icon(Icons.person, size: 38, color: sTextHint)
+                                  : null,
+                            ),
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 24,
+                                height: 24,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: sGold,
+                                  border: Border.all(color: sCard, width: 2),
+                                ),
+                                child: const Icon(Icons.edit_outlined, size: 13, color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // name / phone / tagline
+                  Transform.translate(
+                    offset: const Offset(0, -24),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_nickname,
+                              style: const TextStyle(
+                                  fontSize: 20, fontWeight: FontWeight.w700, color: sText)),
+                          if (phoneDisplay.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                const Icon(Icons.phone_iphone_outlined,
+                                    size: 13, color: sTextHint),
+                                const SizedBox(width: 4),
+                                Text(phoneDisplay,
+                                    style: const TextStyle(fontSize: 13, color: sTextHint)),
+                              ],
+                            ),
+                          ],
+                          const SizedBox(height: 6),
+                          Text(
+                            _tagline,
+                            style: const TextStyle(fontSize: 13, color: sTextSec),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // edit fields
+                  SettingsCard(
+                    children: [
+                      SettingsTile(
+                        icon: Icons.badge_outlined,
+                        iconColor: sGold,
+                        title: '昵称',
+                        subtitle: _nickname,
+                        onTap: _editName,
+                      ),
+                      const SettingsDivider(),
+                      SettingsTile(
+                        icon: Icons.format_quote_outlined,
+                        iconColor: sGold,
+                        title: '签名',
+                        subtitle: _tagline,
+                        onTap: _editName,
+                      ),
+                      const SettingsDivider(),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      _isLoggedIn ? '昵称与签名修改后会同步到云端。' : '登录后可查看并管理账号信息',
+                      style: const TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

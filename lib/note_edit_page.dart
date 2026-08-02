@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'note_sutra_links.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _bg = Color(0xFFF5EDE3);
@@ -31,6 +33,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
   String? _cloudId;
   bool _savingCloud = false;
 
+  // @经书 搜索状态
+  List<NoteSutraLink> _sutraResults = [];
+  bool _sutraPanelVisible = false;
+  bool _justInsertedSutra = false;
+  int _atIndex = -1;
+  Timer? _sutraDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -39,15 +48,109 @@ class _NoteEditPageState extends State<NoteEditPage> {
     _shared = widget.note?['shared'] == true;
     _cloudId = widget.note?['cloudId'] as String?;
     _titleController.addListener(_onChange);
-    _contentController.addListener(_onChange);
+    _contentController.addListener(_onContentChanged);
   }
 
   void _onChange() {
     if (!_hasChanges) setState(() => _hasChanges = true);
   }
 
+  void _onContentChanged() {
+    // 刚由程序插入 @经书 产生的一次变化，不触发搜索，避免选中后立刻又弹出面板。
+    if (_justInsertedSutra) {
+      _justInsertedSutra = false;
+      if (!_hasChanges) setState(() => _hasChanges = true);
+      return;
+    }
+    if (!_hasChanges) setState(() => _hasChanges = true);
+
+    final text = _contentController.text;
+    final sel = _contentController.selection;
+    var panelVisible = false;
+    var atIndex = -1;
+    var query = '';
+    if (sel.isValid && sel.isCollapsed) {
+      final cursor = sel.start;
+      final at = text.lastIndexOf('@', cursor - 1);
+      if (at >= 0) {
+        // 已成形标记内部、或 @ 前是 '[' 时不触发搜索。
+        final insideExisting = at > 0 && text[at - 1] == '[';
+        final seg = text.substring(at, cursor);
+        final valid = !insideExisting &&
+            !seg.substring(1).contains(RegExp(r'[\s\[\]\(\)@]'));
+        if (valid) {
+          panelVisible = true;
+          atIndex = at;
+          query = seg.substring(1);
+        }
+      }
+    }
+
+    if (!panelVisible) {
+      if (_sutraPanelVisible || _atIndex >= 0) {
+        setState(() {
+          _sutraResults = [];
+          _sutraPanelVisible = false;
+          _atIndex = -1;
+        });
+      }
+      return;
+    }
+
+    if (!_sutraPanelVisible || _atIndex != atIndex) {
+      setState(() {
+        _sutraPanelVisible = true;
+        _atIndex = atIndex;
+        _sutraResults = [];
+      });
+    }
+    _sutraDebounce?.cancel();
+    if (query.isEmpty) return;
+    _sutraDebounce = Timer(const Duration(milliseconds: 250), () async {
+      final results = await NoteSutraCatalog.search(query);
+      if (!mounted) return;
+      final curText = _contentController.text;
+      final curSel = _contentController.selection;
+      final stillActive = _sutraPanelVisible &&
+          _atIndex == atIndex &&
+          curSel.isValid &&
+          curSel.isCollapsed &&
+          curText.lastIndexOf('@', curSel.start - 1) == atIndex;
+      if (stillActive) setState(() => _sutraResults = results);
+    });
+  }
+
+  void _insertSutra(NoteSutraLink link) {
+    final text = _contentController.text;
+    final sel = _contentController.selection;
+    final cursor = sel.isValid ? sel.start : text.length;
+    final at = _atIndex >= 0 ? _atIndex : text.lastIndexOf('@', cursor - 1);
+    if (at < 0 || at >= cursor) return;
+    final token = NoteSutraLinks.encode(link.title);
+    _justInsertedSutra = true;
+    _contentController.value = TextEditingValue(
+      text: text.replaceRange(at, cursor, token),
+      selection: TextSelection.collapsed(offset: at + token.length),
+    );
+    setState(() {
+      _sutraResults = [];
+      _sutraPanelVisible = false;
+      _atIndex = -1;
+    });
+  }
+
+  void _hideSutraPanel() {
+    _sutraDebounce?.cancel();
+    setState(() {
+      _sutraResults = [];
+      _sutraPanelVisible = false;
+      _atIndex = -1;
+    });
+  }
+
   @override
   void dispose() {
+    _sutraDebounce?.cancel();
     _titleController.dispose();
     _contentController.dispose();
     super.dispose();
@@ -141,6 +244,106 @@ class _NoteEditPageState extends State<NoteEditPage> {
       _shared = value;
       if (!_hasChanges) _hasChanges = true;
     });
+  }
+
+  Widget _buildSutraPanel() {
+    final results = _sutraResults;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      constraints: const BoxConstraints(maxHeight: 260),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFEBE1D6)),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 16,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 8, 4),
+            child: Row(
+              children: [
+                const Icon(Icons.menu_book_outlined, size: 15, color: _textHint),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text('选择经书',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: _textSec,
+                          fontWeight: FontWeight.w600)),
+                ),
+                GestureDetector(
+                  onTap: _hideSutraPanel,
+                  child: const Icon(Icons.close, size: 16, color: _textHint),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: Color(0xFFEBE1D6)),
+          if (results.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: Text('输入经书名称开始搜索，例如：地藏',
+                    style: TextStyle(fontSize: 13, color: _textHint)),
+              ),
+            )
+          else
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.only(bottom: 6),
+                itemCount: results.length,
+                itemBuilder: (context, index) {
+                  final s = results[index];
+                  return InkWell(
+                    onTap: () => _insertSutra(s),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 9),
+                      child: Row(
+                        children: [
+                          Icon(Icons.menu_book_rounded, size: 17, color: _gold),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(s.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: _text)),
+                                if (s.folder.isNotEmpty) ...[
+                                  const SizedBox(height: 1),
+                                  Text(s.folder,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: _textHint)),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _buildShareRow() {
@@ -377,23 +580,34 @@ class _NoteEditPageState extends State<NoteEditPage> {
               child: Divider(height: 1, thickness: 0.5, color: Color(0xFFEBE1D6)),
             ),
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: TextField(
-                  controller: _contentController,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  style: const TextStyle(fontSize: 15, color: _text, height: 1.6),
-                  decoration: InputDecoration(
-                    hintText: '开始记录...',
-                    hintStyle: TextStyle(color: _textHint),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
+              child: Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      controller: _contentController,
+                      maxLines: null,
+                      expands: true,
+                      textAlignVertical: TextAlignVertical.top,
+                      style: const TextStyle(fontSize: 15, color: _text, height: 1.6),
+                      decoration: InputDecoration(
+                        hintText: '开始记录...\n输入 @ 可引用经书',
+                        hintStyle: TextStyle(color: _textHint),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                      ),
+                    ),
                   ),
-                ),
+                  if (_sutraPanelVisible)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _buildSutraPanel(),
+                    ),
+                ],
               ),
             ),
             _buildShareRow(),

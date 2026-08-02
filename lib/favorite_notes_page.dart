@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
+import 'note_sutra_links.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _bg = Color(0xFFF5EDE3);
@@ -134,9 +135,10 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
   }
 
   Widget _buildNoteTile(PlazaNote note) {
-    final preview = note.content.length > 60
-        ? '${note.content.substring(0, 60)}...'
-        : note.content;
+    final content = NoteSutraLinks.plainText(note.content);
+    final preview = content.length > 60
+        ? '${content.substring(0, 60)}...'
+        : content;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(

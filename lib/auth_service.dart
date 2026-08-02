@@ -151,6 +151,7 @@ class AuthService {
       }
       currentUser.value = _toAuthUser(user);
       await _ensureDefaultNickname(user);
+      await _recordFirstJoin();
     } catch (_) {
       currentUser.value = null;
     }
@@ -203,6 +204,7 @@ class AuthService {
     await _loadLocalTagline();
     currentUser.value = _toAuthUser(user);
     await _ensureDefaultNickname(user);
+    await _recordFirstJoin();
   }
 
   /// 更新当前用户昵称/签名。
@@ -310,5 +312,11 @@ class AuthService {
   Future<void> _loadLocalTagline() async {
     final prefs = await SharedPreferences.getInstance();
     _localTagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+  }
+
+  Future<void> _recordFirstJoin() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey('user_created_at')) return;
+    await prefs.setInt('user_created_at', DateTime.now().millisecondsSinceEpoch);
   }
 }

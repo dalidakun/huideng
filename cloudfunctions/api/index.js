@@ -236,13 +236,18 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 50, 100);
-        const res = await notes
-          .where({ ownerUserId: uid })
+        const base = notes.where({ ownerUserId: uid });
+        const res = await base
           .orderBy("updatedAt", "desc")
           .skip((page - 1) * pageSize)
           .limit(pageSize)
           .get();
-        return ok({ notes: res.data });
+        const { total } = await base.count();
+        return ok({
+          notes: res.data,
+          total,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
       }
 
       // ==================== 广场 ====================
@@ -346,7 +351,7 @@ exports.main = async (event, context) => {
         return ok({ note });
       }
 
-      // 阅读量 +1（打开详情页时调用一次）。
+      // 阅读量 +1（打开详情页时调用一次）。数值类型强制为数字，避免历史脏数据（字符串）导致串接。
       case "incView": {
         const id = String(event.id || "");
         const { data } = await notes.doc(id).get();
@@ -355,7 +360,8 @@ exports.main = async (event, context) => {
         if (note.visibility !== "public" && note.ownerUserId !== uid) {
           return fail("not_found");
         }
-        const viewCount = (note.viewCount || 0) + 1;
+        const prev = Math.floor(Number(note.viewCount) || 0);
+        const viewCount = Number.isFinite(prev) ? prev + 1 : 1;
         await notes.doc(id).update({ viewCount });
         return ok({ viewCount });
       }
@@ -571,6 +577,27 @@ exports.main = async (event, context) => {
           .limit(1000)
           .get();
         return ok({ ids: res.data.map((r) => r.noteId) });
+      }
+
+      case "getLikedNotes": {
+        if (!uid) return fail("unauthorized");
+        const lres = await likes
+          .where({ userId: uid })
+          .orderBy("createdAt", "desc")
+          .limit(1000)
+          .get();
+        const ids = lres.data.map((r) => r.noteId);
+        const list = [];
+        for (const nid of ids) {
+          try {
+            const { data: ndata } = await notes.doc(nid).get();
+            const n = ndata && ndata[0];
+            if (n && n.visibility === "public" && n.status === "normal") {
+              list.push(n);
+            }
+          } catch (e) {}
+        }
+        return ok({ notes: list });
       }
 
       case "toggleLike": {

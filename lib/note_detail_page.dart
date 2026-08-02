@@ -4,6 +4,8 @@ import 'package:share_plus/share_plus.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'note_sutra_links.dart';
+import 'reading_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -26,6 +28,7 @@ class NoteDetailPage extends StatefulWidget {
 class _NoteDetailPageState extends State<NoteDetailPage> {
   PlazaNote? _note;
   List<PlazaComment> _comments = [];
+  Map<String, NoteSutraLink> _sutraLib = const {};
   bool _loading = true;
   bool _error = false;
   bool _liking = false;
@@ -58,11 +61,17 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       final comments =
           await CloudNotesService.instance.getComments(widget.noteId);
       int viewCount = note.viewCount;
+      // 阅读量 +1 尽力而为，失败不影响阅读，也不提示用户。
       try {
         viewCount = await CloudNotesService.instance.incView(widget.noteId);
       } catch (_) {}
+      Map<String, NoteSutraLink> lib = const {};
+      try {
+        lib = await NoteSutraCatalog.titleMap();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
+        _sutraLib = lib;
         _note = PlazaNote(
           id: note.id,
           ownerUserId: note.ownerUserId,
@@ -487,17 +496,12 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (_reposting) return;
     setState(() => _reposting = true);
     try {
-      final newId =
-          await CloudNotesService.instance.repostNote(widget.noteId, quote: quote);
+      await CloudNotesService.instance
+          .repostNote(widget.noteId, quote: quote);
       if (!mounted) return;
       setState(() => _reposting = false);
+      // 转发后停留在当前笔记详情页，不跳转到转发后的新笔记。
       _showToast(quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
-      if (newId.isNotEmpty) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: newId)),
-        );
-      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _reposting = false);
@@ -505,11 +509,21 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
+  void _openSutra(String title, String filePath) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReadingPage(title: title, filePath: filePath),
+      ),
+    );
+  }
+
   Future<void> _share() async {
     final note = _note;
     if (note == null) return;
+    final plain = NoteSutraLinks.plainText(note.content);
     final text = '《${note.title}》\n'
-        '${note.content.length > 120 ? '${note.content.substring(0, 120)}…' : note.content}\n'
+        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
         '—— 来自「慧灯」App · ${note.authorName} 的修学分享';
     try {
       await SharePlus.instance.share(ShareParams(text: text));
@@ -626,9 +640,12 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                       height: 1.4,
                       color: _text)),
               const SizedBox(height: 10),
-              Text(note.content,
-                  style: const TextStyle(
-                      fontSize: 15, color: _text, height: 1.75)),
+              NoteSutraLinks.buildRichText(
+                note.content,
+                style: const TextStyle(fontSize: 15, color: _text, height: 1.75),
+                library: _sutraLib,
+                onTap: (title, filePath) => _openSutra(title, filePath),
+              ),
               if (note.quoteContent.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _buildQuoteCard(note),
@@ -682,7 +699,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         decoration: BoxDecoration(
           color: _card,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _border),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -712,11 +728,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             ],
             if (note.quoteOfContent.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(note.quoteOfContent,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 12, color: _textSec, height: 1.5)),
+              NoteSutraLinks.buildRichText(
+                note.quoteOfContent,
+                style: const TextStyle(
+                    fontSize: 12, color: _textSec, height: 1.5),
+                library: _sutraLib,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                onTap: (title, filePath) =>
+                    _openSutra(title, filePath),
+              ),
             ],
           ],
         ),

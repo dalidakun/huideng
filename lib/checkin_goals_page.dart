@@ -174,7 +174,7 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
               Container(
                 width: 32, height: 32,
                 decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
-                child: Icon(t.icon, size: 17, color: _primary),
+                child: Icon(t.icon, size: 17, color: const Color(0xFF71867A)),
               ),
               const SizedBox(width: 10),
               Text(t.label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _text)),

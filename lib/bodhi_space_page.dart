@@ -5,6 +5,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'note_detail_page.dart';
+import 'note_sutra_links.dart';
 import 'user_space_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -374,7 +375,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
                     if (a.content.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       Text(
-                        a.content,
+                        NoteSutraLinks.plainText(a.content),
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(

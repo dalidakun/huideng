@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
+import 'note_sutra_links.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _bg = Color(0xFFF5EDE3);
@@ -198,11 +199,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
   }
 
   Widget _buildNoteTile(PlazaNote note) {
+    final content = NoteSutraLinks.plainText(note.content);
     final preview = note.quoteContent.isNotEmpty
         ? (note.quoteOfTitle.isNotEmpty
-            ? '${note.content}\n转发自《${note.quoteOfTitle}》'
-            : note.content)
-        : note.content;
+            ? '$content\n转发自《${note.quoteOfTitle}》'
+            : content)
+        : content;
     final text = preview.length > 60 ? '${preview.substring(0, 60)}...' : preview;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),

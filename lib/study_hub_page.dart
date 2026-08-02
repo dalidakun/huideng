@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -15,6 +16,7 @@ import 'calendar_page.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_edit_page.dart';
+import 'note_sutra_links.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -79,11 +81,16 @@ class StudyHubPageState extends State<StudyHubPage>
   final Map<String, _PlazaFeedCache> _tabCaches = {};
   final List<PlazaNote> _feedNotes = [];
   final Set<String> _followedIds = {};
+  final Map<int, String> _timeCache = HashMap<int, String>();
+  final Map<String, String> _plainTextCache = {};
+  final Map<String, List<(String, String)>> _sutraQuoteCache = {};
+  static DateTime _timeCacheNow = DateTime.now();
   final ScrollController _feedScroll = ScrollController();
   final GlobalKey _topSectionKey = GlobalKey();
   double _topSectionHeight = 0;
   bool _showFab = false;
   int _feedPage = 1;
+  int _feedVersion = 0;
   bool _feedHasMore = true;
   bool _feedInitial = true;
   bool _feedLoading = false;
@@ -92,16 +99,24 @@ class StudyHubPageState extends State<StudyHubPage>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
+  static const _commentIcon = AssetImage('assets/images/ic_comment.png');
+  static const _viewIcon = AssetImage('assets/images/ic_view.png');
+
   @override
   void initState() {
     super.initState();
+    NoteSutraCatalog.load(); // 预加载经书目录，让卡片 @经书 提取可用
     _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
     _feedScroll.addListener(_onFeedScroll);
     _loadData();
     _loadFeed();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopSection());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measureTopSection();
+      precacheImage(_commentIcon, context);
+      precacheImage(_viewIcon, context);
+    });
   }
 
   @override
@@ -327,10 +342,19 @@ class StudyHubPageState extends State<StudyHubPage>
       _loadMoreFeed();
     }
     // 只有当广场栏目栏被滚动到贴住顶部（AppBar 下边缘）时才显示“新增笔记”按钮。
-    _measureTopSection();
+    _measureTopSectionOnce();
     final showFab = _topSectionHeight > 0 && _feedScroll.offset >= _topSectionHeight;
     if (showFab != _showFab) {
       setState(() => _showFab = showFab);
+    }
+  }
+
+  void _measureTopSectionOnce() {
+    if (_topSectionHeight > 0) return;
+    final ctx = _topSectionKey.currentContext;
+    final box = ctx?.findRenderObject();
+    if (box is RenderBox && box.size.height > 0) {
+      _topSectionHeight = box.size.height;
     }
   }
 
@@ -347,12 +371,17 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 公告：暂为占位 UI。
   Future<void> _loadFeed() async {
     await CloudNotesService.instance.refreshLikedNoteIds();
+    await NoteSutraCatalog.load(); // 确保经书目录已缓存，提取 @经书 时可用
+    _timeCache.clear();
+    _plainTextCache.clear();
+    _sutraQuoteCache.clear();
     if (!mounted) return;
     final tab = _plazaTabs[_tabIndex];
     setState(() {
       _feedInitial = true;
       _feedError = false;
       _feedNotes.clear();
+      _feedVersion++;
       _feedPage = 1;
       _feedHasMore = true;
       _feedLoading = false;
@@ -365,6 +394,7 @@ class StudyHubPageState extends State<StudyHubPage>
         if (mounted) {
           setState(() {
             _feedNotes.addAll(list);
+            _feedVersion++;
             _feedPage = 2;
             _feedHasMore = hasMore;
             _feedInitial = false;
@@ -494,7 +524,8 @@ class StudyHubPageState extends State<StudyHubPage>
       ..addAll(ids));
   }
 
-  /// 关注 tab：拉取全部公开笔记并筛选出关注同修的作品。
+  /// 关注 tab：拉取公开笔记并筛选出关注同修的作品。
+  /// 最多翻 10 页（200 条），凑够一屏（20 条）即停止。
   Future<void> _loadFollowingNotes() async {
     setState(() => _feedLoading = true);
     try {
@@ -502,7 +533,9 @@ class StudyHubPageState extends State<StudyHubPage>
       final seen = <String>{};
       var page = 1;
       var hasMore = true;
-      while (hasMore && page <= 50) {
+      const maxPages = 10;
+      const minCollect = _feedPageSize;
+      while (hasMore && page <= maxPages && all.length < minCollect) {
         final (list, more) = await CloudNotesService.instance
             .getPlazaNotes(page: page, pageSize: _feedPageSize);
         for (final n in list) {
@@ -548,6 +581,7 @@ class StudyHubPageState extends State<StudyHubPage>
       if (!mounted) return;
       setState(() {
         _feedNotes.addAll(list);
+        _feedVersion++;
         _feedPage++;
         _feedHasMore = hasMore;
         _feedLoading = false;
@@ -718,7 +752,10 @@ class StudyHubPageState extends State<StudyHubPage>
       ..clear()
       ..addAll(ids));
     if (_plazaTabs[_tabIndex] == 'follow') {
-      setState(() => _feedNotes.removeWhere((n) => n.id == note.id));
+      setState(() {
+        _feedNotes.removeWhere((n) => n.id == note.id);
+        _feedVersion++;
+      });
     }
     _showTopToast(following ? '已关注' : '已取消关注');
   }
@@ -849,7 +886,7 @@ class StudyHubPageState extends State<StudyHubPage>
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: IconButton(
-              icon: const Icon(Icons.calendar_month_outlined, color: Color(0xFF616161), size: 20),
+              icon: const Icon(Icons.calendar_month_outlined, color: Color(0xFF71867A), size: 20),
               onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarPage())),
             ),
           ),
@@ -867,7 +904,7 @@ class StudyHubPageState extends State<StudyHubPage>
                     MaterialPageRoute(builder: (_) => const NoteEditPage()),
                   ).then((_) => _refreshCurrentSmooth()),
                   heroTag: 'plaza_fab',
-                  backgroundColor: const Color(0xFF5D4037),
+                  backgroundColor: const Color(0xFF71867A),
                   elevation: 8,
                   highlightElevation: 12,
                   shape: const CircleBorder(),
@@ -966,7 +1003,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   Container(
                     width: 28, height: 28,
                     decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.menu_book_rounded, size: 16, color: _primary),
+                    child: Icon(Icons.menu_book_rounded, size: 16, color: const Color(0xFF71867A)),
                   ),
                   const SizedBox(width: 10),
                   const Text('当前学习', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
@@ -1059,7 +1096,7 @@ class StudyHubPageState extends State<StudyHubPage>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(_currentFavorite ? Icons.star_rounded : Icons.star_outline_rounded, size: 13),
+                        Image.asset(_currentFavorite ? 'assets/images/star_filled.png' : 'assets/images/star_outline.png', width: 13, height: 13),
                         const SizedBox(width: 4),
                         Text(_currentFavorite ? '已收藏' : '收藏', style: const TextStyle(fontSize: 13)),
                       ],
@@ -1154,7 +1191,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 Container(
                   width: 30, height: 30,
                   decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.check_circle_outline, size: 17, color: _primary),
+                  child: Icon(Icons.check_circle_outline, size: 17, color: const Color(0xFF71867A)),
                 ),
                 const SizedBox(width: 10),
                 Text('功课打卡', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
@@ -1321,6 +1358,7 @@ class StudyHubPageState extends State<StudyHubPage>
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
         sliver: SliverList(
+          key: ValueKey('feed_$_feedVersion'),
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               if (index < feedLen) {
@@ -1329,6 +1367,7 @@ class StudyHubPageState extends State<StudyHubPage>
               return _buildFeedFooter();
             },
             childCount: feedLen + (showFooter ? 1 : 0),
+            addRepaintBoundaries: true,
           ),
         ),
       ),
@@ -1475,13 +1514,16 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Widget _buildFeedTile(PlazaNote note) {
-    final preview = note.content.length > 60
-        ? '${note.content.substring(0, 60)}...'
-        : note.content;
+    final content = _plainTextCache.putIfAbsent(note.id, () => NoteSutraLinks.plainText(note.content));
+    final preview = content.length > 60
+        ? '${content.substring(0, 60)}...'
+        : content;
+    final sutraQuotes = _sutraQuoteCache.putIfAbsent(note.id, () => NoteSutraLinks.extract(note.content));
     final isMine =
         AuthService.instance.currentUser.value?.id == note.ownerUserId;
     final isLoggedIn = AuthService.instance.isLoggedIn;
     final followed = _followedIds.contains(note.ownerUserId);
+    final liked = CloudNotesService.instance.likedNoteIds.contains(note.id);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -1571,23 +1613,99 @@ class StudyHubPageState extends State<StudyHubPage>
                       fontSize: 13, color: _textSec, height: 1.5),
                 ),
               ],
-              if (note.quoteContent.isNotEmpty) ...[
-                const SizedBox(height: 6),
+              if (sutraQuotes.isNotEmpty) ...[
+                const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
                     color: _bg,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _border),
                   ),
-                  child: Text(
-                      '@${note.repostSourceAuthor}：《${note.quoteOfTitle}》',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _textSec)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final q in sutraQuotes)
+                        InkWell(
+                          onTap: () => _openSutraByPath(q.$1, q.$2),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.menu_book_rounded,
+                                    size: 14, color: _gold),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    q.$1,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Color(0xFF9A6B3F),
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                const Icon(Icons.chevron_right,
+                                    size: 14, color: _gold),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
+              ],
+              if (note.quoteContent.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Builder(builder: (_) {
+                  final quoteSutras =
+                      NoteSutraLinks.extract(note.quoteOfContent);
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _bg,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                            '@${note.repostSourceAuthor}：《${note.quoteOfTitle}》',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, color: _textSec)),
+                        for (final q in quoteSutras) ...[
+                          const SizedBox(height: 5),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.menu_book_rounded,
+                                  size: 13, color: _gold),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  '@${q.$1}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF9A6B3F),
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                }),
               ],
               const SizedBox(height: 10),
               Row(
@@ -1619,7 +1737,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Image.asset('assets/images/ic_comment.png',
+                      Image(image: _commentIcon,
                           width: 13, height: 13),
                       const SizedBox(width: 3),
                       Text(_formatCount(note.commentCount),
@@ -1634,15 +1752,11 @@ class StudyHubPageState extends State<StudyHubPage>
                               fontSize: 12, color: _textSec)),
                       const SizedBox(width: 8),
                       Icon(
-                        CloudNotesService.instance
-                                .likedNoteIds
-                                .contains(note.id)
+                        liked
                             ? Icons.favorite_rounded
                             : Icons.favorite_border_rounded,
                         size: 13,
-                        color: CloudNotesService.instance
-                                .likedNoteIds
-                                .contains(note.id)
+                        color: liked
                             ? _gold
                             : _textSec,
                       ),
@@ -1650,13 +1764,11 @@ class StudyHubPageState extends State<StudyHubPage>
                       Text(_formatCount(note.likeCount),
                           style: TextStyle(
                               fontSize: 12,
-                              color: CloudNotesService.instance
-                                      .likedNoteIds
-                                      .contains(note.id)
+                              color: liked
                                   ? _gold
                                   : _textSec)),
                       const SizedBox(width: 8),
-                      Image.asset('assets/images/ic_view.png',
+                      Image(image: _viewIcon,
                           width: 13, height: 13),
                       const SizedBox(width: 3),
                       Text(_formatCount(note.viewCount),
@@ -1686,17 +1798,19 @@ class StudyHubPageState extends State<StudyHubPage>
 
   String _formatNoteTime(int ms) {
     if (ms <= 0) return '';
-    final t = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(t.year, t.month, t.day);
-    final diff = today.difference(day).inDays;
-    if (diff == 0) {
-      return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-    }
-    if (diff == 1) return '昨天';
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+    return _timeCache.putIfAbsent(ms, () {
+      final t = DateTime.fromMillisecondsSinceEpoch(ms);
+      _timeCacheNow = DateTime.now();
+      final today = DateTime(_timeCacheNow.year, _timeCacheNow.month, _timeCacheNow.day);
+      final day = DateTime(t.year, t.month, t.day);
+      final diff = today.difference(day).inDays;
+      if (diff == 0) {
+        return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+      }
+      if (diff == 1) return '昨天';
+      if (t.year == _timeCacheNow.year) return '${t.month}月${t.day}日';
+      return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+    });
   }
 
   Future<void> _toggleCheckIn(String typeKey, String label) async {
@@ -1906,7 +2020,7 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (widget.icon != null)
-                Icon(widget.icon, size: 22, color: checked ? _primary : _primaryLight)
+                Icon(widget.icon, size: 22, color: checked ? _primary : const Color(0xFF71867A))
               else
                 Text(widget.emoji ?? '', style: TextStyle(fontSize: 20)),
               const SizedBox(height: 4),
@@ -1922,3 +2036,4 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
     );
   }
 }
+

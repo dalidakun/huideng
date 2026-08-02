@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
 const Color _bg = Color(0xFFF5EDE3);
 const Color _card = Color(0xFFFFFAF5);
 const Color _text = Color(0xFF3E2723);
@@ -133,7 +131,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
                   children: [
-                    Icon(Icons.check_circle_outline, size: 16, color: _primaryLight),
+                    Icon(Icons.check_circle_outline, size: 16, color: const Color(0xFF71867A)),
                     const SizedBox(width: 8),
                     Expanded(child: Text(l, style: TextStyle(fontSize: 15, color: _text))),
                   ],
@@ -252,7 +250,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
             child: Row(
               children: [
-                Icon(icon, size: 22, color: _primary),
+                Icon(icon, size: 22, color: const Color(0xFF71867A)),
                 const SizedBox(width: 10),
                 Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
               ],
@@ -349,7 +347,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(isLast ? Icons.add : Icons.remove, size: 18,
-                color: isLast ? _primary : Colors.red.withValues(alpha: 0.7)),
+                color: isLast ? const Color(0xFF71867A) : Colors.red.withValues(alpha: 0.7)),
             ),
           ),
         ],
@@ -420,7 +418,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(isLast ? Icons.add : Icons.remove, size: 18,
-                color: isLast ? _primary : Colors.red.withValues(alpha: 0.7)),
+                color: isLast ? const Color(0xFF71867A) : Colors.red.withValues(alpha: 0.7)),
             ),
           ),
         ],
@@ -468,7 +466,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
-            child: Icon(Icons.add, size: 20, color: _primary),
+            child: Icon(Icons.add, size: 20, color: const Color(0xFF71867A)),
           ),
         ),
       ),
