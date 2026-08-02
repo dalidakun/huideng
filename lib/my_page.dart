@@ -2,7 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'bodhi_space_page.dart';
+import 'cloud_notes_service.dart';
 import 'favorites_page.dart';
+import 'favorite_notes_page.dart';
 import 'login_page.dart';
 import 'notes_page.dart';
 import 'reader_settings_page.dart';
@@ -12,6 +15,7 @@ import 'change_phone_page.dart';
 import 'about_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
+import 'user_list_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -53,12 +57,15 @@ class MyPageState extends State<MyPage> {
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
 
+  MyCounts _counts = const MyCounts();
+
   void reload() => _loadData();
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _loadCounts();
     AuthService.instance.currentUser.addListener(_onAuthChanged);
   }
 
@@ -68,7 +75,10 @@ class MyPageState extends State<MyPage> {
     super.dispose();
   }
 
-  void _onAuthChanged() => _loadData();
+  void _onAuthChanged() {
+    _loadData();
+    _loadCounts();
+  }
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
 
@@ -89,6 +99,17 @@ class MyPageState extends State<MyPage> {
         _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
       }
     });
+  }
+
+  Future<void> _loadCounts() async {
+    try {
+      final counts = await CloudNotesService.instance.getMyCounts();
+      if (!mounted) return;
+      setState(() => _counts = counts);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _counts = const MyCounts());
+    }
   }
 
   Future<void> _viewAvatar() async {
@@ -131,6 +152,30 @@ class MyPageState extends State<MyPage> {
 
   void _openFavorites() {
     Navigator.push(context, slideInFromLeft(const FavoritesPage()));
+  }
+
+  void _openFavoriteNotes() {
+    Navigator.push(context, slideInFromLeft(const FavoriteNotesPage()))
+        .then((_) => reload());
+  }
+
+  void _openBodhiSpace() {
+    Navigator.push(context, slideInFromLeft(const BodhiSpacePage()))
+        .then((_) => _loadCounts());
+  }
+
+  void _openFollowing() {
+    Navigator.push(
+      context,
+      slideInFromLeft(const UserListPage(mode: UserListMode.following)),
+    ).then((_) => _loadCounts());
+  }
+
+  void _openFollowers() {
+    Navigator.push(
+      context,
+      slideInFromLeft(const UserListPage(mode: UserListMode.followers)),
+    ).then((_) => _loadCounts());
   }
 
   void _openNotes() {
@@ -254,6 +299,27 @@ class MyPageState extends State<MyPage> {
                         _buildLoginButton(),
                       ],
               ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  _buildHeaderEntry(
+                    value: _counts.unread,
+                    label: '互动',
+                    emphasize: _counts.unread > 0,
+                    onTap: _openBodhiSpace,
+                  ),
+                  _buildHeaderEntry(
+                    value: _counts.following,
+                    label: '关注',
+                    onTap: _openFollowing,
+                  ),
+                  _buildHeaderEntry(
+                    value: _counts.followers,
+                    label: '粉丝',
+                    onTap: _openFollowers,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -261,18 +327,51 @@ class MyPageState extends State<MyPage> {
     );
   }
 
+  Widget _buildHeaderEntry({
+    required int value,
+    required String label,
+    required VoidCallback onTap,
+    bool emphasize = false,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '$value',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: emphasize ? _gold : _text,
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 12.5,
+                    color: _textSec,
+                    fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildMenuList() {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
-        ],
-      ),
+      color: _bg,
       child: Column(
         children: [
+          _buildMenuItem(
+            icon: Icons.bookmark_rounded,
+            iconColor: _gold,
+            title: '书签',
+            onTap: _openFavoriteNotes,
+          ),
+          _buildMenuDivider(),
           _buildMenuItem(
             icon: Icons.star_rounded,
             iconColor: _gold,
@@ -306,20 +405,13 @@ class MyPageState extends State<MyPage> {
   }) {
     return InkWell(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, color: iconColor, size: 20),
-            ),
-            const SizedBox(width: 14),
+            Icon(icon, color: iconColor, size: 22),
+            const SizedBox(width: 16),
             Expanded(
               child: Text(
                 title,
@@ -334,9 +426,12 @@ class MyPageState extends State<MyPage> {
   }
 
   Widget _buildMenuDivider() {
-    return Padding(
-      padding: const EdgeInsets.only(left: 68),
-      child: const Divider(height: 1, thickness: 0.5, color: Color(0xFFEFE6DB)),
+    return const Divider(
+      height: 1,
+      thickness: 0.5,
+      color: Color(0xFFEFE6DB),
+      indent: 58,
+      endIndent: 0,
     );
   }
 }

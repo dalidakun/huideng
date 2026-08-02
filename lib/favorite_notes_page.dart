@@ -108,7 +108,7 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                 icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
               ),
               const SizedBox(width: 4),
-              const Text('笔记收藏', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+              const Text('书签', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
               Text('${_notes.length} 篇', style: const TextStyle(fontSize: 13, color: _textSec)),
             ],
@@ -125,7 +125,7 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
         children: [
           Icon(Icons.bookmark_border_rounded, size: 48, color: _textHint.withValues(alpha: 0.6)),
           const SizedBox(height: 14),
-          const Text('暂无收藏笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          const Text('暂无书签笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           const SizedBox(height: 6),
           const Text('在笔记详情中点击收藏，即可在这里查看', style: TextStyle(fontSize: 13, color: _textSec)),
         ],

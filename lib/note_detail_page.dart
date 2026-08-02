@@ -77,6 +77,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           repostCount: note.repostCount,
           repostOf: note.repostOf,
           repostSourceAuthor: note.repostSourceAuthor,
+          quoteContent: note.quoteContent,
+          quoteOfTitle: note.quoteOfTitle,
+          quoteOfContent: note.quoteOfContent,
           createdAt: note.createdAt,
           updatedAt: note.updatedAt,
         );
@@ -120,6 +123,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           repostCount: note.repostCount,
           repostOf: note.repostOf,
           repostSourceAuthor: note.repostSourceAuthor,
+          quoteContent: note.quoteContent,
+          quoteOfTitle: note.quoteOfTitle,
+          quoteOfContent: note.quoteOfContent,
           createdAt: note.createdAt,
           updatedAt: note.updatedAt,
         );
@@ -132,14 +138,91 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
-  Future<void> _sendComment() async {
-    final content = _commentController.text.trim();
-    if (content.isEmpty) return;
+  void _openCommentSheet() {
     if (!AuthService.instance.isLoggedIn) {
       _promptLogin();
       return;
     }
-    if (_sendingComment) return;
+    _commentController.clear();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: _border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 44,
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: _bg,
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: TextField(
+                          controller: _commentController,
+                          autofocus: true,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _submitComment(sheetCtx),
+                          style: const TextStyle(fontSize: 14, color: _text),
+                          decoration: const InputDecoration(
+                            hintText: '说点什么…',
+                            hintStyle: TextStyle(color: _textHint),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding:
+                                EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      onPressed: _sendingComment
+                          ? null
+                          : () => _submitComment(sheetCtx),
+                      icon: _sendingComment
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: _gold))
+                          : const Icon(Icons.send_rounded,
+                              color: _primary, size: 22),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submitComment(BuildContext sheetContext) async {
+    final content = _commentController.text.trim();
+    if (content.isEmpty || _sendingComment) return;
     setState(() => _sendingComment = true);
     try {
       final comment =
@@ -165,10 +248,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 repostCount: _note!.repostCount,
                 repostOf: _note!.repostOf,
                 repostSourceAuthor: _note!.repostSourceAuthor,
+                quoteContent: _note!.quoteContent,
+                quoteOfTitle: _note!.quoteOfTitle,
+                quoteOfContent: _note!.quoteOfContent,
                 createdAt: _note!.createdAt,
                 updatedAt: _note!.updatedAt,
               );
       });
+      if (mounted && sheetContext.mounted) {
+        Navigator.of(sheetContext).pop();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _sendingComment = false);
@@ -215,57 +304,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
-  Future<void> _report() async {
-    if (!AuthService.instance.isLoggedIn) {
-      _promptLogin();
-      return;
-    }
-    final reasons = ['内容与修学无关', '不当言论', '广告/骚扰', '其他'];
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: _card,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text('举报笔记',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
-            ),
-            const Divider(height: 1, color: _border),
-            ...reasons.map((r) => InkWell(
-                  onTap: () => Navigator.pop(ctx, r),
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(r,
-                          style: TextStyle(fontSize: 15, color: _text)),
-                    ),
-                  ),
-                )),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (selected == null) return;
-    try {
-      await CloudNotesService.instance
-          .reportNote(widget.noteId, selected);
-      _showToast('举报已提交，感谢反馈');
-    } catch (e) {
-      _showToast(e.toString());
-    }
-  }
-
   void _promptLogin() {
     Navigator.push(context,
         MaterialPageRoute(builder: (_) => const LoginPage()));
@@ -297,35 +335,163 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       return;
     }
     if (_reposting) return;
-    final confirm = await showDialog<bool>(
+    final choice = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('转发笔记',
-            style: TextStyle(
-                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: const Text('转发后将以你的名义在菩提空间分享这条笔记，确定转发吗？',
-            style: TextStyle(color: _textSec)),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: _textSec))),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('转发',
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text('转发到菩提空间',
                   style: TextStyle(
-                      color: _gold, fontWeight: FontWeight.w600))),
-        ],
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _repostItem(ctx, 'direct', Icons.repeat_rounded, '直接转发',
+                '原样分享这条笔记'),
+            _repostItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发',
+                '写下你的感想，并带上原笔记'),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
-    if (confirm != true) return;
+    if (choice == null || !mounted) return;
+    if (choice == 'quote') {
+      await _quoteRepost();
+    } else {
+      await _doRepost('');
+    }
+  }
+
+  Widget _repostItem(BuildContext ctx, String value, IconData icon,
+      String title, String subtitle) {
+    return InkWell(
+      onTap: () => Navigator.pop(ctx, value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: _primaryLight),
+            const SizedBox(width: 14),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontSize: 15, color: _text)),
+                const SizedBox(height: 2),
+                Text(subtitle,
+                    style: TextStyle(fontSize: 12, color: _textHint)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _quoteRepost() async {
+    final controller = TextEditingController();
+    final quote = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: _border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Text('引用转发',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  maxLength: 500,
+                  maxLines: 3,
+                  minLines: 2,
+                  style: const TextStyle(fontSize: 14, color: _text),
+                  decoration: InputDecoration(
+                    hintText: '写点自己的感想…',
+                    hintStyle: const TextStyle(color: _textHint),
+                    filled: true,
+                    fillColor: _bg,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.all(12),
+                    counterStyle:
+                        const TextStyle(fontSize: 11, color: _textHint),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(22)),
+                    ),
+                    onPressed: () {
+                      final text = controller.text.trim();
+                      if (text.isEmpty) {
+                        _showToast('请先写下感想');
+                        return;
+                      }
+                      Navigator.pop(sheetCtx, text);
+                    },
+                    child: const Text('转发',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (quote == null || !mounted) return;
+    await _doRepost(quote);
+  }
+
+  Future<void> _doRepost(String quote) async {
+    if (_reposting) return;
     setState(() => _reposting = true);
     try {
-      final newId = await CloudNotesService.instance.repostNote(widget.noteId);
+      final newId =
+          await CloudNotesService.instance.repostNote(widget.noteId, quote: quote);
       if (!mounted) return;
       setState(() => _reposting = false);
-      _showToast('已转发到菩提空间');
+      _showToast(quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
       if (newId.isNotEmpty) {
         Navigator.pushReplacement(
           context,
@@ -406,13 +572,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         title: const Text('笔记详情',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.report_outlined,
-                color: _textSec, size: 20),
-            onPressed: _report,
-          ),
-        ],
       ),
       body: _buildBody(),
     );
@@ -452,7 +611,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   children: [
                     Icon(Icons.repeat, size: 13, color: _gold),
                     const SizedBox(width: 4),
-                    Text('转发自 ${note.repostSourceAuthor}',
+                    Text(note.quoteContent.isNotEmpty
+                        ? '引用转发'
+                        : '转发自 ${note.repostSourceAuthor}',
                         style: const TextStyle(fontSize: 12, color: _gold)),
                   ],
                 ),
@@ -468,6 +629,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               Text(note.content,
                   style: const TextStyle(
                       fontSize: 15, color: _text, height: 1.75)),
+              if (note.quoteContent.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _buildQuoteCard(note),
+              ],
               const SizedBox(height: 8),
               Text(_formatTime(note.createdAt),
                   style: const TextStyle(fontSize: 11, color: _textHint)),
@@ -500,8 +665,62 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             ],
           ),
         ),
-        _buildBottomBar(),
       ],
+    );
+  }
+
+  Widget _buildQuoteCard(PlazaNote note) {
+    return InkWell(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.repostOf)),
+      ),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.repeat, size: 13, color: _gold),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text('@${note.repostSourceAuthor} 的笔记',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: _textSec)),
+                ),
+              ],
+            ),
+            if (note.quoteOfTitle.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(note.quoteOfTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ],
+            if (note.quoteOfContent.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(note.quoteOfContent,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12, color: _textSec, height: 1.5)),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -512,7 +731,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     return InkWell(
       onLongPress: canDelete ? () => _deleteComment(c) : null,
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.only(bottom: 20),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -556,61 +775,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBottomBar() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: _card,
-        border: Border(top: BorderSide(color: _border)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Container(
-                  height: 40,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: TextField(
-                    controller: _commentController,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendComment(),
-                    style: const TextStyle(fontSize: 14, color: _text),
-                    decoration: const InputDecoration(
-                      hintText: '说点什么…',
-                      hintStyle: TextStyle(color: _textHint),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding:
-                          EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                onPressed: _sendingComment ? null : _sendComment,
-                icon: _sendingComment
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: _gold))
-                    : const Icon(Icons.send_rounded,
-                        color: _primary, size: 22),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -757,27 +921,29 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _buildActionCell(
-                    _CommentBubbleIcon(color: _textSec),
+                    Image.asset('assets/images/ic_comment.png',
+                        width: 18, height: 18),
                     _textSec,
                     '${_comments.length}',
-                    null),
+                    _openCommentSheet),
                 _buildActionCell(
-                    Icon(Icons.repeat_rounded, size: 20, color: _textSec),
+                    Icon(Icons.repeat_rounded, size: 18, color: _textSec),
                     _textSec,
-                    note.repostCount > 0 ? '${note.repostCount}' : '',
+                    '${note.repostCount}',
                     _reposting ? null : _repost),
                 _buildActionCell(
                     Icon(
                         liked
                             ? Icons.favorite_rounded
                             : Icons.favorite_border_rounded,
-                        size: 20,
+                        size: 18,
                         color: liked ? _gold : _textSec),
                     liked ? _gold : _textSec,
                     '${note.likeCount}',
                     _liking ? null : _toggleLike),
                 _buildActionCell(
-                    _ThinBarsIcon(color: _textSec),
+                    Image.asset('assets/images/ic_view.png',
+                        width: 18, height: 18),
                     _textSec,
                     '${note.viewCount}',
                     null),
@@ -790,14 +956,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   favorited
                       ? Icons.bookmark_rounded
                       : Icons.bookmark_border_rounded,
-                  size: 20,
+                  size: 18,
                   color: favorited ? _gold : _textSec),
               favorited ? _gold : _textSec,
               '',
               _favoriting ? null : _toggleFavorite),
           const SizedBox(width: 6),
           _buildActionCell(
-              Icon(Icons.share_rounded, size: 20, color: _textSec),
+              Icon(Icons.share_rounded, size: 18, color: _textSec),
               _textSec,
               '',
               _share),
@@ -816,10 +982,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(width: 20, height: 20, child: icon),
+            SizedBox(width: 18, height: 18, child: icon),
             if (text.isNotEmpty) ...[
-              const SizedBox(width: 4),
-              Text(text, style: TextStyle(fontSize: 12, color: color)),
+              const SizedBox(width: 3),
+              Text(text,
+                  style: TextStyle(
+                      fontSize: 15,
+                      height: 1,
+                      color: color)),
             ],
           ],
         ),
@@ -841,96 +1011,4 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (t.year == now.year) return '${t.month}月${t.day}日';
     return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
   }
-}
-
-/// Twitter 风格的评论气泡：略微圆润的椭圆气泡 + 左下小尾巴。
-class _CommentBubbleIcon extends StatelessWidget {
-  final Color color;
-  const _CommentBubbleIcon({required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: _CommentBubblePainter(color));
-  }
-}
-
-class _CommentBubblePainter extends CustomPainter {
-  final Color color;
-  _CommentBubblePainter(this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    final w = size.width;
-    final h = size.height;
-
-    // 气泡主体：圆润的椭圆（左右两侧弧度大，接近 Twitter 样式）
-    final rect = RRect.fromRectAndCorners(
-      Rect.fromLTWH(1, 1.5, w - 2, h - 6),
-      topLeft: Radius.circular(w * 0.45),
-      topRight: Radius.circular(w * 0.45),
-      bottomLeft: Radius.circular(w * 0.45),
-      bottomRight: Radius.circular(w * 0.45),
-    );
-    canvas.drawRRect(rect, paint);
-
-    // 左下小尾巴：真正的三角符号，底边贴合气泡底部，顶点向下
-    final tail = Path()
-      ..moveTo(w * 0.20, h - 4.5)
-      ..lineTo(w * 0.30, h - 4.5)
-      ..lineTo(w * 0.15, h - 1.2)
-      ..close();
-    canvas.drawPath(tail, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _CommentBubblePainter old) =>
-      old.color != color;
-}
-
-/// Twitter 风格的数据图：三根细长的竖状柱，高度递增。
-class _ThinBarsIcon extends StatelessWidget {
-  final Color color;
-  const _ThinBarsIcon({required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: _ThinBarsPainter(color));
-  }
-}
-
-class _ThinBarsPainter extends CustomPainter {
-  final Color color;
-  _ThinBarsPainter(this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.6
-      ..strokeCap = StrokeCap.round;
-
-    final w = size.width;
-    final h = size.height;
-    final baseY = h - 2.5;
-    final xs = [w * 0.2, w * 0.5, w * 0.8];
-    final tops = [h * 0.38, h * 0.24, h * 0.10];
-
-    for (int i = 0; i < xs.length; i++) {
-      canvas.drawLine(
-        Offset(xs[i], tops[i]),
-        Offset(xs[i], baseY),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ThinBarsPainter old) => old.color != color;
 }

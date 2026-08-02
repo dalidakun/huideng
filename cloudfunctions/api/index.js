@@ -118,6 +118,7 @@ exports.main = async (event, context) => {
   const comments = db.collection("noteComments");
   const reports = db.collection("noteReports");
   const favorites = db.collection("noteFavorites");
+  const activities = db.collection("activities");
   const userData = db.collection("userData");
   const follows = db.collection("userFollows");
   const blocks = db.collection("userBlocks");
@@ -185,6 +186,15 @@ exports.main = async (event, context) => {
           createdAt: now(),
           updatedAt: now(),
         });
+        await activities.add({
+          userId: uid,
+          type: "share",
+          noteId: res.id,
+          noteTitle: String(event.title || "无标题").slice(0, 100),
+          content: String(event.content || ""),
+          viewed: false,
+          createdAt: now(),
+        });
         return ok({ id: res.id });
       }
 
@@ -237,26 +247,83 @@ exports.main = async (event, context) => {
 
       // ==================== 广场 ====================
 
+      case "getUserNotes": {
+        const userId = String(event.userId || "");
+        if (!userId) return fail("bad_request");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 50);
+        const base = notes.where({
+          ownerUserId: userId,
+          visibility: "public",
+          status: "normal",
+        });
+        const res = await base
+          .orderBy("createdAt", "desc")
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        const { total } = await base.count();
+        return ok({
+          notes: res.data,
+          total,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
+      }
+
       case "getPlazaNotes": {
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 100);
         const sort = event.sort === "hot" ? "hot" : "latest";
         const base = notes
           .where({ visibility: "public", status: "normal" });
-        const res = await base
-          .orderBy(sort === "hot" ? "likeCount" : "createdAt", "desc")
-          .skip((page - 1) * pageSize)
-          .limit(pageSize)
-          .get();
+
         // 屏蔽的用户内容从广场隐藏
         let blocked = [];
         if (uid) {
           const br = await blocks.where({ blockerId: uid }).limit(1000).get();
           blocked = br.data.map((r) => r.blockedId);
         }
-        const filtered = blocked.length
-          ? res.data.filter((n) => !blocked.includes(n.ownerUserId))
-          : res.data;
+        const filterBlocked = (arr) =>
+          blocked.length ? arr.filter((n) => !blocked.includes(n.ownerUserId)) : arr;
+
+        // 热门排序：阅读量 + 点赞×3 + 评论×5 + 转发×8，依次排列。
+        if (sort === "hot") {
+          const all = [];
+          let skip = 0;
+          while (true) {
+            const r = await base.skip(skip).limit(1000).get();
+            const batch = r.data || [];
+            all.push(...batch);
+            if (batch.length < 1000) break;
+            skip += 1000;
+          }
+          const scored = filterBlocked(all).map((n) => ({
+            ...n,
+            _hotScore:
+              (n.viewCount || 0) +
+              (n.likeCount || 0) * 3 +
+              (n.commentCount || 0) * 5 +
+              (n.repostCount || 0) * 8,
+          }));
+          scored.sort(
+            (a, b) => b._hotScore - a._hotScore || (b.createdAt || 0) - (a.createdAt || 0)
+          );
+          const total = scored.length;
+          const pageNotes = scored.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
+          const notesOut = pageNotes.map(({ _hotScore, ...rest }) => rest);
+          return ok({
+            notes: notesOut,
+            total,
+            hasMore: (page - 1) * pageSize + pageNotes.length < total,
+          });
+        }
+
+        const res = await base
+          .orderBy("createdAt", "desc")
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        const filtered = filterBlocked(res.data);
         const { total } = await base.count();
         return ok({
           notes: filtered,
@@ -293,20 +360,20 @@ exports.main = async (event, context) => {
         return ok({ viewCount });
       }
 
-      // 转发：以当前用户身份创建一条内容相同的新笔记，并关联原笔记。
+      // 转发：以当前用户身份创建一条新笔记，并关联原笔记。
+      // quote 为空 → 直接转发（内容与原笔记相同）；quote 非空 → 引用转发（内容为用户的引言 + 原笔记快照）。
       case "repostNote": {
         if (!uid) return fail("unauthorized");
         const id = String(event.id || "");
+        const quote = String(event.quote || "").trim().slice(0, 500);
         const { data } = await notes.doc(id).get();
         const src = data && data[0];
         if (!src) return fail("not_found");
         if (src.visibility !== "public" || src.status !== "normal") {
           return fail("not_found");
         }
-        const res = await notes.add({
+        const base = {
           ownerUserId: uid,
-          title: String(src.title || "无标题").slice(0, 100),
-          content: String(src.content || ""),
           visibility: "public",
           authorName: String(event.authorName || "同修").slice(0, 30),
           likeCount: 0,
@@ -318,10 +385,47 @@ exports.main = async (event, context) => {
           status: "normal",
           createdAt: now(),
           updatedAt: now(),
-        });
+        };
+        if (quote) {
+          base.title = String(src.title || "无标题").slice(0, 100);
+          base.content = quote;
+          base.quoteContent = quote;
+          base.quoteOfTitle = String(src.title || "无标题").slice(0, 100);
+          base.quoteOfContent = String(src.content || "").slice(0, 500);
+        } else {
+          base.title = String(src.title || "无标题").slice(0, 100);
+          base.content = String(src.content || "");
+        }
+        const res = await notes.add(base);
         await notes.doc(id).update({
           repostCount: (src.repostCount || 0) + 1,
         });
+        const newTitle = String(base.title || "无标题").slice(0, 100);
+        const reposterName = String(event.authorName || "同修").slice(0, 30);
+        await activities.add({
+          userId: uid,
+          type: "repost",
+          noteId: res.id,
+          noteTitle: newTitle,
+          sourceTitle: String(src.title || "无标题").slice(0, 100),
+          content: quote,
+          viewed: false,
+          createdAt: now(),
+        });
+        if (src.ownerUserId && src.ownerUserId !== uid) {
+          await activities.add({
+            userId: src.ownerUserId,
+            type: "repost_me",
+            noteId: res.id,
+            noteTitle: newTitle,
+            sourceTitle: String(src.title || "无标题").slice(0, 100),
+            content: quote,
+            actorId: uid,
+            actorName: reposterName,
+            viewed: false,
+            createdAt: now(),
+          });
+        }
         return ok({ id: res.id });
       }
 
@@ -378,6 +482,37 @@ exports.main = async (event, context) => {
           .limit(1000)
           .get();
         return ok({ ids: res.data.map((r) => r.followeeId) });
+      }
+
+      case "getFollowerUserIds": {
+        if (!uid) return ok({ ids: [] });
+        const res = await follows
+          .where({ followeeId: uid })
+          .limit(1000)
+          .get();
+        return ok({ ids: res.data.map((r) => r.followerId) });
+      }
+
+      // 批量获取用户展示信息（昵称）。名字取该用户最新一篇公开笔记的署名。
+      case "getUserProfiles": {
+        const ids = (Array.isArray(event.ids) ? event.ids.map(String) : [])
+          .filter(Boolean)
+          .slice(0, 200);
+        const users = [];
+        for (const id of ids) {
+          let name = "同修";
+          try {
+            const { data: ndata } = await notes
+              .where({ ownerUserId: id, visibility: "public", status: "normal" })
+              .orderBy("createdAt", "desc")
+              .limit(1)
+              .get();
+            const n = ndata && ndata[0];
+            if (n && n.authorName) name = String(n.authorName);
+          } catch (e) {}
+          users.push({ id, name });
+        }
+        return ok({ users });
       }
 
       case "toggleFollow": {
@@ -449,9 +584,29 @@ exports.main = async (event, context) => {
         if (existing.data.length > 0) {
           await likes.doc(existing.data[0]._id).remove();
           likeCount = Math.max(0, (note.likeCount || 0) - 1);
+          const likeActs = await activities
+            .where({ userId: note.ownerUserId, type: "like_me", noteId, actorId: uid })
+            .limit(100)
+            .get();
+          for (const a of likeActs.data || []) {
+            await activities.doc(a._id).remove();
+          }
         } else {
           await likes.add({ noteId, userId: uid, createdAt: now() });
           likeCount = (note.likeCount || 0) + 1;
+          if (note.ownerUserId && note.ownerUserId !== uid) {
+            await activities.add({
+              userId: note.ownerUserId,
+              type: "like_me",
+              noteId,
+              noteTitle: String(note.title || "无标题").slice(0, 100),
+              content: "",
+              actorId: uid,
+              actorName: String(event.authorName || "同修").slice(0, 30),
+              viewed: false,
+              createdAt: now(),
+            });
+          }
         }
         await notes.doc(noteId).update({ likeCount });
         return ok({ likeCount, liked: existing.data.length === 0 });
@@ -477,7 +632,87 @@ exports.main = async (event, context) => {
         await notes.doc(noteId).update({
           commentCount: (note.commentCount || 0) + 1,
         });
-        return ok({ comment: { _id: res.id, noteId, authorId: uid, authorName: String(event.authorName || "同修").slice(0, 30), content, createdAt: now() } });
+        const noteTitle = String(note.title || "无标题").slice(0, 100);
+        const actorName = String(event.authorName || "同修").slice(0, 30);
+        await activities.add({
+          userId: uid,
+          type: "comment",
+          noteId,
+          noteTitle,
+          content,
+          commentId: res.id,
+          actorId: uid,
+          actorName,
+          viewed: false,
+          createdAt: now(),
+        });
+        if (note.ownerUserId && note.ownerUserId !== uid) {
+          await activities.add({
+            userId: note.ownerUserId,
+            type: "reply",
+            noteId,
+            noteTitle,
+            content,
+            commentId: res.id,
+            actorId: uid,
+            actorName,
+            viewed: false,
+            createdAt: now(),
+          });
+        }
+        return ok({ comment: { _id: res.id, noteId, authorId: uid, authorName: actorName, content, createdAt: now() } });
+      }
+
+      // ==================== 菩提空间：我的互动动态 ====================
+
+      case "getMyActivities": {
+        if (!uid) return fail("unauthorized");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 50);
+        const res = await activities
+          .where({ userId: uid })
+          .orderBy("createdAt", "desc")
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        // 拉取到的「收到的互动」视为已查看。
+        const received = ["reply", "repost_me", "like_me"];
+        const toMark = (res.data || []).filter(
+          (a) => received.includes(a.type) && a.viewed !== true
+        );
+        await Promise.all(
+          toMark.map((a) => activities.doc(a._id).update({ viewed: true }))
+        );
+        const { total } = await activities.where({ userId: uid }).count();
+        return ok({
+          activities: res.data,
+          total,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
+      }
+
+      // ==================== 我的主页角标：互动未读数 / 关注数 / 粉丝数 ====================
+
+      case "getMyCounts": {
+        if (!uid) return ok({ following: 0, followers: 0, unread: 0 });
+        const [f, fl, r1, r2, r3] = await Promise.all([
+          follows.where({ followerId: uid }).limit(1000).get(),
+          follows.where({ followeeId: uid }).limit(1000).get(),
+          activities
+            .where({ userId: uid, type: "reply", viewed: false })
+            .count(),
+          activities
+            .where({ userId: uid, type: "repost_me", viewed: false })
+            .count(),
+          activities
+            .where({ userId: uid, type: "like_me", viewed: false })
+            .count(),
+        ]);
+        return ok({
+          following: f.data.length,
+          followers: fl.data.length,
+          unread: r1.total + r2.total + r3.total,
+        });
       }
 
       case "getComments": {
@@ -504,6 +739,10 @@ exports.main = async (event, context) => {
           if (!note) return fail("forbidden");
         }
         await comments.doc(commentId).remove();
+        const linked = await activities.where({ commentId }).limit(100).get();
+        for (const a of linked.data || []) {
+          await activities.doc(a._id).remove();
+        }
         const note = await getNote(notes, comment.noteId);
         if (note) {
           await notes.doc(comment.noteId).update({

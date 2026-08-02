@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'login_page.dart';
 import 'note_detail_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -113,6 +115,113 @@ class _PlazaPageState extends State<PlazaPage> {
     });
   }
 
+  bool _isSelf(PlazaNote note) {
+    final me = AuthService.instance.currentUser.value;
+    return me != null && note.ownerUserId == me.id;
+  }
+
+  Future<void> _showUserMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null) {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const LoginPage()));
+      return;
+    }
+    if (me.id == note.ownerUserId) return;
+    final following =
+        CloudNotesService.instance.followingUserIds.contains(note.ownerUserId);
+    final blocked =
+        CloudNotesService.instance.blockedUserIds.contains(note.ownerUserId);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(note.authorName,
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(
+              ctx,
+              following ? 'unfollow' : 'follow',
+              Icons.person_add_alt,
+              following ? '取消关注' : '关注该用户',
+            ),
+            _menuItem(
+              ctx,
+              blocked ? 'unblock' : 'block',
+              Icons.block_outlined,
+              blocked ? '取消屏蔽' : '屏蔽该用户',
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      if (choice == 'follow' || choice == 'unfollow') {
+        final ok =
+            await CloudNotesService.instance.toggleFollow(note.ownerUserId);
+        if (!mounted) return;
+        setState(() {});
+        _showToast(ok ? '已关注' : '已取消关注');
+      } else if (choice == 'block') {
+        final ok =
+            await CloudNotesService.instance.toggleBlockUser(note.ownerUserId);
+        if (!mounted) return;
+        _showToast(ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+        if (ok) _load();
+      } else if (choice == 'unblock') {
+        final ok =
+            await CloudNotesService.instance.toggleBlockUser(note.ownerUserId);
+        if (!mounted) return;
+        setState(() {});
+        _showToast(ok ? '已屏蔽' : '已取消屏蔽');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(e.toString());
+    }
+  }
+
+  Widget _menuItem(
+      BuildContext ctx, String value, IconData icon, String label) {
+    return InkWell(
+      onTap: () => Navigator.pop(ctx, value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: _textSec),
+            const SizedBox(width: 12),
+            Text(label, style: TextStyle(fontSize: 15, color: _text)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showToast(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..removeCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(text),
+        duration: const Duration(milliseconds: 1800),
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -222,6 +331,17 @@ class _PlazaPageState extends State<PlazaPage> {
                   Text(_formatTime(note.createdAt),
                       style:
                           const TextStyle(fontSize: 11, color: _textHint)),
+                  const SizedBox(width: 4),
+                  if (!_isSelf(note))
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _showUserMenu(note),
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.more_horiz,
+                            size: 18, color: _textSec),
+                      ),
+                    ),
                 ],
               ),
               const SizedBox(height: 10),
@@ -245,9 +365,9 @@ class _PlazaPageState extends State<PlazaPage> {
                       children: [
                         Icon(Icons.repeat, size: 12, color: _gold),
                         const SizedBox(width: 2),
-                        Text('转发',
-                            style:
-                                const TextStyle(fontSize: 11, color: _gold)),
+                        Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
+                            style: const TextStyle(
+                                fontSize: 11, color: _gold)),
                       ],
                     ),
                   ],
@@ -261,6 +381,23 @@ class _PlazaPageState extends State<PlazaPage> {
                 style: const TextStyle(
                     fontSize: 13, color: _textSec, height: 1.5),
               ),
+              if (note.quoteContent.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _bg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _border),
+                  ),
+                  child: Text('@${note.repostSourceAuthor}：《${note.quoteOfTitle}》',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: _textSec)),
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 children: [

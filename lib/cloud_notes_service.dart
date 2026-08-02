@@ -27,6 +27,11 @@ class PlazaNote {
   final int repostCount;
   final String repostOf;
   final String repostSourceAuthor;
+
+  /// 引用转发时的用户引言（空表示直接转发）。
+  final String quoteContent;
+  final String quoteOfTitle;
+  final String quoteOfContent;
   final int createdAt;
   final int updatedAt;
 
@@ -44,6 +49,9 @@ class PlazaNote {
     this.repostCount = 0,
     this.repostOf = '',
     this.repostSourceAuthor = '',
+    this.quoteContent = '',
+    this.quoteOfTitle = '',
+    this.quoteOfContent = '',
     required this.createdAt,
     required this.updatedAt,
   });
@@ -62,6 +70,9 @@ class PlazaNote {
         repostCount: (json['repostCount'] as num?)?.toInt() ?? 0,
         repostOf: json['repostOf']?.toString() ?? '',
         repostSourceAuthor: json['repostSourceAuthor']?.toString() ?? '',
+        quoteContent: json['quoteContent']?.toString() ?? '',
+        quoteOfTitle: json['quoteOfTitle']?.toString() ?? '',
+        quoteOfContent: json['quoteOfContent']?.toString() ?? '',
         createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
         updatedAt: (json['updatedAt'] as num?)?.toInt() ?? 0,
       );
@@ -93,6 +104,60 @@ class PlazaComment {
         content: json['content']?.toString() ?? '',
         createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
       );
+}
+
+/// 菩提空间：单条互动动态（转发/我的评论/别人对我的回复）。
+class PlazaActivity {
+  final String id;
+  final String type; // repost | comment | reply
+  final String noteId;
+  final String noteTitle;
+  final String sourceTitle;
+  final String content;
+  final String actorId;
+  final String actorName;
+  final int createdAt;
+
+  const PlazaActivity({
+    required this.id,
+    required this.type,
+    required this.noteId,
+    required this.noteTitle,
+    this.sourceTitle = '',
+    this.content = '',
+    this.actorId = '',
+    this.actorName = '',
+    required this.createdAt,
+  });
+
+  factory PlazaActivity.fromJson(Map<String, dynamic> json) => PlazaActivity(
+        id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
+        type: json['type']?.toString() ?? '',
+        noteId: json['noteId']?.toString() ?? '',
+        noteTitle: json['noteTitle']?.toString() ?? '',
+        sourceTitle: json['sourceTitle']?.toString() ?? '',
+        content: json['content']?.toString() ?? '',
+        actorId: json['actorId']?.toString() ?? '',
+        actorName: json['actorName']?.toString() ?? '',
+        createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// 广场用户（关注/粉丝列表展示用）。
+class UserProfile {
+  final String id;
+  final String name;
+
+  const UserProfile({required this.id, required this.name});
+}
+
+/// 我的主页角标：互动未读数 / 关注数 / 粉丝数。
+class MyCounts {
+  final int following;
+  final int followers;
+  final int unread;
+
+  const MyCounts({this.following = 0, this.followers = 0, this.unread = 0});
 }
 
 /// 广场云端数据服务：所有操作统一走「api」云函数。
@@ -259,14 +324,15 @@ class CloudNotesService {
     return (res['viewCount'] as num?)?.toInt() ?? 0;
   }
 
-  /// 转发笔记（以当前用户身份复制生成新笔记）。返回新笔记 id。
-  Future<String> repostNote(String noteId) async {
+  /// 转发笔记。quote 为空 → 直接转发；quote 非空 → 引用转发（引言 + 原笔记）。返回新笔记 id。
+  Future<String> repostNote(String noteId, {String quote = ''}) async {
     if (!AuthService.instance.isLoggedIn) {
       throw const CloudApiException('请先登录');
     }
     final res = await _call('repostNote', params: {
       'id': noteId,
       'authorName': _authorName,
+      if (quote.trim().isNotEmpty) 'quote': quote.trim(),
     });
     return res['id']?.toString() ?? '';
   }
@@ -328,6 +394,44 @@ class CloudNotesService {
     } catch (_) {}
   }
 
+  /// 拉取当前用户关注的用户 id 列表（未登录返回空）。
+  Future<List<String>> getFollowingUserIds() async {
+    if (!AuthService.instance.isLoggedIn) return [];
+    final res = await _call('getFollowingUserIds');
+    return (res['ids'] as List<dynamic>? ?? []).map((e) => e.toString()).toList();
+  }
+
+  /// 拉取关注当前用户的所有用户 id 列表（粉丝，未登录返回空）。
+  Future<List<String>> getFollowerUserIds() async {
+    if (!AuthService.instance.isLoggedIn) return [];
+    final res = await _call('getFollowerUserIds');
+    return (res['ids'] as List<dynamic>? ?? []).map((e) => e.toString()).toList();
+  }
+
+  /// 批量获取用户展示信息（昵称）。用于关注/粉丝列表。
+  Future<List<UserProfile>> getUserProfiles(List<String> ids) async {
+    if (ids.isEmpty) return [];
+    final res = await _call('getUserProfiles', params: {'ids': ids});
+    return (res['users'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map((e) => UserProfile(
+              id: e['id']?.toString() ?? '',
+              name: e['name']?.toString() ?? '同修',
+            ))
+        .toList();
+  }
+
+  /// 我的主页角标：互动未读数 / 关注数 / 粉丝数（未登录返回全 0）。
+  Future<MyCounts> getMyCounts() async {
+    if (!AuthService.instance.isLoggedIn) return const MyCounts();
+    final res = await _call('getMyCounts');
+    return MyCounts(
+      following: (res['following'] as num?)?.toInt() ?? 0,
+      followers: (res['followers'] as num?)?.toInt() ?? 0,
+      unread: (res['unread'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// 关注/取消关注某个用户。返回是否已关注。
   Future<bool> toggleFollow(String targetUserId) async {
     if (!AuthService.instance.isLoggedIn) {
@@ -367,7 +471,8 @@ class CloudNotesService {
     if (!AuthService.instance.isLoggedIn) {
       throw const CloudApiException('请先登录');
     }
-    final res = await _call('toggleLike', params: {'noteId': noteId});
+    final res = await _call('toggleLike',
+        params: {'noteId': noteId, 'authorName': _authorName});
     final liked = res['liked'] == true;
     final count = (res['likeCount'] as num?)?.toInt() ?? 0;
     if (liked) {
@@ -415,6 +520,43 @@ class CloudNotesService {
       throw const CloudApiException('请先登录');
     }
     await _call('reportNote', params: {'noteId': noteId, 'reason': reason});
+  }
+
+  /// 拉取我的互动动态（转发/我的评论/别人对我的回复）。
+  Future<(List<PlazaActivity>, bool hasMore)> getMyActivities({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    final res = await _call('getMyActivities', params: {
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = res['activities'];
+    final items = list is List
+        ? list.map((e) => PlazaActivity.fromJson(e as Map<String, dynamic>)).toList()
+        : <PlazaActivity>[];
+    return (items, res['hasMore'] == true);
+  }
+
+  /// 拉取某位用户公开发布的所有笔记（用于查看对方的菩提空间）。
+  Future<(List<PlazaNote>, bool hasMore)> getUserNotes(
+    String userId, {
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final res = await _call('getUserNotes', params: {
+      'userId': userId,
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = res['notes'];
+    final items = list is List
+        ? list.map((e) => PlazaNote.fromJson(e as Map<String, dynamic>)).toList()
+        : <PlazaNote>[];
+    return (items, res['hasMore'] == true);
   }
 
   /// 拉取当前用户云端整包数据（无记录返回 null）。
