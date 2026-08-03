@@ -2074,15 +2074,15 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         if (replies.isEmpty) ...[
           _buildNoteCard(root),
         ] else ...[
-          // 根帖：其头像下方画一条灰色连线，延伸到第一个回复的头像。
+          // 根帖：其头像下方画一条灰色连线，延伸到第一个回复的头像（两端留距）。
           Stack(
             clipBehavior: Clip.none,
             children: [
               Positioned(
                 left: 21,
-                top: 56,
-                bottom: -6,
-                child: Container(width: 2, color: Color(0xFF9E9E9E)),
+                top: 62,
+                bottom: -4,
+                child: Container(width: 2, color: Color(0xFFC4C4C4)),
               ),
               _buildNoteCard(root),
             ],

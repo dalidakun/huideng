@@ -6,7 +6,7 @@ import 'user_avatar.dart';
 
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
-const Color _connector = Color(0xFF9E9E9E);
+const Color _connector = Color(0xFFC4C4C4);
 
 /// 回复链：原贴下方一串回复，每个节点左侧头像 + 向下竖线（非末尾节点），
 /// 右侧为回复内容与四个指标，头像依次用竖线连接。
@@ -22,7 +22,7 @@ class ReplyChain extends StatelessWidget {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
-  /// 一个节点：左侧头像 + 向下竖线（最后一个节点不画线），右侧内容。
+  /// 一个节点：左侧头像 + 向下竖线（最后一个节点不画线，连线两端留距），右侧内容。
   Widget _node(PlazaNote note, {required bool connectDown}) {
     return IntrinsicHeight(
       child: Row(
@@ -33,7 +33,10 @@ class ReplyChain extends StatelessWidget {
               UserAvatar(userId: note.ownerUserId, radius: 22),
               if (connectDown)
                 Expanded(
-                  child: Container(width: 2, color: _connector),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Container(width: 2, color: _connector),
+                  ),
                 ),
             ],
           ),
