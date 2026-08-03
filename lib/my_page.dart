@@ -1,4 +1,4 @@
-import 'dart:convert';
+ï»¿import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -32,7 +32,7 @@ const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 
-/// ´Ó×ó²à±ßÔµ»¬ÈëµÄÒ³ÃæÂ·ÓÉ¡£
+/// ä»å·¦ä¾§è¾¹ç¼˜æ»‘å…¥çš„é¡µé¢è·¯ç”±ã€‚
 Route<T> slideInFromLeft<T>(Widget page) {
   return PageRouteBuilder<T>(
     transitionDuration: const Duration(milliseconds: 280),
@@ -62,11 +62,11 @@ class MyPageState extends State<MyPage>
     with TickerProviderStateMixin {
   String? _avatarPath;
   String? _bannerPath;
-  String _nickname = 'Í¬ĞŞ';
-  String _tagline = 'Óë¾­Îª°é£¬Óë·¨Í¬ĞĞ';
+  String _nickname = 'åŒä¿®';
+  String _tagline = 'ä¸ç»ä¸ºä¼´ï¼Œä¸æ³•åŒè¡Œ';
   String _accountName = '';
   bool _verified = false;
-  String _joinedDate = '${DateTime.now().year}Äê${DateTime.now().month}ÔÂ${DateTime.now().day}ÈÕ¼ÓÈë';
+  String _joinedDate = '${DateTime.now().year}å¹´${DateTime.now().month}æœˆ${DateTime.now().day}æ—¥åŠ å…¥';
 
   MyCounts _counts = const MyCounts();
 
@@ -115,23 +115,23 @@ class MyPageState extends State<MyPage>
       if (av != null) _avatarPath = av;
       if (bn != null) _bannerPath = bn;
       if (_isLoggedIn) {
-        _nickname = user?.displayName ?? 'Í¬ĞŞ';
+        _nickname = user?.displayName ?? 'åŒä¿®';
         _tagline = (user?.tagline?.isNotEmpty ?? false)
             ? user!.tagline!
-            : 'Óë¾­Îª°é£¬Óë·¨Í¬ĞĞ';
+            : 'ä¸ç»ä¸ºä¼´ï¼Œä¸æ³•åŒè¡Œ';
       } else {
-        _nickname = prefs.getString('user_nickname') ?? 'Í¬ĞŞ';
-        _tagline = prefs.getString('user_tagline') ?? 'Óë¾­Îª°é£¬Óë·¨Í¬ĞĞ';
+        _nickname = prefs.getString('user_nickname') ?? 'åŒä¿®';
+        _tagline = prefs.getString('user_tagline') ?? 'ä¸ç»ä¸ºä¼´ï¼Œä¸æ³•åŒè¡Œ';
       }
       final createdMs = prefs.getInt('user_created_at');
       if (createdMs != null) {
         final dt = DateTime.fromMillisecondsSinceEpoch(createdMs);
-        _joinedDate = '${dt.year}Äê${dt.month}ÔÂ${dt.day}ÈÕ¼ÓÈë';
+        _joinedDate = '${dt.year}å¹´${dt.month}æœˆ${dt.day}æ—¥åŠ å…¥';
       } else {
         final now = DateTime.now().millisecondsSinceEpoch;
         prefs.setInt('user_created_at', now);
         final dt = DateTime.fromMillisecondsSinceEpoch(now);
-        _joinedDate = '${dt.year}Äê${dt.month}ÔÂ${dt.day}ÈÕ¼ÓÈë';
+        _joinedDate = '${dt.year}å¹´${dt.month}æœˆ${dt.day}æ—¥åŠ å…¥';
       }
     });
     _loadAccountName();
@@ -144,7 +144,7 @@ class MyPageState extends State<MyPage>
     setState(() => _accountName = name);
   }
 
-  /// ÊµÃûÈÏÖ¤×´Ì¬£ºÓÅÏÈÈ¡ÔÆ¶Ë£¬ÔÆ¶ËÊ§°ÜÊ±»ØÍËµ½±¾µØ»º´æ¡£
+  /// å®åè®¤è¯çŠ¶æ€ï¼šä¼˜å…ˆå–äº‘ç«¯ï¼Œäº‘ç«¯å¤±è´¥æ—¶å›é€€åˆ°æœ¬åœ°ç¼“å­˜ã€‚
   Future<void> _loadVerification() async {
     final prefs = await SharedPreferences.getInstance();
     var verified = prefs.getBool('user_verified') ?? false;
@@ -207,7 +207,7 @@ class MyPageState extends State<MyPage>
                     : null,
               ),
               const SizedBox(height: 16),
-              const Text('Çá´¥ÈÎÒâ´¦¹Ø±Õ', style: TextStyle(fontSize: 13, color: Colors.white70)),
+              const Text('è½»è§¦ä»»æ„å¤„å…³é—­', style: TextStyle(fontSize: 13, color: Colors.white70)),
             ],
           ),
         ),
@@ -252,7 +252,7 @@ class MyPageState extends State<MyPage>
                   alignment: Alignment.bottomCenter,
                   child: Padding(
                     padding: EdgeInsets.only(bottom: 24),
-                    child: Text('Çá´¥ÈÎÒâ´¦¹Ø±Õ ¡¤ Ë«Ö¸Ëõ·Å',
+                    child: Text('è½»è§¦ä»»æ„å¤„å…³é—­ Â· åŒæŒ‡ç¼©æ”¾',
                         style: TextStyle(color: Colors.white70, fontSize: 13)),
                   ),
                 ),
@@ -405,7 +405,7 @@ class MyPageState extends State<MyPage>
                       ],
                     ),
                     child: const Text(
-                      '±à¼­¸öÈË×ÊÁÏ',
+                      'ç¼–è¾‘ä¸ªäººèµ„æ–™',
                       style: TextStyle(
                         fontSize: 12,
                         color: _text,
@@ -491,7 +491,7 @@ class MyPageState extends State<MyPage>
                 Row(
                   children: [
                     const Expanded(
-                      child: Text('Î´µÇÂ¼',
+                      child: Text('æœªç™»å½•',
                           style: TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.w700,
@@ -557,7 +557,7 @@ class MyPageState extends State<MyPage>
     Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
   }
 
-  /// Î´ÈÏÖ¤Ê±êÇ³ÆÅÔµÄ¡¸»ñµÃÈÏÖ¤¡¹°´Å¥£º»ÒÉ«Ô²½Ç¿ò + Í¼±ê + ÎÄ°¸¡£
+  /// æœªè®¤è¯æ—¶æ˜µç§°æ—çš„ã€Œè·å¾—è®¤è¯ã€æŒ‰é’®ï¼šç°è‰²åœ†è§’æ¡† + å›¾æ ‡ + æ–‡æ¡ˆã€‚
   Widget _buildCertifyButton() {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -574,7 +574,7 @@ class MyPageState extends State<MyPage>
           children: [
             Icon(Icons.verified_outlined, size: 13, color: Color(0xFF70867A)),
             SizedBox(width: 3),
-            Text('»ñµÃÈÏÖ¤',
+            Text('è·å¾—è®¤è¯',
                 style: TextStyle(
                     fontSize: 11,
                     color: Color(0xFF70867A),
@@ -585,7 +585,7 @@ class MyPageState extends State<MyPage>
     );
   }
 
-  /// ÒÑÈÏÖ¤Ê±êÇ³ÆºóµÄÈÏÖ¤±êÊ¶£º½ğÉ«¶Ô¹´ + ¡¸ÒÑÈÏÖ¤¡¹£¬ÏßÈ¦°ü¹ü¡£
+  /// å·²è®¤è¯æ—¶æ˜µç§°åçš„è®¤è¯æ ‡è¯†ï¼šé‡‘è‰²å¯¹å‹¾ + ã€Œå·²è®¤è¯ã€ï¼Œçº¿åœˆåŒ…è£¹ã€‚
   Widget _buildVerifiedBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -599,7 +599,7 @@ class MyPageState extends State<MyPage>
         children: [
           Icon(Icons.verified, size: 13, color: Color(0xFFB8860B)),
           SizedBox(width: 3),
-          Text('ÒÑÈÏÖ¤',
+          Text('å·²è®¤è¯',
               style: TextStyle(
                   fontSize: 10,
                   color: Color(0xFFB8860B),
@@ -620,12 +620,12 @@ class MyPageState extends State<MyPage>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         elevation: 0,
       ),
-      child: const Text('µÇÂ¼', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      child: const Text('ç™»å½•', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
     );
   }
 }
 
-/// Îü¶¥µÄ TabBar Î¯ÍĞ¡£
+/// å¸é¡¶çš„ TabBar å§”æ‰˜ã€‚
 class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   final TabController controller;
   final Color backgroundColor;
@@ -656,11 +656,11 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
         labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
         tabs: const [
-          Tab(text: 'Ìû×Ó'),
-          Tab(text: '»Ø¸´'),
-          Tab(text: 'Ï²»¶'),
-          Tab(text: 'ÊéÇ©'),
-          Tab(text: '²İ¸å'),
+          Tab(text: 'å¸–å­'),
+          Tab(text: 'å›å¤'),
+          Tab(text: 'å–œæ¬¢'),
+          Tab(text: 'ä¹¦ç­¾'),
+          Tab(text: 'è‰ç¨¿'),
         ],
       ),
     );
@@ -673,7 +673,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   }
 }
 
-/// ¹Ì¶¨¿í¶ÈµÄ TabBar Ö¸Ê¾Ìõ£¬¾²Ö¹/¶¯»­×´Ì¬¿í¶ÈÒ»ÖÂ¡£
+/// å›ºå®šå®½åº¦çš„ TabBar æŒ‡ç¤ºæ¡ï¼Œé™æ­¢/åŠ¨ç”»çŠ¶æ€å®½åº¦ä¸€è‡´ã€‚
 class _FixedWidthIndicator extends Decoration {
   final Color color;
   final double lineWidth;
@@ -706,7 +706,7 @@ class _FixedWidthPainter extends BoxPainter {
   }
 }
 
-/// NestedScrollView ÄÚ²¿ Tab ÄÚÈİ°ü×°Æ÷¡£
+/// NestedScrollView å†…éƒ¨ Tab å†…å®¹åŒ…è£…å™¨ã€‚
 class _TabContent extends StatelessWidget {
   final Widget child;
   const _TabContent({required this.child});
@@ -717,7 +717,7 @@ class _TabContent extends StatelessWidget {
   }
 }
 
-/// ÓÃ»§Í·Ïñ£ºµ±Ç°ÓÃ»§ÏÔÊ¾±¾µØÉÏ´«µÄÍ·ÏñÍ¼Æ¬£¬ËûÈËÔİÎŞÔÆ¶ËÍ·ÏñÊı¾İÏÔÊ¾Ä¬ÈÏÍ¼±ê¡£
+/// ç”¨æˆ·å¤´åƒï¼šå½“å‰ç”¨æˆ·æ˜¾ç¤ºæœ¬åœ°ä¸Šä¼ çš„å¤´åƒå›¾ç‰‡ï¼Œä»–äººæš‚æ— äº‘ç«¯å¤´åƒæ•°æ®æ˜¾ç¤ºé»˜è®¤å›¾æ ‡ã€‚
 class _UserAvatar extends StatelessWidget {
   final String? userId;
   final double radius;
@@ -753,18 +753,18 @@ class _UserAvatar extends StatelessWidget {
   }
 }
 
-/// Ê±¼äÏÔÊ¾£º½ñÄêÏÔÊ¾¡¸xÔÂxÈÕ¡¹£¬È¥Äê¼°ÍùÄêÏÔÊ¾¡¸xÄêxÔÂxÈÕ¡¹¡£
+/// æ—¶é—´æ˜¾ç¤ºï¼šä»Šå¹´æ˜¾ç¤ºã€Œxæœˆxæ—¥ã€ï¼Œå»å¹´åŠå¾€å¹´æ˜¾ç¤ºã€Œxå¹´xæœˆxæ—¥ã€ã€‚
 String _fullTime(int ms) {
   if (ms <= 0) return '';
   final t = DateTime.fromMillisecondsSinceEpoch(ms);
   final now = DateTime.now();
-  if (t.year == now.year) return '${t.month}ÔÂ${t.day}ÈÕ';
-  return '${t.year}Äê${t.month}ÔÂ${t.day}ÈÕ';
+  if (t.year == now.year) return '${t.month}æœˆ${t.day}æ—¥';
+  return '${t.year}å¹´${t.month}æœˆ${t.day}æ—¥';
 }
 
-/// Ìû×Ó¿é£º×óÁĞÍ·Ïñ£¬ÓÒ²àµÚÒ»ĞĞêÇ³Æ/Ê±¼ä´Á£¬ÄÚÈİÓëÖ¸±êĞĞÓëêÇ³ÆÍ¬Ò»×óÔµ¡£
-/// onTap Îª null Ê±µã»÷Õû¿éÕ¹¿ª/ÊÕÆğÄÚÈİ£¬·ñÔòÖ´ĞĞ onTap¡£
-/// allowActions=true Ê±Ö¸±êĞĞ¿É½»»¥£¨ÆÀÂÛ/×ª·¢/µãÔŞ£©£¬ÆÀÂÛÄÚÇ¶ÏÔÊ¾ÔÚÏÂ·½¡£
+/// å¸–å­å—ï¼šå·¦åˆ—å¤´åƒï¼Œå³ä¾§ç¬¬ä¸€è¡Œæ˜µç§°/æ—¶é—´æˆ³ï¼Œå†…å®¹ä¸æŒ‡æ ‡è¡Œä¸æ˜µç§°åŒä¸€å·¦ç¼˜ã€‚
+/// onTap ä¸º null æ—¶ç‚¹å‡»æ•´å—å±•å¼€/æ”¶èµ·å†…å®¹ï¼Œå¦åˆ™æ‰§è¡Œ onTapã€‚
+/// allowActions=true æ—¶æŒ‡æ ‡è¡Œå¯äº¤äº’ï¼ˆè¯„è®º/è½¬å‘/ç‚¹èµï¼‰ï¼Œè¯„è®ºå†…åµŒæ˜¾ç¤ºåœ¨ä¸‹æ–¹ã€‚
 class _PostBlock extends StatefulWidget {
   final String? ownerUserId;
   final String nickname;
@@ -827,7 +827,7 @@ class _PostBlockState extends State<_PostBlock> {
   late bool _following = widget.ownerUserId != null &&
       CloudNotesService.instance.followingUserIds.contains(widget.ownerUserId);
 
-  /// ¹Ø×¢/È¡Ïû¹Ø×¢Ìû×Ó×÷Õß£¨ÒÑ¹Ø×¢µÄÍ¬ĞŞÔÚÊ×Ò³¡¸¹Ø×¢¡¹À¸Ä¿Õ¹Ê¾ÆäĞÂÌû£©¡£
+  /// å…³æ³¨/å–æ¶ˆå…³æ³¨å¸–å­ä½œè€…ï¼ˆå·²å…³æ³¨çš„åŒä¿®åœ¨é¦–é¡µã€Œå…³æ³¨ã€æ ç›®å±•ç¤ºå…¶æ–°å¸–ï¼‰ã€‚
   Future<void> _toggleFollow() async {
     final me = AuthService.instance.currentUser.value;
     final target = widget.ownerUserId;
@@ -843,7 +843,7 @@ class _PostBlockState extends State<_PostBlock> {
       final ok = await CloudNotesService.instance.toggleFollow(target);
       if (!mounted) return;
       setState(() => _following = ok);
-      _showToastText(context, ok ? 'ÒÑ¹Ø×¢' : 'ÒÑÈ¡Ïû¹Ø×¢');
+      _showToastText(context, ok ? 'å·²å…³æ³¨' : 'å·²å–æ¶ˆå…³æ³¨');
     } catch (e) {
       if (mounted) _showToastText(context, e.toString());
     }
@@ -865,7 +865,7 @@ class _PostBlockState extends State<_PostBlock> {
     }
   }
 
-  /// »Ø¸´£ºÔö¼ÓÔ­ÌûÆÀÂÛÁ¿£¬²¢Éú³ÉÒ»ÌõĞÂÌû×Ó£¨»Ø¸´ÄÚÈİÔÚÉÏ¡¢±»»Ø¸´Ìû×ÓÔÚÏÂ£¬ÒıÓÃ×ª·¢ÑùÊ½£©¡£
+  /// å›å¤ï¼šå¢åŠ åŸå¸–è¯„è®ºé‡ï¼Œå¹¶ç”Ÿæˆä¸€æ¡æ–°å¸–å­ï¼ˆå›å¤å†…å®¹åœ¨ä¸Šã€è¢«å›å¤å¸–å­åœ¨ä¸‹ï¼Œå¼•ç”¨è½¬å‘æ ·å¼ï¼‰ã€‚
   Future<void> _openReplySheet() async {
     final noteId = widget.noteId;
     if (noteId == null) return;
@@ -886,15 +886,15 @@ class _PostBlockState extends State<_PostBlock> {
     final noteId = widget.noteId;
     if (noteId == null || content.isEmpty) return;
     try {
-      // 1) ÆÀÂÛÔ­Ìû£ºÖ»Ôö¼ÓÆÀÂÛÁ¿£¬²»ÔÚÌû×ÓÏÂ·½ÄÚÇ¶ÏÔÊ¾¡£
+      // 1) è¯„è®ºåŸå¸–ï¼šåªå¢åŠ è¯„è®ºé‡ï¼Œä¸åœ¨å¸–å­ä¸‹æ–¹å†…åµŒæ˜¾ç¤ºã€‚
       await CloudNotesService.instance.createComment(noteId, content);
-      // 2) Éú³ÉĞÂÌû×Ó£¨ÒıÓÃ×ª·¢ÑùÊ½£º»Ø¸´ÄÚÈİÔÚÉÏ¡¢±»»Ø¸´µÄÌû×ÓÔÚÏÂ£©¡£
+      // 2) ç”Ÿæˆæ–°å¸–å­ï¼ˆå¼•ç”¨è½¬å‘æ ·å¼ï¼šå›å¤å†…å®¹åœ¨ä¸Šã€è¢«å›å¤çš„å¸–å­åœ¨ä¸‹ï¼‰ã€‚
       await CloudNotesService.instance
           .repostNote(noteId, quote: content, kind: 'reply');
       if (!mounted) return;
       setState(() => _commentCount++);
       if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-      if (mounted) _showToastText(context, 'ÒÑ»Ø¸´');
+      if (mounted) _showToastText(context, 'å·²å›å¤');
       if (widget.onReplyPosted != null) {
         try {
           final dynamic cb = widget.onReplyPosted!;
@@ -921,15 +921,15 @@ class _PostBlockState extends State<_PostBlock> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text('×ª·¢µ½ÆĞÌá¿Õ¼ä',
+              child: Text('è½¬å‘åˆ°è©æç©ºé—´',
                   style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                       color: _text)),
             ),
             const Divider(height: 1, color: _border),
-            _menuItem(ctx, 'direct', Icons.repeat_rounded, 'Ö±½Ó×ª·¢'),
-            _menuItem(ctx, 'quote', Icons.format_quote_rounded, 'ÒıÓÃ×ª·¢'),
+            _menuItem(ctx, 'direct', Icons.repeat_rounded, 'ç›´æ¥è½¬å‘'),
+            _menuItem(ctx, 'quote', Icons.format_quote_rounded, 'å¼•ç”¨è½¬å‘'),
             const SizedBox(height: 8),
           ],
         ),
@@ -946,12 +946,12 @@ class _PostBlockState extends State<_PostBlock> {
                 borderRadius:
                     BorderRadius.vertical(top: Radius.circular(20))),
             builder: (_) => const SheetTextInput(
-              title: 'ÒıÓÃ×ª·¢',
-              hint: 'Ğ´µã×Ô¼ºµÄ¸ĞÏë¡­',
+              title: 'å¼•ç”¨è½¬å‘',
+              hint: 'å†™ç‚¹è‡ªå·±çš„æ„Ÿæƒ³â€¦',
               maxLength: 500,
               minLines: 2,
               maxLines: 3,
-              confirmText: '×ª·¢',
+              confirmText: 'è½¬å‘',
             ),
           )) ??
           '';
@@ -962,7 +962,7 @@ class _PostBlockState extends State<_PostBlock> {
           quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
       if (!mounted) return;
       setState(() => _repostCount++);
-      _showToastText(context, quote.isEmpty ? 'ÒÑ×ª·¢µ½ÆĞÌá¿Õ¼ä' : 'ÒÑÒıÓÃ×ª·¢µ½ÆĞÌá¿Õ¼ä');
+      _showToastText(context, quote.isEmpty ? 'å·²è½¬å‘åˆ°è©æç©ºé—´' : 'å·²å¼•ç”¨è½¬å‘åˆ°è©æç©ºé—´');
       if (widget.onReplyPosted != null) {
         try {
           final dynamic cb = widget.onReplyPosted!;
@@ -975,7 +975,7 @@ class _PostBlockState extends State<_PostBlock> {
     }
   }
 
-  /// Ìû×Ó¹ÜÀí²Ëµ¥£ºÖÃ¶¥/È¡ÏûÖÃ¶¥¡¢±à¼­¡¢É¾³ı£¨½ö×Ô¼ºµÄÌû×Ó£©¡£
+  /// å¸–å­ç®¡ç†èœå•ï¼šç½®é¡¶/å–æ¶ˆç½®é¡¶ã€ç¼–è¾‘ã€åˆ é™¤ï¼ˆä»…è‡ªå·±çš„å¸–å­ï¼‰ã€‚
   Future<void> _showManageMenu() async {
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -999,10 +999,10 @@ class _PostBlockState extends State<_PostBlock> {
                 ctx,
                 'pin',
                 Icons.push_pin_outlined,
-                widget.pinned ? 'È¡ÏûÖÃ¶¥' : 'ÖÃ¶¥'),
-            _menuItem(ctx, 'edit', Icons.edit_outlined, '±à¼­'),
+                widget.pinned ? 'å–æ¶ˆç½®é¡¶' : 'ç½®é¡¶'),
+            _menuItem(ctx, 'edit', Icons.edit_outlined, 'ç¼–è¾‘'),
             _menuItem(
-                ctx, 'delete', Icons.delete_outline, 'É¾³ı'),
+                ctx, 'delete', Icons.delete_outline, 'åˆ é™¤'),
             const SizedBox(height: 8),
           ],
         ),
@@ -1049,7 +1049,7 @@ class _PostBlockState extends State<_PostBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // µÚÒ»ĞĞ£ºêÇ³Æ + Ê±¼ä´Á + ÖÃ¶¥±ê×¢ + ¸ü¶à
+                  // ç¬¬ä¸€è¡Œï¼šæ˜µç§° + æ—¶é—´æˆ³ + ç½®é¡¶æ ‡æ³¨ + æ›´å¤š
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
@@ -1082,7 +1082,7 @@ class _PostBlockState extends State<_PostBlock> {
                                         color: Color(0xFF8C8C8C))),
                               ),
                               const SizedBox(width: 3),
-                              Text('¡¤',
+                              Text('Â·',
                                   style: const TextStyle(
                                       fontSize: 12,
                                       color: Color(0xFF8C8C8C))),
@@ -1103,7 +1103,7 @@ class _PostBlockState extends State<_PostBlock> {
                       if (widget.pinned) ...[
                         const Icon(Icons.push_pin, size: 13, color: Color(0xFF70867A)),
                         const SizedBox(width: 2),
-                        const Text('ÒÑÖÃ¶¥',
+                        const Text('å·²ç½®é¡¶',
                             style: TextStyle(
                                 fontSize: 12,
                                 color: Color(0xFF70867A),
@@ -1133,7 +1133,7 @@ class _PostBlockState extends State<_PostBlock> {
                                   : Colors.black,
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Text(_following ? 'ÒÑ¹Ø×¢' : '¹Ø×¢',
+                            child: Text(_following ? 'å·²å…³æ³¨' : 'å…³æ³¨',
                                 style: const TextStyle(
                                     fontSize: 12,
                                     color: Colors.white,
@@ -1154,7 +1154,7 @@ class _PostBlockState extends State<_PostBlock> {
                       ],
                     ],
                   ),
-                  // ×ª·¢/ÒıÓÃ½Ç±ê£¨êÇ³ÆĞĞÏÂ·½£©
+                  // è½¬å‘/å¼•ç”¨è§’æ ‡ï¼ˆæ˜µç§°è¡Œä¸‹æ–¹ï¼‰
                   if (widget.isRepost) ...[
                     const SizedBox(height: 4),
                     Row(
@@ -1162,13 +1162,13 @@ class _PostBlockState extends State<_PostBlock> {
                       children: [
                         const Icon(Icons.repeat, size: 12, color: _gold),
                         const SizedBox(width: 2),
-                        Text(widget.isQuoteRepost ? 'ÒıÓÃ' : '×ª·¢',
+                        Text(widget.isQuoteRepost ? 'å¼•ç”¨' : 'è½¬å‘',
                             style: const TextStyle(
                                 fontSize: 11, color: _gold)),
                       ],
                     ),
                   ],
-                  // ÄÚÈİ£¨ÓëêÇ³ÆÍ¬Ò»×óÔµ£©
+                  // å†…å®¹ï¼ˆä¸æ˜µç§°åŒä¸€å·¦ç¼˜ï¼‰
                   if (content.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     LayoutBuilder(
@@ -1181,7 +1181,7 @@ class _PostBlockState extends State<_PostBlock> {
                                   color: Colors.black,
                                   height: 1.6)),
                           maxLines: 8,
-                          ellipsis: '¡­',
+                          ellipsis: 'â€¦',
                           textDirection: TextDirection.ltr,
                         )..layout(maxWidth: constraints.maxWidth);
                         final overflow = tp.didExceedMaxLines;
@@ -1203,7 +1203,7 @@ class _PostBlockState extends State<_PostBlock> {
                                     setState(() => _expanded = true),
                                 child: const Padding(
                                   padding: EdgeInsets.only(top: 4),
-                                  child: Text('ÏÔÊ¾¸ü¶à',
+                                  child: Text('æ˜¾ç¤ºæ›´å¤š',
                                       style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
@@ -1215,12 +1215,12 @@ class _PostBlockState extends State<_PostBlock> {
                       },
                     ),
                   ],
-                  // ±»»Ø¸´µÄÔ­Ìù£¨ÒıÓÃ¿ò£©
+                  // è¢«å›å¤çš„åŸè´´ï¼ˆå¼•ç”¨æ¡†ï¼‰
                   if (widget.quoteBox != null) ...[
                     const SizedBox(height: 8),
                     widget.quoteBox!,
                   ],
-                  // Ö¸±êĞĞ£¨ÓëêÇ³ÆÍ¬Ò»×óÔµ£©
+                  // æŒ‡æ ‡è¡Œï¼ˆä¸æ˜µç§°åŒä¸€å·¦ç¼˜ï¼‰
                   if (widget.allowActions) ...[
                     const SizedBox(height: 10),
                     _buildStatsRow(
@@ -1246,7 +1246,7 @@ class _PostBlockState extends State<_PostBlock> {
     );
   }
 }
-/// ¸ü¶à²Ëµ¥£º¹Ø×¢/È¡Ïû¹Ø×¢¡¢ÆÁ±Î/È¡ÏûÆÁ±Î¡£
+/// æ›´å¤šèœå•ï¼šå…³æ³¨/å–æ¶ˆå…³æ³¨ã€å±è”½/å–æ¶ˆå±è”½ã€‚
 Future<void> _showMoreMenu(
     BuildContext context, String targetUserId, String nickname) async {
   final me = AuthService.instance.currentUser.value;
@@ -1277,12 +1277,12 @@ Future<void> _showMoreMenu(
               ctx,
               following ? 'unfollow' : 'follow',
               Icons.person_add_alt,
-              following ? 'È¡Ïû¹Ø×¢' : '¹Ø×¢¸ÃÓÃ»§'),
+              following ? 'å–æ¶ˆå…³æ³¨' : 'å…³æ³¨è¯¥ç”¨æˆ·'),
           _menuItem(
               ctx,
               blocked ? 'unblock' : 'block',
               Icons.block_outlined,
-              blocked ? 'È¡ÏûÆÁ±Î' : 'ÆÁ±Î¸ÃÓÃ»§'),
+              blocked ? 'å–æ¶ˆå±è”½' : 'å±è”½è¯¥ç”¨æˆ·'),
           const SizedBox(height: 8),
         ],
       ),
@@ -1293,18 +1293,18 @@ Future<void> _showMoreMenu(
     if (choice == 'follow' || choice == 'unfollow') {
       final ok =
           await CloudNotesService.instance.toggleFollow(targetUserId);
-      if (context.mounted) _showToastText(context, ok ? 'ÒÑ¹Ø×¢' : 'ÒÑÈ¡Ïû¹Ø×¢');
+      if (context.mounted) _showToastText(context, ok ? 'å·²å…³æ³¨' : 'å·²å–æ¶ˆå…³æ³¨');
     } else if (choice == 'block') {
       final ok =
           await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
-        _showToastText(context, ok ? 'ÒÑÆÁ±Î£¬¸ÃÓÃ»§±Ê¼Ç²»ÔÙÕ¹Ê¾' : 'ÒÑÈ¡ÏûÆÁ±Î');
+        _showToastText(context, ok ? 'å·²å±è”½ï¼Œè¯¥ç”¨æˆ·ç¬”è®°ä¸å†å±•ç¤º' : 'å·²å–æ¶ˆå±è”½');
       }
     } else if (choice == 'unblock') {
       final ok =
           await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
-        _showToastText(context, ok ? 'ÒÑÆÁ±Î' : 'ÒÑÈ¡ÏûÆÁ±Î');
+        _showToastText(context, ok ? 'å·²å±è”½' : 'å·²å–æ¶ˆå±è”½');
       }
     }
   } catch (e) {
@@ -1372,8 +1372,8 @@ void _showToastText(BuildContext context, String text) {
   });
 }
 
-/// »Ø¸´ÊäÈëµ¯´°£º¶ÀÁ¢ÓµÓĞ TextEditingController£¬Ëæµ¯´°ÉúÃüÖÜÆÚÊÍ·Å£¬
-/// ±ÜÃâÔÚµ¯´°ÍË³ö¶¯»­ÆÚ¼ä dispose ¿ØÖÆÆ÷´¥·¢ dependents.isEmpty ¶ÏÑÔ¡£
+/// å›å¤è¾“å…¥å¼¹çª—ï¼šç‹¬ç«‹æ‹¥æœ‰ TextEditingControllerï¼Œéšå¼¹çª—ç”Ÿå‘½å‘¨æœŸé‡Šæ”¾ï¼Œ
+/// é¿å…åœ¨å¼¹çª—é€€å‡ºåŠ¨ç”»æœŸé—´ dispose æ§åˆ¶å™¨è§¦å‘ dependents.isEmpty æ–­è¨€ã€‚
 class _ReplyInputSheet extends StatefulWidget {
   final void Function(String content) onSubmit;
   const _ReplyInputSheet({required this.onSubmit});
@@ -1422,7 +1422,7 @@ class _ReplyInputSheetState extends State<_ReplyInputSheet> {
                     onSubmitted: (_) => _send(),
                     style: const TextStyle(fontSize: 14, color: _text),
                     decoration: const InputDecoration(
-                      hintText: 'Ğ´ÏÂÄãµÄ»Ø¸´¡­',
+                      hintText: 'å†™ä¸‹ä½ çš„å›å¤â€¦',
                       hintStyle: TextStyle(color: _textHint),
                       border: InputBorder.none,
                       isDense: true,
@@ -1444,8 +1444,8 @@ class _ReplyInputSheetState extends State<_ReplyInputSheet> {
   }
 }
 
-/// Ìû×ÓĞĞ£ºÓë±Ê¼ÇÏêÇéÒ³Í¬·ç¸ñ¡ª¡ªÎŞ¿¨Æ¬±³¾°£¬
-/// Í·Ïñ+ÓÃ»§Ãû/Ê±¼ä ¡ú ÄÚÈİÔ¤ÀÀ£¨×î¶à8ĞĞ£¬¿ÉÕ¹¿ª£©¡ú Í³¼ÆÊı¾İĞĞ¡£
+/// å¸–å­è¡Œï¼šä¸ç¬”è®°è¯¦æƒ…é¡µåŒé£æ ¼â€”â€”æ— å¡ç‰‡èƒŒæ™¯ï¼Œ
+/// å¤´åƒ+ç”¨æˆ·å/æ—¶é—´ â†’ å†…å®¹é¢„è§ˆï¼ˆæœ€å¤š8è¡Œï¼Œå¯å±•å¼€ï¼‰â†’ ç»Ÿè®¡æ•°æ®è¡Œã€‚
 class _NoteFeedRow extends StatelessWidget {
   final PlazaNote note;
   final VoidCallback? onReplyPosted;
@@ -1480,7 +1480,7 @@ class _NoteFeedRow extends StatelessWidget {
     final note = this.note;
     final me = AuthService.instance.currentUser.value;
     final isMine = me != null && note.ownerUserId == me.id;
-    // »Ø¸´Ìû£ºäÖÈ¾³ÉÁ¬ÌùÑùÊ½£¨Ô­ÌûÔÚÉÏ + »Ø¸´ÔÚÏÂ + Í·ÏñÊúÏßÁ¬½Ó£©¡£
+    // å›å¤å¸–ï¼šæ¸²æŸ“æˆè¿è´´æ ·å¼ï¼ˆåŸå¸–åœ¨ä¸Š + å›å¤åœ¨ä¸‹ + å¤´åƒç«–çº¿è¿æ¥ï¼‰ã€‚
     if (note.repostKind == 'reply') {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1520,8 +1520,8 @@ class _NoteFeedRow extends StatelessWidget {
   }
 }
 
-/// ËÄ¸öÊı¾İÖ¸±êĞĞ£¨ÆÀÂÛ/×ª·¢/µãÔŞ/ÔÄ¶Á£©£¬ÓëÆĞÌá¿Õ¼ä±Ê¼ÇÏêÇéÒ³ÑùÊ½Ò»ÖÂ¡£
-/// ¾ùÔÈ·Ö²¼Õ¼ÂúÕûĞĞ£¬µÚÒ»¸öÍ¼±êÓëêÇ³Æ/ÄÚÈİ×ó¶ÔÆë£¬ÓÒ²à²»Áô°×¡£
+/// å››ä¸ªæ•°æ®æŒ‡æ ‡è¡Œï¼ˆè¯„è®º/è½¬å‘/ç‚¹èµ/é˜…è¯»ï¼‰ï¼Œä¸è©æç©ºé—´ç¬”è®°è¯¦æƒ…é¡µæ ·å¼ä¸€è‡´ã€‚
+/// å‡åŒ€åˆ†å¸ƒå æ»¡æ•´è¡Œï¼Œç¬¬ä¸€ä¸ªå›¾æ ‡ä¸æ˜µç§°/å†…å®¹å·¦å¯¹é½ï¼Œå³ä¾§ä¸ç•™ç™½ã€‚
 Widget _buildStatsRow({
   required int commentCount,
   required int repostCount,
@@ -1560,7 +1560,7 @@ Widget _buildStatsRow({
   );
 }
 
-/// Ö¸±êµ¥Ôª¸ñ£ºÍ¼±ê+Êı×Ö£¬Êı×Ö¹ı´óÊ±×Ô¶¯Ëõ·Å£¬±ÜÃâÒç³ö/ÕÚµ²¡£
+/// æŒ‡æ ‡å•å…ƒæ ¼ï¼šå›¾æ ‡+æ•°å­—ï¼Œæ•°å­—è¿‡å¤§æ—¶è‡ªåŠ¨ç¼©æ”¾ï¼Œé¿å…æº¢å‡º/é®æŒ¡ã€‚
 Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap}) {
   final cell = Row(
     mainAxisSize: MainAxisSize.min,
@@ -1590,7 +1590,7 @@ Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap})
   );
 }
 
-/// »Ø¸´Ïî£ºÔ­ÌùÍêÕûÏÔÊ¾£¬ÏÂÃæÊÇÎÒµÄ»Ø¸´£¨ÍùÓÒËõ½ø¶ÔÆë£©¡£
+/// å›å¤é¡¹ï¼šåŸè´´å®Œæ•´æ˜¾ç¤ºï¼Œä¸‹é¢æ˜¯æˆ‘çš„å›å¤ï¼ˆå¾€å³ç¼©è¿›å¯¹é½ï¼‰ã€‚
 class _ReplyItem extends StatelessWidget {
   final PlazaActivity activity;
   final PlazaNote? originalNote;
@@ -1614,12 +1614,12 @@ class _ReplyItem extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ===== Ô­Ìù£¨ÍêÕû£¬Í¬Ìû×ÓÑùÊ½£¬Ö§³Ö»Ø¸´/µãÔŞ/×ª·¢£©=====
+        // ===== åŸè´´ï¼ˆå®Œæ•´ï¼ŒåŒå¸–å­æ ·å¼ï¼Œæ”¯æŒå›å¤/ç‚¹èµ/è½¬å‘ï¼‰=====
         _PostBlock(
           ownerUserId: original?.ownerUserId,
           nickname: originalIsMine
               ? me.displayName
-              : (original?.authorName ?? 'Í¬ĞŞ'),
+              : (original?.authorName ?? 'åŒä¿®'),
           account: original?.authorAccount ?? '',
           authorVerified: original?.authorVerified ?? false,
           timeMs: original?.createdAt ?? 0,
@@ -1655,11 +1655,11 @@ class _ReplyItem extends StatelessWidget {
                 )
               : null,
         ),
-        // ===== ÎÒµÄ»Ø¸´£¨Í·ÏñÓëÔ­ÌùÍ·ÏñÉÏÏÂ¶ÔÆë£¬ÄÚÈİÍ¬Ô­ÌùÎ»ÖÃ£©=====
+        // ===== æˆ‘çš„å›å¤ï¼ˆå¤´åƒä¸åŸè´´å¤´åƒä¸Šä¸‹å¯¹é½ï¼Œå†…å®¹åŒåŸè´´ä½ç½®ï¼‰=====
         _PostBlock(
           ownerUserId: activity.actorId,
           nickname:
-              me?.displayName ?? (activity.actorName.isNotEmpty ? activity.actorName : 'ÎÒ'),
+              me?.displayName ?? (activity.actorName.isNotEmpty ? activity.actorName : 'æˆ‘'),
           timeMs: activity.createdAt,
           content: activity.content,
           stats: _buildStatsRow(
@@ -1675,7 +1675,7 @@ class _ReplyItem extends StatelessWidget {
   }
 }
 
-/// Ìû×Ó Tab£ºÎÒ×Ô¼º·¢²¼µÄ¹ã³¡±Ê¼Ç¡£
+/// å¸–å­ Tabï¼šæˆ‘è‡ªå·±å‘å¸ƒçš„å¹¿åœºç¬”è®°ã€‚
 class _MyPostsTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
@@ -1735,7 +1735,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       });
     }
 
-    // Ìû×Ó = ËùÓĞ·ÖÏíµ½ÆĞÌá¿Õ¼äµÄÌû×Ó£¨ÔÆ¶ËÊı¾İ£©¡£
+    // å¸–å­ = æ‰€æœ‰åˆ†äº«åˆ°è©æç©ºé—´çš„å¸–å­ï¼ˆäº‘ç«¯æ•°æ®ï¼‰ã€‚
     List<PlazaNote> cloudNotes = [];
     bool hasMore = false;
     String? errorText;
@@ -1748,17 +1748,17 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         cloudNotes = list;
         hasMore = more;
       } catch (e) {
-        errorText = 'ÔÆ¶Ë¼ÓÔØÊ§°Ü';
+        errorText = 'äº‘ç«¯åŠ è½½å¤±è´¥';
         
       }
     } else {
-      errorText = 'ÇëÏÈµÇÂ¼';
+      errorText = 'è¯·å…ˆç™»å½•';
     }
     if (!mounted) return;
     
 
     var merged = cloudNotes;
-    // ÔÆ¶ËÊ§°Ü/Î´µÇÂ¼Ê±£¬ÓÃ±¾µØÒÑ·ÖÏíµÄ±Ê¼Ç¶µµ×Õ¹Ê¾¡£
+    // äº‘ç«¯å¤±è´¥/æœªç™»å½•æ—¶ï¼Œç”¨æœ¬åœ°å·²åˆ†äº«çš„ç¬”è®°å…œåº•å±•ç¤ºã€‚
     if (merged.isEmpty && errorText != null) {
       final localNotes = await _loadLocalNotes();
       if (!mounted) return;
@@ -1781,7 +1781,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     });
   }
 
-  /// ´Ó±¾µØ¶ÁÈ¡ÖÃ¶¥Ìû×Ó id ÁĞ±í¡£
+  /// ä»æœ¬åœ°è¯»å–ç½®é¡¶å¸–å­ id åˆ—è¡¨ã€‚
   Future<void> _loadPinnedIds() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1791,7 +1791,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     } catch (_) {}
   }
 
-  /// ÅÅĞò£ºÖÃ¶¥µÄÌû×ÓÔÚ×îÇ°£¬ÆäÓà°´¸üĞÂÊ±¼äµ¹Ğò¡£
+  /// æ’åºï¼šç½®é¡¶çš„å¸–å­åœ¨æœ€å‰ï¼Œå…¶ä½™æŒ‰æ›´æ–°æ—¶é—´å€’åºã€‚
   void _sortNotes(List<PlazaNote> notes) {
     notes.sort((a, b) {
       final ap = _pinnedIds.contains(a.id);
@@ -1801,7 +1801,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     });
   }
 
-  /// ÖÃ¶¥/È¡ÏûÖÃ¶¥Ìû×Ó£¨±¾µØ±£´æ£¬ÖØÆôºóÈÔÉúĞ§£©¡£
+  /// ç½®é¡¶/å–æ¶ˆç½®é¡¶å¸–å­ï¼ˆæœ¬åœ°ä¿å­˜ï¼Œé‡å¯åä»ç”Ÿæ•ˆï¼‰ã€‚
   Future<void> _togglePin(PlazaNote note) async {
     final wasPinned = _pinnedIds.contains(note.id);
     try {
@@ -1819,10 +1819,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     if (!mounted) return;
     _sortNotes(_notes);
     setState(() {});
-    _showToastText(context, wasPinned ? 'ÒÑÈ¡ÏûÖÃ¶¥' : 'ÒÑÖÃ¶¥');
+    _showToastText(context, wasPinned ? 'å·²å–æ¶ˆç½®é¡¶' : 'å·²ç½®é¡¶');
   }
 
-  /// ±à¼­Ìû×ÓÄÚÈİ£º¸üĞÂÔÆ¶ËºóÖØĞÂ¼ÓÔØÁĞ±í¡£
+  /// ç¼–è¾‘å¸–å­å†…å®¹ï¼šæ›´æ–°äº‘ç«¯åé‡æ–°åŠ è½½åˆ—è¡¨ã€‚
   Future<void> _editNote(PlazaNote note) async {
     final saved = await showModalBottomSheet<String>(
       context: context,
@@ -1831,13 +1831,13 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => SheetTextInput(
-        title: '±à¼­Ìû×Ó',
-        hint: 'Ğ´ÏÂĞÂµÄÄÚÈİ¡­',
+        title: 'ç¼–è¾‘å¸–å­',
+        hint: 'å†™ä¸‹æ–°çš„å†…å®¹â€¦',
         initialText: note.content,
         maxLength: 2000,
         minLines: 3,
         maxLines: 6,
-        confirmText: '±£´æ',
+        confirmText: 'ä¿å­˜',
       ),
     );
     if (saved == null || saved.trim().isEmpty || !mounted) return;
@@ -1845,14 +1845,14 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       await CloudNotesService.instance
           .updateSharedNote(cloudId: note.id, content: saved.trim());
       if (!mounted) return;
-      _showToastText(context, 'ÒÑ¸üĞÂ');
+      _showToastText(context, 'å·²æ›´æ–°');
       _load(silent: true);
     } catch (e) {
       if (mounted) _showToastText(context, e.toString());
     }
   }
 
-  /// É¾³ıÌû×Ó£º´ÓÆĞÌá¿Õ¼äÒÆ³ı£¬²»ÔÙÕ¹Ê¾¡£
+  /// åˆ é™¤å¸–å­ï¼šä»è©æç©ºé—´ç§»é™¤ï¼Œä¸å†å±•ç¤ºã€‚
   Future<void> _deleteNote(PlazaNote note) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -1860,19 +1860,19 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         backgroundColor: _card,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16)),
-        title: const Text('É¾³ıÌû×Ó',
+        title: const Text('åˆ é™¤å¸–å­',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('É¾³ıºóÌû×Ó½«´ÓÆĞÌá¿Õ¼äÒÆ³ı£¬ÇÒÎŞ·¨»Ö¸´¡£È·¶¨É¾³ıÂğ£¿',
+        content: const Text('åˆ é™¤åå¸–å­å°†ä»è©æç©ºé—´ç§»é™¤ï¼Œä¸”æ— æ³•æ¢å¤ã€‚ç¡®å®šåˆ é™¤å—ï¼Ÿ',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('È¡Ïû', style: TextStyle(color: _textSec)),
+            child: const Text('å–æ¶ˆ', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('É¾³ı',
+            child: const Text('åˆ é™¤',
                 style: TextStyle(
                     color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
           ),
@@ -1885,13 +1885,13 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       _pinnedIds.remove(note.id);
       if (!mounted) return;
       setState(() => _notes.removeWhere((n) => n.id == note.id));
-      _showToastText(context, 'ÒÑÉ¾³ı');
+      _showToastText(context, 'å·²åˆ é™¤');
     } catch (e) {
       if (mounted) _showToastText(context, e.toString());
     }
   }
 
-  /// ±¾µØ±Ê¼ÇÖĞÒÑ·ÖÏí£¨shared=true£©µÄ²¿·Ö£¬ÓÃÓÚÔÆ¶Ë²»¿ÉÓÃÊ±µÄ¶µµ×Õ¹Ê¾¡£
+  /// æœ¬åœ°ç¬”è®°ä¸­å·²åˆ†äº«ï¼ˆshared=trueï¼‰çš„éƒ¨åˆ†ï¼Œç”¨äºäº‘ç«¯ä¸å¯ç”¨æ—¶çš„å…œåº•å±•ç¤ºã€‚
   Future<List<PlazaNote>> _loadLocalNotes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1899,7 +1899,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       final List<dynamic> list = jsonDecode(raw);
       final uid = AuthService.instance.currentUser.value?.id ?? 'local';
       final nickname =
-          AuthService.instance.currentUser.value?.displayName ?? 'Í¬ĞŞ';
+          AuthService.instance.currentUser.value?.displayName ?? 'åŒä¿®';
       return list.reversed
           .where((n) => n['shared'] == true)
           .map<PlazaNote>((n) {
@@ -1908,7 +1908,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         return PlazaNote(
           id: n['id']?.toString() ?? '',
           ownerUserId: uid,
-          title: n['title']?.toString() ?? 'ÎŞ±êÌâ',
+          title: n['title']?.toString() ?? 'æ— æ ‡é¢˜',
           content: n['content']?.toString() ?? '',
           authorName: nickname,
           visibility: 'public',
@@ -1993,7 +1993,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   Widget build(BuildContext context) {
     if (_loading) return _tabLoading();
     if (_notes.isEmpty) {
-      final msg = _error ?? '»¹Ã»ÓĞ·ÖÏí¹ıÌû×Ó';
+      final msg = _error ?? 'è¿˜æ²¡æœ‰åˆ†äº«è¿‡å¸–å­';
       return _tabEmpty(msg, _error != null ? Icons.cloud_off : Icons.post_add_outlined);
     }
     return NotificationListener<ScrollNotification>(
@@ -2053,7 +2053,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 }
 
-/// »Ø¸´ Tab£ºÎÒµÄ»¥¶¯¶¯Ì¬£¨×ª·¢ + ÆÀÂÛ/»Ø¸´£©¡£
+/// å›å¤ Tabï¼šæˆ‘çš„äº’åŠ¨åŠ¨æ€ï¼ˆè½¬å‘ + è¯„è®º/å›å¤ï¼‰ã€‚
 class _MyRepliesTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
@@ -2110,7 +2110,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       _hasMore = true;
     });
     try {
-      // »î¶¯Á÷Àï»ìÓĞ´óÁ¿ share µÈÀàĞÍ£¬Ğè·­Ò³ÊÕ¼¯ÎÒ·¢³öµÄÆÀÂÛ£¨type=comment£©¡£
+      // æ´»åŠ¨æµé‡Œæ··æœ‰å¤§é‡ share ç­‰ç±»å‹ï¼Œéœ€ç¿»é¡µæ”¶é›†æˆ‘å‘å‡ºçš„è¯„è®ºï¼ˆtype=commentï¼‰ã€‚
       final myComments = <PlazaActivity>[];
       int page = 1;
       bool hasMore = true;
@@ -2127,7 +2127,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
         myComments.addAll(list.where((a) => a.type == 'comment'));
         hasMore = more;
         page++;
-        // ÒÑÊÕ¼¯×ã¹»ÆÀÂÛ¼´¿ÉÍ£Ö¹·­Ò³¡£
+        // å·²æ”¶é›†è¶³å¤Ÿè¯„è®ºå³å¯åœæ­¢ç¿»é¡µã€‚
         if (myComments.length >= 30) break;
       }
       debugPrint('[RepliesTab] totalFetched=$totalFetched comments=${myComments.length}');
@@ -2137,13 +2137,13 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
         _activities.addAll(myComments);
         _hasMore = false;
         _page = page;
-        _diagInfo = '¹²À­µ½ $totalFetched Ìõ¶¯Ì¬£¬ÆäÖĞÆÀÂÛ ${myComments.length} Ìõ';
+        _diagInfo = 'å…±æ‹‰åˆ° $totalFetched æ¡åŠ¨æ€ï¼Œå…¶ä¸­è¯„è®º ${myComments.length} æ¡';
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '¼ÓÔØÊ§°Ü';
+        _error = 'åŠ è½½å¤±è´¥';
         _loading = false;
       });
     }
@@ -2173,7 +2173,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     }
   }
 
-  /// ²¢ĞĞÔ¤È¡Ã¿ÌõÆÀÂÛ¶ÔÓ¦µÄÔ­ÌùÊı¾İ£¨Ê§°ÜÖÃ null£¬Õ¹Ê¾±êÌâ¶µµ×£©¡£
+  /// å¹¶è¡Œé¢„å–æ¯æ¡è¯„è®ºå¯¹åº”çš„åŸè´´æ•°æ®ï¼ˆå¤±è´¥ç½® nullï¼Œå±•ç¤ºæ ‡é¢˜å…œåº•ï¼‰ã€‚
   Future<void> _prefetchOriginals(List<PlazaActivity> items) async {
     final futures = items.map((a) async {
       try {
@@ -2192,12 +2192,12 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   @override
   Widget build(BuildContext context) {
     if (!widget.isLoggedIn) {
-      return _tabEmpty('ÇëÏÈµÇÂ¼', Icons.lock_outlined);
+      return _tabEmpty('è¯·å…ˆç™»å½•', Icons.lock_outlined);
     }
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
     if (_activities.isEmpty) {
-      final msg = _diagInfo ?? '»¹Ã»ÓĞ»Ø¸´¼ÇÂ¼';
+      final msg = _diagInfo ?? 'è¿˜æ²¡æœ‰å›å¤è®°å½•';
       return _tabEmpty(msg, Icons.reply_outlined);
     }
 
@@ -2288,7 +2288,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 
   Widget _buildActivityCard(PlazaActivity activity) {
-    // Ô­ÌùÍêÕûÏÔÊ¾ÔÚÉÏ£¬ÏÂÃæÊÇÎÒµÄ»Ø¸´£¨ÍùÓÒËõ½ø£©¡£
+    // åŸè´´å®Œæ•´æ˜¾ç¤ºåœ¨ä¸Šï¼Œä¸‹é¢æ˜¯æˆ‘çš„å›å¤ï¼ˆå¾€å³ç¼©è¿›ï¼‰ã€‚
     final original = _originalNotes[activity.noteId];
     return _ReplyItem(
       activity: activity,
@@ -2298,7 +2298,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 }
 
-/// Ï²»¶ Tab£ºÎÒµãÔŞ¹ıµÄÌû×ÓÁĞ±í¡£
+/// å–œæ¬¢ Tabï¼šæˆ‘ç‚¹èµè¿‡çš„å¸–å­åˆ—è¡¨ã€‚
 class _MyLikesTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
@@ -2356,7 +2356,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
       if (!mounted) return;
       setState(() {
         _notes = [];
-        _error = '¼ÓÔØÊ§°Ü';
+        _error = 'åŠ è½½å¤±è´¥';
         _loading = false;
       });
     }
@@ -2365,12 +2365,12 @@ class _MyLikesTabState extends State<_MyLikesTab> {
   @override
   Widget build(BuildContext context) {
     if (!widget.isLoggedIn) {
-      return _tabEmpty('ÇëÏÈµÇÂ¼', Icons.lock_outlined);
+      return _tabEmpty('è¯·å…ˆç™»å½•', Icons.lock_outlined);
     }
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
     if (_notes == null || _notes!.isEmpty) {
-      return _tabEmpty('»¹Ã»ÓĞµãÔŞ¹ıÌû×Ó', Icons.favorite_border);
+      return _tabEmpty('è¿˜æ²¡æœ‰ç‚¹èµè¿‡å¸–å­', Icons.favorite_border);
     }
     return Builder(
       builder: (context) => CustomScrollView(
@@ -2438,7 +2438,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
   }
 }
 
-/// ÊéÇ© Tab£ºÎÒÊÕ²ØµÄ±Ê¼Ç£¨ÒÑµÇÂ¼£©¡£
+/// ä¹¦ç­¾ Tabï¼šæˆ‘æ”¶è—çš„ç¬”è®°ï¼ˆå·²ç™»å½•ï¼‰ã€‚
 class _MyBookmarksTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
@@ -2496,7 +2496,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
       if (!mounted) return;
       setState(() {
         _notes = [];
-        _error = '¼ÓÔØÊ§°Ü';
+        _error = 'åŠ è½½å¤±è´¥';
         _loading = false;
       });
     }
@@ -2505,12 +2505,12 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
   @override
   Widget build(BuildContext context) {
     if (!widget.isLoggedIn) {
-      return _tabEmpty('ÇëÏÈµÇÂ¼', Icons.lock_outlined);
+      return _tabEmpty('è¯·å…ˆç™»å½•', Icons.lock_outlined);
     }
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
     if (_notes == null || _notes!.isEmpty) {
-      return _tabEmpty('»¹Ã»ÓĞÊÕ²Ø¹ıÌû×Ó', Icons.bookmark_border);
+      return _tabEmpty('è¿˜æ²¡æœ‰æ”¶è—è¿‡å¸–å­', Icons.bookmark_border);
     }
     return Builder(
       builder: (context) => CustomScrollView(
@@ -2578,7 +2578,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
   }
 }
 
-/// ²İ¸åĞĞ£º±¾µØ±£´æµ«Î´·ÖÏíµ½ÆĞÌá¿Õ¼äµÄ±Ê¼Ç£¬ÑùÊ½ÓëÌû×ÓÒ»ÖÂ£¬µ«Ã»ÓĞÍ³¼ÆÖ¸±êĞĞ£¨Î´·¢±í£©¡£
+/// è‰ç¨¿è¡Œï¼šæœ¬åœ°ä¿å­˜ä½†æœªåˆ†äº«åˆ°è©æç©ºé—´çš„ç¬”è®°ï¼Œæ ·å¼ä¸å¸–å­ä¸€è‡´ï¼Œä½†æ²¡æœ‰ç»Ÿè®¡æŒ‡æ ‡è¡Œï¼ˆæœªå‘è¡¨ï¼‰ã€‚
 class _DraftRow extends StatelessWidget {
   final Map<String, dynamic> note;
   final VoidCallback onTap;
@@ -2594,7 +2594,7 @@ class _DraftRow extends StatelessWidget {
     final content = _DraftRow._plainContent(note);
     final ts = DateTime.tryParse(note['updatedAt']?.toString() ?? '');
     final nickname =
-        AuthService.instance.currentUser.value?.displayName ?? 'Í¬ĞŞ';
+        AuthService.instance.currentUser.value?.displayName ?? 'åŒä¿®';
     return _PostBlock(
       ownerUserId: AuthService.instance.currentUser.value?.id,
       nickname: nickname,
@@ -2605,7 +2605,7 @@ class _DraftRow extends StatelessWidget {
   }
 }
 
-/// ²İ¸å Tab£º±¾µØ±£´æµ«Î´·ÖÏíµ½ÆĞÌá¿Õ¼äµÄ±Ê¼Ç¡£
+/// è‰ç¨¿ Tabï¼šæœ¬åœ°ä¿å­˜ä½†æœªåˆ†äº«åˆ°è©æç©ºé—´çš„ç¬”è®°ã€‚
 class _MyDraftsTab extends StatefulWidget {
   final ValueNotifier<int> reloadNotifier;
   const _MyDraftsTab({required this.reloadNotifier});
@@ -2679,7 +2679,7 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
   Widget build(BuildContext context) {
     if (_loading) return _tabLoading();
     if (_notes.isEmpty) {
-      return _tabEmpty('»¹Ã»ÓĞ²İ¸å', Icons.edit_note);
+      return _tabEmpty('è¿˜æ²¡æœ‰è‰ç¨¿', Icons.edit_note);
     }
     return Builder(
       builder: (context) => CustomScrollView(
@@ -2800,7 +2800,7 @@ class _SettingsPageState extends State<_SettingsPage> {
   }
 
   void _pushLogin() {
-    _showToast('ÇëÏÈµÇÂ¼');
+    _showToast('è¯·å…ˆç™»å½•');
     Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
   }
 
@@ -2808,7 +2808,7 @@ class _SettingsPageState extends State<_SettingsPage> {
     final ok = await NotificationService.instance.setMasterEnabled(value);
     if (!mounted) return;
     if (!ok) {
-      _showToast('Î´»ñµÃÍ¨ÖªÈ¨ÏŞ£¬ÇëÔÚÏµÍ³ÉèÖÃÖĞ¿ªÆô');
+      _showToast('æœªè·å¾—é€šçŸ¥æƒé™ï¼Œè¯·åœ¨ç³»ç»Ÿè®¾ç½®ä¸­å¼€å¯');
       return;
     }
     setState(() => _notifOn = value);
@@ -2878,7 +2878,7 @@ class _SettingsPageState extends State<_SettingsPage> {
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 20),
         leading: const Icon(Icons.logout, size: 20, color: Colors.redAccent),
-        title: const Text('ÍË³öµÇÂ¼', style: TextStyle(fontSize: 15, color: Colors.redAccent)),
+        title: const Text('é€€å‡ºç™»å½•', style: TextStyle(fontSize: 15, color: Colors.redAccent)),
         trailing: const Icon(Icons.chevron_right, color: _textHint, size: 20),
         onTap: _confirmLogout,
       ),
@@ -2891,13 +2891,13 @@ class _SettingsPageState extends State<_SettingsPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('ÍË³öµÇÂ¼', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: const Text('ÍË³öºóĞèÖØĞÂµÇÂ¼²ÅÄÜ¹ÜÀíÔÆ¶Ë±Ê¼Ç', style: TextStyle(color: _textSec)),
+        title: const Text('é€€å‡ºç™»å½•', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: const Text('é€€å‡ºåéœ€é‡æ–°ç™»å½•æ‰èƒ½ç®¡ç†äº‘ç«¯ç¬”è®°', style: TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('È¡Ïû', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('å–æ¶ˆ', style: TextStyle(color: _textSec))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('ÍË³ö', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+            child: const Text('é€€å‡º', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -2933,7 +2933,7 @@ class _SettingsPageState extends State<_SettingsPage> {
                       icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
                     ),
                     const SizedBox(width: 4),
-                    const Text('ÉèÖÃ', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+                    const Text('è®¾ç½®', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
                   ],
                 ),
               ),
@@ -2944,21 +2944,21 @@ class _SettingsPageState extends State<_SettingsPage> {
                 ? ListView(
                     padding: const EdgeInsets.only(top: 4, bottom: 32),
                     children: [
-                      _sectionTitle('ÔÄ¶ÁÓëÌáĞÑ'),
+                      _sectionTitle('é˜…è¯»ä¸æé†’'),
                       SettingsCard(
                         children: [
                           _SettingsLinkTile(
                             icon: Icons.text_fields,
                             iconColor: _gold,
-                            title: 'ÔÄ¶ÁÆ«ºÃ',
-                            subtitle: '×ÖºÅ ¡¤ ĞĞ¾à ¡¤ ±³¾° ¡¤ ·­Ò³·½Ê½',
+                            title: 'é˜…è¯»åå¥½',
+                            subtitle: 'å­—å· Â· è¡Œè· Â· èƒŒæ™¯ Â· ç¿»é¡µæ–¹å¼',
                             page: const ReaderSettingsPage(),
                           ),
                           const SettingsDivider(),
                           const _SettingsReminderTile(),
                         ],
                       ),
-                      _sectionTitle('°²È«'),
+                      _sectionTitle('å®‰å…¨'),
                       SettingsCard(
                         children: [
                           _SettingsAccountTile(),
@@ -2968,14 +2968,14 @@ class _SettingsPageState extends State<_SettingsPage> {
                           _SettingsNotifTile(),
                         ],
                       ),
-                      _sectionTitle('ÆäËû'),
+                      _sectionTitle('å…¶ä»–'),
                       SettingsCard(
                         children: [
                           _SettingsLinkTile(
                             icon: Icons.info_outline,
                             iconColor: _primaryLight,
-                            title: '¹ØÓÚÎÒÃÇ',
-                            subtitle: '°æ±¾ ¡¤ ½éÉÜ ¡¤ °æÈ¨',
+                            title: 'å…³äºæˆ‘ä»¬',
+                            subtitle: 'ç‰ˆæœ¬ Â· ä»‹ç» Â· ç‰ˆæƒ',
                             page: const AboutPage(),
                           ),
                         ],
@@ -3052,7 +3052,7 @@ class _SettingsLinkTile extends StatelessWidget {
   }
 }
 
-/// ´ò¿¨ÌáĞÑĞĞ£ºÏÔÊ¾¿ª¹Ø×´Ì¬ÓëÊ±¼ä£¬µã»÷½øÈëÉèÖÃ¡£
+/// æ‰“å¡æé†’è¡Œï¼šæ˜¾ç¤ºå¼€å…³çŠ¶æ€ä¸æ—¶é—´ï¼Œç‚¹å‡»è¿›å…¥è®¾ç½®ã€‚
 class _SettingsReminderTile extends StatelessWidget {
   const _SettingsReminderTile();
 
@@ -3082,10 +3082,10 @@ class _SettingsReminderTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('´ò¿¨ÌáĞÑ', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  const Text('æ‰“å¡æé†’', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
                   const SizedBox(height: 2),
                   Text(
-                    state.reminderOn ? 'Ã¿ÈÕ ${state.reminderTime}' : 'Î´¿ªÆô',
+                    state.reminderOn ? 'æ¯æ—¥ ${state.reminderTime}' : 'æœªå¼€å¯',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: _textHint),
@@ -3101,7 +3101,7 @@ class _SettingsReminderTile extends StatelessWidget {
   }
 }
 
-/// Íü¼ÇÃÜÂëĞĞ£ºÍ¨¹ıÊÖ»úÑéÖ¤ÂëÖØÖÃµÇÂ¼ÃÜÂë£¬Î´µÇÂ¼Ò²¿ÉÊ¹ÓÃ¡£
+/// å¿˜è®°å¯†ç è¡Œï¼šé€šè¿‡æ‰‹æœºéªŒè¯ç é‡ç½®ç™»å½•å¯†ç ï¼Œæœªç™»å½•ä¹Ÿå¯ä½¿ç”¨ã€‚
 class _SettingsAccountTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -3129,10 +3129,10 @@ class _SettingsAccountTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Íü¼ÇÃÜÂë',
+                  Text('å¿˜è®°å¯†ç ',
                       style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text('Í¨¹ıÊÖ»úÑéÖ¤ÂëÖØÖÃµÇÂ¼ÃÜÂë',
+                  Text('é€šè¿‡æ‰‹æœºéªŒè¯ç é‡ç½®ç™»å½•å¯†ç ',
                       style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
@@ -3176,9 +3176,9 @@ class _SettingsPhoneTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('¸ü»»ÊÖ»úºÅ', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  Text('æ›´æ¢æ‰‹æœºå·', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text('¸ü»»ºóÊı¾İ×Ô¶¯±£Áô', style: TextStyle(fontSize: 12, color: _textHint)),
+                  Text('æ›´æ¢åæ•°æ®è‡ªåŠ¨ä¿ç•™', style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
             ),
@@ -3190,7 +3190,7 @@ class _SettingsPhoneTile extends StatelessWidget {
   }
 }
 
-/// ÏûÏ¢Í¨Öª×Ü¿ª¹ØĞĞ¡£
+/// æ¶ˆæ¯é€šçŸ¥æ€»å¼€å…³è¡Œã€‚
 class _SettingsNotifTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -3213,9 +3213,9 @@ class _SettingsNotifTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('ÏûÏ¢Í¨Öª', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                Text('æ¶ˆæ¯é€šçŸ¥', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
                 SizedBox(height: 2),
-                Text('´ò¿¨ÌáĞÑµÈÏµÍ³Í¨Öª', style: TextStyle(fontSize: 12, color: _textHint)),
+                Text('æ‰“å¡æé†’ç­‰ç³»ç»Ÿé€šçŸ¥', style: TextStyle(fontSize: 12, color: _textHint)),
               ],
             ),
           ),

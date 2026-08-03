@@ -31,14 +31,14 @@ const Color _border = Color(0xFFEBE1D6);
 const Color _overlay = Color(0xFFFFF5EC);
 
 const Map<String, String> _plazaTabMeta = {
-  'latest': '最�?,
+  'latest': '最新',
   'hot': '推荐',
   'follow': '关注',
   'announce': '公告',
 };
 
 /// 每个广场栏目的笔记流缓存：切换栏目时不重新拉取，直接展示已缓存内容，
-/// 离开栏目时后台预取，回到栏目时数据已经就绪�?
+/// 离开栏目时后台预取，回到栏目时数据已经就绪。
 class _PlazaFeedCache {
   List<PlazaNote> notes = [];
   int page = 1;
@@ -106,7 +106,7 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void initState() {
     super.initState();
-    NoteSutraCatalog.load(); // 预加载经书目录，让卡�?@经书 提取可用
+    NoteSutraCatalog.load(); // 预加载经书目录，让卡片 @经书 提取可用
     _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
@@ -127,7 +127,7 @@ class StudyHubPageState extends State<StudyHubPage>
     if (route != null) routeObserver.subscribe(this, route);
   }
 
-  /// 从阅读页等路由返回时立即刷新“当前读经”进度�?
+  /// 从阅读页等路由返回时立即刷新“当前读经”进度。
   @override
   void didPopNext() {
     _loadData();
@@ -179,7 +179,7 @@ class StudyHubPageState extends State<StudyHubPage>
         final valid = <String>[];
         for (final k in saved) {
           if (k == 'discover') {
-            // 旧“发现”栏目拆分为“最�?/ 最热”�?
+            // 旧“发现”栏目拆分为“最新 / 最热”。
             if (!valid.contains('latest')) valid.add('latest');
             if (!valid.contains('hot')) valid.add('hot');
           } else if (_plazaTabMeta.containsKey(k) && !valid.contains(k)) {
@@ -245,7 +245,7 @@ class StudyHubPageState extends State<StudyHubPage>
       final list = decoded.map((e) => (e as Map<String, dynamic>)).toList();
       final idx = list.indexWhere((e) => e['title'] == title);
       if (idx < 0) {
-        _showTopToast('未找到该经书，无法收�?, isError: true);
+        _showTopToast('未找到该经书，无法收藏', isError: true);
         return;
       }
       final wasFav = list[idx]['isFavorite'] == true;
@@ -342,7 +342,7 @@ class StudyHubPageState extends State<StudyHubPage>
     if (_feedScroll.position.pixels >= _feedScroll.position.maxScrollExtent - 200) {
       _loadMoreFeed();
     }
-    // 只有当广场栏目栏被滚动到贴住顶部（AppBar 下边缘）时才显示“新增笔记”按钮�?
+    // 只有当广场栏目栏被滚动到贴住顶部（AppBar 下边缘）时才显示“新增笔记”按钮。
     _measureTopSectionOnce();
     final showFab = _topSectionHeight > 0 && _feedScroll.offset >= _topSectionHeight;
     if (showFab != _showFab) {
@@ -367,8 +367,8 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 拉取一页广场笔记并过滤掉被屏蔽用户的帖子；若整页均被屏蔽且还有更多，自动续取下一页（最�?4 页）�?
-  /// 返回（可见笔�? 下一页页�? 是否还有更多）�?
+  /// 拉取一页广场笔记并过滤掉被屏蔽用户的帖子；若整页均被屏蔽且还有更多，自动续取下一页（最多 4 页）。
+  /// 返回（可见笔记, 下一页页码, 是否还有更多）。
   Future<(List<PlazaNote>, int, bool)> _fetchFilteredFeed(
       int page, String sort) async {
     final blocked = CloudNotesService.instance.blockedUserIds;
@@ -393,13 +393,13 @@ class StudyHubPageState extends State<StudyHubPage>
     return (collected, cur, hasMore);
   }
 
-  /// 加载当前 tab 的笔记流。最新：按发布时间倒序（最新分享的在前）�?
-  /// 最热：按自定义热门规则（阅�?点赞/评论/转发）倒序。关注：仅展示已关注同修的笔记�?
-  /// 公告：暂为占�?UI�?
+  /// 加载当前 tab 的笔记流。最新：按发布时间倒序（最新分享的在前）。
+  /// 最热：按自定义热门规则（阅读/点赞/评论/转发）倒序。关注：仅展示已关注同修的笔记。
+  /// 公告：暂为占位 UI。
   Future<void> _loadFeed() async {
     await CloudNotesService.instance.refreshLikedNoteIds();
     await CloudNotesService.instance.refreshFollowStates();
-    await NoteSutraCatalog.load(); // 确保经书目录已缓存，提取 @经书 时可�?
+    await NoteSutraCatalog.load(); // 确保经书目录已缓存，提取 @经书 时可用
     _timeCache.clear();
     _plainTextCache.clear();
     _sutraQuoteCache.clear();
@@ -451,7 +451,7 @@ class StudyHubPageState extends State<StudyHubPage>
   _PlazaFeedCache _cacheFor(String tab) =>
       _tabCaches.putIfAbsent(tab, _PlazaFeedCache.new);
 
-  /// 把当前正在展示的栏目内容快照进缓存，供切换栏目后恢复�?
+  /// 把当前正在展示的栏目内容快照进缓存，供切换栏目后恢复。
   void _saveFeedToCache(String tab) {
     final c = _cacheFor(tab);
     c.notes = List.of(_feedNotes);
@@ -461,7 +461,7 @@ class StudyHubPageState extends State<StudyHubPage>
     c.error = _feedError;
   }
 
-  /// 把某栏目的缓存内容恢复到当前展示状态（不触发网络请求）�?
+  /// 把某栏目的缓存内容恢复到当前展示状态（不触发网络请求）。
   void _restoreFeedFromCache(String tab) {
     final c = _cacheFor(tab);
     _feedNotes
@@ -474,7 +474,7 @@ class StudyHubPageState extends State<StudyHubPage>
     _feedLoading = false;
   }
 
-  /// 平滑刷新当前栏目：已有缓存就后台刷新（不闪加载态），首次才全量加载�?
+  /// 平滑刷新当前栏目：已有缓存就后台刷新（不闪加载态），首次才全量加载。
   void _refreshCurrentSmooth() {
     final tab = _plazaTabs[_tabIndex];
     if (_cacheFor(tab).initial) {
@@ -484,7 +484,7 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 后台预取指定栏目的最新数据，直接写入缓存；若用户正好在该栏目则同步到界面�?
+  /// 后台预取指定栏目的最新数据，直接写入缓存；若用户正好在该栏目则同步到界面。
   Future<void> _refreshFeedInBackground(String tab) async {
     if (tab == 'announce') return;
     final c = _cacheFor(tab);
@@ -557,8 +557,8 @@ class StudyHubPageState extends State<StudyHubPage>
       ..addAll(ids));
   }
 
-  /// 关注 tab：拉取公开笔记并筛选出关注同修的作品�?
-  /// 最多翻 10 页（200 条），凑够一屏（20 条）即停止�?
+  /// 关注 tab：拉取公开笔记并筛选出关注同修的作品。
+  /// 最多翻 10 页（200 条），凑够一屏（20 条）即停止。
   Future<void> _loadFollowingNotes() async {
     setState(() => _feedLoading = true);
     try {
@@ -637,14 +637,14 @@ class StudyHubPageState extends State<StudyHubPage>
       _restoreFeedFromCache(_plazaTabs[i]);
     });
     if (_cacheFor(_plazaTabs[i]).initial) {
-      // 该栏目从未加载过，首次进入才全量加载�?
+      // 该栏目从未加载过，首次进入才全量加载。
       _loadFeed();
     }
-    // 后台预取刚离开的栏目，等再次回来时已是最新�?
+    // 后台预取刚离开的栏目，等再次回来时已是最新。
     _refreshFeedInBackground(prevTab);
   }
 
-  /// 弹出栏目排序面板，长按拖动调整顺序并持久化�?
+  /// 弹出栏目排序面板，长按拖动调整顺序并持久化。
   Future<void> _showTabSortDialog() async {
     final result = await showModalBottomSheet<List<String>>(
       context: context,
@@ -793,7 +793,7 @@ class StudyHubPageState extends State<StudyHubPage>
         _feedVersion++;
       });
     }
-    _showTopToast(following ? '已关�? : '已取消关�?);
+    _showTopToast(following ? '已关注' : '已取消关注');
   }
 
   void _openPlazaNote(PlazaNote note) {
@@ -831,7 +831,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   children: [
                     Text('$latestDate 阅读', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
                     const Spacer(),
-                    Text('${sutras.length} �?, style: TextStyle(fontSize: 13, color: _textHint)),
+                    Text('${sutras.length} 部', style: TextStyle(fontSize: 13, color: _textHint)),
                   ],
                 ),
               ),
@@ -908,7 +908,7 @@ class StudyHubPageState extends State<StudyHubPage>
         title: Padding(
           padding: const EdgeInsets.only(left: 12),
           child: const Text(
-            '诸行无常，一切皆苦；诸法无我，寂灭为乐�?,
+            '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
             style: TextStyle(
               color: Color(0xFF616161),
               fontSize: 12,
@@ -1053,7 +1053,7 @@ class StudyHubPageState extends State<StudyHubPage>
                         children: [
                           const Icon(Icons.today, size: 12, color: _primaryLight),
                           const SizedBox(width: 4),
-                          Text('已学$_studyDays�?, style: const TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
+                          Text('已学$_studyDays天', style: const TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
                         ],
                       ),
                     ),
@@ -1116,7 +1116,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       children: [
                         Icon(_lockedTitle != null ? Icons.lock : Icons.lock_open, size: 13),
                         const SizedBox(width: 4),
-                        Text(_lockedTitle != null ? '已锁�? : '锁定经书', style: const TextStyle(fontSize: 13)),
+                        Text(_lockedTitle != null ? '已锁定' : '锁定经书', style: const TextStyle(fontSize: 13)),
                       ],
                     ),
                   ),
@@ -1134,7 +1134,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       children: [
                         Image.asset(_currentFavorite ? 'assets/images/star_filled.png' : 'assets/images/star_outline.png', width: 13, height: 13),
                         const SizedBox(width: 4),
-                        Text(_currentFavorite ? '已收�? : '收藏', style: const TextStyle(fontSize: 13)),
+                        Text(_currentFavorite ? '已收藏' : '收藏', style: const TextStyle(fontSize: 13)),
                       ],
                     ),
                   ),
@@ -1142,7 +1142,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   TextButton(
                     onPressed: _showRecentSutras,
                     style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
-                    child: const Text('最近阅�?�?, style: TextStyle(fontSize: 13)),
+                    child: const Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
                   ),
                 ],
               ),
@@ -1165,9 +1165,9 @@ class StudyHubPageState extends State<StudyHubPage>
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Text('今日尚未开启经文之�?, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
+                  Text('今日尚未开启经文之旅', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
                   const SizedBox(height: 4),
-                  Text('选择一部经文，开始今日修�?, style: TextStyle(fontSize: 13, color: _textSec)),
+                  Text('选择一部经文，开始今日修学', style: TextStyle(fontSize: 13, color: _textSec)),
                   const SizedBox(height: 14),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -1240,7 +1240,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       children: [
                         Icon(Icons.today, size: 12, color: _primaryLight),
                         const SizedBox(width: 4),
-                        Text('打卡$_checkinStreak�?, style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
+                        Text('打卡$_checkinStreak天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
                       ],
                     ),
                   ),
@@ -1310,7 +1310,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 TextButton(
                   onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInGoalsPage())),
                   style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
-                  child: Text('打卡目标 �?, style: TextStyle(fontSize: 13)),
+                  child: Text('打卡目标 ›', style: TextStyle(fontSize: 13)),
                 ),
               ],
             ),
@@ -1320,9 +1320,9 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 构建当前栏目的笔记流 slivers。为保证“发�?关注/公告”栏目栏被吸顶后�?
-  /// 点击任意子项都不掉落，内容较少时�?spacer 补足滚动量，
-  /// 使内容高度至少达到视口高度（视口 - 栏目栏高度），从而始终能吸顶�?
+  /// 构建当前栏目的笔记流 slivers。为保证“发现/关注/公告”栏目栏被吸顶后，
+  /// 点击任意子项都不掉落，内容较少时用 spacer 补足滚动量，
+  /// 使内容高度至少达到视口高度（视口 - 栏目栏高度），从而始终能吸顶。
   List<Widget> _buildFeedSlivers(double viewportH) {
     final tab = _plazaTabs[_tabIndex];
     if (tab == 'announce') {
@@ -1387,7 +1387,7 @@ class StudyHubPageState extends State<StudyHubPage>
 
     final feedLen = _feedNotes.length;
     final showFooter = _feedLoading || !_feedHasMore || _feedError;
-    // 保守估计每条笔记高度，保证补足后的内容高度一定够吸顶�?
+    // 保守估计每条笔记高度，保证补足后的内容高度一定够吸顶。
     final feedEstimate = feedLen * 110.0 + (showFooter ? 70.0 : 0.0);
     final spacerH = math.max(0.0, minFeed - feedEstimate);
     return [
@@ -1432,7 +1432,7 @@ class StudyHubPageState extends State<StudyHubPage>
           child: TextButton.icon(
             onPressed: _loadFeed,
             icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('加载失败，点击重�?, style: TextStyle(fontSize: 13)),
+            label: const Text('加载失败，点击重试', style: TextStyle(fontSize: 13)),
             style: TextButton.styleFrom(foregroundColor: _textSec),
           ),
         ),
@@ -1442,7 +1442,7 @@ class StudyHubPageState extends State<StudyHubPage>
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 18),
         child: Center(
-          child: Text('�?到底�?�?,
+          child: Text('— 到底了 —',
               style: const TextStyle(fontSize: 12, color: _textHint)),
         ),
       );
@@ -1460,16 +1460,16 @@ class StudyHubPageState extends State<StudyHubPage>
         const SizedBox(height: 14),
         Text(
           isFollowing
-              ? (notLoggedIn ? '登录后关注同�? : '还没有关注同�?)
-              : '菩提空间还没有笔�?,
+              ? (notLoggedIn ? '登录后关注同修' : '还没有关注同修')
+              : '菩提空间还没有笔记',
           style: const TextStyle(
               fontSize: 16, fontWeight: FontWeight.w600, color: _text),
         ),
         const SizedBox(height: 6),
         Text(
           isFollowing
-              ? '关注同修后，这里会显示他们的新笔�?
-              : '分享你的修学心得，让大家一起受�?,
+              ? '关注同修后，这里会显示他们的新笔记'
+              : '分享你的修学心得，让大家一起受益',
           style: const TextStyle(fontSize: 13, color: _textSec),
         ),
         const SizedBox(height: 18),
@@ -1494,7 +1494,7 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 公告 tab：管理员发布公告的展示位，功能暂未接入，先出占位 UI�?
+  /// 公告 tab：管理员发布公告的展示位，功能暂未接入，先出占位 UI。
   Widget _buildAnnounceBody() {
     return Column(
       mainAxisSize: MainAxisSize.max,
@@ -1550,7 +1550,7 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Widget _buildFeedTile(PlazaNote note) {
-    // 回复帖：渲染成「原帖在�?+ 回复在下 + 头像竖线连接」的连贴样式�?
+    // 回复帖：渲染成「原帖在上 + 回复在下 + 头像竖线连接」的连贴样式。
     if (note.repostKind == 'reply') {
       return Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -1630,7 +1630,7 @@ class StudyHubPageState extends State<StudyHubPage>
                                   : _gold.withValues(alpha: 0.4)),
                         ),
                         child: Text(
-                          followed ? '已关�? : '关注',
+                          followed ? '已关注' : '关注',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -1701,7 +1701,7 @@ class StudyHubPageState extends State<StudyHubPage>
               if (note.repostOf.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Builder(builder: (_) {
-                  // 引用转发用快照内容；直接转发 content 即原帖内容�?
+                  // 引用转发用快照内容；直接转发 content 即原帖内容。
                   final quoteSource = note.quoteOfContent.isNotEmpty
                       ? note.quoteOfContent
                       : note.content;
@@ -1725,7 +1725,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                            '@${note.repostSourceAuthor} 的笔�?,
+                            '@${note.repostSourceAuthor} 的笔记',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -1865,13 +1865,13 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 将计数缩写为更紧凑的形式，避免大数字撑开布局被后面图标遮盖�?
+  /// 将计数缩写为更紧凑的形式，避免大数字撑开布局被后面图标遮盖。
   String _formatCount(int count) {
     if (count >= 100000000) {
-      return '${(count / 100000000).toStringAsFixed(1)}�?;
+      return '${(count / 100000000).toStringAsFixed(1)}亿';
     }
     if (count >= 10000) {
-      return '${(count / 10000).toStringAsFixed(1)}�?;
+      return '${(count / 10000).toStringAsFixed(1)}万';
     }
     return '$count';
   }
@@ -1888,7 +1888,7 @@ class StudyHubPageState extends State<StudyHubPage>
         return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
       }
       if (diff == 1) return '昨天';
-      if (t.year == _timeCacheNow.year) return '${t.month}�?{t.day}�?;
+      if (t.year == _timeCacheNow.year) return '${t.month}月${t.day}日';
       return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
     });
   }
