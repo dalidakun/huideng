@@ -60,7 +60,11 @@ class Sutra {
 class SutraListPage extends StatefulWidget {
   /// 底部 Tab 索引变化通知。当切换回经藏页（索引值变化）时刷新“最近阅读”。
   final ValueListenable<int>? activeTab;
-  const SutraListPage({super.key, this.activeTab});
+
+  /// 搜索激活/退出状态回调（供底部「搜索」菜单同步高亮）。
+  final ValueChanged<bool>? onSearchModeChanged;
+
+  const SutraListPage({super.key, this.activeTab, this.onSearchModeChanged});
 
   @override
   State<SutraListPage> createState() => SutraListPageState();
@@ -71,6 +75,7 @@ class SutraListPageState extends State<SutraListPage>
   static const MethodChannel _appChannel = MethodChannel('app_channel');
   static const String _kApkLastUpdateTimeKey = 'apk_last_update_time';
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   bool _drawerOpen = false;
   late final AnimationController _drawerController;
   late final Animation<Offset> _drawerSlide;
@@ -237,6 +242,41 @@ class SutraListPageState extends State<SutraListPage>
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
+  /// 底部「搜索」菜单：进入搜索激活状态，弹出搜索框并拉起键盘。
+  void activateSearch() {
+    if (!mounted) return;
+    if (_drawerOpen) _closeDrawer();
+    setState(() {
+      _searchActive = true;
+    });
+    widget.onSearchModeChanged?.call(true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  /// 底部菜单切换：退出搜索激活状态。
+  void deactivateSearch() {
+    if (!mounted) return;
+    _searchController.clear();
+    _searchFocusNode.unfocus();
+    setState(() {
+      _searchActive = false;
+    });
+    _dismissKeyboard();
+  }
+
+  /// 页内清空按钮：退出搜索激活状态并通知主页面。
+  void _exitSearch() {
+    _searchController.clear();
+    _searchFocusNode.unfocus();
+    setState(() {
+      _searchActive = false;
+    });
+    widget.onSearchModeChanged?.call(false);
+    _dismissKeyboard();
+  }
+
   String _resolveSutraPath(Sutra sutra) {
     return SutraAssetPath.resolve(
       title: sutra.title,
@@ -266,6 +306,7 @@ class SutraListPageState extends State<SutraListPage>
       _downloadedIds.add(id);
       _downloadProgress.remove(id);
     });
+    _sutraDataVersion.value++;
   }
 
   Future<void> _downloadSingle(Sutra sutra, String id) async {
@@ -281,6 +322,7 @@ class SutraListPageState extends State<SutraListPage>
         setState(() {
           _downloadProgress[id] = p;
         });
+        _sutraDataVersion.value++;
       });
       _markDownloaded(id);
       await _persistDownloadedIds();
@@ -301,7 +343,7 @@ class SutraListPageState extends State<SutraListPage>
 
   Future<void> _downloadFolder(String folderName) async {
     final targets = <Sutra>[];
-    for (final s in _getSutrasInFolder(folderName)) {
+    for (final s in _getAllSutrasInFolder(folderName)) {
       final id = SutraDownloader.extractId(s.title, s.filePath);
       if (id != null && !_downloadedIds.contains(id)) targets.add(s);
     }
@@ -340,6 +382,7 @@ class SutraListPageState extends State<SutraListPage>
         setState(() {
           _folderDownloadDone[folderName] = i + 1;
         });
+        _sutraDataVersion.value++;
       }
     }
     await _persistDownloadedIds();
@@ -348,6 +391,7 @@ class SutraListPageState extends State<SutraListPage>
       _folderDownloadDone.remove(folderName);
       _folderDownloadTotal.remove(folderName);
     });
+    _sutraDataVersion.value++;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('《${_folderDisplayNames[folderName] ?? folderName}》下载完成')),
     );
@@ -490,9 +534,14 @@ class SutraListPageState extends State<SutraListPage>
   List<File> txtFiles = [];
 
   bool _isReadExpanded = false;
-  final Map<String, bool> _folderExpanded = {};
+  bool _isFavoriteExpanded = false;
+
+  /// 是否处于搜索激活状态（底部「搜索」菜单进入，页内清空退出）。
+  bool _searchActive = false;
 
   static const String _kDownloadedIdsKey = 'downloaded_sutra_ids';
+  /// 数据版本号：下载进度/经书状态变化时递增，供子页面（分部详情页）监听刷新。
+  final ValueNotifier<int> _sutraDataVersion = ValueNotifier<int>(0);
   final Set<String> _downloadedIds = {};
   final Map<String, double> _downloadProgress = {};
   final Map<String, int> _folderDownloadDone = {};
@@ -604,6 +653,8 @@ class SutraListPageState extends State<SutraListPage>
     routeObserver.unsubscribe(this);
     _drawerController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
+    _sutraDataVersion.dispose();
     super.dispose();
   }
 
@@ -611,9 +662,6 @@ class SutraListPageState extends State<SutraListPage>
 
   void _initFolders() {
     _folders = _folderDisplayNames.values.toList();
-    for (String folder in _folders) {
-      _folderExpanded[folder] = false; // 所有子文件夹都是折叠状态
-    }
   }
 
   Future<void> _loadSutras() async {
@@ -821,60 +869,33 @@ class SutraListPageState extends State<SutraListPage>
 
   Future<void> _saveSutras() async {
     await _writeSutraListFile(_allSutras);
+    _sutraDataVersion.value++;
   }
 
   void _filterSutras() {
     setState(() {
-      if (_searchController.text.isEmpty) {
-        // 搜索内容为空时，恢复默认排序和默认文件夹展开状态
-        _allSutras.sort((a, b) {
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          return 0;
-        });
-         _filteredSutras = List.from(_allSutras);
+      final q = _searchController.text.trim();
+      if (q.isEmpty) {
+        _filteredSutras = List.from(_allSutras);
       } else {
-        // 有搜索内容时，过滤经文并管理文件夹展开状态
-        var filtered = _allSutras
-            .where((sutra) =>
-                sutra.title.contains(_searchController.text))
-            .toList();
+        final filtered = _allSutras.where((sutra) {
+          if (sutra.title.contains(q)) return true;
+          return (_folderDisplayNames[sutra.folder] ?? '').contains(q);
+        }).toList();
         filtered.sort((a, b) {
           if (a.isPinned && !b.isPinned) return -1;
           if (!a.isPinned && b.isPinned) return 1;
           return 0;
         });
         _filteredSutras = filtered;
-
-        // 管理文件夹展开状态：只展开包含搜索结果的文件夹
-        _manageFolderExpansionForSearch();
       }
     });
   }
 
-  void _manageFolderExpansionForSearch() {
-    // 找到所有包含搜索结果的文件夹
-    Set<String> foldersWithResults = {};
-    for (var sutra in _filteredSutras) {
-      if (sutra.folder != null) {
-        foldersWithResults.add(sutra.folder!);
-      }
-    }
-
-    // 更新文件夹展开状态
-    for (var folder in _folders) {
-      _folderExpanded[folder] = foldersWithResults.contains(folder);
-    }
-
-    // 如果有已读经文匹配，也展开已读文件夹
-    bool hasReadResults = _filteredSutras.any((sutra) => sutra.isRead);
-    if (hasReadResults) {
-      _isReadExpanded = true;
-    }
-  }
-
-  void _showBottomSheet(BuildContext context, int index) {
+  void _showBottomSheet(BuildContext context, Sutra sutra) {
     _dismissKeyboard();
+    final index = _allSutras.indexOf(sutra);
+    if (index < 0) return;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -889,18 +910,18 @@ class SutraListPageState extends State<SutraListPage>
             mainAxisSize: MainAxisSize.min,
             children: [
                _buildMenuItem(
-                 icon: _filteredSutras[index].isFavorite ? Icons.favorite : Icons.favorite_border,
-                 title: _filteredSutras[index].isFavorite ? '取消收藏' : '收藏',
+                 icon: sutra.isFavorite ? Icons.favorite : Icons.favorite_border,
+                 title: sutra.isFavorite ? '取消收藏' : '收藏',
                  onTap: () {
-                   _toggleFavorite(_allSutras.indexOf(_filteredSutras[index]));
+                   _toggleFavorite(index);
                    Navigator.pop(context);
                  },
                ),
                _buildMenuItem(
-                 icon: Icons.push_pin,
-                 title: _filteredSutras[index].isPinned ? '取消置顶' : '置顶',
+                 icon: sutra.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                 title: sutra.isPinned ? '取消置顶' : '置顶',
                  onTap: () {
-                   _togglePin(_allSutras.indexOf(_filteredSutras[index]));
+                   _togglePin(index);
                    Navigator.pop(context);
                  },
                ),
@@ -909,14 +930,14 @@ class SutraListPageState extends State<SutraListPage>
                  title: '编辑标题',
                  onTap: () {
                    Navigator.pop(context);
-                   _editTitle(_allSutras.indexOf(_filteredSutras[index]));
+                   _editTitle(index);
                  },
                ),
                _buildMenuItem(
-                 icon: _filteredSutras[index].isRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
-                 title: _filteredSutras[index].isRead ? '标记为未读' : '标记为已读',
+                 icon: sutra.isRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
+                 title: sutra.isRead ? '标记为未读' : '标记为已读',
                  onTap: () {
-                   _toggleRead(_allSutras.indexOf(_filteredSutras[index]));
+                   _toggleRead(index);
                    Navigator.pop(context);
                  },
                ),
@@ -924,7 +945,7 @@ class SutraListPageState extends State<SutraListPage>
                  icon: Icons.delete,
                  title: '删除',
                  onTap: () {
-                   _deleteSutra(_allSutras.indexOf(_filteredSutras[index]));
+                   _deleteSutra(index);
                    Navigator.pop(context);
                  },
                ),
@@ -1029,88 +1050,6 @@ class SutraListPageState extends State<SutraListPage>
       _filterSutras();
     });
     _saveSutras();
-  }
-
-  void _showFolderMenu(BuildContext context, String folderName) {
-    _dismissKeyboard();
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (BuildContext context) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildMenuItem(
-                icon: Icons.add,
-                title: '添加书籍',
-                onTap: () {
-                  Navigator.pop(context);
-                  _addSutraToFolder(folderName);
-                },
-              ),
-              _buildMenuItem(
-                icon: Icons.delete_outline,
-                title: '清空书籍',
-                onTap: () {
-                  Navigator.pop(context);
-                  _showClearFolderConfirmDialog(context, folderName);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showClearFolderConfirmDialog(BuildContext context, String folderName) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('确认清空'),
-          content: Text('是否清空《${_folderDisplayNames[folderName] ?? folderName}》中的所有书籍？'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-              },
-              child: const Text('否'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _clearFolderBooks(folderName);
-              },
-              child: const Text('是'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _clearFolderBooks(String folderName) {
-    setState(() {
-      // 删除该文件夹下的所有书籍
-      _allSutras.removeWhere((sutra) => sutra.folder == folderName);
-      _filteredSutras = List.from(_allSutras);
-    });
-    _saveSutras();
-    
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('已清空《${_folderDisplayNames[folderName] ?? folderName}》中的所有书籍'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   void _addSutraToFolder(String folderName) async {
@@ -1227,32 +1166,21 @@ class SutraListPageState extends State<SutraListPage>
     return readSutras;
   }
 
-  List<Sutra>? _cachedAllUnread;
-  Map<String, List<Sutra>>? _cachedByFolder;
-  List<Sutra>? _cacheSource;
-
-  void _ensureFolderCache() {
-    if (_cacheSource != null && identical(_cacheSource, _filteredSutras)) return;
-    final all = <Sutra>[];
-    final byFolder = <String, List<Sutra>>{};
-    for (final s in _filteredSutras) {
-      if (s.isRead) continue;
-      all.add(s);
-      byFolder.putIfAbsent(s.folder ?? '', () => []).add(s);
-    }
-    _cacheSource = _filteredSutras;
-    _cachedAllUnread = all;
-    _cachedByFolder = byFolder;
+  /// 某部分类下的全部经书（含已读）。
+  List<Sutra> _getAllSutrasInFolder(String folder) {
+    return _allSutras.where((s) => s.folder == folder).toList();
   }
 
-  List<Sutra> _getAllSutras() {
-    _ensureFolderCache();
-    return _cachedAllUnread!;
-  }
-
-  List<Sutra> _getSutrasInFolder(String folder) {
-    _ensureFolderCache();
-    return _cachedByFolder![folder] ?? const [];
+  /// 我的收藏：按收藏时间倒序。
+  List<Sutra> _getFavoriteSutras() {
+    final list = _allSutras.where((s) => s.isFavorite).toList();
+    list.sort((a, b) {
+      if (a.favoriteTime == null && b.favoriteTime == null) return 0;
+      if (a.favoriteTime == null) return 1;
+      if (b.favoriteTime == null) return -1;
+      return b.favoriteTime!.compareTo(a.favoriteTime!);
+    });
+    return list;
   }
 
   Future<void> _loadLastRead() async {
@@ -1499,153 +1427,354 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  Widget _buildAllSutrasFolder() {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          color: const Color(0xFFcec6c3),
-          child: Row(
+  Widget _buildSearchBar() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      height: 40,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE8E0D5), width: 0.8),
+      ),
+      child: TextField(
+        controller: _searchController,
+        focusNode: _searchFocusNode,
+        textAlignVertical: TextAlignVertical.center,
+        decoration: InputDecoration(
+          hintText: '搜索经文 · 支持书名与部类',
+          hintStyle: const TextStyle(color: Color(0xFFB8B8B8), fontSize: 13),
+          prefixIcon: const Padding(
+            padding: EdgeInsets.only(left: 8, right: 4),
+            child: Icon(Icons.search, color: Color(0xFF616161), size: 18),
+          ),
+          suffixIcon: GestureDetector(
+            onTap: _exitSearch,
+            child: const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Icon(Icons.close, color: Color(0xFFB8B8B8), size: 18),
+            ),
+          ),
+          border: InputBorder.none,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+        ),
+        style: const TextStyle(color: Color(0xFF212121), fontSize: 14),
+        onSubmitted: (_) => _dismissKeyboard(),
+      ),
+    );
+  }
+
+  Widget _buildProgressCard() {
+    final total = _allSutras.length;
+    final read = _allSutras.where((s) => s.isRead).length;
+    final pct = total == 0 ? 0.0 : read / total * 100;
+    const milestones = [25, 50, 75, 100];
+    int? next;
+    for (final m in milestones) {
+      if (pct < m) {
+        next = m;
+        break;
+      }
+    }
+    final remain = next == null ? 0 : ((next / 100 * total).ceil() - read);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF5d4037), Color(0xFF7a5c4e)],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: const Color(0xFF5d4037).withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              const Icon(Icons.book, color: Color(0xFF5d4037), size: 20),
-              const SizedBox(width: 8),
+              const Icon(Icons.auto_stories, color: Color(0xFFF4E6D3), size: 16),
+              const SizedBox(width: 6),
+              const Text('阅藏进度', style: TextStyle(color: Color(0xFFF4E6D3), fontSize: 13)),
+              const Spacer(),
               Text(
-                '待阅经文 (${_getAllSutras().length})',
+                '${pct.toStringAsFixed(1)}%',
                 style: const TextStyle(
-                  color: Color(0xFF5d4037),
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
                 ),
               ),
             ],
           ),
-        ),
-        ..._folders.map((folder) => _buildSubFolder(folder)),
-      ],
-    );
-  }
-
-  Widget _buildSubFolder(String folderName) {
-    final sutras = _getSutrasInFolder(folderName);
-    final isExpanded = _folderExpanded[folderName] ?? true;
-
-    return Column(
-      children: [
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              _folderExpanded[folderName] = !isExpanded;
-            });
-          },
-          onLongPress: () {
-            _showFolderMenu(context, folderName);
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            color: Colors.white,
-            child: Row(
-              children: [
-                const Icon(Icons.folder, color: Color(0xFFba8e82), size: 18),
-                const SizedBox(width: 8),
-                Text(
-                  _folderDisplayNames[folderName] ?? folderName,
-                  style: const TextStyle(
-                    color: Color(0xFF5d4037),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              return SizedBox(
+                width: constraints.maxWidth,
+                height: 10,
+                child: Stack(
+                  alignment: Alignment.centerLeft,
+                  children: [
+                  Container(
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
                   ),
-                ),
-                const Spacer(),
-                GestureDetector(
-                  onTap: () {
-                    if (_folderDownloadTotal[folderName] == null) {
-                      _downloadFolder(folderName);
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    child: _folderDownloadTotal[folderName] != null
-                        ? Text(
-                            '${_folderDownloadDone[folderName] ?? 0}/${_folderDownloadTotal[folderName]}',
-                            style: const TextStyle(
-                              color: Color(0xFFba8e82),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          )
-                        : const Icon(
-                            Icons.download_for_offline_outlined,
-                            color: Color(0xFFba8e82),
-                            size: 19,
+                  if (pct > 0)
+                    FractionallySizedBox(
+                      widthFactor: pct / 100,
+                      child: Container(
+                        height: 10,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFF4E6D3), Color(0xFFE8C48A)],
                           ),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                      ),
+                    ),
+                  for (final m in milestones)
+                    Positioned(
+                      left: constraints.maxWidth * m / 100 - 0.5,
+                      top: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 1,
+                        color: Colors.white.withValues(alpha: 0.45),
+                      ),
+                    ),
+                ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              for (final m in milestones)
+                Text(
+                  m == 100 ? '圆满' : '$m%',
+                  style: TextStyle(
+                    color: pct >= m
+                        ? const Color(0xFFF4E6D3)
+                        : Colors.white.withValues(alpha: 0.45),
+                    fontSize: 11,
+                    fontWeight: pct >= m ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),
-                const SizedBox(width: 4),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '已阅 $read 部 · 共 $total 部',
+            style: const TextStyle(color: Color(0xFFE8D9C4), fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          if (next != null)
+            Text(
+              '再读 $remain 部即可到达 $next%',
+              style: const TextStyle(
+                color: Color(0xFFF4E6D3),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            )
+          else
+            const Row(
+              children: [
+                Icon(Icons.emoji_events, color: Color(0xFFF4E6D3), size: 14),
+                SizedBox(width: 4),
                 Text(
-                  '${sutras.length}卷',
-                  style: const TextStyle(
-                    color: Color(0xFF999999),
+                  '阅藏圆满，功德无量',
+                  style: TextStyle(
+                    color: Color(0xFFF4E6D3),
                     fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-        if (isExpanded && sutras.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.only(left: 8, right: 8, top: 0, bottom: 20),
-             color: const Color(0xFFF5EDE3),
-             child: Column(
-               children: sutras.map((sutra) {
-                 final allSutrasIndex = _filteredSutras.indexOf(sutra);
-                 return Container(
-                   margin: const EdgeInsets.only(bottom: 4),
-                  height: 38,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Center(
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                      minVerticalPadding: 0,
-                      dense: true,
-                      title: Text(
-                        sutra.title,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          height: 1.2,
-                          color: Color(0xFF616161),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                      ),
-                      trailing: _buildDownloadTrailing(sutra),
-                      onTap: () {
-                        _openSutra(sutra);
-                      },
-                      onLongPress: () => _showBottomSheet(context, allSutrasIndex),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        if (isExpanded && sutras.isEmpty)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            color: const Color(0xFFfafafa),
-            child: Center(
-              child: Text(
-                '暂无内容',
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategorySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+          child: Row(
+            children: [
+              const Text(
+                '分类阅览',
                 style: TextStyle(
-                  color: const Color(0xFF999999),
-                  fontSize: 12,
+                  color: Color(0xFF5d4037),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-            ),
+              const SizedBox(width: 6),
+              Text(
+                '${_folders.length} 个部类',
+                style: const TextStyle(color: Color(0xFF999999), fontSize: 12),
+              ),
+            ],
           ),
+        ),
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.8,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          children: _folders.map((f) => _buildFolderCard(f)).toList(),
+        ),
       ],
+    );
+  }
+
+  Widget _buildFolderCard(String folder) {
+    final list = _getAllSutrasInFolder(folder);
+    final total = list.length;
+    final read = list.where((s) => s.isRead).length;
+    final pct = total == 0 ? 0.0 : read / total * 100;
+    final name = _folderDisplayNames[folder] ?? folder;
+    return Material(
+      color: const Color(0xFFFFFAF5),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SutraFolderPage(
+                parent: this,
+                folderName: folder,
+                displayName: name,
+              ),
+            ),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.menu_book, color: Color(0xFFba8e82), size: 15),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF5d4037),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: pct / 100,
+                        minHeight: 4,
+                        backgroundColor: const Color(0xFFF0E6D8),
+                        color: const Color(0xFFD4A06A),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$read/$total',
+                    style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchResults() {
+    if (_searchController.text.trim().isEmpty) {
+      return const Center(
+        child: Text(
+          '输入书名或部类，开始搜索经文',
+          style: TextStyle(color: Color(0xFF999999), fontSize: 13),
+        ),
+      );
+    }
+    if (_filteredSutras.isEmpty) {
+      return const Center(
+        child: Text('未找到相关经文', style: TextStyle(color: Color(0xFF999999), fontSize: 13)),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.only(top: 8, bottom: 40),
+      itemCount: _filteredSutras.length,
+      itemBuilder: (ctx, i) => _buildSutraTile(ctx, _filteredSutras[i], showFolder: true),
+    );
+  }
+
+  Widget _buildSutraTile(BuildContext ctx, Sutra sutra, {bool showFolder = false}) {
+    final folderName = _folderDisplayNames[sutra.folder] ?? sutra.folder;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ListTile(
+        dense: true,
+        minVerticalPadding: 4,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        title: Text(
+          _displayTitle(sutra.title),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFF5d4037),
+            fontSize: 14.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        subtitle: showFolder && folderName != null
+            ? Text(folderName, style: const TextStyle(color: Color(0xFF999999), fontSize: 11))
+            : null,
+        trailing: _buildDownloadTrailing(sutra),
+        onTap: () => _openSutra(sutra),
+        onLongPress: () => _showBottomSheet(ctx, sutra),
+      ),
     );
   }
 
@@ -1690,7 +1819,6 @@ class SutraListPageState extends State<SutraListPage>
             padding: const EdgeInsets.only(left: 8, right: 8, top: 0, bottom: 20),
             child: Column(
               children: sutras.map((sutra) {
-                final allSutrasIndex = _filteredSutras.indexOf(sutra);
                 return Container(
                   margin: const EdgeInsets.only(bottom: 4),
                   height: 38,
@@ -1715,7 +1843,7 @@ class SutraListPageState extends State<SutraListPage>
                       onTap: () {
                         _openSutra(sutra);
                       },
-                      onLongPress: () => _showBottomSheet(context, allSutrasIndex),
+                      onLongPress: () => _showBottomSheet(context, sutra),
                     ),
                   ),
                 );
@@ -1753,40 +1881,51 @@ class SutraListPageState extends State<SutraListPage>
             iconTheme: const IconThemeData(color: Color(0xFF212121)),
             leading: IconButton(
               icon: const Icon(Icons.menu, color: Color(0xFF5d4037), size: 22),
-              tooltip: '经藏',
+              tooltip: '经藏菜单',
               onPressed: _toggleDrawer,
             ),
-            title: const Text(
-              '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
-              style: TextStyle(
-                color: Color(0xFF616161),
-                fontSize: 12,
-                fontWeight: FontWeight.normal,
-              ),
-              softWrap: false,
-              overflow: TextOverflow.visible,
-            ),
-            actions: [
-              Padding(
-                padding: const EdgeInsets.only(right: 16),
-                child: Text(
-                  '${(_allSutras.where((s) => s.isRead).length / 8982 * 100).toStringAsFixed(1)}%',
-                  style: const TextStyle(
-                    color: Color(0xFF616161),
-                    fontSize: 12,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  '经藏',
+                  style: TextStyle(
+                    color: Color(0xFF5d4037),
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-              ),
-            ],
-          ),
-          body: SingleChildScrollView(
-            padding: const EdgeInsets.only(bottom: 40),
-            child: Column(
-              children: [
-                _buildRecentReadCard(),
-                _buildRandomSutraCard(),
+                Text(
+                  '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
+                  style: TextStyle(
+                    color: Color(0xFF9E9588),
+                    fontSize: 10.5,
+                  ),
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
+          ),
+          body: Column(
+            children: [
+              if (_searchActive) _buildSearchBar(),
+              Expanded(
+                child: _searchActive
+                    ? _buildSearchResults()
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.only(bottom: 40),
+                        child: Column(
+                          children: [
+                            _buildProgressCard(),
+                            _buildRecentReadCard(),
+                            _buildRandomSutraCard(),
+                            _buildCategorySection(),
+                          ],
+                        ),
+                      ),
+              ),
+            ],
           ),
         ),
         Positioned.fill(
@@ -1823,14 +1962,17 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   void _openDrawer() {
-    if (_searchController.text.isNotEmpty) {
+    if (_searchActive) {
       _searchController.clear();
+      _searchFocusNode.unfocus();
+      setState(() {
+        _searchActive = false;
+      });
+      widget.onSearchModeChanged?.call(false);
+      _dismissKeyboard();
     }
     setState(() {
       _drawerOpen = true;
-      for (final folder in _folders) {
-        _folderExpanded[folder] = false;
-      }
     });
     _drawerController.forward();
   }
@@ -1854,7 +1996,7 @@ class SutraListPageState extends State<SutraListPage>
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
               child: Row(
                 children: [
                   const Text(
@@ -1865,31 +2007,11 @@ class SutraListPageState extends State<SutraListPage>
                       color: Color(0xFF5d4037),
                     ),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Container(
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFf8f8f8),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: TextField(
-                        controller: _searchController,
-                        textAlignVertical: TextAlignVertical.center,
-                        decoration: const InputDecoration(
-                          hintText: '搜索经文',
-                          hintStyle: TextStyle(color: Color(0xFFB8B8B8), fontSize: 13),
-                          prefixIcon: Padding(
-                            padding: EdgeInsets.only(left: 8, right: 4),
-                            child: Icon(Icons.search, color: Color(0xFF616161), size: 18),
-                          ),
-                          border: InputBorder.none,
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12),
-                        ),
-                        style: const TextStyle(color: Color(0xFF212121), fontSize: 14),
-                      ),
-                    ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Color(0xFF616161), size: 20),
+                    tooltip: '关闭',
+                    onPressed: _closeDrawer,
                   ),
                 ],
               ),
@@ -1909,13 +2031,170 @@ class SutraListPageState extends State<SutraListPage>
                     },
                     icon: Icons.check_circle,
                   ),
-                  _buildAllSutrasFolder(),
+                  _buildFolder(
+                    title: '我的收藏',
+                    sutras: _getFavoriteSutras(),
+                    isExpanded: _isFavoriteExpanded,
+                    onToggle: () {
+                      setState(() {
+                        _isFavoriteExpanded = !_isFavoriteExpanded;
+                      });
+                    },
+                    icon: Icons.star,
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.upload_file, color: Color(0xFF5d4037), size: 20),
+                    title: const Text(
+                      '导入经书（TXT）',
+                      style: TextStyle(
+                        color: Color(0xFF5d4037),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    onTap: () {
+                      _closeDrawer();
+                      _pickFile();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.error_outline, color: Color(0xFF5d4037), size: 20),
+                    title: const Text(
+                      '缺失经文',
+                      style: TextStyle(
+                        color: Color(0xFF5d4037),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    onTap: () {
+                      _closeDrawer();
+                      if (!_missingComputed || _missingSutraTitles.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('暂无缺失经文')),
+                        );
+                        return;
+                      }
+                      _showMissingSutrasSheet();
+                    },
+                  ),
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 分部详情页：展示某一部类下的全部经书与阅读进度。
+class SutraFolderPage extends StatefulWidget {
+  final SutraListPageState parent;
+  final String folderName;
+  final String displayName;
+
+  const SutraFolderPage({
+    super.key,
+    required this.parent,
+    required this.folderName,
+    required this.displayName,
+  });
+
+  @override
+  State<SutraFolderPage> createState() => _SutraFolderPageState();
+}
+
+class _SutraFolderPageState extends State<SutraFolderPage> {
+  List<Sutra> get _sutras =>
+      widget.parent._getAllSutrasInFolder(widget.folderName);
+
+  @override
+  void initState() {
+    super.initState();
+    widget.parent._sutraDataVersion.addListener(_onParentChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.parent._sutraDataVersion.removeListener(_onParentChanged);
+    super.dispose();
+  }
+
+  void _onParentChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = _sutras.length;
+    final read = _sutras.where((s) => s.isRead).length;
+    final downloading = widget.parent._folderDownloadTotal[widget.folderName] != null;
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5EDE3),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF5EDE3),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF5d4037),
+                fontSize: 16.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            Text(
+              '已读 $read / $total',
+              style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+            ),
+          ],
+        ),
+        actions: [
+          if (downloading)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Text(
+                  '${widget.parent._folderDownloadDone[widget.folderName] ?? 0}/${widget.parent._folderDownloadTotal[widget.folderName]}',
+                  style: const TextStyle(
+                    color: Color(0xFFba8e82),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            )
+          else ...[
+            IconButton(
+              tooltip: '导入经书到本卷',
+              icon: const Icon(Icons.library_add_outlined, color: Color(0xFFba8e82), size: 20),
+              onPressed: () => widget.parent._addSutraToFolder(widget.folderName),
+            ),
+            IconButton(
+              tooltip: '下载本卷全部经文',
+              icon: const Icon(Icons.download_for_offline_outlined, color: Color(0xFFba8e82), size: 20),
+              onPressed: () => widget.parent._downloadFolder(widget.folderName),
+            ),
+          ],
+        ],
+      ),
+      body: total == 0
+          ? const Center(
+              child: Text('暂无经文', style: TextStyle(color: Color(0xFF999999), fontSize: 13)),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: total,
+              itemBuilder: (ctx, i) => widget.parent._buildSutraTile(ctx, _sutras[i]),
+            ),
     );
   }
 }

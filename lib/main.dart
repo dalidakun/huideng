@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show PlatformDispatcher;
+import 'dart:ui' show ImageFilter, PlatformDispatcher;
 import 'theme.dart';
 import 'sutra_list_page.dart';
 import 'discussion_page.dart';
@@ -174,6 +174,7 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   int _currentIndex = 0;
+  bool _searchMode = false;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
@@ -186,7 +187,12 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     _tabIndex = ValueNotifier<int>(0);
     _pages = [
       StudyHubPage(key: _studyHubKey),
-      SutraListPage(key: _sutraListKey, activeTab: _tabIndex),
+      SutraListPage(
+        key: _sutraListKey,
+        activeTab: _tabIndex,
+        onSearchModeChanged: _onSearchModeChanged,
+      ),
+      const _AssistantTabPage(),
       const MessagePage(),
       MyPage(key: _myKey),
     ];
@@ -225,7 +231,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       final shouldSwitchToAssistant = prefs.getBool('switch_to_assistant');
       if (shouldSwitchToAssistant == true) {
         setState(() {
-          _currentIndex = 3;
+          _currentIndex = 2;
         });
         prefs.setBool('switch_to_assistant', false);
       }
@@ -242,68 +248,127 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
 
   final List<BottomNavigationBarItem> _bottomNavItems = [
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/study.png', width: 18, height: 18),
-      activeIcon: Image.asset('assets/images/study_selected.png', width: 18, height: 18),
-      label: '修学',
+      icon: Image.asset('assets/images/study.png', width: 24, height: 24),
+      activeIcon: Image.asset('assets/images/study_selected.png', width: 24, height: 24),
+      label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/sutra_book.png', width: 18, height: 18),
-      activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 18, height: 18),
-      label: '经藏',
+      icon: Image.asset('assets/images/sutra_book.png', width: 27, height: 27),
+      activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 27, height: 27),
+      label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/chat.png', width: 18, height: 18),
-      activeIcon: Image.asset('assets/images/chat_selected.png', width: 18, height: 18),
-      label: '消息',
+      icon: Image.asset('assets/images/assistant.png', width: 24, height: 24),
+      activeIcon: Image.asset('assets/images/assistant_selected.png', width: 24, height: 24),
+      label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/my.png', width: 18, height: 18),
-      activeIcon: Image.asset('assets/images/my_selected.png', width: 18, height: 18),
-      label: '我的',
+      icon: Image.asset('assets/images/chat.png', width: 23, height: 23),
+      activeIcon: Image.asset('assets/images/chat_selected.png', width: 23, height: 23),
+      label: '',
+    ),
+    BottomNavigationBarItem(
+      icon: Image.asset('assets/images/search.png', width: 24, height: 24),
+      activeIcon: Image.asset('assets/images/search_selected.png', width: 24, height: 24),
+      label: '',
+    ),
+    BottomNavigationBarItem(
+      icon: Image.asset('assets/images/my.png', width: 24, height: 24),
+      activeIcon: Image.asset('assets/images/my_selected.png', width: 24, height: 24),
+      label: '',
     ),
   ];
 
-  void _switchToTab(int index) {
-    _tabIndex.value = index;
+  /// 经藏页搜索模式变化（页内退出搜索时同步菜单高亮）。
+  void _onSearchModeChanged(bool active) {
+    if (!mounted || _searchMode == active) return;
     setState(() {
-      _currentIndex = index;
+      _searchMode = active;
     });
-    if (index == 0) _studyHubKey.currentState?.reload();
-    if (index == 3) _myKey.currentState?.reload();
+  }
+
+  /// 当前页面索引 → 底部菜单索引（搜索是模式入口，没有独立页面）。
+  int _navIndexForCurrent() {
+    if (_searchMode) return 4;
+    if (_currentIndex >= 4) return 5; // 「我的」
+    return _currentIndex;
+  }
+
+  void _switchToTab(int index) {
+    if (index == 4) {
+      // 底部「搜索」：进入/退出经藏搜索激活状态。
+      if (_searchMode) {
+        _searchMode = false;
+        setState(() {
+          _currentIndex = 1;
+        });
+        _sutraListKey.currentState?.deactivateSearch();
+      } else {
+        _searchMode = true;
+        _tabIndex.value = 1;
+        setState(() {
+          _currentIndex = 1;
+        });
+        _sutraListKey.currentState?.activateSearch();
+      }
+      return;
+    }
+    if (_searchMode) {
+      _searchMode = false;
+      _sutraListKey.currentState?.deactivateSearch();
+    }
+    final pageIndex = index == 5 ? 4 : index;
+    _tabIndex.value = pageIndex;
+    setState(() {
+      _currentIndex = pageIndex;
+    });
+    if (pageIndex == 0) _studyHubKey.currentState?.reload();
+    if (pageIndex == 4) _myKey.currentState?.reload();
   }
 
   void switchToTab(int index) {
-    _tabIndex.value = index;
-    setState(() {
-      _currentIndex = index;
-    });
-    if (index == 0) _studyHubKey.currentState?.reload();
-    if (index == 3) _myKey.currentState?.reload();
+    _switchToTab(index);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        body: Column(
-          children: [
-            Expanded(
+      body: Stack(
+        children: [
+          // 内容区：底部让出菜单高度（仅作用于主页内容，不影响跳转后的页面），
+          // 列表滚动时内容会从毛玻璃菜单下方掠过。
+          Positioned.fill(
+            child: MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                padding: MediaQuery.of(context).padding.copyWith(
+                  bottom: MediaQuery.of(context).padding.bottom +
+                      _BottomNavBar.heightOnly(context),
+                ),
+              ),
               child: IndexedStack(
                 index: _currentIndex,
                 children: _pages,
               ),
             ),
-            _BottomNavBar(
+          ),
+          // X 风格毛玻璃悬浮菜单：始终悬浮在内容之上。
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _BottomNavBar(
               items: _bottomNavItems,
-              currentIndex: _currentIndex,
+              currentIndex: _navIndexForCurrent(),
               onTap: _switchToTab,
             ),
+          ),
         ],
       ),
     );
   }
 }
 
-/// 自定义底部导航栏：按屏幕尺寸自适应高度，统一处理安全区并加分隔线/阴影。
+/// X 风格毛玻璃底部导航栏：始终悬浮在内容之上，内容从下方滚过时呈磨砂效果。
 class _BottomNavBar extends StatelessWidget {
   final List<BottomNavigationBarItem> items;
   final int currentIndex;
@@ -315,66 +380,84 @@ class _BottomNavBar extends StatelessWidget {
     required this.onTap,
   });
 
+  /// 图标区高度（不含底部安全区）。
+  static double heightOnly(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final large = media.size.height >= 820 || media.size.width >= 430;
+    return large ? 50.0 : 44.0;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    // 大屏（高度 ≥ 820 或很宽）适当加高，避免与内容区比例失调。
-    final large = media.size.height >= 820 || media.size.width >= 430;
-    final base = large ? 62.0 : 54.0;
+    final base = heightOnly(context);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFAF5),
-        border: const Border(
-          top: BorderSide(color: Color(0xFFE8E0D5), width: 0.8),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFAF5).withValues(alpha: 0.8),
+            border: const Border(
+              top: BorderSide(color: Color(0xFFE8E0D5), width: 0.8),
+            ),
           ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: base,
-          child: Row(
-            children: List.generate(items.length, (i) {
-              final selected = i == currentIndex;
-              final item = items[i];
-              final Widget icon = selected
-                  ? (item.activeIcon ?? item.icon)
-                  : item.icon;
-              return Expanded(
-                child: InkWell(
-                  onTap: () => onTap(i),
-                  borderRadius: BorderRadius.circular(10),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(width: 24, height: 24, child: Center(child: icon)),
-                      const SizedBox(height: 2),
-                      Text(
-                        item.label ?? '',
-                        style: TextStyle(
-                          fontSize: selected ? 11.5 : 11,
-                          color: selected
-                              ? const Color(0xFF5D4037)
-                              : const Color(0xFF424242),
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.normal,
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: base,
+              child: Row(
+                children: List.generate(items.length, (i) {
+                  final selected = i == currentIndex;
+                  final item = items[i];
+                  final Widget icon = selected
+                      ? item.activeIcon
+                      : item.icon;
+                  return Expanded(
+                    child: InkWell(
+                      onTap: () => onTap(i),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Center(
+                        child: SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: Center(child: icon),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              );
-            }),
+                    ),
+                  );
+                }),
+              ),
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 底部「助手」标签页：DeepSeek 对话 WebView。
+class _AssistantTabPage extends StatelessWidget {
+  const _AssistantTabPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5EDE3),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF5EDE3),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
+        title: const Text(
+          'AI 助手',
+          style: TextStyle(
+            color: Color(0xFF5d4037),
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+      body: const DiscussionPage(),
     );
   }
 }

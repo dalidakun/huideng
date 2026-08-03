@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -19,9 +19,9 @@ import 'user_list_page.dart';
 import 'note_edit_page.dart';
 import 'note_detail_page.dart';
 import 'quote_box.dart';
-import 'reply_chain.dart';
-import 'reply_thread.dart';
 import 'user_avatar.dart';
+import 'reply_thread.dart';
+import 'reply_chain.dart';
 import 'certification_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -41,7 +41,8 @@ Route<T> slideInFromLeft<T>(Widget page) {
     reverseTransitionDuration: const Duration(milliseconds: 220),
     pageBuilder: (context, animation, secondaryAnimation) => page,
     transitionsBuilder: (context, animation, secondaryAnimation, child) {
-      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      final curved =
+          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
       return SlideTransition(
         position: Tween<Offset>(
           begin: const Offset(-1, 0),
@@ -60,15 +61,15 @@ class MyPage extends StatefulWidget {
   State<MyPage> createState() => MyPageState();
 }
 
-class MyPageState extends State<MyPage>
-    with TickerProviderStateMixin {
+class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   String? _avatarPath;
   String? _bannerPath;
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
   String _accountName = '';
   bool _verified = false;
-  String _joinedDate = '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
+  String _joinedDate =
+      '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
 
   /// 保存资料成功后，在横幅下边缘显示的"已保存"气泡。
   bool _showSavedBubble = false;
@@ -121,9 +122,8 @@ class MyPageState extends State<MyPage>
       if (bn != null) _bannerPath = bn;
       if (_isLoggedIn) {
         _nickname = user?.displayName ?? '同修';
-        _tagline = (user?.tagline?.isNotEmpty ?? false)
-            ? user!.tagline!
-            : '与经为伴，与法同行';
+        _tagline =
+            (user?.tagline?.isNotEmpty ?? false) ? user!.tagline! : '与经为伴，与法同行';
       } else {
         _nickname = prefs.getString('user_nickname') ?? '同修';
         _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
@@ -201,10 +201,14 @@ class MyPageState extends State<MyPage>
                   shape: BoxShape.circle,
                   color: _card,
                   boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 24),
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.25),
+                        blurRadius: 24),
                   ],
                   image: _avatarPath != null
-                      ? DecorationImage(image: FileImage(File(_avatarPath!)), fit: BoxFit.cover)
+                      ? DecorationImage(
+                          image: FileImage(File(_avatarPath!)),
+                          fit: BoxFit.cover)
                       : null,
                 ),
                 child: _avatarPath == null
@@ -212,7 +216,8 @@ class MyPageState extends State<MyPage>
                     : null,
               ),
               const SizedBox(height: 16),
-              const Text('轻触任意处关闭', style: TextStyle(fontSize: 13, color: Colors.white70)),
+              const Text('轻触任意处关闭',
+                  style: TextStyle(fontSize: 13, color: Colors.white70)),
             ],
           ),
         ),
@@ -313,31 +318,39 @@ class MyPageState extends State<MyPage>
       body: SafeArea(
         top: true,
         child: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) {
-          return [
-            SliverToBoxAdapter(
-              child: _buildProfileHeader(isLoggedIn),
-            ),
-            SliverPersistentHeader(
-              pinned: true,
-              delegate: _TabBarDelegate(
-                controller: _tabController,
-                backgroundColor: _bg,
+          headerSliverBuilder: (context, innerBoxIsScrolled) {
+            return [
+              SliverToBoxAdapter(
+                child: _buildProfileHeader(isLoggedIn),
               ),
-            ),
-          ];
-        },
-        body: TabBarView(
-          controller: _tabController,
-          children: [
-            _TabContent(child: _MyPostsTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
-            _TabContent(child: _MyRepliesTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
-            _TabContent(child: _MyLikesTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
-            _TabContent(child: _MyBookmarksTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
-            _TabContent(child: _MyDraftsTab(reloadNotifier: _reloadNotifier)),
-          ],
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _TabBarDelegate(
+                  controller: _tabController,
+                  backgroundColor: _bg,
+                ),
+              ),
+            ];
+          },
+          body: TabBarView(
+            controller: _tabController,
+            children: [
+              _TabContent(
+                  child: _MyPostsTab(
+                      isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+              _TabContent(
+                  child: _MyRepliesTab(
+                      isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+              _TabContent(
+                  child: _MyLikesTab(
+                      isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+              _TabContent(
+                  child: _MyBookmarksTab(
+                      isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+              _TabContent(child: _MyDraftsTab(reloadNotifier: _reloadNotifier)),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -372,7 +385,8 @@ class MyPageState extends State<MyPage>
                     ),
                     child: _bannerPath == null
                         ? const Center(
-                            child: Icon(Icons.camera_alt_outlined, size: 28, color: Colors.white38),
+                            child: Icon(Icons.camera_alt_outlined,
+                                size: 28, color: Colors.white38),
                           )
                         : null,
                   ),
@@ -384,7 +398,8 @@ class MyPageState extends State<MyPage>
                 child: GestureDetector(
                   onTap: _openEditProfile,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(14),
@@ -464,7 +479,8 @@ class MyPageState extends State<MyPage>
                           : null,
                     ),
                     child: _avatarPath == null
-                        ? const Icon(Icons.person, size: 38, color: _primaryLight)
+                        ? const Icon(Icons.person,
+                            size: 38, color: _primaryLight)
                         : null,
                   ),
                 ),
@@ -477,86 +493,86 @@ class MyPageState extends State<MyPage>
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (isLoggedIn) ...[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Flexible(
-                      child: Text(_nickname,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: _text)),
-                    ),
-                    if (_verified) ...[
-                      const SizedBox(width: 4),
-                      _buildVerifiedBadge(),
-                    ] else ...[
-                      const SizedBox(width: 12),
-                      _buildCertifyButton(),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (isLoggedIn) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(_nickname,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: _text)),
+                      ),
+                      if (_verified) ...[
+                        const SizedBox(width: 4),
+                        _buildVerifiedBadge(),
+                      ] else ...[
+                        const SizedBox(width: 12),
+                        _buildCertifyButton(),
+                      ],
                     ],
+                  ),
+                  if (_isLoggedIn && _accountName.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text('@$_accountName',
+                            style: const TextStyle(
+                                fontSize: 13, color: _textHint)),
+                      ],
+                    ),
                   ],
-                ),
-                if (_isLoggedIn && _accountName.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                ] else ...[
                   Row(
                     children: [
-                      Text('@$_accountName',
-                          style: const TextStyle(
-                              fontSize: 13, color: _textHint)),
+                      const Expanded(
+                        child: Text('未登录',
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: _text)),
+                      ),
+                      _buildLoginButton(),
                     ],
                   ),
                 ],
-              ] else ...[
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text('未登录',
-                          style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: _text)),
-                    ),
-                    _buildLoginButton(),
-                  ],
+                const SizedBox(height: 6),
+                Text(
+                  _tagline,
+                  style: const TextStyle(fontSize: 13, color: _textSec),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-              const SizedBox(height: 6),
-              Text(
-                _tagline,
-                style: const TextStyle(fontSize: 13, color: _textSec),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (_joinedDate.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_month_outlined,
-                        size: 14, color: _textHint),
-                    const SizedBox(width: 4),
-                    Text(
-                      _joinedDate,
-                      style: const TextStyle(fontSize: 13, color: _textHint),
-                    ),
-                    const Spacer(),
-                    if (isLoggedIn)
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _openSettings,
-                        child: const Padding(
-                          padding: EdgeInsets.all(6),
-                          child: Icon(Icons.settings_outlined,
-                              size: 20, color: Color(0xFF8C8C8C)),
-                        ),
+                if (_joinedDate.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.calendar_month_outlined,
+                          size: 14, color: _textHint),
+                      const SizedBox(width: 4),
+                      Text(
+                        _joinedDate,
+                        style: const TextStyle(fontSize: 13, color: _textHint),
                       ),
-                  ],
-                ),
-              ],
+                      const Spacer(),
+                      if (isLoggedIn)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _openSettings,
+                          child: const Padding(
+                            padding: EdgeInsets.all(6),
+                            child: Icon(Icons.settings_outlined,
+                                size: 20, color: Color(0xFF8C8C8C)),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -575,21 +591,17 @@ class MyPageState extends State<MyPage>
         children: [
           Text(value,
               style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: _text)),
+                  fontSize: 16, fontWeight: FontWeight.w700, color: _text)),
           const SizedBox(width: 4),
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 13,
-                  color: _textSec)),
+          Text(label, style: const TextStyle(fontSize: 13, color: _textSec)),
         ],
       ),
     );
   }
 
   void _promptLogin() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+    Navigator.push(
+        context, MaterialPageRoute(builder: (_) => const LoginPage()));
   }
 
   /// 未认证时昵称旁的「获得认证」按钮：灰色圆角框 + 图标 + 文案。
@@ -655,7 +667,8 @@ class MyPageState extends State<MyPage>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         elevation: 0,
       ),
-      child: const Text('登录', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      child: const Text('登录',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
     );
   }
 }
@@ -689,7 +702,8 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
           barWidth: 60,
         ),
         labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-        unselectedLabelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
+        unselectedLabelStyle:
+            const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
         tabs: const [
           Tab(text: '帖子'),
           Tab(text: '回复'),
@@ -727,7 +741,8 @@ class _FixedWidthPainter extends BoxPainter {
   final Color color;
   final double lineWidth;
   final double barWidth;
-  _FixedWidthPainter(this.color, this.lineWidth, this.barWidth, VoidCallback? onChanged)
+  _FixedWidthPainter(
+      this.color, this.lineWidth, this.barWidth, VoidCallback? onChanged)
       : super(onChanged);
   @override
   void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
@@ -922,9 +937,7 @@ class _PostBlockState extends State<_PostBlock> {
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text('转发到菩提空间',
                   style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
             _menuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
@@ -942,8 +955,7 @@ class _PostBlockState extends State<_PostBlock> {
             isScrollControlled: true,
             backgroundColor: _card,
             shape: const RoundedRectangleBorder(
-                borderRadius:
-                    BorderRadius.vertical(top: Radius.circular(20))),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
             builder: (_) => const SheetTextInput(
               title: '引用转发',
               hint: '写点自己的感想…',
@@ -989,19 +1001,13 @@ class _PostBlockState extends State<_PostBlock> {
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(widget.nickname,
                   style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
-            _menuItem(
-                ctx,
-                'pin',
-                Icons.push_pin_outlined,
+            _menuItem(ctx, 'pin', Icons.push_pin_outlined,
                 widget.pinned ? '取消置顶' : '置顶'),
             _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
-            _menuItem(
-                ctx, 'delete', Icons.delete_outline, '删除'),
+            _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
           ],
         ),
@@ -1024,9 +1030,8 @@ class _PostBlockState extends State<_PostBlock> {
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
-    final showMore = me != null &&
-        widget.ownerUserId != null &&
-        widget.ownerUserId != me.id;
+    final showMore =
+        me != null && widget.ownerUserId != null && widget.ownerUserId != me.id;
     final canManage = me != null &&
         widget.ownerUserId != null &&
         widget.ownerUserId == me.id &&
@@ -1083,8 +1088,7 @@ class _PostBlockState extends State<_PostBlock> {
                               const SizedBox(width: 3),
                               Text('·',
                                   style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF8C8C8C))),
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
                               const SizedBox(width: 2),
                             ],
                             const SizedBox(width: 2),
@@ -1093,14 +1097,14 @@ class _PostBlockState extends State<_PostBlock> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF8C8C8C))),
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
                             ),
                           ],
                         ),
                       ),
                       if (widget.pinned) ...[
-                        const Icon(Icons.push_pin, size: 13, color: Color(0xFF70867A)),
+                        const Icon(Icons.push_pin,
+                            size: 13, color: Color(0xFF70867A)),
                         const SizedBox(width: 2),
                         const Text('已置顶',
                             style: TextStyle(
@@ -1110,14 +1114,11 @@ class _PostBlockState extends State<_PostBlock> {
                         const SizedBox(width: 8),
                       ],
                       if (canManage)
-                        Transform.translate(
-                          offset: const Offset(0, 0),
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _showManageMenu,
-                            child: const Icon(Icons.more_horiz,
-                                size: 18, color: Color(0xFF8C8C8C)),
-                          ),
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _showManageMenu,
+                          child: const Icon(Icons.more_horiz,
+                              size: 18, color: Color(0xFF8C8C8C)),
                         ),
                       if (showMore) ...[
                         GestureDetector(
@@ -1140,15 +1141,12 @@ class _PostBlockState extends State<_PostBlock> {
                           ),
                         ),
                         const SizedBox(width: 6),
-                        Transform.translate(
-                          offset: const Offset(0, 0),
-                          child: GestureDetector(
+                        GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => _showMoreMenu(
                               context, widget.ownerUserId!, widget.nickname),
                           child: const Icon(Icons.more_horiz,
                               size: 18, color: Color(0xFF8C8C8C)),
-                          ),
                         ),
                       ],
                     ],
@@ -1162,8 +1160,7 @@ class _PostBlockState extends State<_PostBlock> {
                         const Icon(Icons.repeat, size: 12, color: _gold),
                         const SizedBox(width: 2),
                         Text(widget.isQuoteRepost ? '引用' : '转发',
-                            style: const TextStyle(
-                                fontSize: 11, color: _gold)),
+                            style: const TextStyle(fontSize: 11, color: _gold)),
                       ],
                     ),
                   ],
@@ -1189,17 +1186,15 @@ class _PostBlockState extends State<_PostBlock> {
                           children: [
                             Text(content,
                                 maxLines: _expanded ? null : 8,
-                                overflow: _expanded
-                                    ? null
-                                    : TextOverflow.ellipsis,
+                                overflow:
+                                    _expanded ? null : TextOverflow.ellipsis,
                                 style: const TextStyle(
                                     fontSize: 15,
                                     color: Colors.black,
                                     height: 1.6)),
                             if (overflow && !_expanded)
                               GestureDetector(
-                                onTap: () =>
-                                    setState(() => _expanded = true),
+                                onTap: () => setState(() => _expanded = true),
                                 child: const Padding(
                                   padding: EdgeInsets.only(top: 4),
                                   child: Text('显示更多',
@@ -1245,6 +1240,7 @@ class _PostBlockState extends State<_PostBlock> {
     );
   }
 }
+
 /// 更多菜单：关注/取消关注、屏蔽/取消屏蔽。
 Future<void> _showMoreMenu(
     BuildContext context, String targetUserId, String nickname) async {
@@ -1267,20 +1263,12 @@ Future<void> _showMoreMenu(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
             child: Text(nickname,
                 style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: _text)),
+                    fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           ),
           const Divider(height: 1, color: _border),
-          _menuItem(
-              ctx,
-              following ? 'unfollow' : 'follow',
-              Icons.person_add_alt,
-              following ? '取消关注' : '关注该用户'),
-          _menuItem(
-              ctx,
-              blocked ? 'unblock' : 'block',
-              Icons.block_outlined,
+          _menuItem(ctx, following ? 'unfollow' : 'follow',
+              Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
+          _menuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
               blocked ? '取消屏蔽' : '屏蔽该用户'),
           const SizedBox(height: 8),
         ],
@@ -1290,18 +1278,15 @@ Future<void> _showMoreMenu(
   if (choice == null || !context.mounted) return;
   try {
     if (choice == 'follow' || choice == 'unfollow') {
-      final ok =
-          await CloudNotesService.instance.toggleFollow(targetUserId);
+      final ok = await CloudNotesService.instance.toggleFollow(targetUserId);
       if (context.mounted) _showToastText(context, ok ? '已关注' : '已取消关注');
     } else if (choice == 'block') {
-      final ok =
-          await CloudNotesService.instance.toggleBlockUser(targetUserId);
+      final ok = await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
         _showToastText(context, ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
       }
     } else if (choice == 'unblock') {
-      final ok =
-          await CloudNotesService.instance.toggleBlockUser(targetUserId);
+      final ok = await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
         _showToastText(context, ok ? '已屏蔽' : '已取消屏蔽');
       }
@@ -1311,8 +1296,7 @@ Future<void> _showMoreMenu(
   }
 }
 
-Widget _menuItem(
-    BuildContext ctx, String value, IconData icon, String label) {
+Widget _menuItem(BuildContext ctx, String value, IconData icon, String label) {
   return InkWell(
     onTap: () => Navigator.pop(ctx, value),
     child: Padding(
@@ -1321,8 +1305,7 @@ Widget _menuItem(
         children: [
           Icon(icon, size: 18, color: _textSec),
           const SizedBox(width: 12),
-          Text(label,
-              style: const TextStyle(fontSize: 15, color: _text)),
+          Text(label, style: const TextStyle(fontSize: 15, color: _text)),
         ],
       ),
     ),
@@ -1399,7 +1382,8 @@ class _ReplyInputSheetState extends State<_ReplyInputSheet> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SafeArea(
         top: false,
         child: Padding(
@@ -1443,6 +1427,120 @@ class _ReplyInputSheetState extends State<_ReplyInputSheet> {
   }
 }
 
+/// 回复某帖：打开回复输入弹窗，发表后生成连贴回复帖并回调刷新列表。
+Future<void> _replyToNote(
+    BuildContext context, PlazaNote target, dynamic onPosted) async {
+  if (!AuthService.instance.isLoggedIn) return;
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: _card,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (sheetCtx) => _ReplyInputSheet(
+      onSubmit: (content) =>
+          _submitReplyPost(sheetCtx, context, target, content, onPosted),
+    ),
+  );
+}
+
+Future<void> _submitReplyPost(BuildContext sheetCtx, BuildContext parentCtx,
+    PlazaNote target, String content, dynamic onPosted) async {
+  if (content.isEmpty) return;
+  try {
+    await CloudNotesService.instance.createComment(target.id, content);
+    await CloudNotesService.instance
+        .repostNote(target.id, quote: content, kind: 'reply');
+    if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
+    if (parentCtx.mounted) _showToastText(parentCtx, '已回复');
+    if (onPosted != null) {
+      final dynamic cb = onPosted;
+      final r = cb();
+      if (r is Future) await r.catchError((_) {});
+    }
+  } catch (e) {
+    if (parentCtx.mounted) _showToastText(parentCtx, e.toString());
+  }
+}
+
+/// 点赞某帖并回调刷新列表。
+Future<void> _likeTargetNote(
+    BuildContext context, PlazaNote target, dynamic onPosted) async {
+  try {
+    await CloudNotesService.instance.toggleLike(target.id);
+    if (onPosted != null) {
+      final dynamic cb = onPosted;
+      final r = cb();
+      if (r is Future) await r.catchError((_) {});
+    }
+  } catch (e) {
+    if (context.mounted) _showToastText(context, e.toString());
+  }
+}
+
+/// 转发某帖（直接转发/引用转发）并回调刷新列表。
+Future<void> _forwardNote(
+    BuildContext context, PlazaNote target, dynamic onPosted) async {
+  if (!AuthService.instance.isLoggedIn) return;
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    backgroundColor: _card,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+            child: Text('转发到菩提空间',
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          ),
+          const Divider(height: 1, color: _border),
+          _menuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
+          _menuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  String quote = '';
+  if (choice == 'quote') {
+    quote = (await showModalBottomSheet<String>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: _card,
+          shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          builder: (_) => const SheetTextInput(
+            title: '引用转发',
+            hint: '写点自己的感想…',
+            maxLength: 500,
+            minLines: 2,
+            maxLines: 3,
+            confirmText: '转发',
+          ),
+        )) ??
+        '';
+    if (quote.isEmpty) return;
+  }
+  try {
+    await CloudNotesService.instance.repostNote(target.id,
+        quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
+    if (!context.mounted) return;
+    _showToastText(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
+    if (onPosted != null) {
+      final dynamic cb = onPosted;
+      final r = cb();
+      if (r is Future) await r.catchError((_) {});
+    }
+  } catch (e) {
+    if (context.mounted) _showToastText(context, e.toString());
+  }
+}
+
 /// 帖子行：与笔记详情页同风格——无卡片背景，
 /// 头像+用户名/时间 → 内容预览（最多8行，可展开）→ 统计数据行。
 class _NoteFeedRow extends StatelessWidget {
@@ -1453,6 +1551,7 @@ class _NoteFeedRow extends StatelessWidget {
   final VoidCallback? onTogglePin;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+  final void Function(PlazaNote note)? onMore;
   const _NoteFeedRow({
     required this.note,
     this.onReplyPosted,
@@ -1461,16 +1560,16 @@ class _NoteFeedRow extends StatelessWidget {
     this.onTogglePin,
     this.onEdit,
     this.onDelete,
+    this.onMore,
   });
 
-  static String plainContent(PlazaNote note) => note.content.replaceAll(
-      RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+  static String plainContent(PlazaNote note) =>
+      note.content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
 
   void _openDetail(BuildContext context) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-          builder: (_) => NoteDetailPage(noteId: note.id)),
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
     );
   }
 
@@ -1483,7 +1582,18 @@ class _NoteFeedRow extends StatelessWidget {
     if (note.repostKind == 'reply') {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        child: ReplyThread(replyNote: note),
+        child: GestureDetector(
+          onTap: onTap ?? () => _openDetail(context),
+          behavior: HitTestBehavior.opaque,
+          child: ReplyThread(
+            replyNote: note,
+            pinned: pinned,
+            onComment: (n) => _replyToNote(context, n, onReplyPosted),
+            onLike: (n) => _likeTargetNote(context, n, onReplyPosted),
+            onRepost: (n) => _forwardNote(context, n, onReplyPosted),
+            onMore: onMore,
+          ),
+        ),
       );
     }
     return _PostBlock(
@@ -1534,14 +1644,12 @@ Widget _buildStatsRow({
   return Row(
     children: [
       _statsCell(
-          Image.asset('assets/images/ic_comment.png',
-              width: 16, height: 16),
+          Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
           '$commentCount',
           onTap: onComment),
       const SizedBox(width: 48),
       _statsCell(
-          Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-          '$repostCount',
+          Icon(Icons.repeat_rounded, size: 16, color: _textSec), '$repostCount',
           onTap: onRepost),
       const SizedBox(width: 48),
       _statsCell(
@@ -1552,15 +1660,15 @@ Widget _buildStatsRow({
           onTap: onLike),
       const SizedBox(width: 48),
       _statsCell(
-          Image.asset('assets/images/ic_view.png',
-              width: 16, height: 16),
+          Image.asset('assets/images/ic_view.png', width: 16, height: 16),
           '$viewCount'),
     ],
   );
 }
 
 /// 指标单元格：图标+数字，数字过大时自动缩放，避免溢出/遮挡。
-Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap}) {
+Widget _statsCell(Widget icon, String text,
+    {Color? color, VoidCallback? onTap}) {
   final cell = Row(
     mainAxisSize: MainAxisSize.min,
     children: [
@@ -1570,10 +1678,8 @@ Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap})
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(text,
-              style: TextStyle(
-                  fontSize: 13,
-                  height: 1,
-                  color: color ?? _textSec)),
+              style:
+                  TextStyle(fontSize: 13, height: 1, color: color ?? _textSec)),
         ),
       ),
     ],
@@ -1587,91 +1693,6 @@ Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap})
       child: cell,
     ),
   );
-}
-
-/// 回复项：原贴完整显示，下面是我的回复（往右缩进对齐）。
-class _ReplyItem extends StatelessWidget {
-  final PlazaActivity activity;
-  final PlazaNote? originalNote;
-  final VoidCallback? onReplyPosted;
-  const _ReplyItem({
-    required this.activity,
-    required this.originalNote,
-    this.onReplyPosted,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final activity = this.activity;
-    final original = originalNote;
-    final content = original != null ? _NoteFeedRow.plainContent(original) : '';
-    final me = AuthService.instance.currentUser.value;
-    final originalIsMine = me != null &&
-        original != null &&
-        original.ownerUserId == me.id;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ===== 原贴（完整，同帖子样式，支持回复/点赞/转发）=====
-        _PostBlock(
-          ownerUserId: original?.ownerUserId,
-          nickname: originalIsMine
-              ? me.displayName
-              : (original?.authorName ?? '同修'),
-          account: original?.authorAccount ?? '',
-          authorVerified: original?.authorVerified ?? false,
-          timeMs: original?.createdAt ?? 0,
-          content: original != null
-              ? content
-              : (activity.noteTitle.isNotEmpty ? activity.noteTitle : ''),
-          noteId: original?.id,
-          allowActions: original != null,
-          likeCount: original?.likeCount ?? 0,
-          repostCount: original?.repostCount ?? 0,
-          commentCount: original?.commentCount ?? 0,
-          viewCount: original?.viewCount ?? 0,
-          onReplyPosted: onReplyPosted,
-          onTap: original != null
-              ? () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => NoteDetailPage(noteId: original!.id)),
-                )
-              : null,
-          quoteBox: original != null && original.repostOf.isNotEmpty
-              ? QuoteBox(note: original)
-              : null,
-          stats: original != null
-              ? _buildStatsRow(
-                  commentCount: original.commentCount,
-                  repostCount: original.repostCount,
-                  likeCount: original.likeCount,
-                  viewCount: original.viewCount,
-                  liked: CloudNotesService
-                      .instance.likedNoteIds
-                      .contains(original.id),
-                )
-              : null,
-        ),
-        // ===== 我的回复（头像与原贴头像上下对齐，内容同原贴位置）=====
-        _PostBlock(
-          ownerUserId: activity.actorId,
-          nickname:
-              me?.displayName ?? (activity.actorName.isNotEmpty ? activity.actorName : '我'),
-          timeMs: activity.createdAt,
-          content: activity.content,
-          stats: _buildStatsRow(
-            commentCount: 0,
-            repostCount: 0,
-            likeCount: 0,
-            viewCount: 0,
-            liked: false,
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 /// 帖子 Tab：我自己发布的广场笔记。
@@ -1698,14 +1719,13 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   @override
   void initState() {
     super.initState();
-    
+
     _load();
     widget.reloadNotifier.addListener(_onReload);
   }
 
   @override
   void dispose() {
-    
     widget.reloadNotifier.removeListener(_onReload);
     super.dispose();
   }
@@ -1715,7 +1735,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   @override
   void didUpdateWidget(covariant _MyPostsTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
+
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
     if (widget.reloadNotifier != oldWidget.reloadNotifier) {
       oldWidget.reloadNotifier.removeListener(_onReload);
@@ -1734,7 +1754,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       });
     }
 
-    // 帖子 = 所有分享到菩提空间的帖子（云端数据）。
+    // 帖子 = 我发布的帖子 + 我转发（含引用转发）的帖子，不含回复帖。
     List<PlazaNote> cloudNotes = [];
     bool hasMore = false;
     String? errorText;
@@ -1744,17 +1764,15 @@ class _MyPostsTabState extends State<_MyPostsTab> {
           page: 1,
           pageSize: _pageSize,
         );
-        cloudNotes = list;
+        cloudNotes = list.where((n) => n.repostKind != 'reply').toList();
         hasMore = more;
       } catch (e) {
         errorText = '云端加载失败';
-        
       }
     } else {
       errorText = '请先登录';
     }
     if (!mounted) return;
-    
 
     var merged = cloudNotes;
     // 云端失败/未登录时，用本地已分享的笔记兜底展示。
@@ -1772,7 +1790,9 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     _sortNotes(merged);
 
     setState(() {
-      _notes..clear()..addAll(merged);
+      _notes
+        ..clear()
+        ..addAll(merged);
       _hasMore = hasMore;
       _page = 2;
       _error = errorText;
@@ -1857,8 +1877,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
@@ -1933,7 +1952,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       );
       if (!mounted) return;
       setState(() {
-        _notes.addAll(list);
+        _notes.addAll(list.where((n) => n.repostKind != 'reply'));
         _hasMore = more;
         _page++;
         _loadingMore = false;
@@ -1993,7 +2012,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     if (_loading) return _tabLoading();
     if (_notes.isEmpty) {
       final msg = _error ?? '还没有分享过帖子';
-      return _tabEmpty(msg, _error != null ? Icons.cloud_off : Icons.post_add_outlined);
+      return _tabEmpty(
+          msg, _error != null ? Icons.cloud_off : Icons.post_add_outlined);
     }
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
@@ -2011,11 +2031,12 @@ class _MyPostsTabState extends State<_MyPostsTab> {
               child: SizedBox(height: 4),
             ),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+              // 横向内边距移入每条帖子内部，保证分割线通栏贴边。
+              padding: const EdgeInsets.only(top: 4, bottom: 32),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
-                    if (index == _groups.length) {
+                    if (index == _notes.length) {
                       if (_hasMore && widget.isLoggedIn) {
                         return const Padding(
                           padding: EdgeInsets.all(20),
@@ -2029,14 +2050,28 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                           ),
                         );
                       }
-                      // 末尾收尾分割线，保证最后一条帖子下方也有分割线。
+                      // 末尾收尾分割线，保证最后一条帖子下方也有分割线（通栏贴边）。
                       return const Divider(
-                          height: 1, thickness: 0.6, color: Color(0xFFEDE5DB));
+                          height: 1, thickness: 0.6, color: Color(0xFFD8CCBC));
                     }
-                    final g = _groups[index];
-                    return _buildGroupCard(g.$1, g.$2);
+                    final note = _notes[index];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 帖子顶部通栏分割线（首条不画，避免顶部多一条线）。
+                        if (index > 0)
+                          const Divider(
+                              height: 1,
+                              thickness: 0.6,
+                              color: Color(0xFFD8CCBC)),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: _buildNoteCard(note),
+                        ),
+                      ],
+                    );
                   },
-                  childCount: _groups.length + 1,
+                  childCount: _notes.length + 1,
                 ),
               ),
             ),
@@ -2046,54 +2081,52 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     );
   }
 
-  /// 分组：非回复为根，回复按 repostOf 挂到对应的根下面（根只显示一次）。
-  List<(PlazaNote, List<PlazaNote>)> get _groups {
-    final byId = {for (final n in _notes) n.id: n};
-    final children = <String, List<PlazaNote>>{};
-    final roots = <PlazaNote>[];
-    for (final n in _notes) {
-      final isReply = n.repostKind == 'reply' || n.repostOf.isNotEmpty;
-      if (isReply && byId.containsKey(n.repostOf)) {
-        children.putIfAbsent(n.repostOf, () => []).add(n);
-      } else {
-        roots.add(n);
+  /// 回复节点更多菜单：自己的回复显示置顶/编辑/删除，他人回复显示关注/屏蔽。
+  Future<void> _showReplyMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null || note.ownerUserId != me.id) {
+      if (me != null && note.ownerUserId.isNotEmpty) {
+        await _showMoreMenu(context, note.ownerUserId, note.authorName);
       }
+      return;
     }
-    return [
-      for (final r in roots) (r, children[r.id] ?? const <PlazaNote>[]),
-    ];
-  }
-
-  Widget _buildGroupCard(PlazaNote root, List<PlazaNote> replies) {
-    // 每个区域顶部一条浅色分割线，与其他帖子分隔。
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Divider(height: 1, thickness: 0.6, color: Color(0xFFEDE5DB)),
-        const SizedBox(height: 4),
-        if (replies.isEmpty) ...[
-          _buildNoteCard(root),
-        ] else ...[
-          // 根帖：其头像下方画一条灰色连线，延伸到第一个回复的头像（两端留距）。
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                left: 21,
-                top: 62,
-                bottom: 0,
-                child: Container(width: 1, color: Color(0xFFC9C9C9)),
-              ),
-              _buildNoteCard(root),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 8),
-            child: ReplyChain(replies: replies),
-          ),
-        ],
-      ],
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(note.authorName,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(ctx, 'pin', Icons.push_pin_outlined,
+                _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
+            _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'pin':
+        _togglePin(note);
+        break;
+      case 'edit':
+        _editNote(note);
+        break;
+      case 'delete':
+        _deleteNote(note);
+        break;
+    }
   }
 
   Widget _buildNoteCard(PlazaNote note) {
@@ -2104,6 +2137,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       onTogglePin: () => _togglePin(note),
       onEdit: () => _editNote(note),
       onDelete: () => _deleteNote(note),
+      onMore: (n) => _showReplyMenu(n),
     );
   }
 }
@@ -2119,18 +2153,31 @@ class _MyRepliesTab extends StatefulWidget {
 }
 
 class _MyRepliesTabState extends State<_MyRepliesTab> {
-  final List<PlazaActivity> _activities = [];
-  final Map<String, PlazaNote?> _originalNotes = {};
+  /// 回复 = 我发出的回复帖（repostKind == 'reply'），
+  /// 含回复自己的帖子与回复其他人的帖子。
+  final List<PlazaNote> _replies = [];
+
+  /// 按最顶层原贴分组：同一原贴下的多条回复归入同一区域（原贴 + 回复链连线）。
+  final List<(PlazaNote, List<PlazaNote>)> _groups = [];
+
+  /// 已置顶的回复帖：以独立「置顶帖子」卡片展示在列表顶部。
+  final List<PlazaNote> _pinnedReplies = [];
+
+  /// 帖子 id → 作者账号（用于置顶帖子的「回复@账户名」）。
+  final Map<String, String> _accountsById = {};
+  final Set<String> _pinnedIds = {};
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
   int _page = 1;
   String? _error;
-  String? _diagInfo;
+  static const int _pageSize = 20;
+  static const String _pinnedKey = 'my_pinned_note_ids';
 
   @override
   void initState() {
     super.initState();
+    _loadPinnedIds();
     if (widget.isLoggedIn) _load();
     widget.reloadNotifier.addListener(_onReload);
   }
@@ -2142,6 +2189,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 
   void _onReload() {
+    _loadPinnedIds();
     if (widget.isLoggedIn) _load();
   }
 
@@ -2159,43 +2207,27 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     setState(() {
       _loading = true;
       _error = null;
-      _activities.clear();
-      _originalNotes.clear();
+      _replies.clear();
+      _groups.clear();
+      _pinnedReplies.clear();
       _page = 1;
       _hasMore = true;
     });
     try {
-      // 活动流里混有大量 share 等类型，需翻页收集我发出的评论（type=comment）。
-      final myComments = <PlazaActivity>[];
-      int page = 1;
-      bool hasMore = true;
-      int totalFetched = 0;
-      while (hasMore && page <= 10) {
-        final (list, more) =
-            await CloudNotesService.instance.getMyActivities(
-          page: page,
-          pageSize: 50,
-        );
-        if (!mounted) return;
-        totalFetched += list.length;
-        debugPrint('[RepliesTab] page=$page got=${list.length} types=${list.map((a) => a.type).toSet()}');
-        myComments.addAll(list.where((a) => a.type == 'comment'));
-        hasMore = more;
-        page++;
-        // 已收集足够评论即可停止翻页。
-        if (myComments.length >= 30) break;
-      }
-      debugPrint('[RepliesTab] totalFetched=$totalFetched comments=${myComments.length}');
-      await _prefetchOriginals(myComments);
+      final (list, more) = await CloudNotesService.instance.getMyNotes(
+        page: 1,
+        pageSize: _pageSize,
+      );
       if (!mounted) return;
       setState(() {
-        _activities.addAll(myComments);
-        _hasMore = false;
-        _page = page;
-        _diagInfo = '共拉到 $totalFetched 条动态，其中评论 ${myComments.length} 条';
-        _loading = false;
+        _replies.addAll(list.where((n) => n.repostKind == 'reply'));
+        _hasMore = more;
+        _page = 2;
       });
-    } catch (e) {
+      await _buildGroups();
+      if (!mounted) return;
+      setState(() => _loading = false);
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _error = '加载失败';
@@ -2208,39 +2240,248 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     if (_loadingMore || !_hasMore) return;
     setState(() => _loadingMore = true);
     try {
-      final (list, more) = await CloudNotesService.instance.getMyActivities(
+      final (list, more) = await CloudNotesService.instance.getMyNotes(
         page: _page,
-        pageSize: 50,
+        pageSize: _pageSize,
       );
       if (!mounted) return;
-      final myComments = list.where((a) => a.type == 'comment').toList();
-      await _prefetchOriginals(myComments);
-      if (!mounted) return;
       setState(() {
-        _activities.addAll(myComments);
+        _replies.addAll(list.where((n) => n.repostKind == 'reply'));
         _hasMore = more;
         _page++;
         _loadingMore = false;
       });
+      await _buildGroups();
     } catch (_) {
       if (!mounted) return;
       setState(() => _loadingMore = false);
     }
   }
 
-  /// 并行预取每条评论对应的原贴数据（失败置 null，展示标题兜底）。
-  Future<void> _prefetchOriginals(List<PlazaActivity> items) async {
-    final futures = items.map((a) async {
-      try {
-        final n = await CloudNotesService.instance.getNoteById(a.noteId);
-        return MapEntry(a.noteId, n);
-      } catch (_) {
-        return MapEntry(a.noteId, null);
+  /// 按最顶层原贴分组：沿 repostOf 逐级向上找到根原贴，
+  /// 同一根下的所有回复（含置顶的）归入一组；组内按时间正序成链。
+  /// 置顶的回复额外单独作为「置顶帖子」展示在列表顶部。
+  Future<void> _buildGroups() async {
+    await _loadPinnedIds();
+    final pinned = _replies.where((n) => _pinnedIds.contains(n.id)).toList();
+    final accountsById = <String, String>{
+      for (final n in _replies) n.id: n.authorAccount,
+    };
+
+    final allById = {for (final n in _replies) n.id: n};
+    final children = <String, List<PlazaNote>>{};
+    final rootIds = <String>[];
+    for (final n in _replies) {
+      var top = n.repostOf;
+      var guard = 0;
+      while (top.isNotEmpty && allById.containsKey(top) && guard < 30) {
+        final node = allById[top]!;
+        if (node.repostOf.isNotEmpty && allById.containsKey(node.repostOf)) {
+          top = node.repostOf;
+        } else {
+          break;
+        }
+        guard++;
       }
+      if (!children.containsKey(top)) rootIds.add(top);
+      children.putIfAbsent(top, () => []).add(n);
+    }
+    // 并行预取各组原贴数据（失败时用已有数据或占位兜底）。
+    final futures = rootIds.map((id) async {
+      PlazaNote? root;
+      try {
+        root = await CloudNotesService.instance.getNoteById(id);
+      } catch (_) {
+        root = allById[id];
+      }
+      return MapEntry(id, root);
     });
-    final entries = await Future.wait(futures);
-    for (final e in entries) {
-      _originalNotes[e.key] = e.value;
+    final roots = <String, PlazaNote>{};
+    for (final e in await Future.wait(futures)) {
+      final root = e.value ??
+          PlazaNote(
+            id: e.key,
+            ownerUserId: '',
+            title: '',
+            content: '',
+            authorName: '同修',
+            visibility: 'public',
+            status: 'normal',
+            likeCount: 0,
+            commentCount: 0,
+            createdAt: 0,
+            updatedAt: 0,
+          );
+      roots[e.key] = root;
+      accountsById[e.key] = root.authorAccount;
+    }
+    final groups = <(PlazaNote, List<PlazaNote>)>[];
+    for (final id in rootIds) {
+      final list = children[id]!;
+      if (list.isEmpty) continue;
+      list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      groups.add((roots[id]!, list));
+    }
+    // 分组按组内最新回复倒序展示。
+    groups.sort((a, b) => b.$2.last.createdAt.compareTo(a.$2.last.createdAt));
+    if (!mounted) return;
+    setState(() {
+      _accountsById
+        ..clear()
+        ..addAll(accountsById);
+      _pinnedReplies
+        ..clear()
+        ..addAll(pinned);
+      _groups
+        ..clear()
+        ..addAll(groups);
+    });
+  }
+
+  Future<void> _loadPinnedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _pinnedIds
+        ..clear()
+        ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
+    } catch (_) {}
+  }
+
+  /// 置顶/取消置顶回复（本地保存，与帖子 Tab 共用同一份置顶记录）。
+  /// 置顶后立即重建分组：被置顶的评论移出回复链，生成独立置顶帖子。
+  Future<void> _togglePin(PlazaNote note) async {
+    final wasPinned = _pinnedIds.contains(note.id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_pinnedKey) ?? [];
+      if (wasPinned) {
+        list.remove(note.id);
+        _pinnedIds.remove(note.id);
+      } else {
+        list.add(note.id);
+        _pinnedIds.add(note.id);
+      }
+      await prefs.setStringList(_pinnedKey, list);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {});
+    _showToastText(context, wasPinned ? '已取消置顶' : '已置顶');
+    await _buildGroups();
+  }
+
+  /// 编辑回复内容：更新云端后重新加载列表。
+  Future<void> _editNote(PlazaNote note) async {
+    final saved = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '编辑回复',
+        hint: '写下新的内容…',
+        initialText: note.content,
+        maxLength: 2000,
+        minLines: 3,
+        maxLines: 6,
+        confirmText: '保存',
+      ),
+    );
+    if (saved == null || saved.trim().isEmpty || !mounted) return;
+    try {
+      await CloudNotesService.instance
+          .updateSharedNote(cloudId: note.id, content: saved.trim());
+      if (!mounted) return;
+      _showToastText(context, '已更新');
+      _load();
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
+
+  /// 删除回复：从菩提空间移除，不再展示。
+  Future<void> _deleteNote(PlazaNote note) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除回复',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后回复将从菩提空间移除，且无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteCloudNote(note.id);
+      _pinnedIds.remove(note.id);
+      if (!mounted) return;
+      setState(() => _replies.removeWhere((n) => n.id == note.id));
+      _showToastText(context, '已删除');
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
+
+  /// 回复节点更多菜单：自己的回复显示置顶/编辑/删除，他人回复显示关注/屏蔽。
+  Future<void> _showReplyMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null || note.ownerUserId != me.id) {
+      if (me != null && note.ownerUserId.isNotEmpty) {
+        await _showMoreMenu(context, note.ownerUserId, note.authorName);
+      }
+      return;
+    }
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(note.authorName,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(ctx, 'pin', Icons.push_pin_outlined,
+                _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
+            _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'pin':
+        _togglePin(note);
+        break;
+      case 'edit':
+        _editNote(note);
+        break;
+      case 'delete':
+        _deleteNote(note);
+        break;
     }
   }
 
@@ -2251,11 +2492,11 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     }
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
-    if (_activities.isEmpty) {
-      final msg = _diagInfo ?? '还没有回复记录';
-      return _tabEmpty(msg, Icons.reply_outlined);
+    if (_replies.isEmpty) {
+      return _tabEmpty('还没有回复过帖子', Icons.reply_outlined);
     }
 
+    final itemCount = _pinnedReplies.length + _groups.length;
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification is ScrollEndNotification &&
@@ -2272,31 +2513,234 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               child: SizedBox(height: 4),
             ),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+              padding: const EdgeInsets.only(top: 4, bottom: 32),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
-                    if (index == _activities.length) {
-                      return const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(
-                          child: SizedBox(
-                            width: 20, height: 20,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: _gold),
+                    if (index == itemCount) {
+                      if (_hasMore) {
+                        return const Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: _gold),
+                            ),
                           ),
-                        ),
-                      );
+                        );
+                      }
+                      return const Divider(
+                          height: 1, thickness: 0.6, color: Color(0xFFD8CCBC));
                     }
-                    return _buildActivityCard(_activities[index]);
+                    final Widget body;
+                    if (index < _pinnedReplies.length) {
+                      // 置顶回复：独立置顶帖子卡片。
+                      body = _buildPinnedReplyCard(_pinnedReplies[index]);
+                    } else {
+                      final g = _groups[index - _pinnedReplies.length];
+                      // 同一原贴下的多条回复归入一个区域。
+                      body = _buildGroupCard(g.$1, g.$2);
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (index > 0)
+                          const Divider(
+                              height: 1,
+                              thickness: 0.6,
+                              color: Color(0xFFD8CCBC)),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: body,
+                        ),
+                      ],
+                    );
                   },
-                  childCount: _activities.length + (_hasMore ? 1 : 0),
+                  childCount: itemCount + (_hasMore ? 1 : 0),
                 ),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// 置顶帖子卡片：与正常帖子同风格（头像 + 昵称，无卡片背景），
+  /// 昵称下方多一行 `回复@账户名`（被回复者账号，不一定是自己），再下面是回复内容。
+  Widget _buildPinnedReplyCard(PlazaNote reply) {
+    final me = AuthService.instance.currentUser.value;
+    final parentAccount = _accountsById[reply.repostOf] ?? '';
+    final nickname = me != null
+        ? me.displayName
+        : (reply.authorName.isNotEmpty ? reply.authorName : '我');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          UserAvatar(userId: reply.ownerUserId, radius: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 第一行：昵称 + 账号 + 时间 + 已置顶 + 三点菜单
+                Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(nickname,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: _text)),
+                          ),
+                          if (reply.authorVerified) ...[
+                            const SizedBox(width: 3),
+                            const Icon(Icons.verified,
+                                size: 15, color: Color(0xFF70867A)),
+                          ],
+                          if (reply.authorAccount.isNotEmpty) ...[
+                            const SizedBox(width: 3),
+                            Flexible(
+                              child: Text('@${reply.authorAccount}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
+                            ),
+                            const SizedBox(width: 3),
+                            const Text('·',
+                                style: TextStyle(
+                                    fontSize: 12, color: Color(0xFF8C8C8C))),
+                            const SizedBox(width: 2),
+                          ],
+                          Flexible(
+                            child: Text(_fullTime(reply.createdAt),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12, color: Color(0xFF8C8C8C))),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.push_pin,
+                        size: 13, color: Color(0xFF70867A)),
+                    const SizedBox(width: 2),
+                    const Text('已置顶',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF70867A),
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _showReplyMenu(reply),
+                      child: const Padding(
+                        padding: EdgeInsets.all(2),
+                        child: Icon(Icons.more_horiz,
+                            size: 18, color: Color(0xFF8C8C8C)),
+                      ),
+                    ),
+                  ],
+                ),
+                // 回复@账户名（被回复者）
+                const SizedBox(height: 3),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      const TextSpan(
+                        text: '回复@',
+                        style: TextStyle(fontSize: 14, color: _textSec),
+                      ),
+                      TextSpan(
+                        text: parentAccount.isEmpty ? '同修' : parentAccount,
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: _textSec),
+                      ),
+                    ],
+                  ),
+                ),
+                // 回复内容
+                const SizedBox(height: 4),
+                Text(_NoteFeedRow.plainContent(reply),
+                    maxLines: 8,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 15, color: _text, height: 1.6)),
+                // 指标行（与下方帖子的指标对齐）
+                const SizedBox(height: 10),
+                _buildStatsRow(
+                  commentCount: reply.commentCount,
+                  repostCount: reply.repostCount,
+                  likeCount: reply.likeCount,
+                  viewCount: reply.viewCount,
+                  liked: CloudNotesService.instance.likedNoteIds
+                      .contains(reply.id),
+                  onComment: () => _replyToNote(context, reply, _load),
+                  onRepost: () => _forwardNote(context, reply, _load),
+                  onLike: () => _likeTargetNote(context, reply, _load),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 分组卡片：原贴在上 + 头像连线 + 其下所有回复链。
+  Widget _buildGroupCard(PlazaNote root, List<PlazaNote> replies) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 原贴：其头像下方画一条连线，延伸到第一个回复的头像（两端留距）。
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 21,
+              top: 62,
+              bottom: 0,
+              child: Container(width: 1, color: const Color(0xFFC9C9C9)),
+            ),
+            _NoteFeedRow(
+              note: root,
+              onReplyPosted: _load,
+              // 分组区域不显示已置顶（已置顶只在顶部置顶卡片展示）。
+              pinned: false,
+              onTogglePin: () => _togglePin(root),
+              onEdit: () => _editNote(root),
+              onDelete: () => _deleteNote(root),
+              onMore: (n) => _showReplyMenu(n),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 8),
+          child: ReplyChain(
+            replies: replies,
+            parentAccounts: {
+              root.id: root.authorAccount,
+              for (final r in replies) r.id: r.authorAccount,
+            },
+            onComment: (n) => _replyToNote(context, n, _load),
+            onLike: (n) => _likeTargetNote(context, n, _load),
+            onRepost: (n) => _forwardNote(context, n, _load),
+            onMore: (n) => _showReplyMenu(n),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2339,16 +2783,6 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildActivityCard(PlazaActivity activity) {
-    // 原贴完整显示在上，下面是我的回复（往右缩进）。
-    final original = _originalNotes[activity.noteId];
-    return _ReplyItem(
-      activity: activity,
-      originalNote: original,
-      onReplyPosted: _load,
     );
   }
 }
@@ -2402,6 +2836,8 @@ class _MyLikesTabState extends State<_MyLikesTab> {
     });
     try {
       final notes = await CloudNotesService.instance.getLikedNotes();
+      // 喜欢 Tab 里的帖子全部是已点赞的，写入点赞记录让爱心显示为填充色。
+      CloudNotesService.instance.likedNoteIds.addAll(notes.map((n) => n.id));
       if (!mounted) return;
       setState(() {
         _notes = notes;
@@ -2448,7 +2884,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
         ],
       ),
     );
-  }  // _MyLikesTab build
+  } // _MyLikesTab build
 
   Widget _tabLoading() {
     return Builder(
@@ -2497,7 +2933,8 @@ class _MyLikesTabState extends State<_MyLikesTab> {
 class _MyBookmarksTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
-  const _MyBookmarksTab({required this.isLoggedIn, required this.reloadNotifier});
+  const _MyBookmarksTab(
+      {required this.isLoggedIn, required this.reloadNotifier});
 
   @override
   State<_MyBookmarksTab> createState() => _MyBookmarksTabState();
@@ -2640,8 +3077,8 @@ class _DraftRow extends StatelessWidget {
   const _DraftRow({required this.note, required this.onTap});
 
   static String _plainContent(Map<String, dynamic> note) =>
-      (note['content'] as String? ?? '').replaceAll(
-          RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+      (note['content'] as String? ?? '')
+          .replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
 
   @override
   Widget build(BuildContext context) {
@@ -2856,7 +3293,8 @@ class _SettingsPageState extends State<_SettingsPage> {
 
   void _pushLogin() {
     _showToast('请先登录');
-    Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+    Navigator.push(
+        context, MaterialPageRoute(builder: (_) => const LoginPage()));
   }
 
   Future<void> _toggleNotif(bool value) async {
@@ -2889,7 +3327,8 @@ class _SettingsPageState extends State<_SettingsPage> {
                 color: _primary,
                 borderRadius: BorderRadius.circular(20),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                   child: Text(
                     text,
                     style: const TextStyle(
@@ -2916,7 +3355,8 @@ class _SettingsPageState extends State<_SettingsPage> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
       child: Text(text,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _textSec)),
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: _textSec)),
     );
   }
 
@@ -2927,13 +3367,17 @@ class _SettingsPageState extends State<_SettingsPage> {
         color: _card,
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 20),
         leading: const Icon(Icons.logout, size: 20, color: Colors.redAccent),
-        title: const Text('退出登录', style: TextStyle(fontSize: 15, color: Colors.redAccent)),
+        title: const Text('退出登录',
+            style: TextStyle(fontSize: 15, color: Colors.redAccent)),
         trailing: const Icon(Icons.chevron_right, color: _textHint, size: 20),
         onTap: _confirmLogout,
       ),
@@ -2946,13 +3390,20 @@ class _SettingsPageState extends State<_SettingsPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('退出登录', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: const Text('退出后需重新登录才能管理云端笔记', style: TextStyle(color: _textSec)),
+        title: const Text('退出登录',
+            style: TextStyle(
+                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content:
+            const Text('退出后需重新登录才能管理云端笔记', style: TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消', style: TextStyle(color: _textSec))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('退出', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+            child: const Text('退出',
+                style:
+                    TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -2985,10 +3436,15 @@ class _SettingsPageState extends State<_SettingsPage> {
                   children: [
                     IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+                      icon: const Icon(Icons.arrow_back_ios_new,
+                          color: _text, size: 20),
                     ),
                     const SizedBox(width: 4),
-                    const Text('设置', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+                    const Text('设置',
+                        style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w600,
+                            color: _text)),
                   ],
                 ),
               ),
@@ -3070,7 +3526,9 @@ class _SettingsLinkTile extends StatelessWidget {
       onTap: () {
         Navigator.push(context, slideInFromLeft(page)).then((_) {
           if (context.mounted) {
-            context.findAncestorStateOfType<_SettingsPageState>()?.reloadForSettings();
+            context
+                .findAncestorStateOfType<_SettingsPageState>()
+                ?.reloadForSettings();
           }
         });
       },
@@ -3092,9 +3550,15 @@ class _SettingsLinkTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
                   const SizedBox(height: 2),
-                  Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  Text(subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
@@ -3137,7 +3601,11 @@ class _SettingsReminderTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('打卡提醒', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  const Text('打卡提醒',
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
                   const SizedBox(height: 2),
                   Text(
                     state.reminderOn ? '每日 ${state.reminderTime}' : '未开启',
@@ -3177,7 +3645,8 @@ class _SettingsAccountTile extends StatelessWidget {
                 color: _primaryLight.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.lock_reset, color: _primaryLight, size: 20),
+              child:
+                  const Icon(Icons.lock_reset, color: _primaryLight, size: 20),
             ),
             const SizedBox(width: 14),
             const Expanded(
@@ -3185,7 +3654,10 @@ class _SettingsAccountTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('忘记密码',
-                      style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
                   Text('通过手机验证码重置登录密码',
                       style: TextStyle(fontSize: 12, color: _textHint)),
@@ -3224,16 +3696,22 @@ class _SettingsPhoneTile extends StatelessWidget {
                 color: _primaryLight.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.phone_iphone_outlined, color: _primaryLight, size: 20),
+              child: const Icon(Icons.phone_iphone_outlined,
+                  color: _primaryLight, size: 20),
             ),
             const SizedBox(width: 14),
             const Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('更换手机号', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  Text('更换手机号',
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text('更换后数据自动保留', style: TextStyle(fontSize: 12, color: _textHint)),
+                  Text('更换后数据自动保留',
+                      style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
             ),
@@ -3261,22 +3739,29 @@ class _SettingsNotifTile extends StatelessWidget {
               color: _gold.withValues(alpha: 0.10),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.notifications_outlined, color: _gold, size: 20),
+            child: const Icon(Icons.notifications_outlined,
+                color: _gold, size: 20),
           ),
           const SizedBox(width: 14),
           const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('消息通知', style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                Text('消息通知',
+                    style: TextStyle(
+                        fontSize: 16,
+                        color: _text,
+                        fontWeight: FontWeight.w500)),
                 SizedBox(height: 2),
-                Text('打卡提醒等系统通知', style: TextStyle(fontSize: 12, color: _textHint)),
+                Text('打卡提醒等系统通知',
+                    style: TextStyle(fontSize: 12, color: _textHint)),
               ],
             ),
           ),
           SwitchTheme(
             data: SwitchThemeData(
-              trackOutlineColor: WidgetStateProperty.resolveWith((_) => Colors.transparent),
+              trackOutlineColor:
+                  WidgetStateProperty.resolveWith((_) => Colors.transparent),
             ),
             child: Switch(
               value: state.notifOn,

@@ -12,9 +12,25 @@ const Color _primaryLight = Color(0xFF8B6B5A);
 
 /// 回复连贴：原帖在上、回复在下，两侧头像用竖线连接。
 /// 原帖与回复均为完整帖子样式：头像、昵称、@账号、时间戳、内容、四个指标。
+/// 传入 onComment/onLike/onRepost 后，对应指标按钮可点击（回调参数为该节点帖子）。
+/// 传入 onMore 后，回复节点右侧显示三点菜单；pinned=true 时回复节点显示置顶样式
+/// （回复@原帖作者账户 · 时间 + 已置顶标签 + 三点菜单）。
 class ReplyThread extends StatefulWidget {
   final PlazaNote replyNote;
-  const ReplyThread({super.key, required this.replyNote});
+  final void Function(PlazaNote note)? onComment;
+  final void Function(PlazaNote note)? onLike;
+  final void Function(PlazaNote note)? onRepost;
+  final void Function(PlazaNote note)? onMore;
+  final bool pinned;
+  const ReplyThread({
+    super.key,
+    required this.replyNote,
+    this.onComment,
+    this.onLike,
+    this.onRepost,
+    this.onMore,
+    this.pinned = false,
+  });
 
   @override
   State<ReplyThread> createState() => _ReplyThreadState();
@@ -48,7 +64,7 @@ class _ReplyThreadState extends State<ReplyThread> {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
-  Widget _header(PlazaNote note) {
+  Widget _header(PlazaNote note, {required bool showMenu}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -57,9 +73,7 @@ class _ReplyThreadState extends State<ReplyThread> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: _text)),
+                  fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
         ),
         if (note.authorVerified) ...[
           const SizedBox(width: 3),
@@ -71,8 +85,7 @@ class _ReplyThreadState extends State<ReplyThread> {
             child: Text('@${note.authorAccount}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 12, color: Color(0xFF8C8C8C))),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
           ),
           const SizedBox(width: 3),
           const Text('·',
@@ -80,29 +93,104 @@ class _ReplyThreadState extends State<ReplyThread> {
           const SizedBox(width: 2),
         ],
         Text(_time(note.createdAt),
-            style: const TextStyle(
-                fontSize: 12, color: Color(0xFF8C8C8C))),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+        if (showMenu && widget.onMore != null) ...[
+          const SizedBox(width: 4),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => widget.onMore!(note),
+            child: const Padding(
+              padding: EdgeInsets.all(2),
+              child: Icon(Icons.more_horiz, size: 18, color: Color(0xFF8C8C8C)),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 置顶回复的头部：`回复@原帖作者账户 · 时间 + 已置顶标签 + 三点菜单`。
+  Widget _pinnedHeader(PlazaNote note) {
+    final parentAccount = _original?.authorAccount ?? '';
+    return Row(
+      children: [
+        Expanded(
+          child: Row(
+            children: [
+              Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(
+                      text: '回复@',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF8C8C8C)),
+                    ),
+                    TextSpan(
+                      text: parentAccount.isEmpty ? '同修' : parentAccount,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _textSec),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Text('·',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+              const SizedBox(width: 2),
+              Text(_time(note.createdAt),
+                  style:
+                      const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+            ],
+          ),
+        ),
+        const Icon(Icons.push_pin, size: 13, color: Color(0xFF70867A)),
+        const SizedBox(width: 2),
+        const Text('已置顶',
+            style: TextStyle(
+                fontSize: 12,
+                color: Color(0xFF70867A),
+                fontWeight: FontWeight.w600)),
+        if (widget.onMore != null) ...[
+          const SizedBox(width: 4),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => widget.onMore!(note),
+            child: const Padding(
+              padding: EdgeInsets.all(2),
+              child: Icon(Icons.more_horiz, size: 18, color: Color(0xFF8C8C8C)),
+            ),
+          ),
+        ],
       ],
     );
   }
 
   Widget _metrics(PlazaNote note) {
+    final onComment = widget.onComment;
+    final onLike = widget.onLike;
+    final onRepost = widget.onRepost;
+    final liked = CloudNotesService.instance.likedNoteIds.contains(note.id);
     return Row(
       children: [
-        Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
-        const SizedBox(width: 3),
-        Text('${note.commentCount}',
-            style: const TextStyle(fontSize: 13, color: _textSec)),
+        _cell(
+          Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
+          '${note.commentCount}',
+          onTap: onComment == null ? null : () => onComment(note),
+        ),
         const SizedBox(width: 48),
-        Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-        const SizedBox(width: 3),
-        Text('${note.repostCount}',
-            style: const TextStyle(fontSize: 13, color: _textSec)),
+        _cell(
+          Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+          '${note.repostCount}',
+          onTap: onRepost == null ? null : () => onRepost(note),
+        ),
         const SizedBox(width: 48),
-        Icon(Icons.favorite_border_rounded, size: 16, color: _textSec),
-        const SizedBox(width: 3),
-        Text('${note.likeCount}',
-            style: const TextStyle(fontSize: 13, color: _textSec)),
+        _cell(
+          Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+              size: 16, color: liked ? _gold : _textSec),
+          '${note.likeCount}',
+          onTap: onLike == null ? null : () => onLike(note),
+        ),
         const SizedBox(width: 48),
         Image.asset('assets/images/ic_view.png', width: 16, height: 16),
         const SizedBox(width: 3),
@@ -112,19 +200,41 @@ class _ReplyThreadState extends State<ReplyThread> {
     );
   }
 
-  Widget _body(PlazaNote note) {
+  Widget _cell(Widget icon, String text, {VoidCallback? onTap}) {
+    final cell = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: 16, height: 16, child: icon),
+        const SizedBox(width: 3),
+        Text(text, style: const TextStyle(fontSize: 13, color: _textSec)),
+      ],
+    );
+    if (onTap == null) return cell;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+        child: cell,
+      ),
+    );
+  }
+
+  Widget _body(PlazaNote note, {required bool showMenu}) {
     final content = NoteSutraLinks.plainText(note.content);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _header(note),
+        if (showMenu && widget.pinned)
+          _pinnedHeader(note)
+        else
+          _header(note, showMenu: showMenu),
         if (content.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text(content,
               maxLines: 8,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 15, color: _text, height: 1.6)),
+              style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
         ],
         const SizedBox(height: 8),
         _metrics(note),
@@ -133,7 +243,8 @@ class _ReplyThreadState extends State<ReplyThread> {
   }
 
   /// 一个节点：左侧头像 + 竖线（非最后节点向下延伸），右侧内容。
-  Widget _nodeRow(PlazaNote note, {required bool connectDown}) {
+  Widget _nodeRow(PlazaNote note,
+      {required bool connectDown, required bool showMenu}) {
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -148,7 +259,7 @@ class _ReplyThreadState extends State<ReplyThread> {
             ],
           ),
           const SizedBox(width: 10),
-          Expanded(child: _body(note)),
+          Expanded(child: _body(note, showMenu: showMenu)),
         ],
       ),
     );
@@ -160,8 +271,9 @@ class _ReplyThreadState extends State<ReplyThread> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (original != null) _nodeRow(original, connectDown: true),
-        _nodeRow(widget.replyNote, connectDown: false),
+        if (original != null)
+          _nodeRow(original, connectDown: true, showMenu: false),
+        _nodeRow(widget.replyNote, connectDown: false, showMenu: true),
       ],
     );
   }
