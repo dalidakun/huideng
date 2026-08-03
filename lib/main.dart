@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 import 'theme.dart';
 import 'sutra_list_page.dart';
 import 'discussion_page.dart';
@@ -17,6 +18,62 @@ import 'notification_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+bool _errorDialogShown = false;
+
+/// 捕获未处理异常并把堆栈弹窗展示，方便在手机上直接看到出错位置。
+void _installErrorHandler() {
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    _showErrorReport(details.exceptionAsString(), details.stack?.toString() ?? '');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    _showErrorReport(error.toString(), stack.toString());
+    return true;
+  };
+}
+
+void _showErrorReport(String message, String stack) {
+  if (_errorDialogShown) return;
+  _errorDialogShown = true;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+    nav.push(
+      MaterialPageRoute(
+        builder: (_) => _ErrorReportPage(message: message, stack: stack),
+      ),
+    );
+  });
+}
+
+/// 展示错误详情（调试用）：消息 + 完整堆栈 + 复制按钮。
+class _ErrorReportPage extends StatelessWidget {
+  final String message;
+  final String stack;
+  const _ErrorReportPage({required this.message, required this.stack});
+
+  @override
+  Widget build(BuildContext context) {
+    final full = 'ERROR: $message\n\n$stack';
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('错误详情'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy),
+            onPressed: () =>
+                Clipboard.setData(ClipboardData(text: full)),
+          ),
+        ],
+      ),
+      body: SelectableText(
+        full,
+        style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+      ),
+    );
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await StudyHubPageState.warmPrefs();
@@ -29,6 +86,7 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.dark,
     ),
   );
+  _installErrorHandler();
   runApp(const MyApp());
   // 后台静默恢复登录会话（不阻塞启动，登录态通过 ValueNotifier 广播）。
   unawaited(AuthService.instance.restoreSession());
