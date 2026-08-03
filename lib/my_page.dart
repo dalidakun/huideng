@@ -2080,8 +2080,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
             children: [
               Positioned(
                 left: 21,
-                top: 68,
-                bottom: 18,
+                top: 62,
+                bottom: 12,
                 child: Container(width: 1, color: Color(0xFFC9C9C9)),
               ),
               _buildNoteCard(root),

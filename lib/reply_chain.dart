@@ -34,7 +34,7 @@ class ReplyChain extends StatelessWidget {
               if (connectDown)
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Container(width: 1, color: _connector),
                   ),
                 ),
