@@ -17,6 +17,7 @@ import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
 import 'user_list_page.dart';
 import 'note_edit_page.dart';
+import 'note_detail_page.dart';
 import 'certification_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -1446,6 +1447,7 @@ class _ReplyInputSheetState extends State<_ReplyInputSheet> {
 class _NoteFeedRow extends StatelessWidget {
   final PlazaNote note;
   final VoidCallback? onReplyPosted;
+  final VoidCallback? onTap;
   final bool pinned;
   final VoidCallback? onTogglePin;
   final VoidCallback? onEdit;
@@ -1453,6 +1455,7 @@ class _NoteFeedRow extends StatelessWidget {
   const _NoteFeedRow({
     required this.note,
     this.onReplyPosted,
+    this.onTap,
     this.pinned = false,
     this.onTogglePin,
     this.onEdit,
@@ -1461,6 +1464,14 @@ class _NoteFeedRow extends StatelessWidget {
 
   static String plainContent(PlazaNote note) => note.content.replaceAll(
       RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+
+  void _openDetail(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => NoteDetailPage(noteId: note.id)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1481,6 +1492,7 @@ class _NoteFeedRow extends StatelessWidget {
       commentCount: note.commentCount,
       viewCount: note.viewCount,
       onReplyPosted: onReplyPosted,
+      onTap: onTap ?? () => _openDetail(context),
       pinned: pinned,
       onTogglePin: onTogglePin,
       onEdit: onEdit,
@@ -1728,6 +1740,13 @@ class _ReplyItem extends StatelessWidget {
           commentCount: original?.commentCount ?? 0,
           viewCount: original?.viewCount ?? 0,
           onReplyPosted: onReplyPosted,
+          onTap: original != null
+              ? () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => NoteDetailPage(noteId: original!.id)),
+                )
+              : null,
           quoteBox: original != null && original.repostOf.isNotEmpty
               ? _QuoteBox(note: original)
               : null,
