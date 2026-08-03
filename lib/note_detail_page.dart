@@ -429,8 +429,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (_reposting) return;
     setState(() => _reposting = true);
     try {
-      await CloudNotesService.instance
-          .repostNote(widget.noteId, quote: quote);
+      await CloudNotesService.instance.repostNote(widget.noteId,
+          quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
       if (!mounted) return;
       setState(() => _reposting = false);
       // 转发后停留在当前笔记详情页，不跳转到转发后的新笔记。
@@ -551,7 +551,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             children: [
               _buildUserHeader(note),
-              if (note.repostOf.isNotEmpty) ...[
+              if (note.repostOf.isNotEmpty && note.repostKind != 'reply') ...[
                 const SizedBox(height: 8),
                 Row(
                   children: [

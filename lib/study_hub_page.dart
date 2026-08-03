@@ -1581,7 +1581,7 @@ class StudyHubPageState extends State<StudyHubPage>
             children: [
               Row(
                 children: [
-                  if (note.repostOf.isNotEmpty) ...[
+                  if (note.repostOf.isNotEmpty && note.repostKind != 'reply') ...[
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

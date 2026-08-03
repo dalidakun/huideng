@@ -31,6 +31,9 @@ class PlazaNote {
   final String repostOf;
   final String repostSourceAuthor;
 
+  /// 转发类型：forward / quote / reply（reply 不展示转发角标）。
+  final String repostKind;
+
   /// 引用转发时的用户引言（空表示直接转发）。
   final String quoteContent;
   final String quoteOfTitle;
@@ -54,6 +57,7 @@ class PlazaNote {
     this.repostCount = 0,
     this.repostOf = '',
     this.repostSourceAuthor = '',
+    this.repostKind = '',
     this.quoteContent = '',
     this.quoteOfTitle = '',
     this.quoteOfContent = '',
@@ -77,6 +81,7 @@ class PlazaNote {
         repostCount: (json['repostCount'] as num?)?.toInt() ?? 0,
         repostOf: json['repostOf']?.toString() ?? '',
         repostSourceAuthor: json['repostSourceAuthor']?.toString() ?? '',
+        repostKind: json['repostKind']?.toString() ?? '',
         quoteContent: json['quoteContent']?.toString() ?? '',
         quoteOfTitle: json['quoteOfTitle']?.toString() ?? '',
         quoteOfContent: json['quoteOfContent']?.toString() ?? '',
@@ -414,14 +419,17 @@ class CloudNotesService {
     return count ?? 0;
   }
 
-  /// 转发笔记。quote 为空 → 直接转发；quote 非空 → 引用转发（引言 + 原笔记）。返回新笔记 id。
-  Future<String> repostNote(String noteId, {String quote = ''}) async {
+  /// 转发笔记。quote 为空 → 直接转发；quote 非空 → 引用转发（引言 + 原笔记）。
+  /// kind：forward（直接转发）/ quote（引用转发）/ reply（回复，不展示转发角标）。
+  Future<String> repostNote(String noteId,
+      {String quote = '', String kind = 'forward'}) async {
     if (!AuthService.instance.isLoggedIn) {
       throw const CloudApiException('请先登录');
     }
     final res = await _call('repostNote', params: {
       'id': noteId,
       'authorName': _authorName,
+      'kind': kind,
       if (quote.trim().isNotEmpty) 'quote': quote.trim(),
     });
     return res['id']?.toString() ?? '';

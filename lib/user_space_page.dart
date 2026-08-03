@@ -450,7 +450,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (note.repostOf.isNotEmpty) ...[
+              if (note.repostOf.isNotEmpty && note.repostKind != 'reply') ...[
                 Row(
                   children: [
                     Icon(Icons.repeat, size: 12, color: _gold),

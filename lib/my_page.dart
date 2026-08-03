@@ -886,7 +886,8 @@ class _PostBlockState extends State<_PostBlock> {
       // 1) 评论原帖：只增加评论量，不在帖子下方内嵌显示。
       await CloudNotesService.instance.createComment(noteId, content);
       // 2) 生成新帖子（引用转发样式：回复内容在上、被回复的帖子在下）。
-      await CloudNotesService.instance.repostNote(noteId, quote: content);
+      await CloudNotesService.instance
+          .repostNote(noteId, quote: content, kind: 'reply');
       if (!mounted) return;
       setState(() => _commentCount++);
       if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
@@ -954,7 +955,8 @@ class _PostBlockState extends State<_PostBlock> {
       if (quote.isEmpty) return;
     }
     try {
-      await CloudNotesService.instance.repostNote(noteId, quote: quote);
+      await CloudNotesService.instance.repostNote(noteId,
+          quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
       if (!mounted) return;
       setState(() => _repostCount++);
       _showToastText(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
@@ -1484,7 +1486,7 @@ class _NoteFeedRow extends StatelessWidget {
       onEdit: onEdit,
       onDelete: onDelete,
       quoteBox: note.repostOf.isNotEmpty ? _QuoteBox(note: note) : null,
-      isRepost: note.repostOf.isNotEmpty,
+      isRepost: note.repostOf.isNotEmpty && note.repostKind != 'reply',
       isQuoteRepost: note.quoteContent.isNotEmpty,
       stats: _buildStatsRow(
         commentCount: note.commentCount,

@@ -156,6 +156,15 @@ exports.main = async (event, context) => {
     }
   }
 
+  // 确保 feedbacks 集合存在。
+  async function ensureFeedbacks() {
+    try {
+      await db.createCollection("feedbacks");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
   // 判断是否为管理员：控制台数据库 → admins 集合中是否存在 { uid: 该用户 uid }。
   async function isAdminUser(uid) {
     if (!uid) return false;
@@ -497,6 +506,12 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         const id = String(event.id || "");
         const quote = String(event.quote || "").trim().slice(0, 500);
+        const repostKind =
+          event.kind === "reply"
+            ? "reply"
+            : quote
+              ? "quote"
+              : "forward";
         const { data } = await notes.doc(id).get();
         const src = data && data[0];
         if (!src) return fail("not_found");
@@ -513,6 +528,7 @@ exports.main = async (event, context) => {
           repostCount: 0,
           repostOf: id,
           repostSourceAuthor: String(src.authorName || "同修").slice(0, 30),
+          repostKind,
           status: "normal",
           createdAt: now(),
           updatedAt: now(),
@@ -1125,6 +1141,7 @@ exports.main = async (event, context) => {
       // 用户反馈（未登录也可提交，匿名记录 uid 为空串）。
       // 收集方式：云开发控制台 → 数据库 → feedbacks 集合查看/导出。
       case "submitFeedback": {
+        await ensureFeedbacks();
         const content = String(event.content || "").trim().slice(0, 1000);
         if (!content) return fail("empty_content");
         await feedbacks.add({
@@ -1145,6 +1162,7 @@ exports.main = async (event, context) => {
 
       // 管理员拉取反馈列表（分页，新反馈优先）。
       case "getFeedbacks": {
+        await ensureFeedbacks();
         if (!(await isAdminUser(uid))) return fail("forbidden");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
