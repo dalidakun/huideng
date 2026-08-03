@@ -6,6 +6,7 @@ import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'note_sutra_links.dart';
 import 'reading_page.dart';
+import 'text_input_sheet.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -405,87 +406,19 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   }
 
   Future<void> _quoteRepost() async {
-    final controller = TextEditingController();
     final quote = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: _border,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const Text('引用转发',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: _text)),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  maxLength: 500,
-                  maxLines: 3,
-                  minLines: 2,
-                  style: const TextStyle(fontSize: 14, color: _text),
-                  decoration: InputDecoration(
-                    hintText: '写点自己的感想…',
-                    hintStyle: const TextStyle(color: _textHint),
-                    filled: true,
-                    fillColor: _bg,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                    contentPadding: const EdgeInsets.all(12),
-                    counterStyle:
-                        const TextStyle(fontSize: 11, color: _textHint),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(22)),
-                    ),
-                    onPressed: () {
-                      final text = controller.text.trim();
-                      if (text.isEmpty) {
-                        _showToast('请先写下感想');
-                        return;
-                      }
-                      Navigator.pop(sheetCtx, text);
-                    },
-                    child: const Text('转发',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      builder: (_) => const SheetTextInput(
+        title: '引用转发',
+        hint: '写点自己的感想…',
+        maxLength: 500,
+        minLines: 2,
+        maxLines: 3,
+        confirmText: '转发',
       ),
     );
     if (quote == null || !mounted) return;

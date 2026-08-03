@@ -14,8 +14,10 @@ import 'forgot_password_page.dart';
 import 'about_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
+import 'text_input_sheet.dart';
 import 'user_list_page.dart';
 import 'note_edit_page.dart';
+import 'certification_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -60,6 +62,8 @@ class MyPageState extends State<MyPage>
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
   String _accountName = '';
+  bool _verified = false;
+  String _verifiedName = '';
   String _joinedDate = '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
 
   MyCounts _counts = const MyCounts();
@@ -129,12 +133,44 @@ class MyPageState extends State<MyPage>
       }
     });
     _loadAccountName();
+    _loadVerification();
   }
 
   Future<void> _loadAccountName() async {
     final name = await AuthService.instance.getAccountName();
     if (!mounted) return;
     setState(() => _accountName = name);
+  }
+
+  /// 实名认证状态：优先取云端，云端失败时回退到本地缓存。
+  Future<void> _loadVerification() async {
+    final prefs = await SharedPreferences.getInstance();
+    var verified = prefs.getBool('user_verified') ?? false;
+    var name = prefs.getString('user_verified_name') ?? '';
+    if (_isLoggedIn) {
+      try {
+        final info = await CloudNotesService.instance.getMyVerification();
+        verified = info.verified;
+        name = info.realNameMasked;
+        await prefs.setBool('user_verified', verified);
+        if (name.isNotEmpty) {
+          await prefs.setString('user_verified_name', name);
+        }
+      } catch (_) {}
+    } else {
+      verified = false;
+      name = '';
+    }
+    if (!mounted) return;
+    setState(() {
+      _verified = verified;
+      _verifiedName = name;
+    });
+  }
+
+  void _openCertification() {
+    Navigator.push(context, slideInFromLeft(const CertificationPage()))
+        .then((_) => _loadVerification());
   }
 
   Future<void> _loadCounts() async {
@@ -428,14 +464,24 @@ class MyPageState extends State<MyPage>
             children: [
               if (isLoggedIn) ...[
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Expanded(
+                    Flexible(
                       child: Text(_nickname,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.w700,
                               color: _text)),
                     ),
+                    if (_verified) ...[
+                      const SizedBox(width: 6),
+                      _buildVerifiedBadge(),
+                    ] else ...[
+                      const SizedBox(width: 8),
+                      _buildCertifyButton(),
+                    ],
                   ],
                 ),
                 if (_isLoggedIn && _accountName.isNotEmpty) ...[
@@ -516,6 +562,65 @@ class MyPageState extends State<MyPage>
 
   void _promptLogin() {
     Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+  }
+
+  /// 未认证时昵称旁的「获得认证」按钮：灰色圆角框 + 图标 + 文案。
+  Widget _buildCertifyButton() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _openCertification,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFE9E2),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFDCD3C8)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.verified_outlined, size: 13, color: Color(0xFF9A8C80)),
+            SizedBox(width: 3),
+            Text('获得认证',
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF9A8C80),
+                    fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 已认证时昵称后的认证标识：金色对勾 + 脱敏姓名。
+  Widget _buildVerifiedBadge() {
+    return Tooltip(
+      message: _verifiedName.isNotEmpty ? '已实名认证（$_verifiedName）' : '已实名认证',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF7EEDF),
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: const Color(0xFFE5D3B5)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.verified, size: 14, color: Color(0xFFB8860B)),
+            if (_verifiedName.isNotEmpty) ...[
+              const SizedBox(width: 3),
+              Text(_verifiedName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFFB8860B),
+                      fontWeight: FontWeight.w600)),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildLoginButton() {
@@ -727,6 +832,30 @@ class _PostBlockState extends State<_PostBlock> {
   late int _commentCount = widget.commentCount;
   late bool _liked = widget.noteId != null &&
       CloudNotesService.instance.likedNoteIds.contains(widget.noteId);
+  late bool _following = widget.ownerUserId != null &&
+      CloudNotesService.instance.followingUserIds.contains(widget.ownerUserId);
+
+  /// 关注/取消关注帖子作者（已关注的同修在首页「关注」栏目展示其新帖）。
+  Future<void> _toggleFollow() async {
+    final me = AuthService.instance.currentUser.value;
+    final target = widget.ownerUserId;
+    if (me == null) {
+      if (mounted) {
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      }
+      return;
+    }
+    if (target == null || target.isEmpty || target == me.id) return;
+    try {
+      final ok = await CloudNotesService.instance.toggleFollow(target);
+      if (!mounted) return;
+      setState(() => _following = ok);
+      _showToastText(context, ok ? '已关注' : '已取消关注');
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
 
   Future<void> _toggleLike() async {
     final noteId = widget.noteId;
@@ -749,63 +878,20 @@ class _PostBlockState extends State<_PostBlock> {
     final noteId = widget.noteId;
     if (noteId == null) return;
     if (!AuthService.instance.isLoggedIn) return;
-    final controller = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    height: 44,
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    decoration: BoxDecoration(
-                      color: _bg,
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                    child: TextField(
-                      controller: controller,
-                      autofocus: true,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _submitReply(sheetCtx, controller),
-                      style: const TextStyle(fontSize: 14, color: _text),
-                      decoration: const InputDecoration(
-                        hintText: '写下你的回复…',
-                        hintStyle: TextStyle(color: _textHint),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  onPressed: () => _submitReply(sheetCtx, controller),
-                  icon: const Icon(Icons.send_rounded, color: _primary, size: 22),
-                ),
-              ],
-            ),
-          ),
-        ),
+      builder: (sheetCtx) => _ReplyInputSheet(
+        onSubmit: (content) => _submitReply(sheetCtx, content),
       ),
     );
-    controller.dispose();
   }
 
-  Future<void> _submitReply(
-      BuildContext sheetCtx, TextEditingController controller) async {
+  Future<void> _submitReply(BuildContext sheetCtx, String content) async {
     final noteId = widget.noteId;
-    final content = controller.text.trim();
     if (noteId == null || content.isEmpty) return;
     try {
       // 1) 评论原帖：只增加评论量，不在帖子下方内嵌显示。
@@ -859,75 +945,23 @@ class _PostBlockState extends State<_PostBlock> {
     if (choice == null || !mounted) return;
     String quote = '';
     if (choice == 'quote') {
-      final controller = TextEditingController();
-      quote = await showModalBottomSheet<String>(
+      quote = (await showModalBottomSheet<String>(
             context: context,
             isScrollControlled: true,
             backgroundColor: _card,
             shape: const RoundedRectangleBorder(
                 borderRadius:
                     BorderRadius.vertical(top: Radius.circular(20))),
-            builder: (sheetCtx) => Padding(
-              padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('引用转发',
-                          style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: _text)),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: controller,
-                        autofocus: true,
-                        maxLength: 500,
-                        maxLines: 3,
-                        minLines: 2,
-                        style: const TextStyle(fontSize: 14, color: _text),
-                        decoration: InputDecoration(
-                          hintText: '写点自己的感想…',
-                          hintStyle: const TextStyle(color: _textHint),
-                          filled: true,
-                          fillColor: _bg,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 44,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _primary,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(22)),
-                          ),
-                          onPressed: () {
-                            final text = controller.text.trim();
-                            if (text.isEmpty) return;
-                            Navigator.pop(sheetCtx, text);
-                          },
-                          child: const Text('转发'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            builder: (_) => const SheetTextInput(
+              title: '引用转发',
+              hint: '写点自己的感想…',
+              maxLength: 500,
+              minLines: 2,
+              maxLines: 3,
+              confirmText: '转发',
             ),
-          ) ??
+          )) ??
           '';
-      controller.dispose();
       if (quote.isEmpty) return;
     }
     try {
@@ -1080,7 +1114,27 @@ class _PostBlockState extends State<_PostBlock> {
                                 size: 18, color: Color(0xFF8C8C8C)),
                           ),
                         ),
-                      if (showMore)
+                      if (showMore) ...[
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _toggleFollow,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: _following
+                                  ? const Color(0xFFBDB6AC)
+                                  : Colors.black,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(_following ? '已关注' : '关注',
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
                         Transform.translate(
                           offset: const Offset(0, 0),
                           child: GestureDetector(
@@ -1091,6 +1145,7 @@ class _PostBlockState extends State<_PostBlock> {
                               size: 18, color: Color(0xFF8C8C8C)),
                           ),
                         ),
+                      ],
                     ],
                   ),
                   // 内容（与昵称同一左缘）
@@ -1295,6 +1350,78 @@ void _showToastText(BuildContext context, String text) {
   Future.delayed(const Duration(milliseconds: 2000), () {
     if (entry.mounted) entry.remove();
   });
+}
+
+/// 回复输入弹窗：独立拥有 TextEditingController，随弹窗生命周期释放，
+/// 避免在弹窗退出动画期间 dispose 控制器触发 dependents.isEmpty 断言。
+class _ReplyInputSheet extends StatefulWidget {
+  final void Function(String content) onSubmit;
+  const _ReplyInputSheet({required this.onSubmit});
+
+  @override
+  State<_ReplyInputSheet> createState() => _ReplyInputSheetState();
+}
+
+class _ReplyInputSheetState extends State<_ReplyInputSheet> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final content = _controller.text.trim();
+    if (content.isEmpty) return;
+    widget.onSubmit(content);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 44,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: _bg,
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: TextField(
+                    controller: _controller,
+                    autofocus: true,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _send(),
+                    style: const TextStyle(fontSize: 14, color: _text),
+                    decoration: const InputDecoration(
+                      hintText: '写下你的回复…',
+                      hintStyle: TextStyle(color: _textHint),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                onPressed: _send,
+                icon: const Icon(Icons.send_rounded, color: _primary, size: 22),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// 帖子行：与笔记详情页同风格——无卡片背景，
@@ -1757,72 +1884,22 @@ class _MyPostsTabState extends State<_MyPostsTab> {
 
   /// 编辑帖子内容：更新云端后重新加载列表。
   Future<void> _editNote(PlazaNote note) async {
-    final controller = TextEditingController(text: note.content);
     final saved = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => Padding(
-        padding: EdgeInsets.only(
-            bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('编辑帖子',
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: _text)),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  maxLines: 6,
-                  minLines: 3,
-                  style: const TextStyle(fontSize: 14, color: _text),
-                  decoration: InputDecoration(
-                    hintText: '写下新的内容…',
-                    hintStyle: const TextStyle(color: _textHint),
-                    filled: true,
-                    fillColor: _bg,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(22)),
-                    ),
-                    onPressed: () {
-                      final text = controller.text.trim();
-                      if (text.isEmpty) return;
-                      Navigator.pop(sheetCtx, text);
-                    },
-                    child: const Text('保存'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      builder: (_) => SheetTextInput(
+        title: '编辑帖子',
+        hint: '写下新的内容…',
+        initialText: note.content,
+        maxLength: 2000,
+        minLines: 3,
+        maxLines: 6,
+        confirmText: '保存',
       ),
     );
-    controller.dispose();
     if (saved == null || saved.trim().isEmpty || !mounted) return;
     try {
       await CloudNotesService.instance
