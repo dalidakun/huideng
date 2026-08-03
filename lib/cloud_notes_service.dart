@@ -21,6 +21,7 @@ class PlazaNote {
   final String content;
   final String authorName;
   final String authorAccount;
+  final bool authorVerified;
   final String visibility;
   final String status;
   final int likeCount;
@@ -44,6 +45,7 @@ class PlazaNote {
     required this.content,
     required this.authorName,
     this.authorAccount = '',
+    this.authorVerified = false,
     required this.visibility,
     required this.status,
     required this.likeCount,
@@ -66,6 +68,7 @@ class PlazaNote {
         content: json['content']?.toString() ?? '',
         authorName: json['authorName']?.toString() ?? '同修',
         authorAccount: json['authorAccount']?.toString() ?? '',
+        authorVerified: json['authorVerified'] == true,
         visibility: json['visibility']?.toString() ?? 'public',
         status: json['status']?.toString() ?? 'normal',
         likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
@@ -114,6 +117,52 @@ class PlazaComment {
       );
 }
 
+/// 反馈条目（管理页展示）。
+class FeedbackItem {
+  final String id;
+  final String userId;
+  final String username;
+  final String content;
+  final String contact;
+  final String status; // new | handled
+  final int createdAt;
+
+  const FeedbackItem({
+    required this.id,
+    this.userId = '',
+    this.username = '',
+    required this.content,
+    this.contact = '',
+    this.status = 'new',
+    required this.createdAt,
+  });
+
+  bool get isHandled => status == 'handled';
+
+  factory FeedbackItem.fromJson(Map<String, dynamic> json) => FeedbackItem(
+        id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
+        userId: json['userId']?.toString() ?? '',
+        username: json['username']?.toString() ?? '',
+        content: json['content']?.toString() ?? '',
+        contact: json['contact']?.toString() ?? '',
+        status: json['status']?.toString() ?? 'new',
+        createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// 反馈分页列表结果。
+class FeedbackListResult {
+  final List<FeedbackItem> items;
+  final bool hasMore;
+  final int unread;
+
+  const FeedbackListResult({
+    required this.items,
+    required this.hasMore,
+    required this.unread,
+  });
+}
+
 /// 菩提空间：单条互动动态（转发/我的评论/别人对我的回复）。
 class PlazaActivity {
   final String id;
@@ -155,8 +204,13 @@ class PlazaActivity {
 class UserProfile {
   final String id;
   final String name;
+  final bool verified;
 
-  const UserProfile({required this.id, required this.name});
+  const UserProfile({
+    required this.id,
+    required this.name,
+    this.verified = false,
+  });
 }
 
 /// 我的主页角标：互动未读数 / 关注数 / 粉丝数。
@@ -166,6 +220,19 @@ class MyCounts {
   final int unread;
 
   const MyCounts({this.following = 0, this.followers = 0, this.unread = 0});
+}
+
+/// 实名认证状态：是否已认证 + 脱敏姓名 + 认证时间。
+class VerificationInfo {
+  final bool verified;
+  final String realNameMasked;
+  final int verifiedAt;
+
+  const VerificationInfo({
+    this.verified = false,
+    this.realNameMasked = '',
+    this.verifiedAt = 0,
+  });
 }
 
 /// 广场云端数据服务：所有操作统一走「api」云函数。
@@ -489,6 +556,7 @@ class CloudNotesService {
         .map((e) => UserProfile(
               id: e['id']?.toString() ?? '',
               name: e['name']?.toString() ?? '同修',
+              verified: e['verified'] == true,
             ))
         .toList();
   }
@@ -646,11 +714,83 @@ class CloudNotesService {
     await _call('setUserData', params: {'payload': payload});
   }
 
+  /// 提交反馈意见（未登录也可提交，云端记录用户 uid）。
+  Future<void> submitFeedback(String content, {String? contact}) async {
+    await _call('submitFeedback', params: {
+      'content': content,
+      if (contact != null && contact.isNotEmpty) 'contact': contact,
+    });
+  }
+
+  /// 当前登录用户是否为管理员（admins 集合中登记了 uid）。
+  Future<bool> isAdmin() async {
+    try {
+      final res = await _call('isAdmin');
+      return res['isAdmin'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 管理员拉取反馈列表。
+  Future<FeedbackListResult> getFeedbacks({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final res = await _call('getFeedbacks', params: {
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = res['feedbacks'];
+    final items = list is List
+        ? list
+            .map((e) => FeedbackItem.fromJson(e as Map<String, dynamic>))
+            .toList()
+        : <FeedbackItem>[];
+    return FeedbackListResult(
+      items: items,
+      hasMore: res['hasMore'] == true,
+      unread: (res['unread'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// 管理员标记反馈为已处理 / 待处理。
+  Future<void> markFeedbackHandled(String id, {bool handled = true}) async {
+    await _call('markFeedbackHandled', params: {'id': id, 'handled': handled});
+  }
+
   /// 通用调用「api」云函数（供账号名称/密码等认证相关 action 使用）。
   Future<Map<String, dynamic>> callApi(
     String action, {
     Map<String, dynamic>? params,
   }) {
     return _call(action, params: params);
+  }
+
+  /// 提交实名认证（真实姓名 + 身份证号）。
+  /// 云端会再次校验格式（地区码/出生日期/校验位），返回是否已认证。
+  Future<bool> verifyIdentity({
+    required String realName,
+    required String idCard,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    final res = await _call('verifyIdentity', params: {
+      'realName': realName,
+      'idCard': idCard,
+    });
+    return res['verified'] == true;
+  }
+
+  /// 查询当前用户实名认证状态（未登录/未认证返回未认证）。
+  Future<VerificationInfo> getMyVerification() async {
+    if (!AuthService.instance.isLoggedIn) return const VerificationInfo();
+    final res = await _call('getMyVerification');
+    return VerificationInfo(
+      verified: res['verified'] == true,
+      realNameMasked: res['realNameMasked']?.toString() ?? '',
+      verifiedAt: (res['verifiedAt'] as num?)?.toInt() ?? 0,
+    );
   }
 }

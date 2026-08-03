@@ -476,10 +476,10 @@ class MyPageState extends State<MyPage>
                               color: _text)),
                     ),
                     if (_verified) ...[
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
                       _buildVerifiedBadge(),
                     ] else ...[
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 12),
                       _buildCertifyButton(),
                     ],
                   ],
@@ -574,17 +574,17 @@ class MyPageState extends State<MyPage>
         decoration: BoxDecoration(
           color: const Color(0xFFEFE9E2),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFDCD3C8)),
+          border: Border.all(color: Color(0xFFBDBDBD)),
         ),
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.verified_outlined, size: 13, color: Color(0xFF9A8C80)),
+            Icon(Icons.verified_outlined, size: 13, color: Color(0xFF70867A)),
             SizedBox(width: 3),
             Text('获得认证',
                 style: TextStyle(
                     fontSize: 11,
-                    color: Color(0xFF9A8C80),
+                    color: Color(0xFF70867A),
                     fontWeight: FontWeight.w500)),
           ],
         ),
@@ -783,6 +783,7 @@ class _PostBlock extends StatefulWidget {
   final String? ownerUserId;
   final String nickname;
   final String account;
+  final bool authorVerified;
   final int timeMs;
   final String content;
   final Widget? stats;
@@ -803,6 +804,7 @@ class _PostBlock extends StatefulWidget {
     required this.ownerUserId,
     required this.nickname,
     this.account = '',
+    this.authorVerified = false,
     required this.timeMs,
     required this.content,
     this.stats,
@@ -1065,6 +1067,11 @@ class _PostBlockState extends State<_PostBlock> {
                                       fontWeight: FontWeight.w600,
                                       color: _text)),
                             ),
+                            if (widget.authorVerified) ...[
+                              const SizedBox(width: 3),
+                              const Icon(Icons.verified,
+                                  size: 14, color: Color(0xFFB8860B)),
+                            ],
                             if (widget.account.isNotEmpty) ...[
                               const SizedBox(width: 3),
                               Flexible(
@@ -1454,6 +1461,7 @@ class _NoteFeedRow extends StatelessWidget {
       ownerUserId: note.ownerUserId,
       nickname: isMine ? me.displayName : note.authorName,
       account: note.authorAccount,
+      authorVerified: note.authorVerified,
       timeMs: note.createdAt,
       content: _NoteFeedRow.plainContent(note),
       noteId: note.id,
@@ -1517,7 +1525,9 @@ class _QuoteBoxState extends State<_QuoteBox> {
     final timeMs = src?.createdAt ?? 0;
     final content = src != null
         ? _NoteFeedRow.plainContent(src)
-        : widget.note.quoteOfContent;
+        : (widget.note.quoteOfContent.isNotEmpty
+            ? widget.note.quoteOfContent
+            : widget.note.content);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(10),
@@ -1547,6 +1557,11 @@ class _QuoteBoxState extends State<_QuoteBox> {
                               fontWeight: FontWeight.w600,
                               color: _text)),
                     ),
+                    if (src?.authorVerified ?? false) ...[
+                      const SizedBox(width: 3),
+                      const Icon(Icons.verified,
+                          size: 13, color: Color(0xFFB8860B)),
+                    ],
                     if (account.isNotEmpty) ...[
                       const SizedBox(width: 3),
                       Flexible(
@@ -1689,6 +1704,7 @@ class _ReplyItem extends StatelessWidget {
               ? me.displayName
               : (original?.authorName ?? '同修'),
           account: original?.authorAccount ?? '',
+          authorVerified: original?.authorVerified ?? false,
           timeMs: original?.createdAt ?? 0,
           content: original != null
               ? content

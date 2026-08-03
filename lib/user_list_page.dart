@@ -272,12 +272,25 @@ class _UserListPageState extends State<UserListPage> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                user.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 15, color: _text, fontWeight: FontWeight.w500),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      user.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          color: _text,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                  if (user.verified) ...[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.verified,
+                        size: 14, color: Color(0xFFB8860B)),
+                  ],
+                ],
               ),
             ),
             if (!isSelf)

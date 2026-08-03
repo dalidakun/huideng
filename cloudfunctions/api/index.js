@@ -134,11 +134,63 @@ exports.main = async (event, context) => {
   const follows = db.collection("userFollows");
   const blocks = db.collection("userBlocks");
   const userAccounts = db.collection("userAccounts");
+  const feedbacks = db.collection("feedbacks");
+  const admins = db.collection("admins");
+  const verifications = db.collection("userVerifications");
 
   // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
   async function ensureUserAccounts() {
     try {
       await db.createCollection("userAccounts");
+    } catch (e) {
+      // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
+    }
+  }
+
+  // 确保 admins 集合存在。
+  async function ensureAdmins() {
+    try {
+      await db.createCollection("admins");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 判断是否为管理员：控制台数据库 → admins 集合中是否存在 { uid: 该用户 uid }。
+  async function isAdminUser(uid) {
+    if (!uid) return false;
+    try {
+      const { data } = await admins.where({ uid }).limit(1).get();
+      return !!(data && data.length > 0);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 给反馈列表附加反馈者的账号名称（未设置返回空串）。
+  async function attachFeedbackUsernames(feedbackList) {
+    if (!feedbackList || feedbackList.length === 0) return;
+    const ids = [...new Set(feedbackList.map((f) => f.userId).filter(Boolean))];
+    if (ids.length === 0) return;
+    const accounts = {};
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      try {
+        const { data } = await userAccounts
+          .where({ uid: _.in(chunk) })
+          .get();
+        for (const a of data || []) accounts[a.uid] = a.username || "";
+      } catch (e) {}
+    }
+    for (const f of feedbackList) {
+      f.username = accounts[f.userId] || "";
+    }
+  }
+
+  // 确保 userVerifications 集合存在。
+  async function ensureVerifications() {
+    try {
+      await db.createCollection("userVerifications");
     } catch (e) {
       // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
     }
@@ -163,6 +215,26 @@ exports.main = async (event, context) => {
     }
     for (const n of noteList) {
       n.authorAccount = accounts[n.ownerUserId] || "";
+    }
+  }
+
+  // 给笔记列表附加作者实名认证标记（authorVerified），供客户端展示认证图标。
+  async function attachAuthorVerified(noteList) {
+    if (!noteList || noteList.length === 0) return;
+    const ids = [...new Set(noteList.map((n) => n.ownerUserId).filter(Boolean))];
+    if (ids.length === 0) return;
+    const verified = {};
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      try {
+        const { data } = await verifications
+          .where({ uid: _.in(chunk) })
+          .get();
+        for (const v of data || []) verified[v.uid] = true;
+      } catch (e) {}
+    }
+    for (const n of noteList) {
+      n.authorVerified = !!verified[n.ownerUserId];
     }
   }
 
@@ -287,6 +359,7 @@ exports.main = async (event, context) => {
           .get();
         const { total } = await base.count();
         await attachAuthorAccounts(res.data);
+        await attachAuthorVerified(res.data);
         return ok({
           notes: res.data,
           total,
@@ -313,6 +386,7 @@ exports.main = async (event, context) => {
           .get();
         const { total } = await base.count();
         await attachAuthorAccounts(res.data);
+        await attachAuthorVerified(res.data);
         return ok({
           notes: res.data,
           total,
@@ -362,6 +436,7 @@ exports.main = async (event, context) => {
           const pageNotes = scored.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
           const notesOut = pageNotes.map(({ _hotScore, ...rest }) => rest);
           await attachAuthorAccounts(notesOut);
+          await attachAuthorVerified(notesOut);
           return ok({
             notes: notesOut,
             total,
@@ -377,6 +452,7 @@ exports.main = async (event, context) => {
         const filtered = filterBlocked(res.data);
         const { total } = await base.count();
         await attachAuthorAccounts(filtered);
+        await attachAuthorVerified(filtered);
         return ok({
           notes: filtered,
           total,
@@ -396,6 +472,7 @@ exports.main = async (event, context) => {
           return fail("not_found");
         }
         await attachAuthorAccounts([note]);
+        await attachAuthorVerified([note]);
         return ok({ note });
       }
 
@@ -525,6 +602,7 @@ exports.main = async (event, context) => {
           } catch (e) {}
         }
         await attachAuthorAccounts(list);
+        await attachAuthorVerified(list);
         return ok({ notes: list });
       }
 
@@ -553,6 +631,15 @@ exports.main = async (event, context) => {
         const ids = (Array.isArray(event.ids) ? event.ids.map(String) : [])
           .filter(Boolean)
           .slice(0, 200);
+        const verified = {};
+        if (ids.length > 0) {
+          try {
+            const { data } = await verifications
+              .where({ uid: _.in(ids) })
+              .get();
+            for (const v of data || []) verified[v.uid] = true;
+          } catch (e) {}
+        }
         const users = [];
         for (const id of ids) {
           let name = "同修";
@@ -565,7 +652,7 @@ exports.main = async (event, context) => {
             const n = ndata && ndata[0];
             if (n && n.authorName) name = String(n.authorName);
           } catch (e) {}
-          users.push({ id, name });
+          users.push({ id, name, verified: !!verified[id] });
         }
         return ok({ users });
       }
@@ -647,6 +734,7 @@ exports.main = async (event, context) => {
           } catch (e) {}
         }
         await attachAuthorAccounts(list);
+        await attachAuthorVerified(list);
         return ok({ notes: list });
       }
 
@@ -1029,6 +1117,105 @@ exports.main = async (event, context) => {
         return ok({ username: acc ? acc.username : "" });
       }
 
+      // ==================== 反馈 ====================
+
+      // 用户反馈（未登录也可提交，匿名记录 uid 为空串）。
+      // 收集方式：云开发控制台 → 数据库 → feedbacks 集合查看/导出。
+      case "submitFeedback": {
+        const content = String(event.content || "").trim().slice(0, 1000);
+        if (!content) return fail("empty_content");
+        await feedbacks.add({
+          userId: uid || "",
+          content,
+          contact: String(event.contact || "").slice(0, 100),
+          status: "new",
+          createdAt: now(),
+        });
+        return ok({});
+      }
+
+      // 当前登录用户是否为管理员（admins 集合中登记了 uid）。
+      case "isAdmin": {
+        await ensureAdmins();
+        return ok({ isAdmin: await isAdminUser(uid) });
+      }
+
+      // 管理员拉取反馈列表（分页，新反馈优先）。
+      case "getFeedbacks": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 50);
+        const base = feedbacks.orderBy("createdAt", "desc");
+        const res = await base
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        const { total } = await feedbacks.count();
+        const { total: unread } = await feedbacks
+          .where({ status: "new" })
+          .count();
+        await attachFeedbackUsernames(res.data);
+        return ok({
+          feedbacks: res.data,
+          total,
+          unread,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
+      }
+
+      // 管理员标记反馈为已处理 / 待处理。
+      case "markFeedbackHandled": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        const id = String(event.id || "");
+        const status = event.handled === true ? "handled" : "new";
+        const patch = { status };
+        if (status === "handled") patch.handledAt = now();
+        await feedbacks.doc(id).update(patch);
+        return ok({});
+      }
+
+      // ==================== 实名认证 ====================
+
+      // 提交实名认证：服务端再次校验姓名与身份证号格式（地区码/出生日期/校验位），
+      // 只保存姓名的脱敏形式与身份证号哈希，不保存明文；同一账号只认证一次（幂等）。
+      case "verifyIdentity": {
+        if (!uid) return fail("unauthorized");
+        await ensureVerifications();
+        const realName = String(event.realName || "").trim();
+        const idCard = String(event.idCard || "").trim().toUpperCase();
+        const nameErr = validateRealName(realName);
+        if (nameErr) return fail(nameErr);
+        const idErr = validateIdCard(idCard);
+        if (idErr) return fail(idErr);
+        const existing = await verifications.where({ uid }).limit(1).get();
+        if (existing.data.length > 0) {
+          const v = existing.data[0];
+          return ok({ verified: true, realNameMasked: v.realNameMasked || "" });
+        }
+        const masked = maskRealName(realName);
+        const idHash = crypto.createHash("sha256").update(idCard).digest("hex");
+        await verifications.add({
+          uid,
+          realNameMasked: masked,
+          idHash,
+          verifiedAt: now(),
+        });
+        return ok({ verified: true, realNameMasked: masked });
+      }
+
+      // 查询当前登录用户的实名认证状态。
+      case "getMyVerification": {
+        if (!uid) return ok({ verified: false });
+        await ensureVerifications();
+        const { data } = await verifications.where({ uid }).limit(1).get();
+        const v = data && data[0];
+        return ok({
+          verified: !!v,
+          realNameMasked: v ? v.realNameMasked || "" : "",
+          verifiedAt: v ? v.verifiedAt || 0 : 0,
+        });
+      }
+
       // ==================== 管理 ====================
 
       case "hideNote": {
@@ -1063,6 +1250,51 @@ function normalizeUsername(raw) {
   const u = String(raw || "").trim();
   if (!/^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$/.test(u)) return null;
   return u;
+}
+
+// 真实姓名：2-20 位汉字，允许少数民族姓名中的间隔号 ·。合法返回空串。
+function validateRealName(raw) {
+  const n = String(raw || "").trim();
+  if (!n) return "请输入真实姓名";
+  if (n.length < 2 || n.length > 20) return "姓名长度需为 2-20 个汉字";
+  if (!/^[\u4e00-\u9fa5·]+$/.test(n)) return "姓名仅支持汉字与间隔号 ·";
+  return "";
+}
+
+// 18 位身份证号校验（GB 11643-1999）：长度、地区码、出生日期、校验位。合法返回空串。
+function validateIdCard(raw) {
+  const id = String(raw || "").trim().toUpperCase();
+  if (!id) return "请输入身份证号";
+  if (!/^\d{17}[\dX]$/.test(id)) return "身份证号需为 18 位数字，末位可为 X";
+  const region = Number(id.slice(0, 2));
+  if (region < 11 || region > 82) return "身份证号前两位地区码无效";
+  const y = Number(id.slice(6, 10));
+  const m = Number(id.slice(10, 12));
+  const d = Number(id.slice(12, 14));
+  const dt = new Date(y, m - 1, d);
+  if (
+    dt.getFullYear() !== y ||
+    dt.getMonth() !== m - 1 ||
+    dt.getDate() !== d ||
+    dt.getTime() > Date.now()
+  ) {
+    return "身份证号中的出生日期无效";
+  }
+  const weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+  const codes = "10X98765432";
+  let sum = 0;
+  for (let i = 0; i < 17; i++) sum += Number(id[i]) * weights[i];
+  if (codes[sum % 11] !== id[17]) return "身份证号校验位不正确，请核对";
+  return "";
+}
+
+// 姓名脱敏：2 字「张*」，3 字「李**」，4 字及以上保留首末字「欧**娜」。
+function maskRealName(raw) {
+  const n = String(raw || "").trim();
+  if (n.length <= 1) return "***";
+  if (n.length === 2) return n[0] + "*";
+  if (n.length === 3) return n[0] + "**";
+  return n[0] + "**" + n[n.length - 1];
 }
 
 // scrypt + 随机盐哈希密码，只存哈希不存明文。

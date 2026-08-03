@@ -1,10 +1,32 @@
 import 'package:flutter/material.dart';
 
+import 'cloud_notes_service.dart';
+import 'feedback_admin_page.dart';
 import 'settings_widgets.dart';
+import 'text_input_sheet.dart';
 
 /// 关于我们：应用简介、版本信息。
-class AboutPage extends StatelessWidget {
+class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
+
+  @override
+  State<AboutPage> createState() => _AboutPageState();
+}
+
+class _AboutPageState extends State<AboutPage> {
+  bool _isAdmin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAdmin();
+  }
+
+  Future<void> _checkAdmin() async {
+    final ok = await CloudNotesService.instance.isAdmin();
+    if (!mounted) return;
+    setState(() => _isAdmin = ok);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,12 +75,35 @@ class AboutPage extends StatelessWidget {
                 subtitle: '邮箱：liyankun007@gmail.com',
               ),
               const SettingsDivider(),
+              SettingsTile(
+                icon: Icons.feedback_outlined,
+                iconColor: sGold,
+                title: '反馈问题',
+                subtitle: '告诉我们你的建议或遇到的问题',
+                onTap: () => _submitFeedback(context),
+              ),
+              const SettingsDivider(),
               const SettingsTile(
                 icon: Icons.favorite_border,
                 iconColor: sGold,
                 title: '初心',
                 subtitle: '愿更多人亲近经典，修习佛法。',
               ),
+              if (_isAdmin) ...[
+                const SettingsDivider(),
+                SettingsTile(
+                  icon: Icons.admin_panel_settings_outlined,
+                  iconColor: sGold,
+                  title: '反馈管理',
+                  subtitle: '查看用户提交的反馈',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const FeedbackAdminPage(),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 20),
@@ -95,5 +140,36 @@ class AboutPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 反馈入口：弹出输入框 → 提交到云端 feedbacks 集合。
+  Future<void> _submitFeedback(BuildContext context) async {
+    final content = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: sCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => const SheetTextInput(
+        title: '反馈问题',
+        hint: '请描述你遇到的问题或建议…',
+        maxLength: 1000,
+        confirmText: '提交',
+      ),
+    );
+    final text = content?.trim() ?? '';
+    if (text.isEmpty || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await CloudNotesService.instance.submitFeedback(text);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('感谢反馈，我们会尽快处理'), duration: Duration(seconds: 2)),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('提交失败：$e'), duration: Duration(seconds: 2)),
+      );
+    }
   }
 }

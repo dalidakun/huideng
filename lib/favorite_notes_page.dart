@@ -178,6 +178,11 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                               style: const TextStyle(
                                   fontSize: 12, color: _textSec)),
                         ),
+                        if (note.authorVerified) ...[
+                          const SizedBox(width: 3),
+                          const Icon(Icons.verified,
+                              size: 12, color: Color(0xFFB8860B)),
+                        ],
                         if (note.authorAccount.isNotEmpty) ...[
                           const SizedBox(width: 3),
                           Flexible(

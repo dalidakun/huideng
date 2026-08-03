@@ -366,11 +366,38 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
+  /// 拉取一页广场笔记并过滤掉被屏蔽用户的帖子；若整页均被屏蔽且还有更多，自动续取下一页（最多 4 页）。
+  /// 返回（可见笔记, 下一页页码, 是否还有更多）。
+  Future<(List<PlazaNote>, int, bool)> _fetchFilteredFeed(
+      int page, String sort) async {
+    final blocked = CloudNotesService.instance.blockedUserIds;
+    if (blocked.isEmpty) {
+      final (list, more) = await CloudNotesService.instance
+          .getPlazaNotes(page: page, pageSize: _feedPageSize, sort: sort);
+      return (list, page + 1, more);
+    }
+    final collected = <PlazaNote>[];
+    var cur = page;
+    var hasMore = true;
+    for (var i = 0; i < 4; i++) {
+      final (list, more) = await CloudNotesService.instance
+          .getPlazaNotes(page: cur, pageSize: _feedPageSize, sort: sort);
+      for (final n in list) {
+        if (!blocked.contains(n.ownerUserId)) collected.add(n);
+      }
+      hasMore = more;
+      cur++;
+      if (collected.isNotEmpty || !hasMore) break;
+    }
+    return (collected, cur, hasMore);
+  }
+
   /// 加载当前 tab 的笔记流。最新：按发布时间倒序（最新分享的在前）。
   /// 最热：按自定义热门规则（阅读/点赞/评论/转发）倒序。关注：仅展示已关注同修的笔记。
   /// 公告：暂为占位 UI。
   Future<void> _loadFeed() async {
     await CloudNotesService.instance.refreshLikedNoteIds();
+    await CloudNotesService.instance.refreshFollowStates();
     await NoteSutraCatalog.load(); // 确保经书目录已缓存，提取 @经书 时可用
     _timeCache.clear();
     _plainTextCache.clear();
@@ -389,13 +416,13 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       if (tab == 'latest' || tab == 'hot') {
         final sort = tab == 'hot' ? 'hot' : 'latest';
-        final (list, hasMore) = await CloudNotesService.instance
-            .getPlazaNotes(page: 1, pageSize: _feedPageSize, sort: sort);
+        final (list, nextPage, hasMore) =
+            await _fetchFilteredFeed(1, sort);
         if (mounted) {
           setState(() {
             _feedNotes.addAll(list);
             _feedVersion++;
-            _feedPage = 2;
+            _feedPage = nextPage;
             _feedHasMore = hasMore;
             _feedInitial = false;
           });
@@ -463,11 +490,11 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       if (tab == 'latest' || tab == 'hot') {
         final sort = tab == 'hot' ? 'hot' : 'latest';
-        final (list, hasMore) = await CloudNotesService.instance
-            .getPlazaNotes(page: 1, pageSize: _feedPageSize, sort: sort);
+        final (list, nextPage, hasMore) =
+            await _fetchFilteredFeed(1, sort);
         if (!mounted) return;
         c.notes = list;
-        c.page = 2;
+        c.page = nextPage;
         c.hasMore = hasMore;
         c.initial = false;
         c.error = false;
@@ -477,6 +504,7 @@ class StudyHubPageState extends State<StudyHubPage>
         final ids = raw.isEmpty
             ? <String>{}
             : raw.split(',').where((s) => s.isNotEmpty).toSet();
+        final blocked = CloudNotesService.instance.blockedUserIds;
         final all = <PlazaNote>[];
         final seen = <String>{};
         var page = 1;
@@ -485,7 +513,11 @@ class StudyHubPageState extends State<StudyHubPage>
           final (list, more) = await CloudNotesService.instance
               .getPlazaNotes(page: page, pageSize: _feedPageSize);
           for (final n in list) {
-            if (ids.contains(n.ownerUserId) && seen.add(n.id)) all.add(n);
+            if (ids.contains(n.ownerUserId) &&
+                !blocked.contains(n.ownerUserId) &&
+                seen.add(n.id)) {
+              all.add(n);
+            }
           }
           hasMore = more;
           page++;
@@ -531,6 +563,7 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       final all = <PlazaNote>[];
       final seen = <String>{};
+      final blocked = CloudNotesService.instance.blockedUserIds;
       var page = 1;
       var hasMore = true;
       const maxPages = 10;
@@ -539,7 +572,9 @@ class StudyHubPageState extends State<StudyHubPage>
         final (list, more) = await CloudNotesService.instance
             .getPlazaNotes(page: page, pageSize: _feedPageSize);
         for (final n in list) {
-          if (_followedIds.contains(n.ownerUserId) && seen.add(n.id)) {
+          if (_followedIds.contains(n.ownerUserId) &&
+              !blocked.contains(n.ownerUserId) &&
+              seen.add(n.id)) {
             all.add(n);
           }
         }
@@ -576,13 +611,13 @@ class StudyHubPageState extends State<StudyHubPage>
     setState(() => _feedLoading = true);
     try {
       final sort = tab == 'hot' ? 'hot' : 'latest';
-      final (list, hasMore) = await CloudNotesService.instance
-          .getPlazaNotes(page: _feedPage, pageSize: _feedPageSize, sort: sort);
+      final (list, nextPage, hasMore) =
+          await _fetchFilteredFeed(_feedPage, sort);
       if (!mounted) return;
       setState(() {
         _feedNotes.addAll(list);
         _feedVersion++;
-        _feedPage++;
+        _feedPage = nextPage;
         _feedHasMore = hasMore;
         _feedLoading = false;
       });
@@ -1644,14 +1679,17 @@ class StudyHubPageState extends State<StudyHubPage>
                   ),
                 ),
               ],
-              if (note.quoteContent.isNotEmpty) ...[
+              if (note.repostOf.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Builder(builder: (_) {
-                  final quoteSutras =
-                      NoteSutraLinks.extract(note.quoteOfContent);
+                  // 引用转发用快照内容；直接转发 content 即原帖内容。
+                  final quoteSource = note.quoteOfContent.isNotEmpty
+                      ? note.quoteOfContent
+                      : note.content;
+                  final quoteSutras = NoteSutraLinks.extract(quoteSource);
                   final quotePlain = _plainTextCache.putIfAbsent(
                       'quote_${note.id}',
-                      () => NoteSutraLinks.plainText(note.quoteOfContent));
+                      () => NoteSutraLinks.plainText(quoteSource));
                   final quotePreview = quotePlain.length > 80
                       ? '${quotePlain.substring(0, 80)}...'
                       : quotePlain;
@@ -1726,6 +1764,11 @@ class StudyHubPageState extends State<StudyHubPage>
                               style: const TextStyle(
                                   fontSize: 12, color: _textSec)),
                         ),
+                        if (note.authorVerified) ...[
+                          const SizedBox(width: 3),
+                          const Icon(Icons.verified,
+                              size: 12, color: Color(0xFFB8860B)),
+                        ],
                         if (note.authorAccount.isNotEmpty) ...[
                           const SizedBox(width: 3),
                           Flexible(

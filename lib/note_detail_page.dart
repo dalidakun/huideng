@@ -736,6 +736,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                         fontWeight: FontWeight.w600,
                         color: _text)),
               ),
+              if (note.authorVerified) ...[
+                const SizedBox(width: 3),
+                const Icon(Icons.verified, size: 14, color: Color(0xFFB8860B)),
+              ],
               if (note.authorAccount.isNotEmpty) ...[
                 const SizedBox(width: 3),
                 Flexible(
@@ -793,11 +797,25 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text(note.authorName,
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(note.authorName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: _text)),
+                  ),
+                  if (note.authorVerified) ...[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.verified,
+                        size: 15, color: Color(0xFFB8860B)),
+                  ],
+                ],
+              ),
             ),
             const Divider(height: 1, color: _border),
             _menuItem(
