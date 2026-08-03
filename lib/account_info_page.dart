@@ -253,22 +253,22 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                                         fit: BoxFit.cover)
                                     : null,
                               ),
-                              child: _avatarPath == null
-                                  ? const Icon(Icons.person, size: 38, color: sTextHint)
-                                  : null,
-                            ),
-                            Positioned(
-                              right: 0,
-                              bottom: 0,
-                              child: Container(
-                                width: 24,
-                                height: 24,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: sGold,
-                                  border: Border.all(color: sCard, width: 2),
-                                ),
-                                child: const Icon(Icons.edit_outlined, size: 13, color: Colors.white),
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  if (_avatarPath == null)
+                                    const Icon(Icons.person, size: 38, color: sTextHint),
+                                  Container(
+                                    width: 22,
+                                    height: 22,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: sGold,
+                                      border: Border.all(color: sCard, width: 2),
+                                    ),
+                                    child: const Icon(Icons.edit_outlined, size: 12, color: Colors.white),
+                                  ),
+                                ],
                               ),
                             ),
                           ],

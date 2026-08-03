@@ -25,7 +25,6 @@ class NoteEditPage extends StatefulWidget {
 }
 
 class _NoteEditPageState extends State<NoteEditPage> {
-  late TextEditingController _titleController;
   late TextEditingController _contentController;
   bool _hasChanges = false;
   String? _savedId;
@@ -43,16 +42,10 @@ class _NoteEditPageState extends State<NoteEditPage> {
   @override
   void initState() {
     super.initState();
-    _titleController = TextEditingController(text: widget.note?['title'] ?? '');
     _contentController = TextEditingController(text: widget.note?['content'] ?? '');
     _shared = widget.note?['shared'] == true;
     _cloudId = widget.note?['cloudId'] as String?;
-    _titleController.addListener(_onChange);
     _contentController.addListener(_onContentChanged);
-  }
-
-  void _onChange() {
-    if (!_hasChanges) setState(() => _hasChanges = true);
   }
 
   void _onContentChanged() {
@@ -151,15 +144,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
   @override
   void dispose() {
     _sutraDebounce?.cancel();
-    _titleController.dispose();
     _contentController.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    final title = _titleController.text.trim();
     final content = _contentController.text.trim();
-    if (title.isEmpty && content.isEmpty) return;
+    if (content.isEmpty) return;
 
     if (_shared && !AuthService.instance.isLoggedIn) {
       _showToast('分享到菩提空间需要先登录');
@@ -176,13 +167,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
       try {
         if (_cloudId == null || _cloudId!.isEmpty) {
           newCloudId = await CloudNotesService.instance.publishNote(
-            title: title.isEmpty ? '无标题' : title,
+            title: '',
             content: content,
           );
         } else {
           await CloudNotesService.instance.updateSharedNote(
             cloudId: _cloudId!,
-            title: title.isEmpty ? '无标题' : title,
+            title: '',
             content: content,
             isPublic: true,
           );
@@ -202,14 +193,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
     final raw = prefs.getString('notes') ?? '[]';
     final List<dynamic> notes = jsonDecode(raw);
     final now = DateTime.now().toIso8601String();
-    final displayTitle = title.isEmpty ? '无标题' : title;
 
     final sharedNow =
         _shared && (cloudOk || (_cloudId != null && _cloudId!.isNotEmpty));
     final targetId = _savedId ?? widget.note?['id'] ?? now;
     final newNote = <String, dynamic>{
       'id': targetId,
-      'title': displayTitle,
+      'title': '',
       'content': content,
       'updatedAt': now,
       'shared': sharedNow,
@@ -229,7 +219,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
         _hasChanges = false;
         _savingCloud = false;
       });
-      _showSavedToast(sharedNow ? '已保存并分享' : '已保存');
+      _showSavedToast(sharedNow ? '已保存并分享' : '已保存到草稿');
     }
   }
 
@@ -560,25 +550,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
         ),
         body: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
-              child: TextField(
-                controller: _titleController,
-                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text),
-                decoration: InputDecoration(
-                  hintText: '标题',
-                  hintStyle: TextStyle(color: _textHint),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Divider(height: 1, thickness: 0.5, color: Color(0xFFEBE1D6)),
-            ),
             Expanded(
               child: Stack(
                 children: [
@@ -589,12 +560,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       maxLines: null,
                       expands: true,
                       textAlignVertical: TextAlignVertical.top,
-                      style: const TextStyle(fontSize: 15, color: _text, height: 1.6),
+                      style: const TextStyle(fontSize: 16, color: _text, height: 1.6),
                       decoration: InputDecoration(
                         hintText: '开始记录...\n输入 @ 可引用经书',
                         hintStyle: TextStyle(color: _textHint),
                         isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 18),
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
                       ),

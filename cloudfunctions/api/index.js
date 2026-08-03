@@ -17,6 +17,7 @@
  */
 // 云函数专用 Server SDK：自动读取环境注入的管理员凭证，数据库端点自带地域。
 const cloudbase = require("@cloudbase/node-sdk");
+const crypto = require("crypto");
 
 // 按环境变量显式构造凭证（与 SDK 自动读取等价，显式更稳妥）。
 function buildInitOptions() {
@@ -122,6 +123,7 @@ exports.main = async (event, context) => {
   const userData = db.collection("userData");
   const follows = db.collection("userFollows");
   const blocks = db.collection("userBlocks");
+  const userAccounts = db.collection("userAccounts");
 
   const action = event.action;
   console.log(`[api] action=${action} uid=${uid} tokenPresent=${!!(event.__accessToken)}`);
@@ -830,6 +832,81 @@ exports.main = async (event, context) => {
         return ok({ updatedAt: record.updatedAt });
       }
 
+      // ==================== 账号名称 + 密码登录 ====================
+
+      // 设置/修改账号名称与密码（需已登录）。账号名称全局唯一。
+      case "setAccount": {
+        if (!uid) return fail("unauthorized");
+        const username = normalizeUsername(event.username);
+        if (!username) return fail("invalid_username");
+        const password = String(event.password || "");
+        if (password.length < 6 || password.length > 64) {
+          return fail("invalid_password");
+        }
+        const usernameKey = username.toLowerCase();
+        const { data } = await userAccounts
+          .where({ usernameKey })
+          .limit(1)
+          .get();
+        const existing = data && data[0];
+        if (existing && existing.uid !== uid) return fail("username_taken");
+        const salt = crypto.randomBytes(16).toString("hex");
+        const passwordHash = hashPassword(password, salt);
+        if (existing) {
+          await userAccounts.doc(existing._id).update({
+            username,
+            usernameKey,
+            salt,
+            passwordHash,
+            updatedAt: now(),
+          });
+        } else {
+          await userAccounts.add({
+            username,
+            usernameKey,
+            salt,
+            passwordHash,
+            uid,
+            createdAt: now(),
+            updatedAt: now(),
+          });
+        }
+        return ok({ username });
+      }
+
+      // 账号名称 + 密码登录：校验通过后签发自定义登录票据，客户端用票据建立会话。
+      case "loginWithAccount": {
+        const username = String(event.username || "").trim().toLowerCase();
+        if (!username) return fail("bad_request");
+        const password = String(event.password || "");
+        const { data } = await userAccounts
+          .where({ usernameKey: username })
+          .limit(1)
+          .get();
+        const acc = data && data[0];
+        if (!acc) return fail("account_not_found");
+        if (hashPassword(password, acc.salt) !== acc.passwordHash) {
+          return fail("wrong_password");
+        }
+        let ticket = "";
+        try {
+          // 需要云开发环境开启「自定义登录」。
+          ticket = await app.auth().createTicket(acc.uid, { refresh: 604800 });
+        } catch (e) {
+          console.log("[api] createTicket error:", e.message);
+          return fail("ticket_error");
+        }
+        return ok({ uid: acc.uid, ticket });
+      }
+
+      // 查询当前登录用户的账号名称（未设置返回空串）。
+      case "getMyAccount": {
+        if (!uid) return ok({ username: "" });
+        const { data } = await userAccounts.where({ uid }).limit(1).get();
+        const acc = data && data[0];
+        return ok({ username: acc ? acc.username : "" });
+      }
+
       // ==================== 管理 ====================
 
       case "hideNote": {
@@ -857,4 +934,16 @@ async function getOwnedNote(notesColl, id, uid) {
 async function getNote(notesColl, id) {
   const { data } = await notesColl.doc(id).get();
   return data && data[0];
+}
+
+// 账号名称规则：2-20 位，中英文、数字、下划线。
+function normalizeUsername(raw) {
+  const u = String(raw || "").trim();
+  if (!/^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$/.test(u)) return null;
+  return u;
+}
+
+// scrypt + 随机盐哈希密码，只存哈希不存明文。
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 32).toString("hex");
 }

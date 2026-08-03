@@ -625,6 +625,7 @@ class SutraListPageState extends State<SutraListPage>
         if (loaded.isNotEmpty) {
           _applySutraList(loaded);
           await _maybeRestoreDefaultsAfterApkUpdate();
+          await _applyRestoredSutraStates();
           return;
         }
       }
@@ -643,6 +644,7 @@ class SutraListPageState extends State<SutraListPage>
       await prefs.remove('sutras');
       _applySutraList(loaded);
       await _maybeRestoreDefaultsAfterApkUpdate();
+      await _applyRestoredSutraStates();
       return;
     }
 
@@ -652,6 +654,60 @@ class SutraListPageState extends State<SutraListPage>
     await _writeSutraListFile(catalog);
     // 初始化安装标记（避免第一次启动就触发“恢复默认”）。
     await _shouldRestoreDefaultsAfterApkUpdate(prefs);
+    await _applyRestoredSutraStates();
+  }
+
+  /// 将云端同步下来的经书状态（已读/收藏/置顶/时间）合并进本地列表。
+  /// 以标题匹配，采用并集（OR）语义：本地缺失的状态补上，已有状态绝不覆盖。
+  /// 幂等：重复合并不会产生副作用。
+  Future<void> _applyRestoredSutraStates() async {
+    if (kIsWeb) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('sutra_states');
+      if (raw == null || raw.isEmpty) return;
+      final states = jsonDecode(raw);
+      if (states is! Map || states.isEmpty) return;
+
+      var changed = false;
+      final list = List<Sutra>.from(_allSutras);
+      for (var i = 0; i < list.length; i++) {
+        final st = states[list[i].title];
+        if (st is! Map) continue;
+        final s = list[i];
+        final r = st['r'] == true;
+        final f = st['f'] == true;
+        final p = st['p'] == true;
+        final rt = st['rt']?.toString();
+        final ft = st['ft']?.toString();
+        if (!r && !f && !p && rt == null && ft == null) continue;
+        final timeSame =
+            (rt == null || s.readTime?.toIso8601String() == rt) &&
+                (ft == null || s.favoriteTime?.toIso8601String() == ft);
+        if (r == s.isRead && f == s.isFavorite && p == s.isPinned && timeSame) {
+          continue;
+        }
+        list[i] = Sutra(
+          s.title,
+          s.size,
+          isPinned: s.isPinned || p,
+          isRead: s.isRead || r,
+          isFavorite: s.isFavorite || f,
+          filePath: s.filePath,
+          folder: s.folder,
+          favoriteTime:
+              (s.favoriteTime != null || ft == null) ? s.favoriteTime : DateTime.tryParse(ft),
+          readTime: (s.readTime != null || rt == null) ? s.readTime : DateTime.tryParse(rt),
+        );
+        changed = true;
+      }
+      if (changed) {
+        _applySutraList(list);
+        await _writeSutraListFile(list);
+      }
+    } catch (_) {
+      // 状态合并失败不影响列表加载。
+    }
   }
 
   void _applySutraList(List<Sutra> list) {

@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -65,8 +67,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   Future<void> _pickAvatar() async {
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+      type: FileType.image,
+      allowMultiple: false,
     );
     if (result == null || result.files.single.path == null) return;
     try {
@@ -113,19 +115,33 @@ class _EditProfilePageState extends State<EditProfilePage> {
       await prefs.setString('user_nickname', nickname);
     }
     await prefs.setString('user_tagline', tagline);
-    if (_isLoggedIn) {
-      try {
-        await AuthService.instance.updateProfile(
-          nickname: nickname.isEmpty ? null : nickname,
-          tagline: tagline,
-        );
-      } catch (_) {}
+    // 本地登录态立即生效（触发「我的」页刷新昵称）。
+    final current = AuthService.instance.currentUser.value;
+    if (current != null && nickname.isNotEmpty) {
+      AuthService.instance.currentUser.value = AuthUser(
+        id: current.id,
+        mobilePhoneNumber: current.mobilePhoneNumber,
+        nickname: nickname,
+        tagline: tagline,
+      );
     }
     if (!mounted) return;
+    // 横幅下边缘小字号提示，避免云端同步耗时造成卡顿。
     setState(() => _showSavedText = true);
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _showSavedText = false);
     });
+    // 云端同步放到后台执行，不阻塞保存反馈。
+    if (_isLoggedIn) {
+      unawaited(() async {
+        try {
+          await AuthService.instance.updateProfile(
+            nickname: nickname.isEmpty ? null : nickname,
+            tagline: tagline,
+          );
+        } catch (_) {}
+      }());
+    }
   }
 
   void _showToast(String text) {
@@ -137,242 +153,280 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: true,
-      child: Scaffold(
-        backgroundColor: _bg,
-        body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: [
-                GestureDetector(
-                  onTap: _pickBanner,
-                  child: Stack(
-                    children: [
-                      Container(
-                        width: double.infinity,
-                        height: 160,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFD2C5B3),
-                          image: _bannerPath != null
-                              ? DecorationImage(
-                                  image: FileImage(File(_bannerPath!)),
-                                  fit: BoxFit.cover,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Color(0xFFD2C5B3),
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+      ),
+      child: SafeArea(
+        top: true,
+        child: Scaffold(
+          backgroundColor: _bg,
+          body: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  GestureDetector(
+                    onTap: _pickBanner,
+                    child: Stack(
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          height: 160,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD2C5B3),
+                            image: _bannerPath != null
+                                ? DecorationImage(
+                                    image: FileImage(File(_bannerPath!)),
+                                    fit: BoxFit.cover,
+                                  )
+                                : null,
+                          ),
+                          child: _bannerPath == null
+                              ? const Center(
+                                  child: Icon(Icons.camera_alt_outlined,
+                                      size: 28, color: Colors.white38),
                                 )
                               : null,
                         ),
-                        child: _bannerPath == null
-                            ? const Center(
-                                child: Icon(Icons.camera_alt_outlined,
-                                    size: 28, color: Colors.white38),
-                              )
-                            : null,
-                      ),
-                      Positioned(
-                        left: 8,
-                        top: 4,
-                        child: GestureDetector(
-                          onTap: () => Navigator.pop(context),
-                          child: Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.arrow_back_ios_new,
-                                size: 18, color: Colors.white),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        right: 8,
-                        bottom: 8,
-                        child: Container(
-                          width: 30,
-                          height: 30,
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.3),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.edit,
-                              size: 16, color: Colors.white),
-                        ),
-                      ),
-                      if (_showSavedText)
                         Positioned(
-                          bottom: -22,
-                          left: 0,
-                          right: 0,
-                          child: Center(
-                            child: Text('已保存',
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    color: _gold,
-                                    fontWeight: FontWeight.w500)),
+                          left: 8,
+                          top: 4,
+                          child: GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.arrow_back_ios_new,
+                                  size: 18, color: Colors.white),
+                            ),
                           ),
                         ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 20),
-                  child: Transform.translate(
-                    offset: const Offset(0, -38),
-                    child: GestureDetector(
-                      onTap: _pickAvatar,
-                      child: Stack(
-                        children: [
-                          Container(
-                            width: 76,
-                            height: 76,
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: Container(
+                            width: 30,
+                            height: 30,
                             decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.3),
                               shape: BoxShape.circle,
-                              color: _card,
-                              border: Border.all(color: Colors.white, width: 3),
-                              boxShadow: [
-                                BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.12),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 2)),
-                              ],
-                              image: _avatarPath != null
-                                  ? DecorationImage(
-                                      image: FileImage(File(_avatarPath!)),
-                                      fit: BoxFit.cover)
-                                  : null,
                             ),
-                            child: _avatarPath == null
-                                ? const Icon(Icons.person,
-                                    size: 38, color: _primaryLight)
-                                : null,
+                            child: const Icon(Icons.edit,
+                                size: 16, color: Colors.white),
                           ),
+                        ),
+                        if (_showSavedText)
                           Positioned(
+                            left: 0,
                             right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: _gold,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: _card, width: 2),
+                            bottom: 12,
+                            child: Center(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.45),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: const Text('已保存',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w500)),
                               ),
-                              child: const Icon(Icons.edit,
-                                  size: 13, color: Colors.white),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 20),
+                    child: Transform.translate(
+                      offset: const Offset(0, -38),
+                      child: GestureDetector(
+                        onTap: _pickAvatar,
+                        child: Stack(
+                          children: [
+                            Container(
+                              width: 76,
+                              height: 76,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _card,
+                                border: Border.all(
+                                    color: Colors.white, width: 3),
+                                boxShadow: [
+                                  BoxShadow(
+                                      color: Colors.black
+                                          .withValues(alpha: 0.12),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 2)),
+                                ],
+                                image: _avatarPath != null
+                                    ? DecorationImage(
+                                        image:
+                                            FileImage(File(_avatarPath!)),
+                                        fit: BoxFit.cover)
+                                    : null,
+                              ),
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  if (_avatarPath == null)
+                                    const Icon(Icons.person,
+                                        size: 38, color: _primaryLight),
+                                  Container(
+                                    width: 22,
+                                    height: 22,
+                                    decoration: BoxDecoration(
+                                      color: _gold,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                          color: _card, width: 2),
+                                    ),
+                                    child: const Icon(Icons.edit,
+                                        size: 12, color: Colors.white),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Transform.translate(
+                    offset: const Offset(0, -24),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 20),
+                          const Text('昵称',
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: _textSec)),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _nameCtrl,
+                            maxLength: 12,
+                            style: const TextStyle(
+                                fontSize: 16, color: _text),
+                            decoration: const InputDecoration(
+                              hintText: '输入你的昵称',
+                              hintStyle:
+                                  TextStyle(color: _textHint),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: _gold, width: 1.5),
+                              ),
+                              filled: true,
+                              fillColor: _card,
+                              contentPadding:
+                                  EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text('签名',
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: _textSec)),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _taglineCtrl,
+                            maxLength: 20,
+                            style: const TextStyle(
+                                fontSize: 16, color: _text),
+                            decoration: const InputDecoration(
+                              hintText: '一句修学感悟',
+                              hintStyle:
+                                  TextStyle(color: _textHint),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: _gold, width: 1.5),
+                              ),
+                              filled: true,
+                              fillColor: _card,
+                              contentPadding:
+                                  EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                ),
-                Transform.translate(
-                  offset: const Offset(0, -24),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('编辑个人资料',
-                            style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                color: _text)),
-                        const SizedBox(height: 20),
-                        const Text('昵称',
-                            style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: _textSec)),
-                        const SizedBox(height: 6),
-                        TextField(
-                          controller: _nameCtrl,
-                          maxLength: 12,
-                          style: const TextStyle(fontSize: 16, color: _text),
-                          decoration: const InputDecoration(
-                            hintText: '输入你的昵称',
-                            hintStyle: TextStyle(color: _textHint),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(12)),
-                              borderSide: BorderSide(color: Color(0xFFEFE6DB)),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(12)),
-                              borderSide: BorderSide(color: Color(0xFFEFE6DB)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(12)),
-                              borderSide: BorderSide(color: _gold, width: 1.5),
-                            ),
-                            filled: true,
-                            fillColor: _card,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text('签名',
-                            style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: _textSec)),
-                        const SizedBox(height: 6),
-                        TextField(
-                          controller: _taglineCtrl,
-                          maxLength: 20,
-                          style: const TextStyle(fontSize: 16, color: _text),
-                          decoration: const InputDecoration(
-                            hintText: '一句修学感悟',
-                            hintStyle: TextStyle(color: _textHint),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(12)),
-                              borderSide: BorderSide(color: Color(0xFFEFE6DB)),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(12)),
-                              borderSide: BorderSide(color: Color(0xFFEFE6DB)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(12)),
-                              borderSide: BorderSide(color: _gold, width: 1.5),
-                            ),
-                            filled: true,
-                            fillColor: _card,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: _save,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _gold,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 0,
-                ),
-                child: const Text('保存',
-                    style: TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.w600)),
+                ],
               ),
             ),
-          ),
-        ],
-      ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 12),
+              child: SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _gold,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: const Text('保存',
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        ),
       ),
     );
   }

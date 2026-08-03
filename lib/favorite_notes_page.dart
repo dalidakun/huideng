@@ -157,17 +157,10 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                note.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 15, color: _text, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              Text(
                 preview,
-                maxLines: 2,
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, color: _textSec, height: 1.5),
+                style: const TextStyle(fontSize: 14, color: _textSec, height: 1.5),
               ),
               const SizedBox(height: 10),
               Row(

@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -11,11 +11,12 @@ import 'reader_settings_page.dart';
 import 'checkin_reminder_page.dart';
 import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
+import 'account_setup_page.dart';
 import 'about_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
 import 'user_list_page.dart';
-import 'note_detail_page.dart';
+import 'note_edit_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -25,6 +26,7 @@ const Color _card = Color(0xFFFFFAF5);
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
+const Color _border = Color(0xFFEBE1D6);
 
 /// 从左侧边缘滑入的页面路由。
 Route<T> slideInFromLeft<T>(Widget page) {
@@ -75,7 +77,7 @@ class MyPageState extends State<MyPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadData();
     _loadCounts();
     AuthService.instance.currentUser.addListener(_onAuthChanged);
@@ -102,9 +104,11 @@ class MyPageState extends State<MyPage>
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     final user = _authUser;
+    final av = prefs.getString('user_avatar_path');
+    final bn = prefs.getString('user_banner_path');
     setState(() {
-      _avatarPath = prefs.getString('user_avatar_path');
-      _bannerPath = prefs.getString('user_banner_path');
+      if (av != null) _avatarPath = av;
+      if (bn != null) _bannerPath = bn;
       if (_isLoggedIn) {
         _nickname = user?.displayName ?? '同修';
         _tagline = (user?.tagline?.isNotEmpty ?? false)
@@ -179,38 +183,47 @@ class MyPageState extends State<MyPage>
   }
 
   Future<void> _viewBanner() async {
+    if (_bannerPath == null || !File(_bannerPath!).existsSync()) return;
     await showDialog<void>(
       context: context,
       builder: (ctx) => GestureDetector(
         onTap: () => Navigator.pop(ctx),
         behavior: HitTestBehavior.opaque,
         child: Dialog(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          insetPadding: EdgeInsets.zero,
+          backgroundColor: Colors.black,
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  width: 300,
-                  height: 170,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD2C5B3),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 24),
-                    ],
-                    image: _bannerPath != null
-                        ? DecorationImage(image: FileImage(File(_bannerPath!)), fit: BoxFit.cover)
-                        : null,
+              InteractiveViewer(
+                maxScale: 5,
+                minScale: 1,
+                child: SizedBox.expand(
+                  child: Image.file(
+                    File(_bannerPath!),
+                    fit: BoxFit.contain,
                   ),
-                  child: _bannerPath == null
-                      ? const Icon(Icons.image, size: 48, color: Colors.white38)
-                      : null,
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text('轻触任意处关闭', style: TextStyle(fontSize: 13, color: Colors.white70)),
+              const SafeArea(
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Icon(Icons.close, color: Colors.white70, size: 26),
+                  ),
+                ),
+              ),
+              const SafeArea(
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: EdgeInsets.only(bottom: 24),
+                    child: Text('轻触任意处关闭 · 双指缩放',
+                        style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -237,7 +250,8 @@ class MyPageState extends State<MyPage>
   }
 
   void _openEditProfile() {
-    Navigator.push(context, slideInFromLeft(const EditProfilePage()));
+    Navigator.push(context, slideInFromLeft(const EditProfilePage()))
+        .then((_) => _loadData());
   }
 
   @override
@@ -270,6 +284,7 @@ class MyPageState extends State<MyPage>
             _TabContent(child: _MyRepliesTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
             _TabContent(child: _MyLikesTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
             _TabContent(child: _MyBookmarksTab(isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
+            _TabContent(child: _MyDraftsTab(reloadNotifier: _reloadNotifier)),
           ],
         ),
       ),
@@ -285,87 +300,102 @@ class MyPageState extends State<MyPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        GestureDetector(
-          onTap: _viewBanner,
+        SizedBox(
+          height: 240,
           child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              Container(
-                width: double.infinity,
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
                 height: 160,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD2C5B3),
-                  image: _bannerPath != null
-                      ? DecorationImage(
-                          image: FileImage(File(_bannerPath!)),
-                          fit: BoxFit.cover,
-                        )
-                      : null,
+                child: GestureDetector(
+                  onTap: _viewBanner,
+                  child: Container(
+                    width: double.infinity,
+                    height: 160,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD2C5B3),
+                      image: _bannerPath != null
+                          ? DecorationImage(
+                              image: FileImage(File(_bannerPath!)),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                    ),
+                    child: _bannerPath == null
+                        ? const Center(
+                            child: Icon(Icons.camera_alt_outlined, size: 28, color: Colors.white38),
+                          )
+                        : null,
+                  ),
                 ),
-                child: _bannerPath == null
-                    ? const Center(
-                        child: Icon(Icons.camera_alt_outlined, size: 28, color: Colors.white38),
-                      )
-                    : null,
               ),
               Positioned(
-                right: 20,
-                bottom: 12,
+                right: 8,
+                top: 168,
                 child: GestureDetector(
                   onTap: _openEditProfile,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.25),
+                      color: Colors.white.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
                     ),
                     child: const Text(
                       '编辑个人资料',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
+                        color: _text,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 20,
+                top: 122,
+                child: GestureDetector(
+                  onTap: _viewAvatar,
+                  child: Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _card,
+                      border: Border.all(color: Colors.white, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.12),
+                            blurRadius: 12,
+                            offset: const Offset(0, 2)),
+                      ],
+                      image: _avatarPath != null
+                          ? DecorationImage(
+                              image: FileImage(File(_avatarPath!)),
+                              fit: BoxFit.cover)
+                          : null,
+                    ),
+                    child: _avatarPath == null
+                        ? const Icon(Icons.person, size: 38, color: _primaryLight)
+                        : null,
                   ),
                 ),
               ),
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.only(left: 20),
-          child: Transform.translate(
-            offset: const Offset(0, -38),
-            child: GestureDetector(
-              onTap: _viewAvatar,
-              child: Container(
-                width: 76,
-                height: 76,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _card,
-                  border: Border.all(color: Colors.white, width: 3),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 12,
-                        offset: const Offset(0, 2)),
-                  ],
-                  image: _avatarPath != null
-                      ? DecorationImage(
-                          image: FileImage(File(_avatarPath!)),
-                          fit: BoxFit.cover)
-                      : null,
-                ),
-                child: _avatarPath == null
-                    ? const Icon(Icons.person, size: 38, color: _primaryLight)
-                    : null,
-              ),
-            ),
-          ),
-        ),
         Transform.translate(
-          offset: const Offset(0, -24),
+          offset: const Offset(0, -28),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
@@ -518,6 +548,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
           Tab(text: '回复'),
           Tab(text: '喜欢'),
           Tab(text: '书签'),
+          Tab(text: '草稿'),
         ],
       ),
     );
@@ -574,6 +605,780 @@ class _TabContent extends StatelessWidget {
   }
 }
 
+/// 用户头像：当前用户显示本地上传的头像图片，他人暂无云端头像数据显示默认图标。
+class _UserAvatar extends StatelessWidget {
+  final String? userId;
+  final double radius;
+  const _UserAvatar({this.userId, this.radius = 22});
+
+  @override
+  Widget build(BuildContext context) {
+    final me = AuthService.instance.currentUser.value;
+    final isMe = me != null && userId != null && userId == me.id;
+    if (!isMe) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: _primary.withValues(alpha: 0.10),
+        child: Icon(Icons.person, size: radius, color: _primaryLight),
+      );
+    }
+    return FutureBuilder<String?>(
+      future: SharedPreferences.getInstance()
+          .then((p) => p.getString('user_avatar_path')),
+      builder: (context, snap) {
+        final path = snap.data;
+        if (path != null && path.isNotEmpty && File(path).existsSync()) {
+          return CircleAvatar(
+              radius: radius, backgroundImage: FileImage(File(path)));
+        }
+        return CircleAvatar(
+          radius: radius,
+          backgroundColor: _primary.withValues(alpha: 0.10),
+          child: Icon(Icons.person, size: radius, color: _primaryLight),
+        );
+      },
+    );
+  }
+}
+
+/// 时间显示：今年显示「x月x日」，去年及往年显示「x年x月x日」。
+String _fullTime(int ms) {
+  if (ms <= 0) return '';
+  final t = DateTime.fromMillisecondsSinceEpoch(ms);
+  final now = DateTime.now();
+  if (t.year == now.year) return '${t.month}月${t.day}日';
+  return '${t.year}年${t.month}月${t.day}日';
+}
+
+/// 帖子块：左列头像，右侧第一行昵称/时间戳，内容与指标行与昵称同一左缘。
+/// onTap 为 null 时点击整块展开/收起内容，否则执行 onTap。
+/// allowActions=true 时指标行可交互（评论/转发/点赞），评论内嵌显示在下方。
+class _PostBlock extends StatefulWidget {
+  final String? ownerUserId;
+  final String nickname;
+  final int timeMs;
+  final String content;
+  final Widget? stats;
+  final VoidCallback? onTap;
+  final String? noteId;
+  final bool allowActions;
+  final int likeCount;
+  final int repostCount;
+  final int commentCount;
+  final int viewCount;
+  const _PostBlock({
+    required this.ownerUserId,
+    required this.nickname,
+    required this.timeMs,
+    required this.content,
+    this.stats,
+    this.onTap,
+    this.noteId,
+    this.allowActions = false,
+    this.likeCount = 0,
+    this.repostCount = 0,
+    this.commentCount = 0,
+    this.viewCount = 0,
+  });
+
+  @override
+  State<_PostBlock> createState() => _PostBlockState();
+}
+
+class _PostBlockState extends State<_PostBlock> {
+  bool _expanded = false;
+  late int _likeCount = widget.likeCount;
+  late int _repostCount = widget.repostCount;
+  late int _commentCount = widget.commentCount;
+  late bool _liked = widget.noteId != null &&
+      CloudNotesService.instance.likedNoteIds.contains(widget.noteId);
+  List<PlazaComment> _comments = [];
+  bool _showComments = false;
+  bool _commentsLoaded = false;
+
+  Future<void> _toggleLike() async {
+    final noteId = widget.noteId;
+    if (noteId == null) return;
+    try {
+      final (liked, count) =
+          await CloudNotesService.instance.toggleLike(noteId);
+      if (!mounted) return;
+      setState(() {
+        _liked = liked;
+        _likeCount = count;
+      });
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
+
+  Future<void> _loadComments() async {
+    final noteId = widget.noteId;
+    if (noteId == null) return;
+    try {
+      final cs = await CloudNotesService.instance.getComments(noteId);
+      if (!mounted) return;
+      setState(() {
+        _comments = cs;
+        _commentsLoaded = true;
+        _showComments = true;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _openCommentSheet() async {
+    if (widget.noteId == null) return;
+    if (!AuthService.instance.isLoggedIn) return;
+    // 先加载已有评论并显示在帖子下方。
+    if (!_commentsLoaded) await _loadComments();
+    final controller = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    height: 44,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: _bg,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    child: TextField(
+                      controller: controller,
+                      autofocus: true,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _submitComment(sheetCtx, controller),
+                      style: const TextStyle(fontSize: 14, color: _text),
+                      decoration: const InputDecoration(
+                        hintText: '说点什么…',
+                        hintStyle: TextStyle(color: _textHint),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: () => _submitComment(sheetCtx, controller),
+                  icon: const Icon(Icons.send_rounded, color: _primary, size: 22),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
+  Future<void> _submitComment(
+      BuildContext sheetCtx, TextEditingController controller) async {
+    final noteId = widget.noteId;
+    final content = controller.text.trim();
+    if (noteId == null || content.isEmpty) return;
+    try {
+      final comment =
+          await CloudNotesService.instance.createComment(noteId, content);
+      if (!mounted) return;
+      setState(() {
+        _commentCount++;
+        _comments.add(comment);
+        _showComments = true;
+        _commentsLoaded = true;
+      });
+      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
+      _showToastText(context, '评论成功');
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
+
+  Future<void> _repost() async {
+    final noteId = widget.noteId;
+    if (noteId == null || !AuthService.instance.isLoggedIn) return;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text('转发到菩提空间',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
+            _menuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    String quote = '';
+    if (choice == 'quote') {
+      final controller = TextEditingController();
+      quote = await showModalBottomSheet<String>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: _card,
+            shape: const RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.vertical(top: Radius.circular(20))),
+            builder: (sheetCtx) => Padding(
+              padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('引用转发',
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: _text)),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: controller,
+                        autofocus: true,
+                        maxLength: 500,
+                        maxLines: 3,
+                        minLines: 2,
+                        style: const TextStyle(fontSize: 14, color: _text),
+                        decoration: InputDecoration(
+                          hintText: '写点自己的感想…',
+                          hintStyle: const TextStyle(color: _textHint),
+                          filled: true,
+                          fillColor: _bg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _primary,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(22)),
+                          ),
+                          onPressed: () {
+                            final text = controller.text.trim();
+                            if (text.isEmpty) return;
+                            Navigator.pop(sheetCtx, text);
+                          },
+                          child: const Text('转发'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ) ??
+          '';
+      controller.dispose();
+      if (quote.isEmpty) return;
+    }
+    try {
+      await CloudNotesService.instance.repostNote(noteId, quote: quote);
+      if (!mounted) return;
+      setState(() => _repostCount++);
+      _showToastText(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final me = AuthService.instance.currentUser.value;
+    final showMore = me != null &&
+        widget.ownerUserId != null &&
+        widget.ownerUserId != me.id;
+    final content = widget.content;
+    return InkWell(
+      onTap: widget.onTap ?? () => setState(() => _expanded = !_expanded),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _UserAvatar(userId: widget.ownerUserId, radius: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 第一行：昵称 + 时间戳 + 更多
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(widget.nickname,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: _text)),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(_fullTime(widget.timeMs),
+                          style: const TextStyle(
+                              fontSize: 11, color: _textHint)),
+                      const Spacer(),
+                      if (showMore)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _showMoreMenu(
+                              context, widget.ownerUserId!, widget.nickname),
+                          child: const Icon(Icons.more_horiz,
+                              size: 18, color: _textSec),
+                        ),
+                    ],
+                  ),
+                  // 内容（与昵称同一左缘）
+                  if (content.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final tp = TextPainter(
+                          text: TextSpan(
+                              text: content,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  color: _textSec,
+                                  height: 1.6)),
+                          maxLines: 8,
+                          textDirection: TextDirection.ltr,
+                        )..layout(maxWidth: constraints.maxWidth);
+                        final overflow = tp.didExceedMaxLines;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(content,
+                                maxLines: _expanded ? null : 8,
+                                overflow: _expanded
+                                    ? null
+                                    : TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 15,
+                                    color: _textSec,
+                                    height: 1.6)),
+                            if (overflow && !_expanded)
+                              GestureDetector(
+                                onTap: () =>
+                                    setState(() => _expanded = true),
+                                child: const Padding(
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Text('显示更多',
+                                      style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF6F877A))),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                  // 指标行（与昵称同一左缘）
+                  if (widget.allowActions) ...[
+                    const SizedBox(height: 10),
+                    _buildStatsRow(
+                      commentCount: _commentCount,
+                      repostCount: _repostCount,
+                      likeCount: _likeCount,
+                      viewCount: widget.viewCount,
+                      liked: _liked,
+                      onComment: _openCommentSheet,
+                      onRepost: _repost,
+                      onLike: _toggleLike,
+                    ),
+                    if (_showComments && _comments.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      for (final c in _comments) _buildCommentRow(c),
+                    ],
+                  ] else if (widget.stats != null) ...[
+                    const SizedBox(height: 10),
+                    widget.stats!,
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommentRow(PlazaComment c) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 12,
+            backgroundColor: _primary.withValues(alpha: 0.10),
+            child: Icon(Icons.person, size: 13, color: _primaryLight),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(c.authorName,
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _primaryLight)),
+                    const SizedBox(width: 8),
+                    Text(_fullTime(c.createdAt),
+                        style: const TextStyle(
+                            fontSize: 11, color: _textHint)),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(c.content,
+                    style: const TextStyle(
+                        fontSize: 14, color: _text, height: 1.5)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+/// 更多菜单：关注/取消关注、屏蔽/取消屏蔽。
+Future<void> _showMoreMenu(
+    BuildContext context, String targetUserId, String nickname) async {
+  final me = AuthService.instance.currentUser.value;
+  if (me == null || me.id == targetUserId) return;
+  final following =
+      CloudNotesService.instance.followingUserIds.contains(targetUserId);
+  final blocked =
+      CloudNotesService.instance.blockedUserIds.contains(targetUserId);
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    backgroundColor: _card,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+            child: Text(nickname,
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: _text)),
+          ),
+          const Divider(height: 1, color: _border),
+          _menuItem(
+              ctx,
+              following ? 'unfollow' : 'follow',
+              Icons.person_add_alt,
+              following ? '取消关注' : '关注该用户'),
+          _menuItem(
+              ctx,
+              blocked ? 'unblock' : 'block',
+              Icons.block_outlined,
+              blocked ? '取消屏蔽' : '屏蔽该用户'),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  try {
+    if (choice == 'follow' || choice == 'unfollow') {
+      final ok =
+          await CloudNotesService.instance.toggleFollow(targetUserId);
+      if (context.mounted) _showToastText(context, ok ? '已关注' : '已取消关注');
+    } else if (choice == 'block') {
+      final ok =
+          await CloudNotesService.instance.toggleBlockUser(targetUserId);
+      if (context.mounted) {
+        _showToastText(context, ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+      }
+    } else if (choice == 'unblock') {
+      final ok =
+          await CloudNotesService.instance.toggleBlockUser(targetUserId);
+      if (context.mounted) {
+        _showToastText(context, ok ? '已屏蔽' : '已取消屏蔽');
+      }
+    }
+  } catch (e) {
+    if (context.mounted) _showToastText(context, e.toString());
+  }
+}
+
+Widget _menuItem(
+    BuildContext ctx, String value, IconData icon, String label) {
+  return InkWell(
+    onTap: () => Navigator.pop(ctx, value),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: _textSec),
+          const SizedBox(width: 12),
+          Text(label,
+              style: const TextStyle(fontSize: 15, color: _text)),
+        ],
+      ),
+    ),
+  );
+}
+
+void _showToastText(BuildContext context, String text) {
+  final overlay = Overlay.of(context);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (ctx) {
+      final topInset = MediaQuery.of(ctx).padding.top;
+      return Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        child: Padding(
+          padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Material(
+              color: _primary,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                child: Text(
+                  text,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+  overlay.insert(entry);
+  Future.delayed(const Duration(milliseconds: 2000), () {
+    if (entry.mounted) entry.remove();
+  });
+}
+
+/// 帖子行：与笔记详情页同风格——无卡片背景，
+/// 头像+用户名/时间 → 内容预览（最多8行，可展开）→ 统计数据行。
+class _NoteFeedRow extends StatelessWidget {
+  final PlazaNote note;
+  const _NoteFeedRow({required this.note});
+
+  static String plainContent(PlazaNote note) => note.content.replaceAll(
+      RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+
+  @override
+  Widget build(BuildContext context) {
+    final note = this.note;
+    final me = AuthService.instance.currentUser.value;
+    final isMine = me != null && note.ownerUserId == me.id;
+    return _PostBlock(
+      ownerUserId: note.ownerUserId,
+      nickname: isMine ? me.displayName : note.authorName,
+      timeMs: note.createdAt,
+      content: _NoteFeedRow.plainContent(note),
+      noteId: note.id,
+      allowActions: true,
+      likeCount: note.likeCount,
+      repostCount: note.repostCount,
+      commentCount: note.commentCount,
+      viewCount: note.viewCount,
+      stats: _buildStatsRow(
+        commentCount: note.commentCount,
+        repostCount: note.repostCount,
+        likeCount: note.likeCount,
+        viewCount: note.viewCount,
+        liked: CloudNotesService.instance.likedNoteIds.contains(note.id),
+      ),
+    );
+  }
+}
+
+/// 四个数据指标行（评论/转发/点赞/阅读），与菩提空间笔记详情页样式一致。
+/// 均匀分布占满整行，第一个图标与昵称/内容左对齐，右侧不留白。
+Widget _buildStatsRow({
+  required int commentCount,
+  required int repostCount,
+  required int likeCount,
+  required int viewCount,
+  required bool liked,
+  VoidCallback? onComment,
+  VoidCallback? onRepost,
+  VoidCallback? onLike,
+}) {
+  return Row(
+    children: [
+      _statsCell(
+          Image.asset('assets/images/ic_comment.png',
+              width: 16, height: 16),
+          '$commentCount',
+          onTap: onComment),
+      const SizedBox(width: 48),
+      _statsCell(
+          Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+          '$repostCount',
+          onTap: onRepost),
+      const SizedBox(width: 48),
+      _statsCell(
+          Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+              size: 16, color: liked ? _gold : _textSec),
+          '$likeCount',
+          color: liked ? _gold : null,
+          onTap: onLike),
+      const SizedBox(width: 48),
+      _statsCell(
+          Image.asset('assets/images/ic_view.png',
+              width: 16, height: 16),
+          '$viewCount'),
+    ],
+  );
+}
+
+/// 指标单元格：图标+数字，数字过大时自动缩放，避免溢出/遮挡。
+Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap}) {
+  final cell = Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      SizedBox(width: 16, height: 16, child: icon),
+      const SizedBox(width: 3),
+      Flexible(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 13,
+                  height: 1,
+                  color: color ?? _textSec)),
+        ),
+      ),
+    ],
+  );
+  if (onTap == null) return cell;
+  return GestureDetector(
+    onTap: onTap,
+    behavior: HitTestBehavior.opaque,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+      child: cell,
+    ),
+  );
+}
+
+/// 回复项：原贴完整显示，下面是我的回复（往右缩进对齐）。
+class _ReplyItem extends StatelessWidget {
+  final PlazaActivity activity;
+  final PlazaNote? originalNote;
+  const _ReplyItem({
+    required this.activity,
+    required this.originalNote,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final activity = this.activity;
+    final original = originalNote;
+    final content = original != null ? _NoteFeedRow.plainContent(original) : '';
+    final me = AuthService.instance.currentUser.value;
+    final originalIsMine = me != null &&
+        original != null &&
+        original.ownerUserId == me.id;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ===== 原贴（完整，同帖子样式）=====
+        _PostBlock(
+          ownerUserId: original?.ownerUserId,
+          nickname: originalIsMine
+              ? me.displayName
+              : (original?.authorName ?? '同修'),
+          timeMs: original?.createdAt ?? 0,
+          content: original != null
+              ? content
+              : (activity.noteTitle.isNotEmpty ? activity.noteTitle : ''),
+          stats: original != null
+              ? _buildStatsRow(
+                  commentCount: original.commentCount,
+                  repostCount: original.repostCount,
+                  likeCount: original.likeCount,
+                  viewCount: original.viewCount,
+                  liked: CloudNotesService
+                      .instance.likedNoteIds
+                      .contains(original.id),
+                )
+              : null,
+        ),
+        // ===== 我的回复（头像与原贴头像上下对齐，内容同原贴位置）=====
+        _PostBlock(
+          ownerUserId: activity.actorId,
+          nickname:
+              me?.displayName ?? (activity.actorName.isNotEmpty ? activity.actorName : '我'),
+          timeMs: activity.createdAt,
+          content: activity.content,
+          stats: _buildStatsRow(
+            commentCount: 0,
+            repostCount: 0,
+            likeCount: 0,
+            viewCount: 0,
+            liked: false,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// 帖子 Tab：我自己发布的广场笔记。
 class _MyPostsTab extends StatefulWidget {
   final bool isLoggedIn;
@@ -596,12 +1401,14 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   @override
   void initState() {
     super.initState();
+    
     _load();
     widget.reloadNotifier.addListener(_onReload);
   }
 
   @override
   void dispose() {
+    
     widget.reloadNotifier.removeListener(_onReload);
     super.dispose();
   }
@@ -611,6 +1418,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   @override
   void didUpdateWidget(covariant _MyPostsTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
     if (widget.reloadNotifier != oldWidget.reloadNotifier) {
       oldWidget.reloadNotifier.removeListener(_onReload);
@@ -619,6 +1427,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 
   Future<void> _load() async {
+    
     setState(() {
       _loading = true;
       _error = null;
@@ -626,10 +1435,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       _page = 1;
       _hasMore = true;
     });
-    // 本地笔记始终加载（未登录/未同步时也显示）
-    final localNotes = await _loadLocalNotes();
-    if (!mounted) return;
 
+    // 帖子 = 所有分享到菩提空间的帖子（云端数据）。
     List<PlazaNote> cloudNotes = [];
     bool hasMore = false;
     String? errorText;
@@ -643,19 +1450,29 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         hasMore = more;
       } catch (e) {
         errorText = '云端加载失败';
+        
       }
+    } else {
+      errorText = '请先登录';
     }
     if (!mounted) return;
+    
 
-    final cloudIds = cloudNotes.map((n) => n.id).toSet();
-    final merged = <PlazaNote>[
-      ...cloudNotes,
-      ...localNotes.where((n) => !cloudIds.contains(n.id)),
-    ];
+    var merged = cloudNotes;
+    // 云端失败/未登录时，用本地已分享的笔记兜底展示。
+    if (merged.isEmpty && errorText != null) {
+      final localNotes = await _loadLocalNotes();
+      if (!mounted) return;
+      final cloudIds = cloudNotes.map((n) => n.id).toSet();
+      merged = [
+        ...cloudNotes,
+        ...localNotes.where((n) => !cloudIds.contains(n.id)),
+      ];
+    }
     merged.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
     setState(() {
-      _notes.addAll(merged);
+      _notes..clear()..addAll(merged);
       _hasMore = hasMore;
       _page = 2;
       _error = errorText;
@@ -663,13 +1480,18 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     });
   }
 
+  /// 本地笔记中已分享（shared=true）的部分，用于云端不可用时的兜底展示。
   Future<List<PlazaNote>> _loadLocalNotes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('notes') ?? '[]';
       final List<dynamic> list = jsonDecode(raw);
       final uid = AuthService.instance.currentUser.value?.id ?? 'local';
-      return list.reversed.map<PlazaNote>((n) {
+      final nickname =
+          AuthService.instance.currentUser.value?.displayName ?? '同修';
+      return list.reversed
+          .where((n) => n['shared'] == true)
+          .map<PlazaNote>((n) {
         final tsStr = n['updatedAt']?.toString() ?? '';
         final ts = DateTime.tryParse(tsStr)?.millisecondsSinceEpoch ?? 0;
         return PlazaNote(
@@ -677,7 +1499,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
           ownerUserId: uid,
           title: n['title']?.toString() ?? '无标题',
           content: n['content']?.toString() ?? '',
-          authorName: '我',
+          authorName: nickname,
           visibility: 'public',
           status: 'normal',
           likeCount: 0,
@@ -712,19 +1534,12 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     }
   }
 
-  void _openNote(PlazaNote note) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
-    );
-  }
-
   Widget _tabLoading() {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           const SliverFillRemaining(
             child: Center(
@@ -740,8 +1555,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           SliverFillRemaining(
             child: Center(
@@ -764,9 +1579,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return _tabLoading();
-    if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
-    if (_notes.isEmpty) return _tabEmpty('还没有发布过帖子', Icons.post_add_outlined);
-
+    if (_notes.isEmpty) {
+      final msg = _error ?? '还没有分享过帖子';
+      return _tabEmpty(msg, _error != null ? Icons.cloud_off : Icons.post_add_outlined);
+    }
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification is ScrollEndNotification &&
@@ -779,8 +1595,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       child: Builder(
         builder: (context) => CustomScrollView(
           slivers: [
-            SliverOverlapInjector(
-              handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            SliverToBoxAdapter(
+              child: SizedBox(height: 4),
             ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -813,87 +1629,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 
   Widget _buildNoteCard(PlazaNote note) {
-    final content = note.content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
-    final preview = content.length > 60
-        ? '${content.substring(0, 60)}...'
-        : content;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 8,
-              offset: const Offset(0, 1)),
-        ],
-      ),
-      child: InkWell(
-        onTap: () => _openNote(note),
-        borderRadius: BorderRadius.circular(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(note.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: _text)),
-            if (preview.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(preview,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 13, color: _textSec, height: 1.4)),
-            ],
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                const Icon(Icons.schedule, size: 12, color: _textHint),
-                const SizedBox(width: 3),
-                Text(_fmtTime(note.createdAt),
-                    style: const TextStyle(fontSize: 11, color: _textHint)),
-                const Spacer(),
-                Icon(
-                  CloudNotesService.instance.likedNoteIds.contains(note.id)
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                  size: 13,
-                  color: CloudNotesService.instance.likedNoteIds.contains(note.id)
-                      ? _gold
-                      : _textHint,
-                ),
-                const SizedBox(width: 2),
-                Text('${note.likeCount}',
-                    style: const TextStyle(fontSize: 11, color: _textHint)),
-                const SizedBox(width: 12),
-                const Icon(Icons.chat_bubble_outline, size: 12, color: _textHint),
-                const SizedBox(width: 2),
-                Text('${note.commentCount}',
-                    style: const TextStyle(fontSize: 11, color: _textHint)),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _fmtTime(int ms) {
-    if (ms <= 0) return '';
-    final t = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    final diff = DateTime(now.year, now.month, now.day)
-        .difference(DateTime(t.year, t.month, t.day))
-        .inDays;
-    if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-    if (diff == 1) return '昨天';
-    return '${t.month}月${t.day}日';
+    return _NoteFeedRow(note: note);
   }
 }
 
@@ -909,12 +1645,13 @@ class _MyRepliesTab extends StatefulWidget {
 
 class _MyRepliesTabState extends State<_MyRepliesTab> {
   final List<PlazaActivity> _activities = [];
+  final Map<String, PlazaNote?> _originalNotes = {};
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
   int _page = 1;
   String? _error;
-  static const int _pageSize = 20;
+  String? _diagInfo;
 
   @override
   void initState() {
@@ -948,19 +1685,39 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       _loading = true;
       _error = null;
       _activities.clear();
+      _originalNotes.clear();
       _page = 1;
       _hasMore = true;
     });
     try {
-      final (list, more) = await CloudNotesService.instance.getMyActivities(
-        page: 1,
-        pageSize: _pageSize,
-      );
+      // 活动流里混有大量 share 等类型，需翻页收集我发出的评论（type=comment）。
+      final myComments = <PlazaActivity>[];
+      int page = 1;
+      bool hasMore = true;
+      int totalFetched = 0;
+      while (hasMore && page <= 10) {
+        final (list, more) =
+            await CloudNotesService.instance.getMyActivities(
+          page: page,
+          pageSize: 50,
+        );
+        if (!mounted) return;
+        totalFetched += list.length;
+        debugPrint('[RepliesTab] page=$page got=${list.length} types=${list.map((a) => a.type).toSet()}');
+        myComments.addAll(list.where((a) => a.type == 'comment'));
+        hasMore = more;
+        page++;
+        // 已收集足够评论即可停止翻页。
+        if (myComments.length >= 30) break;
+      }
+      debugPrint('[RepliesTab] totalFetched=$totalFetched comments=${myComments.length}');
+      await _prefetchOriginals(myComments);
       if (!mounted) return;
       setState(() {
-        _activities.addAll(list);
-        _hasMore = more;
-        _page = 2;
+        _activities.addAll(myComments);
+        _hasMore = false;
+        _page = page;
+        _diagInfo = '共拉到 $totalFetched 条动态，其中评论 ${myComments.length} 条';
         _loading = false;
       });
     } catch (e) {
@@ -978,11 +1735,14 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     try {
       final (list, more) = await CloudNotesService.instance.getMyActivities(
         page: _page,
-        pageSize: _pageSize,
+        pageSize: 50,
       );
       if (!mounted) return;
+      final myComments = list.where((a) => a.type == 'comment').toList();
+      await _prefetchOriginals(myComments);
+      if (!mounted) return;
       setState(() {
-        _activities.addAll(list);
+        _activities.addAll(myComments);
         _hasMore = more;
         _page++;
         _loadingMore = false;
@@ -993,11 +1753,20 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     }
   }
 
-  void _openNote(String noteId) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: noteId)),
-    );
+  /// 并行预取每条评论对应的原贴数据（失败置 null，展示标题兜底）。
+  Future<void> _prefetchOriginals(List<PlazaActivity> items) async {
+    final futures = items.map((a) async {
+      try {
+        final n = await CloudNotesService.instance.getNoteById(a.noteId);
+        return MapEntry(a.noteId, n);
+      } catch (_) {
+        return MapEntry(a.noteId, null);
+      }
+    });
+    final entries = await Future.wait(futures);
+    for (final e in entries) {
+      _originalNotes[e.key] = e.value;
+    }
   }
 
   @override
@@ -1008,7 +1777,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
     if (_activities.isEmpty) {
-      return _tabEmpty('还没有互动记录', Icons.reply_outlined);
+      final msg = _diagInfo ?? '还没有回复记录';
+      return _tabEmpty(msg, Icons.reply_outlined);
     }
 
     return NotificationListener<ScrollNotification>(
@@ -1023,8 +1793,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       child: Builder(
         builder: (context) => CustomScrollView(
           slivers: [
-            SliverOverlapInjector(
-              handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            SliverToBoxAdapter(
+              child: SizedBox(height: 4),
             ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -1059,8 +1829,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           const SliverFillRemaining(
             child: Center(
@@ -1076,8 +1846,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           SliverFillRemaining(
             child: Center(
@@ -1098,105 +1868,12 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 
   Widget _buildActivityCard(PlazaActivity activity) {
-    final typeIcon = activity.type == 'repost'
-        ? Icons.repeat_rounded
-        : Icons.chat_bubble_outline;
-    final typeLabel = activity.type == 'repost' ? '转发' : '回复';
-    Color typeColor;
-    switch (activity.type) {
-      case 'repost':
-        typeColor = _gold;
-        break;
-      case 'comment':
-        typeColor = _primaryLight;
-        break;
-      default:
-        typeColor = _primary;
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 8,
-              offset: const Offset(0, 1)),
-        ],
-      ),
-      child: InkWell(
-        onTap: () => _openNote(activity.noteId),
-        borderRadius: BorderRadius.circular(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(typeIcon, size: 14, color: typeColor),
-                const SizedBox(width: 4),
-                Text(typeLabel,
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: typeColor)),
-                const Spacer(),
-                Text(_fmtTime(activity.createdAt),
-                    style: const TextStyle(
-                        fontSize: 11, color: _textHint)),
-              ],
-            ),
-            if (activity.content.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(activity.content,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 13, color: _text, height: 1.5)),
-            ],
-            if (activity.noteTitle.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _bg,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.article_outlined,
-                        size: 13, color: _textHint),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(activity.noteTitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, color: _textSec)),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+    // 原贴完整显示在上，下面是我的回复（往右缩进）。
+    final original = _originalNotes[activity.noteId];
+    return _ReplyItem(
+      activity: activity,
+      originalNote: original,
     );
-  }
-
-  String _fmtTime(int ms) {
-    if (ms <= 0) return '';
-    final t = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    final diff = DateTime(now.year, now.month, now.day)
-        .difference(DateTime(t.year, t.month, t.day))
-        .inDays;
-    if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-    if (diff == 1) return '昨天';
-    return '${t.month}月${t.day}日';
   }
 }
 
@@ -1264,13 +1941,6 @@ class _MyLikesTabState extends State<_MyLikesTab> {
     }
   }
 
-  void _openNote(PlazaNote note) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!widget.isLoggedIn) {
@@ -1284,8 +1954,8 @@ class _MyLikesTabState extends State<_MyLikesTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -1293,63 +1963,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  final content = note.content.replaceAll(
-                      RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
-                  final preview = content.length > 60
-                      ? '${content.substring(0, 60)}...'
-                      : content;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: _card,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.03),
-                            blurRadius: 8,
-                            offset: const Offset(0, 1)),
-                      ],
-                    ),
-                    child: InkWell(
-                      onTap: () => _openNote(note),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.person_outline, size: 13, color: _textHint),
-                              const SizedBox(width: 4),
-                              Text(note.authorName,
-                                  style: const TextStyle(fontSize: 12, color: _textSec)),
-                              const Spacer(),
-                              const Icon(Icons.favorite_rounded, size: 12, color: _gold),
-                              const SizedBox(width: 2),
-                              Text('${note.likeCount}',
-                                  style: const TextStyle(fontSize: 11, color: _textHint)),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(note.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: _text)),
-                          if (preview.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text(preview,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 13, color: _textSec, height: 1.4)),
-                          ],
-                        ],
-                      ),
-                    ),
-                  );
+                  return _NoteFeedRow(note: note);
                 },
                 childCount: _notes!.length,
               ),
@@ -1364,8 +1978,8 @@ class _MyLikesTabState extends State<_MyLikesTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           const SliverFillRemaining(
             child: Center(
@@ -1381,8 +1995,8 @@ class _MyLikesTabState extends State<_MyLikesTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           SliverFillRemaining(
             child: Center(
@@ -1467,13 +2081,6 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
     }
   }
 
-  void _openNote(PlazaNote note) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
-    ).then((_) => _load());
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!widget.isLoggedIn) {
@@ -1487,8 +2094,8 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -1496,61 +2103,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  final content = note.content.replaceAll(
-                      RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
-                  final preview = content.length > 60
-                      ? '${content.substring(0, 60)}...'
-                      : content;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: _card,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.03),
-                            blurRadius: 8,
-                            offset: const Offset(0, 1)),
-                      ],
-                    ),
-                    child: InkWell(
-                      onTap: () => _openNote(note),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.bookmark_rounded, size: 13, color: _gold),
-                              const SizedBox(width: 4),
-                              Text(note.authorName,
-                                  style: const TextStyle(fontSize: 12, color: _textSec)),
-                              const Spacer(),
-                              Text(_fmtTime(note.createdAt),
-                                  style: const TextStyle(fontSize: 11, color: _textHint)),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(note.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: _text)),
-                          if (preview.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text(preview,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 13, color: _textSec, height: 1.4)),
-                          ],
-                        ],
-                      ),
-                    ),
-                  );
+                  return _NoteFeedRow(note: note);
                 },
                 childCount: _notes!.length,
               ),
@@ -1565,8 +2118,8 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           const SliverFillRemaining(
             child: Center(
@@ -1582,8 +2135,8 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
     return Builder(
       builder: (context) => CustomScrollView(
         slivers: [
-          SliverOverlapInjector(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
           ),
           SliverFillRemaining(
             child: Center(
@@ -1602,17 +2155,177 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
       ),
     );
   }
+}
 
-  String _fmtTime(int ms) {
-    if (ms <= 0) return '';
-    final t = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    final diff = DateTime(now.year, now.month, now.day)
-        .difference(DateTime(t.year, t.month, t.day))
-        .inDays;
-    if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-    if (diff == 1) return '昨天';
-    return '${t.month}月${t.day}日';
+/// 草稿行：本地保存但未分享到菩提空间的笔记，样式与帖子一致，但没有统计指标行（未发表）。
+class _DraftRow extends StatelessWidget {
+  final Map<String, dynamic> note;
+  final VoidCallback onTap;
+  const _DraftRow({required this.note, required this.onTap});
+
+  static String _plainContent(Map<String, dynamic> note) =>
+      (note['content'] as String? ?? '').replaceAll(
+          RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+
+  @override
+  Widget build(BuildContext context) {
+    final note = this.note;
+    final content = _DraftRow._plainContent(note);
+    final ts = DateTime.tryParse(note['updatedAt']?.toString() ?? '');
+    final nickname =
+        AuthService.instance.currentUser.value?.displayName ?? '同修';
+    return _PostBlock(
+      ownerUserId: AuthService.instance.currentUser.value?.id,
+      nickname: nickname,
+      timeMs: ts?.millisecondsSinceEpoch ?? 0,
+      content: content,
+      onTap: onTap,
+    );
+  }
+}
+
+/// 草稿 Tab：本地保存但未分享到菩提空间的笔记。
+class _MyDraftsTab extends StatefulWidget {
+  final ValueNotifier<int> reloadNotifier;
+  const _MyDraftsTab({required this.reloadNotifier});
+
+  @override
+  State<_MyDraftsTab> createState() => _MyDraftsTabState();
+}
+
+class _MyDraftsTabState extends State<_MyDraftsTab> {
+  List<Map<String, dynamic>> _notes = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    widget.reloadNotifier.addListener(_onReload);
+  }
+
+  @override
+  void dispose() {
+    widget.reloadNotifier.removeListener(_onReload);
+    super.dispose();
+  }
+
+  void _onReload() => _load();
+
+  @override
+  void didUpdateWidget(covariant _MyDraftsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.reloadNotifier != oldWidget.reloadNotifier) {
+      oldWidget.reloadNotifier.removeListener(_onReload);
+      widget.reloadNotifier.addListener(_onReload);
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('notes') ?? '[]';
+      final notes = (jsonDecode(raw) as List<dynamic>)
+          .cast<Map<String, dynamic>>()
+          .where((n) => n['shared'] != true)
+          .toList()
+        ..sort((a, b) => (b['updatedAt']?.toString() ?? '')
+            .compareTo(a['updatedAt']?.toString() ?? ''));
+      if (!mounted) return;
+      setState(() {
+        _notes = notes;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _loading = false;
+      });
+    }
+  }
+
+  void _openEdit(Map<String, dynamic> note) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteEditPage(note: note)),
+    ).then((_) {
+      if (mounted) _load();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return _tabLoading();
+    if (_notes.isEmpty) {
+      return _tabEmpty('还没有草稿', Icons.edit_note);
+    }
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final note = _notes[index];
+                  return _DraftRow(
+                    note: note,
+                    onTap: () => _openEdit(note),
+                  );
+                },
+                childCount: _notes.length,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabLoading() {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
+          ),
+          const SliverFillRemaining(
+            child: Center(
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabEmpty(String text, IconData icon) {
+    return Builder(
+      builder: (context) => CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: SizedBox(height: 4),
+          ),
+          SliverFillRemaining(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 48, color: _textHint),
+                  const SizedBox(height: 12),
+                  Text(text,
+                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -1827,6 +2540,8 @@ class _SettingsPageState extends State<_SettingsPage> {
                       _sectionTitle('账号'),
                       SettingsCard(
                         children: [
+                          _SettingsAccountTile(),
+                          const SettingsDivider(),
                           _SettingsPhoneTile(),
                           const SettingsDivider(),
                           _SettingsNotifTile(),
@@ -1966,6 +2681,62 @@ class _SettingsReminderTile extends StatelessWidget {
 }
 
 /// 更换手机号行：未登录时引导登录。
+/// 账号名称与密码设置行。
+class _SettingsAccountTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_SettingsPageState>()!;
+    return InkWell(
+      onTap: () {
+        if (!AuthService.instance.isLoggedIn) {
+          state.requireLogin();
+          return;
+        }
+        Navigator.push(context, slideInFromLeft(const AccountSetupPage()))
+            .then((_) => state.reloadForSettings());
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _primaryLight.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.badge_outlined, color: _primaryLight, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: FutureBuilder<String>(
+                future: AuthService.instance.getAccountName(),
+                builder: (context, snap) {
+                  final name = snap.data ?? '';
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('账号名称与密码',
+                          style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 2),
+                      Text(
+                        name.isEmpty ? '未设置，可用于账号密码登录' : '账号：$name',
+                        style: const TextStyle(fontSize: 12, color: _textHint),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SettingsPhoneTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {

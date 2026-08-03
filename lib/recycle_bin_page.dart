@@ -68,7 +68,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('彻底删除', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('将彻底删除「${note['title']}」，且不可恢复，确定吗？', style: const TextStyle(color: _textSec)),
+        content: Text('将彻底删除这篇笔记，且不可恢复，确定吗？', style: const TextStyle(color: _textSec)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
@@ -178,10 +178,10 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
                         children: [
                           Expanded(
                             child: Text(
-                              note['title'] ?? '',
-                              maxLines: 1,
+                              preview,
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _text),
+                              style: TextStyle(fontSize: 14, color: _textSec, height: 1.5),
                             ),
                           ),
                           if (note['shared'] == true)
@@ -197,14 +197,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
                             ),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        preview,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 13, color: _textSec, height: 1.5),
-                      ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       Row(
                         children: [
                           Icon(Icons.schedule, size: 12, color: _textHint),

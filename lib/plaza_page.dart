@@ -350,19 +350,7 @@ class _PlazaPageState extends State<PlazaPage> {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      note.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: _text),
-                    ),
-                  ),
                   if (note.repostOf.isNotEmpty) ...[
-                    const SizedBox(width: 8),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -376,19 +364,26 @@ class _PlazaPageState extends State<PlazaPage> {
                   ],
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                preview,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 13, color: _textSec, height: 1.5),
-              ),
+              if (preview.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  preview,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 14, color: _textSec, height: 1.5),
+                ),
+              ],
               if (note.quoteContent.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Builder(builder: (_) {
                   final quoteSutras =
                       NoteSutraLinks.extract(note.quoteOfContent);
+                  final quotePlain =
+                      NoteSutraLinks.plainText(note.quoteOfContent);
+                  final quotePreview = quotePlain.length > 80
+                      ? '${quotePlain.substring(0, 80)}...'
+                      : quotePlain;
                   return Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(
@@ -402,11 +397,21 @@ class _PlazaPageState extends State<PlazaPage> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                            '@${note.repostSourceAuthor}：《${note.quoteOfTitle}》',
+                            '@${note.repostSourceAuthor} 的笔记',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 12, color: _textSec)),
+                        if (quotePreview.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            quotePreview,
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 13, color: _textSec, height: 1.5),
+                          ),
+                        ],
                         for (final q in quoteSutras) ...[
                           const SizedBox(height: 5),
                           Row(

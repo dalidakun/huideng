@@ -191,6 +191,17 @@ class CloudNotesService {
   Future<Map<String, dynamic>> _call(
     String action, {
     Map<String, dynamic>? params,
+  }) {
+    // 所有云端调用统一加超时，避免网络异常时页面永久卡在加载状态。
+    return _doCall(action, params: params).timeout(
+      const Duration(seconds: 8),
+      onTimeout: () => throw const CloudApiException('请求超时'),
+    );
+  }
+
+  Future<Map<String, dynamic>> _doCall(
+    String action, {
+    Map<String, dynamic>? params,
   }) async {
     final app = await AuthService.instance.ensureApp();
     if (app == null) {
@@ -386,14 +397,35 @@ class CloudNotesService {
         .toList();
   }
 
-  /// 拉取当前用户点赞过的笔记列表。
+  /// 拉取当前用户点赞过的笔记列表（最新点赞在前）。
   Future<List<PlazaNote>> getLikedNotes() async {
     if (!AuthService.instance.isLoggedIn) return [];
-    final res = await _call('getLikedNotes');
-    return (res['notes'] as List<dynamic>? ?? [])
-        .whereType<Map<String, dynamic>>()
-        .map(PlazaNote.fromJson)
-        .toList();
+    // 优先新版云函数的 getLikedNotes（带 createdAt 倒序）。
+    try {
+      final res = await _call('getLikedNotes');
+      return (res['notes'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(PlazaNote.fromJson)
+          .toList();
+    } catch (_) {
+      // 旧版云函数兜底：getLikedNoteIds 拿 ID 顺序（最新在前），再逐个取详情。
+    }
+    final idRes = await _call('getLikedNoteIds');
+    final ids = (idRes['ids'] as List<dynamic>? ?? []).map((e) => e.toString());
+    final list = <PlazaNote>[];
+    // 旧接口无排序，默认按插入顺序返回（旧在前），反转后最新点赞在前。
+    for (final id in ids.toList().reversed) {
+      try {
+        final res = await _call('getNoteById', params: {'id': id});
+        final note = res['note'];
+        if (note is Map<String, dynamic>) {
+          list.add(PlazaNote.fromJson(note));
+        }
+      } catch (_) {
+        // 单个笔记获取失败（已删除/隐藏）跳过
+      }
+    }
+    return list;
   }
 
   /// 拉取当前用户自己发布的笔记列表（含私密笔记）。
@@ -609,5 +641,13 @@ class CloudNotesService {
   Future<void> setUserData(Map<String, dynamic> payload) async {
     if (!AuthService.instance.isLoggedIn) return;
     await _call('setUserData', params: {'payload': payload});
+  }
+
+  /// 通用调用「api」云函数（供账号名称/密码等认证相关 action 使用）。
+  Future<Map<String, dynamic>> callApi(
+    String action, {
+    Map<String, dynamic>? params,
+  }) {
+    return _call(action, params: params);
   }
 }

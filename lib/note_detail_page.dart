@@ -522,8 +522,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     final note = _note;
     if (note == null) return;
     final plain = NoteSutraLinks.plainText(note.content);
-    final text = '《${note.title}》\n'
-        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
+    final text = '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
         '—— 来自「慧灯」App · ${note.authorName} 的修学分享';
     try {
       await SharePlus.instance.share(ShareParams(text: text));
@@ -633,16 +632,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ],
               const SizedBox(height: 14),
-              Text(note.title,
-                  style: const TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                      height: 1.4,
-                      color: _text)),
-              const SizedBox(height: 10),
               NoteSutraLinks.buildRichText(
                 note.content,
-                style: const TextStyle(fontSize: 15, color: _text, height: 1.75),
+                style: const TextStyle(fontSize: 16, color: _text, height: 1.75),
                 library: _sutraLib,
                 onTap: (title, filePath) => _openSutra(title, filePath),
               ),
@@ -716,16 +708,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ],
             ),
-            if (note.quoteOfTitle.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(note.quoteOfTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
-            ],
             if (note.quoteOfContent.isNotEmpty) ...[
               const SizedBox(height: 4),
               NoteSutraLinks.buildRichText(

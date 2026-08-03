@@ -9,6 +9,7 @@ import 'discussion_page.dart';
 import 'splash_image_page.dart';
 import 'study_hub_page.dart';
 import 'my_page.dart';
+import 'message_page.dart';
 import 'app_state.dart';
 import 'auth_service.dart';
 import 'sync_service.dart';
@@ -128,6 +129,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     _pages = [
       StudyHubPage(key: _studyHubKey),
       SutraListPage(key: _sutraListKey, activeTab: _tabIndex),
+      const MessagePage(),
       MyPage(key: _myKey),
     ];
     WidgetsBinding.instance.addObserver(this);
@@ -165,7 +167,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       final shouldSwitchToAssistant = prefs.getBool('switch_to_assistant');
       if (shouldSwitchToAssistant == true) {
         setState(() {
-          _currentIndex = 2;
+          _currentIndex = 3;
         });
         prefs.setBool('switch_to_assistant', false);
       }
@@ -192,6 +194,11 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       label: '经藏',
     ),
     BottomNavigationBarItem(
+      icon: Image.asset('assets/images/chat.png', width: 18, height: 18),
+      activeIcon: Image.asset('assets/images/chat_selected.png', width: 18, height: 18),
+      label: '消息',
+    ),
+    BottomNavigationBarItem(
       icon: Image.asset('assets/images/my.png', width: 18, height: 18),
       activeIcon: Image.asset('assets/images/my_selected.png', width: 18, height: 18),
       label: '我的',
@@ -204,7 +211,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       _currentIndex = index;
     });
     if (index == 0) _studyHubKey.currentState?.reload();
-    if (index == 2) _myKey.currentState?.reload();
+    if (index == 3) _myKey.currentState?.reload();
   }
 
   void switchToTab(int index) {
@@ -213,7 +220,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       _currentIndex = index;
     });
     if (index == 0) _studyHubKey.currentState?.reload();
-    if (index == 2) _myKey.currentState?.reload();
+    if (index == 3) _myKey.currentState?.reload();
   }
 
   @override

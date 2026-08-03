@@ -404,7 +404,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
       decorationColor: _primaryLight.withValues(alpha: 0.35),
     );
     final actor = a.actorName.isEmpty ? '同修' : a.actorName;
-    final noteLabel = a.noteTitle.isEmpty ? '这篇笔记' : '《${a.noteTitle}》';
+    final noteLabel = '这篇笔记';
     TextSpan plain(String t) => TextSpan(text: t, style: baseStyle);
     TextSpan noteLink() => TextSpan(
           text: noteLabel,

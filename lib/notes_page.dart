@@ -54,7 +54,7 @@ class _NotesPageState extends State<NotesPage> {
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('确定将「${note['title']}」移入回收站吗？', style: const TextStyle(color: _textSec)),
+        content: Text('确定将这篇笔记移入回收站吗？', style: const TextStyle(color: _textSec)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
@@ -163,25 +163,11 @@ class _NotesPageState extends State<NotesPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                note['title'] ?? '',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _text),
-                              ),
-                            ),
-                            Icon(Icons.edit_outlined, size: 15, color: _textHint),
-                          ],
-                        ),
-                        const SizedBox(height: 5),
                         Text(
                           preview,
-                          maxLines: 2,
+                          maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 13, color: _textSec, height: 1.5),
+                          style: TextStyle(fontSize: 14, color: _textSec, height: 1.5),
                         ),
                         const SizedBox(height: 10),
                         Row(

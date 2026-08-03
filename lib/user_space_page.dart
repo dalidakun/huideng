@@ -201,9 +201,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget _buildNoteTile(PlazaNote note) {
     final content = NoteSutraLinks.plainText(note.content);
     final preview = note.quoteContent.isNotEmpty
-        ? (note.quoteOfTitle.isNotEmpty
-            ? '$content\n转发自《${note.quoteOfTitle}》'
-            : content)
+        ? (content.isEmpty ? '转发自同修的笔记' : content)
         : content;
     final text = preview.length > 60 ? '${preview.substring(0, 60)}...' : preview;
     return Container(
@@ -226,41 +224,24 @@ class _UserSpacePageState extends State<UserSpacePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      note.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 15,
-                          color: _text,
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  if (note.repostOf.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.repeat, size: 12, color: _gold),
-                        const SizedBox(width: 2),
-                        Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
-                            style: const TextStyle(
-                                fontSize: 11, color: _gold)),
-                      ],
-                    ),
+              if (note.repostOf.isNotEmpty) ...[
+                Row(
+                  children: [
+                    Icon(Icons.repeat, size: 12, color: _gold),
+                    const SizedBox(width: 2),
+                    Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
+                        style: const TextStyle(
+                            fontSize: 11, color: _gold)),
                   ],
-                ],
-              ),
+                ),
+              ],
               const SizedBox(height: 6),
               Text(
                 text,
-                maxLines: 2,
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                    fontSize: 13, color: _textSec, height: 1.5),
+                    fontSize: 14, color: _textSec, height: 1.5),
               ),
               const SizedBox(height: 10),
               Row(

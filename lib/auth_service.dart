@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cloudbase_config.dart';
+import 'cloud_notes_service.dart';
 
 /// 认证相关错误，message 可直接展示给用户。
 class AuthException implements Exception {
@@ -250,6 +251,70 @@ class AuthService {
       } catch (_) {}
     }
     currentUser.value = null;
+  }
+
+  /// 设置/修改账号名称与密码（需已登录）。
+  /// 账号名称全局唯一，成功后缓存本地用于展示。
+  Future<void> setAccount({
+    required String username,
+    required String password,
+  }) async {
+    if (!isLoggedIn) {
+      throw AuthException('not_logged_in', '请先登录');
+    }
+    final res = await CloudNotesService.instance
+        .callApi('setAccount', params: {'username': username, 'password': password});
+    final name = res['username']?.toString();
+    if (name != null && name.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_account_name', name);
+    }
+  }
+
+  /// 使用账号名称 + 密码登录：
+  /// 云函数校验通过后签发自定义登录票据，再用票据建立 CloudBase 会话。
+  Future<void> loginWithAccount({
+    required String username,
+    required String password,
+  }) async {
+    final app = await _requireApp();
+    final res = await CloudNotesService.instance.callApi('loginWithAccount', params: {
+      'username': username,
+      'password': password,
+    });
+    final ticket = res['ticket']?.toString();
+    if (ticket == null || ticket.isEmpty) {
+      throw AuthException('no_ticket', '登录失败，请稍后重试');
+    }
+    final sr = await app.auth.signInWithCustomTicket(() async => ticket);
+    _throwIfFailed(sr);
+    final user = sr.data?.user;
+    if (user == null) {
+      throw AuthException('no_user', '登录失败，未获取到用户信息');
+    }
+    await _loadLocalTagline();
+    currentUser.value = _toAuthUser(user);
+    await _ensureDefaultNickname(user);
+    await _recordFirstJoin();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_account_name', username.trim());
+  }
+
+  /// 查询当前登录用户的账号名称；未设置返回空串。失败时回退到本地缓存。
+  Future<String> getAccountName() async {
+    if (!isLoggedIn) return '';
+    try {
+      final res = await CloudNotesService.instance.callApi('getMyAccount');
+      final name = res['username']?.toString() ?? '';
+      if (name.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_account_name', name);
+      }
+      return name;
+    } catch (_) {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('user_account_name') ?? '';
+    }
   }
 
   /// 更换绑定手机号第一步：向新手机号发送验证码。
