@@ -7,6 +7,7 @@ import 'login_page.dart';
 import 'note_sutra_links.dart';
 import 'quote_box.dart';
 import 'reading_page.dart';
+import 'reply_thread.dart';
 import 'text_input_sheet.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -63,7 +64,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       final comments =
           await CloudNotesService.instance.getComments(widget.noteId);
       int viewCount = note.viewCount;
-      // 阅读量 +1 尽力而为，失败不影响阅读，也不提示用户。
+      // 阅读�?+1 尽力而为，失败不影响阅读，也不提示用户�?
       try {
         viewCount = await CloudNotesService.instance.incView(widget.noteId);
       } catch (_) {}
@@ -197,7 +198,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                           onSubmitted: (_) => _submitComment(sheetCtx),
                           style: const TextStyle(fontSize: 14, color: _text),
                           decoration: const InputDecoration(
-                            hintText: '说点什么…',
+                            hintText: '说点什么�?,
                             hintStyle: TextStyle(color: _textHint),
                             border: InputBorder.none,
                             isDense: true,
@@ -332,7 +333,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           await CloudNotesService.instance.toggleNoteFavorite(widget.noteId);
       if (!mounted) return;
       setState(() => _favoriting = false);
-      _showToast(favorited ? '已收藏' : '已取消收藏');
+      _showToast(favorited ? '已收�? : '已取消收�?);
     } catch (e) {
       if (!mounted) return;
       setState(() => _favoriting = false);
@@ -357,7 +358,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text('转发到菩提空间',
+              child: Text('转发到菩提空�?,
                   style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -367,7 +368,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             _repostItem(ctx, 'direct', Icons.repeat_rounded, '直接转发',
                 '原样分享这条笔记'),
             _repostItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发',
-                '写下你的感想，并带上原笔记'),
+                '写下你的感想，并带上原笔�?),
             const SizedBox(height: 8),
           ],
         ),
@@ -415,7 +416,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => const SheetTextInput(
         title: '引用转发',
-        hint: '写点自己的感想…',
+        hint: '写点自己的感想�?,
         maxLength: 500,
         minLines: 2,
         maxLines: 3,
@@ -434,7 +435,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
       if (!mounted) return;
       setState(() => _reposting = false);
-      // 转发后停留在当前笔记详情页，不跳转到转发后的新笔记。
+      // 转发后停留在当前笔记详情页，不跳转到转发后的新笔记�?
       _showToast(quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
     } catch (e) {
       if (!mounted) return;
@@ -456,13 +457,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     final note = _note;
     if (note == null) return;
     final plain = NoteSutraLinks.plainText(note.content);
-    final text = '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
-        '—— 来自「慧灯」App · ${note.authorName} 的修学分享';
+    final text = '${plain.length > 120 ? '${plain.substring(0, 120)}�? : plain}\n'
+        '—�?来自「慧灯」App · ${note.authorName} 的修学分�?;
     try {
       await SharePlus.instance.share(ShareParams(text: text));
     } catch (e) {
       if (!mounted) return;
-      _showToast('分享失败：$e');
+      _showToast('分享失败�?e');
     }
   }
 
@@ -551,30 +552,35 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             children: [
-              _buildUserHeader(note),
-              if (note.repostOf.isNotEmpty && note.repostKind != 'reply') ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.repeat, size: 13, color: _gold),
-                    const SizedBox(width: 4),
-                    Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
-                        style: const TextStyle(fontSize: 12, color: _gold)),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 14),
-              if (note.content.isNotEmpty)
-                NoteSutraLinks.buildRichText(
-                  note.content,
-                  style:
-                      const TextStyle(fontSize: 16, color: _text, height: 1.75),
-                  library: _sutraLib,
-                  onTap: (title, filePath) => _openSutra(title, filePath),
-                ),
-              if (note.repostOf.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                QuoteBox(note: note),
+              if (note.repostKind == 'reply') ...[
+                // 回复帖：原帖在上 + 回复在下 + 头像竖线连接�?
+                ReplyThread(replyNote: note),
+              ] else ...[
+                _buildUserHeader(note),
+                if (note.repostOf.isNotEmpty && note.repostKind != 'reply') ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(Icons.repeat, size: 13, color: _gold),
+                      const SizedBox(width: 4),
+                      Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
+                          style: const TextStyle(fontSize: 12, color: _gold)),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 14),
+                if (note.content.isNotEmpty)
+                  NoteSutraLinks.buildRichText(
+                    note.content,
+                    style: const TextStyle(
+                        fontSize: 16, color: _text, height: 1.75),
+                    library: _sutraLib,
+                    onTap: (title, filePath) => _openSutra(title, filePath),
+                  ),
+                if (note.repostOf.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  QuoteBox(note: note),
+                ],
               ],
               const SizedBox(height: 8),
               const Divider(height: 1, color: _border),
@@ -595,7 +601,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 20),
                   child: Center(
-                    child: Text('还没有评论，来说两句吧',
+                    child: Text('还没有评论，来说两句�?,
                         style:
                             TextStyle(fontSize: 13, color: _textHint)),
                   ),
@@ -774,13 +780,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               ctx,
               following ? 'unfollow' : 'follow',
               Icons.person_add_alt,
-              following ? '取消关注' : '关注该用户',
+              following ? '取消关注' : '关注该用�?,
             ),
             _menuItem(
               ctx,
               blocked ? 'unblock' : 'block',
               Icons.block_outlined,
-              blocked ? '取消屏蔽' : '屏蔽该用户',
+              blocked ? '取消屏蔽' : '屏蔽该用�?,
             ),
             const SizedBox(height: 8),
           ],
@@ -794,19 +800,19 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             await CloudNotesService.instance.toggleFollow(note.ownerUserId);
         if (!mounted) return;
         setState(() {});
-        _showToast(ok ? '已关注' : '已取消关注');
+        _showToast(ok ? '已关�? : '已取消关�?);
       } else if (choice == 'block') {
         final ok =
             await CloudNotesService.instance.toggleBlockUser(note.ownerUserId);
         if (!mounted) return;
-        _showToast(ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+        _showToast(ok ? '已屏蔽，该用户笔记不再展�? : '已取消屏�?);
         if (ok) Navigator.pop(context);
       } else if (choice == 'unblock') {
         final ok =
             await CloudNotesService.instance.toggleBlockUser(note.ownerUserId);
         if (!mounted) return;
         setState(() {});
-        _showToast(ok ? '已屏蔽' : '已取消屏蔽');
+        _showToast(ok ? '已屏�? : '已取消屏�?);
       }
     } catch (e) {
       if (!mounted) return;
@@ -930,7 +936,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     }
     if (diff == 1) return '昨天';
-    if (t.year == now.year) return '${t.month}月${t.day}日';
+    if (t.year == now.year) return '${t.month}�?{t.day}�?;
     return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
   }
 }

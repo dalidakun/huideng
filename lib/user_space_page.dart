@@ -4,6 +4,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'reply_thread.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _primary = Color(0xFF5C4033);
@@ -15,7 +16,7 @@ const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 
-/// 某位用户的菩提空间：展示对方公开发布的所有笔记（含转发），点击可查看评论/点赞等。
+/// 某位用户的菩提空间：展示对方公开发布的所有笔记（含转发），点击可查看评论/点赞等�?
 class UserSpacePage extends StatefulWidget {
   final String userId;
   final String userName;
@@ -39,14 +40,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
   late bool _following =
       CloudNotesService.instance.followingUserIds.contains(widget.userId);
 
-  /// 对方账号（从已加载的笔记中取，用于「屏蔽@账号」等展示）。
+  /// 对方账号（从已加载的笔记中取，用于「屏蔽@账号」等展示）�?
   String get _account =>
       _notes.isNotEmpty ? _notes.first.authorAccount : '';
 
-  /// 对方是否已实名认证（从已加载的笔记中取）。
+  /// 对方是否已实名认证（从已加载的笔记中取）�?
   bool get _verified => _notes.isNotEmpty && _notes.first.authorVerified;
 
-  /// 关注/取消关注对方（已关注的同修在首页「关注」栏目展示其新帖）。
+  /// 关注/取消关注对方（已关注的同修在首页「关注」栏目展示其新帖）�?
   Future<void> _toggleFollow() async {
     final me = AuthService.instance.currentUser.value;
     if (me == null || me.id == widget.userId) return;
@@ -54,13 +55,13 @@ class _UserSpacePageState extends State<UserSpacePage> {
       final ok = await CloudNotesService.instance.toggleFollow(widget.userId);
       if (!mounted) return;
       setState(() => _following = ok);
-      _showToast(context, ok ? '已关注' : '已取消关注');
+      _showToast(context, ok ? '已关�? : '已取消关�?);
     } catch (e) {
       if (mounted) _showToast(context, e.toString());
     }
   }
 
-  /// 屏蔽/取消屏蔽对方：屏蔽后对方的帖子不再出现在修学主页菩提空间的推荐/最新等栏目。
+  /// 屏蔽/取消屏蔽对方：屏蔽后对方的帖子不再出现在修学主页菩提空间的推�?最新等栏目�?
   Future<void> _showBlockSheet() async {
     final me = AuthService.instance.currentUser.value;
     if (me == null || me.id == widget.userId) return;
@@ -69,7 +70,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
     final account = _account;
     final label = blocked
         ? '取消屏蔽'
-        : (account.isNotEmpty ? '屏蔽@$account' : '屏蔽该用户');
+        : (account.isNotEmpty ? '屏蔽@$account' : '屏蔽该用�?);
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: _card,
@@ -116,7 +117,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
           await CloudNotesService.instance.toggleBlockUser(widget.userId);
       if (!mounted) return;
       setState(() {});
-      _showToast(context, ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+      _showToast(context, ok ? '已屏蔽，该用户笔记不再展�? : '已取消屏�?);
     } catch (e) {
       if (mounted) _showToast(context, e.toString());
     }
@@ -254,7 +255,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      '${widget.userName} 的菩提空间',
+                      '${widget.userName} 的菩提空�?,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -346,7 +347,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                             : Colors.black,
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Text(following ? '已关注' : '关注',
+                      child: Text(following ? '已关�? : '关注',
                           style: const TextStyle(
                               fontSize: 13,
                               color: Colors.white,
@@ -425,6 +426,24 @@ class _UserSpacePageState extends State<UserSpacePage> {
   }
 
   Widget _buildNoteTile(PlazaNote note) {
+    // 回复帖：渲染成连贴样式�?
+    if (note.repostKind == 'reply') {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2)),
+          ],
+        ),
+        padding: const EdgeInsets.all(12),
+        child: ReplyThread(replyNote: note),
+      );
+    }
     final content = NoteSutraLinks.plainText(note.content);
     final preview = note.quoteContent.isNotEmpty
         ? (content.isEmpty ? '转发自同修的笔记' : content)
@@ -482,7 +501,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('@${note.repostSourceAuthor} 的笔记',
+                      Text('@${note.repostSourceAuthor} 的笔�?,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -570,7 +589,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     }
     if (diff == 1) return '昨天';
-    if (t.year == now.year) return '${t.month}月${t.day}日';
+    if (t.year == now.year) return '${t.month}�?{t.day}�?;
     return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
   }
 }
