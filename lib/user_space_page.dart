@@ -296,7 +296,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                             if (_verified) ...[
                               const SizedBox(width: 4),
                               const Icon(Icons.verified,
-                                  size: 14, color: Color(0xFFB8860B)),
+                                  size: 14, color: Color(0xFF70867A)),
                             ],
                           ],
                         ),

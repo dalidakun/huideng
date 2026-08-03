@@ -288,7 +288,7 @@ class _UserListPageState extends State<UserListPage> {
                   if (user.verified) ...[
                     const SizedBox(width: 4),
                     const Icon(Icons.verified,
-                        size: 14, color: Color(0xFFB8860B)),
+                        size: 14, color: Color(0xFF70867A)),
                   ],
                 ],
               ),

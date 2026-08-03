@@ -63,7 +63,7 @@ class _ReplyThreadState extends State<ReplyThread> {
         ),
         if (note.authorVerified) ...[
           const SizedBox(width: 3),
-          const Icon(Icons.verified, size: 15, color: Color(0xFFB8860B)),
+          const Icon(Icons.verified, size: 15, color: Color(0xFF70867A)),
         ],
         if (note.authorAccount.isNotEmpty) ...[
           const SizedBox(width: 3),

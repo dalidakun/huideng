@@ -1786,7 +1786,7 @@ class StudyHubPageState extends State<StudyHubPage>
                         if (note.authorVerified) ...[
                           const SizedBox(width: 3),
                           const Icon(Icons.verified,
-                              size: 12, color: Color(0xFFB8860B)),
+                              size: 12, color: Color(0xFF70867A)),
                         ],
                         if (note.authorAccount.isNotEmpty) ...[
                           const SizedBox(width: 3),

@@ -155,7 +155,7 @@ class _CertificationPageState extends State<CertificationPage> {
           ),
           child: Column(
             children: [
-              const Icon(Icons.verified, size: 64, color: _gold),
+              const Icon(Icons.verified, size: 64, color: Color(0xFF70867A)),
               const SizedBox(height: 16),
               const Text('已实名认证',
                   style: TextStyle(
