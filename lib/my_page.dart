@@ -18,6 +18,7 @@ import 'text_input_sheet.dart';
 import 'user_list_page.dart';
 import 'note_edit_page.dart';
 import 'note_detail_page.dart';
+import 'quote_box.dart';
 import 'certification_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -1497,7 +1498,7 @@ class _NoteFeedRow extends StatelessWidget {
       onTogglePin: onTogglePin,
       onEdit: onEdit,
       onDelete: onDelete,
-      quoteBox: note.repostOf.isNotEmpty ? _QuoteBox(note: note) : null,
+      quoteBox: note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
       isRepost: note.repostOf.isNotEmpty && note.repostKind != 'reply',
       isQuoteRepost: note.quoteContent.isNotEmpty,
       stats: _buildStatsRow(
@@ -1506,122 +1507,6 @@ class _NoteFeedRow extends StatelessWidget {
         likeCount: note.likeCount,
         viewCount: note.viewCount,
         liked: CloudNotesService.instance.likedNoteIds.contains(note.id),
-      ),
-    );
-  }
-}
-
-/// 被回复原贴的引用框：线框包裹，内部为完整帖子样式——
-/// 头像、昵称、账号、时间戳、内容（字号颜色与原贴一致，最多3行），不显示四个指标。
-class _QuoteBox extends StatefulWidget {
-  final PlazaNote note;
-  const _QuoteBox({required this.note});
-
-  @override
-  State<_QuoteBox> createState() => _QuoteBoxState();
-}
-
-class _QuoteBoxState extends State<_QuoteBox> {
-  PlazaNote? _original;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    try {
-      final n = await CloudNotesService.instance
-          .getNoteById(widget.note.repostOf);
-      if (!mounted) return;
-      setState(() => _original = n);
-    } catch (_) {
-      // 原帖已删除/隐藏，使用转发时保存的快照。
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final src = _original;
-    final name = src?.authorName ?? widget.note.repostSourceAuthor;
-    final account = src?.authorAccount ?? '';
-    final timeMs = src?.createdAt ?? 0;
-    final content = src != null
-        ? _NoteFeedRow.plainContent(src)
-        : (widget.note.quoteOfContent.isNotEmpty
-            ? widget.note.quoteOfContent
-            : widget.note.content);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        border: Border.all(color: _border),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 被回复原贴头部：头像 + 昵称 + @账号 + 时间戳（同一行，颜色与正常帖子一致）
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _UserAvatar(userId: src?.ownerUserId, radius: 14),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Flexible(
-                      child: Text(name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: _text)),
-                    ),
-                    if (src?.authorVerified ?? false) ...[
-                      const SizedBox(width: 3),
-                      const Icon(Icons.verified,
-                          size: 13, color: Color(0xFFB8860B)),
-                    ],
-                    if (account.isNotEmpty) ...[
-                      const SizedBox(width: 3),
-                      Flexible(
-                        child: Text('@$account',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12, color: Color(0xFF8C8C8C))),
-                      ),
-                      const SizedBox(width: 3),
-                      const Text('·',
-                          style: TextStyle(
-                              fontSize: 12, color: Color(0xFF8C8C8C))),
-                      const SizedBox(width: 3),
-                    ],
-                    const SizedBox(width: 3),
-                    Text(_fullTime(timeMs),
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF8C8C8C))),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          // 被回复原贴内容：字号颜色与原贴一致，最多3行
-          if (content.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(content,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 15,
-                    color: Colors.black,
-                    height: 1.6)),
-          ],
-        ],
       ),
     );
   }
@@ -1748,7 +1633,7 @@ class _ReplyItem extends StatelessWidget {
                 )
               : null,
           quoteBox: original != null && original.repostOf.isNotEmpty
-              ? _QuoteBox(note: original)
+              ? QuoteBox(note: original)
               : null,
           stats: original != null
               ? _buildStatsRow(

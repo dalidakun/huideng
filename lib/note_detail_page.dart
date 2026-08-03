@@ -5,6 +5,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'note_sutra_links.dart';
+import 'quote_box.dart';
 import 'reading_page.dart';
 import 'text_input_sheet.dart';
 
@@ -557,9 +558,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   children: [
                     Icon(Icons.repeat, size: 13, color: _gold),
                     const SizedBox(width: 4),
-                    Text(note.quoteContent.isNotEmpty
-                        ? '引用转发'
-                        : '转发自 ${note.repostSourceAuthor}',
+                    Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
                         style: const TextStyle(fontSize: 12, color: _gold)),
                   ],
                 ),
@@ -575,7 +574,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               if (note.repostOf.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                _buildQuoteCard(note),
+                QuoteBox(note: note),
               ],
               const SizedBox(height: 8),
               const Divider(height: 1, color: _border),
@@ -607,55 +606,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildQuoteCard(PlazaNote note) {
-    return InkWell(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.repostOf)),
-      ),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.repeat, size: 13, color: _gold),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text('@${note.repostSourceAuthor} 的笔记',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12, color: _textSec)),
-                ),
-              ],
-            ),
-            if (note.quoteOfContent.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              NoteSutraLinks.buildRichText(
-                note.quoteOfContent,
-                style: const TextStyle(
-                    fontSize: 12, color: _textSec, height: 1.5),
-                library: _sutraLib,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                onTap: (title, filePath) =>
-                    _openSutra(title, filePath),
-              ),
-            ],
-          ],
-        ),
-      ),
     );
   }
 
