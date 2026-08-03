@@ -6,7 +6,7 @@ import 'user_avatar.dart';
 
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
-const Color _connector = Color(0xFFC4C4C4);
+const Color _connector = Color(0xFFE0E0E0);
 
 /// 回复链：原贴下方一串回复，每个节点左侧头像 + 向下竖线（非末尾节点），
 /// 右侧为回复内容与四个指标，头像依次用竖线连接。
@@ -35,7 +35,7 @@ class ReplyChain extends StatelessWidget {
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Container(width: 2, color: _connector),
+                    child: Container(width: 1, color: _connector),
                   ),
                 ),
             ],
