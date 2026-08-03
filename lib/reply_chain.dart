@@ -6,6 +6,7 @@ import 'user_avatar.dart';
 
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
+const Color _connector = Color(0xFF9E9E9E);
 
 /// 回复链：原贴下方一串回复，每个节点左侧头像 + 向下竖线（非末尾节点），
 /// 右侧为回复内容与四个指标，头像依次用竖线连接。
@@ -21,13 +22,21 @@ class ReplyChain extends StatelessWidget {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
-  Widget _node(PlazaNote note) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
+  /// 一个节点：左侧头像 + 向下竖线（最后一个节点不画线），右侧内容。
+  Widget _node(PlazaNote note, {required bool connectDown}) {
+    return IntrinsicHeight(
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          UserAvatar(userId: note.ownerUserId, radius: 22),
+          Column(
+            children: [
+              UserAvatar(userId: note.ownerUserId, radius: 22),
+              if (connectDown)
+                Expanded(
+                  child: Container(width: 2, color: _connector),
+                ),
+            ],
+          ),
           const SizedBox(width: 10),
           Expanded(child: _body(note)),
         ],
@@ -117,7 +126,8 @@ class ReplyChain extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        for (final r in replies) _node(r),
+        for (var i = 0; i < replies.length; i++)
+          _node(replies[i], connectDown: i < replies.length - 1),
       ],
     );
   }
