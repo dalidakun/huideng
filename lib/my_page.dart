@@ -1072,7 +1072,7 @@ class _PostBlockState extends State<_PostBlock> {
                       ],
                       if (canManage)
                         Transform.translate(
-                          offset: const Offset(8, 0),
+                          offset: const Offset(0, 0),
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onTap: _showManageMenu,
@@ -1082,7 +1082,7 @@ class _PostBlockState extends State<_PostBlock> {
                         ),
                       if (showMore)
                         Transform.translate(
-                          offset: const Offset(8, 0),
+                          offset: const Offset(0, 0),
                           child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => _showMoreMenu(
