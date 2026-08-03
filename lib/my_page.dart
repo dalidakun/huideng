@@ -1044,19 +1044,6 @@ class _PostBlockState extends State<_PostBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (widget.isRepost) ...[
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.repeat, size: 12, color: _gold),
-                        const SizedBox(width: 2),
-                        Text(widget.isQuoteRepost ? '引用' : '转发',
-                            style: const TextStyle(
-                                fontSize: 11, color: _gold)),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                  ],
                   // 第一行：昵称 + 时间戳 + 置顶标注 + 更多
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -1162,6 +1149,20 @@ class _PostBlockState extends State<_PostBlock> {
                       ],
                     ],
                   ),
+                  // 转发/引用角标（昵称行下方）
+                  if (widget.isRepost) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.repeat, size: 12, color: _gold),
+                        const SizedBox(width: 2),
+                        Text(widget.isQuoteRepost ? '引用' : '转发',
+                            style: const TextStyle(
+                                fontSize: 11, color: _gold)),
+                      ],
+                    ),
+                  ],
                   // 内容（与昵称同一左缘）
                   if (content.isNotEmpty) ...[
                     const SizedBox(height: 4),
