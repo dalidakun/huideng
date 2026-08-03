@@ -1,6 +1,5 @@
 ﻿import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,7 +10,7 @@ import 'reader_settings_page.dart';
 import 'checkin_reminder_page.dart';
 import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
-import 'account_setup_page.dart';
+import 'forgot_password_page.dart';
 import 'about_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
@@ -60,7 +59,7 @@ class MyPageState extends State<MyPage>
   String? _bannerPath;
   String _nickname = '同修';
   String _tagline = '与经为伴，与法同行';
-  String _phone = '';
+  String _accountName = '';
   String _joinedDate = '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
 
   MyCounts _counts = const MyCounts();
@@ -114,11 +113,9 @@ class MyPageState extends State<MyPage>
         _tagline = (user?.tagline?.isNotEmpty ?? false)
             ? user!.tagline!
             : '与经为伴，与法同行';
-        _phone = user?.mobilePhoneNumber ?? '';
       } else {
         _nickname = prefs.getString('user_nickname') ?? '同修';
         _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
-        _phone = '';
       }
       final createdMs = prefs.getInt('user_created_at');
       if (createdMs != null) {
@@ -131,6 +128,13 @@ class MyPageState extends State<MyPage>
         _joinedDate = '${dt.year}年${dt.month}月${dt.day}日加入';
       }
     });
+    _loadAccountName();
+  }
+
+  Future<void> _loadAccountName() async {
+    final name = await AuthService.instance.getAccountName();
+    if (!mounted) return;
+    setState(() => _accountName = name);
   }
 
   Future<void> _loadCounts() async {
@@ -293,10 +297,6 @@ class MyPageState extends State<MyPage>
   }
 
   Widget _buildProfileHeader(bool isLoggedIn) {
-    final phoneDisplay = _phone.isNotEmpty
-        ? '${_phone.substring(0, math.min(3, _phone.length))}****${_phone.length >= 7 ? _phone.substring(_phone.length - 4) : ''}'
-        : '';
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -332,6 +332,31 @@ class MyPageState extends State<MyPage>
                   ),
                 ),
               ),
+              if (isLoggedIn)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: GestureDetector(
+                    onTap: _openSettings,
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.3),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.06),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.settings_outlined,
+                          size: 20, color: _text),
+                    ),
+                  ),
+                ),
               Positioned(
                 right: 8,
                 top: 168,
@@ -411,24 +436,13 @@ class MyPageState extends State<MyPage>
                               fontWeight: FontWeight.w700,
                               color: _text)),
                     ),
-                    IconButton(
-                      onPressed: _openSettings,
-                      icon: const Icon(Icons.settings_outlined,
-                          size: 20, color: _textHint),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
                   ],
                 ),
-                if (phoneDisplay.isNotEmpty) ...[
+                if (_isLoggedIn && _accountName.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      const Icon(Icons.phone_iphone_outlined,
-                          size: 13, color: _textHint),
-                      const SizedBox(width: 4),
-                      Text(phoneDisplay,
+                      Text('@$_accountName',
                           style: const TextStyle(
                               fontSize: 13, color: _textHint)),
                     ],
@@ -457,9 +471,16 @@ class MyPageState extends State<MyPage>
               ),
               if (_joinedDate.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                Text(
-                  _joinedDate,
-                  style: const TextStyle(fontSize: 13, color: _textHint),
+                Row(
+                  children: [
+                    const Icon(Icons.calendar_month_outlined,
+                        size: 14, color: _textHint),
+                    const SizedBox(width: 4),
+                    Text(
+                      _joinedDate,
+                      style: const TextStyle(fontSize: 13, color: _textHint),
+                    ),
+                  ],
                 ),
               ],
               ],
@@ -656,6 +677,7 @@ String _fullTime(int ms) {
 class _PostBlock extends StatefulWidget {
   final String? ownerUserId;
   final String nickname;
+  final String account;
   final int timeMs;
   final String content;
   final Widget? stats;
@@ -666,9 +688,16 @@ class _PostBlock extends StatefulWidget {
   final int repostCount;
   final int commentCount;
   final int viewCount;
+  final VoidCallback? onReplyPosted;
+  final Widget? quoteBox;
+  final bool pinned;
+  final VoidCallback? onTogglePin;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
   const _PostBlock({
     required this.ownerUserId,
     required this.nickname,
+    this.account = '',
     required this.timeMs,
     required this.content,
     this.stats,
@@ -679,6 +708,12 @@ class _PostBlock extends StatefulWidget {
     this.repostCount = 0,
     this.commentCount = 0,
     this.viewCount = 0,
+    this.onReplyPosted,
+    this.quoteBox,
+    this.pinned = false,
+    this.onTogglePin,
+    this.onEdit,
+    this.onDelete,
   });
 
   @override
@@ -692,9 +727,6 @@ class _PostBlockState extends State<_PostBlock> {
   late int _commentCount = widget.commentCount;
   late bool _liked = widget.noteId != null &&
       CloudNotesService.instance.likedNoteIds.contains(widget.noteId);
-  List<PlazaComment> _comments = [];
-  bool _showComments = false;
-  bool _commentsLoaded = false;
 
   Future<void> _toggleLike() async {
     final noteId = widget.noteId;
@@ -712,25 +744,11 @@ class _PostBlockState extends State<_PostBlock> {
     }
   }
 
-  Future<void> _loadComments() async {
+  /// 回复：增加原帖评论量，并生成一条新帖子（回复内容在上、被回复帖子在下，引用转发样式）。
+  Future<void> _openReplySheet() async {
     final noteId = widget.noteId;
     if (noteId == null) return;
-    try {
-      final cs = await CloudNotesService.instance.getComments(noteId);
-      if (!mounted) return;
-      setState(() {
-        _comments = cs;
-        _commentsLoaded = true;
-        _showComments = true;
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _openCommentSheet() async {
-    if (widget.noteId == null) return;
     if (!AuthService.instance.isLoggedIn) return;
-    // 先加载已有评论并显示在帖子下方。
-    if (!_commentsLoaded) await _loadComments();
     final controller = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
@@ -758,10 +776,10 @@ class _PostBlockState extends State<_PostBlock> {
                       controller: controller,
                       autofocus: true,
                       textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _submitComment(sheetCtx, controller),
+                      onSubmitted: (_) => _submitReply(sheetCtx, controller),
                       style: const TextStyle(fontSize: 14, color: _text),
                       decoration: const InputDecoration(
-                        hintText: '说点什么…',
+                        hintText: '写下你的回复…',
                         hintStyle: TextStyle(color: _textHint),
                         border: InputBorder.none,
                         isDense: true,
@@ -772,7 +790,7 @@ class _PostBlockState extends State<_PostBlock> {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
-                  onPressed: () => _submitComment(sheetCtx, controller),
+                  onPressed: () => _submitReply(sheetCtx, controller),
                   icon: const Icon(Icons.send_rounded, color: _primary, size: 22),
                 ),
               ],
@@ -784,23 +802,27 @@ class _PostBlockState extends State<_PostBlock> {
     controller.dispose();
   }
 
-  Future<void> _submitComment(
+  Future<void> _submitReply(
       BuildContext sheetCtx, TextEditingController controller) async {
     final noteId = widget.noteId;
     final content = controller.text.trim();
     if (noteId == null || content.isEmpty) return;
     try {
-      final comment =
-          await CloudNotesService.instance.createComment(noteId, content);
+      // 1) 评论原帖：只增加评论量，不在帖子下方内嵌显示。
+      await CloudNotesService.instance.createComment(noteId, content);
+      // 2) 生成新帖子（引用转发样式：回复内容在上、被回复的帖子在下）。
+      await CloudNotesService.instance.repostNote(noteId, quote: content);
       if (!mounted) return;
-      setState(() {
-        _commentCount++;
-        _comments.add(comment);
-        _showComments = true;
-        _commentsLoaded = true;
-      });
+      setState(() => _commentCount++);
       if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-      _showToastText(context, '评论成功');
+      if (mounted) _showToastText(context, '已回复');
+      if (widget.onReplyPosted != null) {
+        try {
+          final dynamic cb = widget.onReplyPosted!;
+          final r = cb();
+          if (r is Future) await r.catchError((_) {});
+        } catch (_) {}
+      }
     } catch (e) {
       if (mounted) _showToastText(context, e.toString());
     }
@@ -918,12 +940,66 @@ class _PostBlockState extends State<_PostBlock> {
     }
   }
 
+  /// 帖子管理菜单：置顶/取消置顶、编辑、删除（仅自己的帖子）。
+  Future<void> _showManageMenu() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(widget.nickname,
+                  style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(
+                ctx,
+                'pin',
+                Icons.push_pin_outlined,
+                widget.pinned ? '取消置顶' : '置顶'),
+            _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            _menuItem(
+                ctx, 'delete', Icons.delete_outline, '删除'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'pin':
+        widget.onTogglePin?.call();
+        break;
+      case 'edit':
+        widget.onEdit?.call();
+        break;
+      case 'delete':
+        widget.onDelete?.call();
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
     final showMore = me != null &&
         widget.ownerUserId != null &&
         widget.ownerUserId != me.id;
+    final canManage = me != null &&
+        widget.ownerUserId != null &&
+        widget.ownerUserId == me.id &&
+        widget.noteId != null &&
+        (widget.onTogglePin != null ||
+            widget.onEdit != null ||
+            widget.onDelete != null);
     final content = widget.content;
     return InkWell(
       onTap: widget.onTap ?? () => setState(() => _expanded = !_expanded),
@@ -938,31 +1014,82 @@ class _PostBlockState extends State<_PostBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 第一行：昵称 + 时间戳 + 更多
+                  // 第一行：昵称 + 时间戳 + 置顶标注 + 更多
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(widget.nickname,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: _text)),
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Flexible(
+                              child: Text(widget.nickname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: _text)),
+                            ),
+                            if (widget.account.isNotEmpty) ...[
+                              const SizedBox(width: 3),
+                              Flexible(
+                                child: Text('@${widget.account}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF8C8C8C))),
+                              ),
+                              const SizedBox(width: 3),
+                              Text('·',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF8C8C8C))),
+                              const SizedBox(width: 2),
+                            ],
+                            const SizedBox(width: 2),
+                            Flexible(
+                              child: Text(_fullTime(widget.timeMs),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF8C8C8C))),
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      Text(_fullTime(widget.timeMs),
-                          style: const TextStyle(
-                              fontSize: 11, color: _textHint)),
-                      const Spacer(),
+                      if (widget.pinned) ...[
+                        const Icon(Icons.push_pin, size: 13, color: Color(0xFF70867A)),
+                        const SizedBox(width: 2),
+                        const Text('已置顶',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF70867A),
+                                fontWeight: FontWeight.w600)),
+                        const SizedBox(width: 8),
+                      ],
+                      if (canManage)
+                        Transform.translate(
+                          offset: const Offset(8, 0),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _showManageMenu,
+                            child: const Icon(Icons.more_horiz,
+                                size: 18, color: Color(0xFF8C8C8C)),
+                          ),
+                        ),
                       if (showMore)
-                        GestureDetector(
+                        Transform.translate(
+                          offset: const Offset(8, 0),
+                          child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => _showMoreMenu(
                               context, widget.ownerUserId!, widget.nickname),
                           child: const Icon(Icons.more_horiz,
-                              size: 18, color: _textSec),
+                              size: 18, color: Color(0xFF8C8C8C)),
+                          ),
                         ),
                     ],
                   ),
@@ -976,9 +1103,10 @@ class _PostBlockState extends State<_PostBlock> {
                               text: content,
                               style: const TextStyle(
                                   fontSize: 15,
-                                  color: _textSec,
+                                  color: Colors.black,
                                   height: 1.6)),
                           maxLines: 8,
+                          ellipsis: '…',
                           textDirection: TextDirection.ltr,
                         )..layout(maxWidth: constraints.maxWidth);
                         final overflow = tp.didExceedMaxLines;
@@ -992,7 +1120,7 @@ class _PostBlockState extends State<_PostBlock> {
                                     : TextOverflow.ellipsis,
                                 style: const TextStyle(
                                     fontSize: 15,
-                                    color: _textSec,
+                                    color: Colors.black,
                                     height: 1.6)),
                             if (overflow && !_expanded)
                               GestureDetector(
@@ -1012,6 +1140,11 @@ class _PostBlockState extends State<_PostBlock> {
                       },
                     ),
                   ],
+                  // 被回复的原贴（引用框）
+                  if (widget.quoteBox != null) ...[
+                    const SizedBox(height: 8),
+                    widget.quoteBox!,
+                  ],
                   // 指标行（与昵称同一左缘）
                   if (widget.allowActions) ...[
                     const SizedBox(height: 10),
@@ -1021,14 +1154,10 @@ class _PostBlockState extends State<_PostBlock> {
                       likeCount: _likeCount,
                       viewCount: widget.viewCount,
                       liked: _liked,
-                      onComment: _openCommentSheet,
+                      onComment: _openReplySheet,
                       onRepost: _repost,
                       onLike: _toggleLike,
                     ),
-                    if (_showComments && _comments.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      for (final c in _comments) _buildCommentRow(c),
-                    ],
                   ] else if (widget.stats != null) ...[
                     const SizedBox(height: 10),
                     widget.stats!,
@@ -1038,47 +1167,6 @@ class _PostBlockState extends State<_PostBlock> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildCommentRow(PlazaComment c) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 12,
-            backgroundColor: _primary.withValues(alpha: 0.10),
-            child: Icon(Icons.person, size: 13, color: _primaryLight),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(c.authorName,
-                        style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: _primaryLight)),
-                    const SizedBox(width: 8),
-                    Text(_fullTime(c.createdAt),
-                        style: const TextStyle(
-                            fontSize: 11, color: _textHint)),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(c.content,
-                    style: const TextStyle(
-                        fontSize: 14, color: _text, height: 1.5)),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1213,7 +1301,19 @@ void _showToastText(BuildContext context, String text) {
 /// 头像+用户名/时间 → 内容预览（最多8行，可展开）→ 统计数据行。
 class _NoteFeedRow extends StatelessWidget {
   final PlazaNote note;
-  const _NoteFeedRow({required this.note});
+  final VoidCallback? onReplyPosted;
+  final bool pinned;
+  final VoidCallback? onTogglePin;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+  const _NoteFeedRow({
+    required this.note,
+    this.onReplyPosted,
+    this.pinned = false,
+    this.onTogglePin,
+    this.onEdit,
+    this.onDelete,
+  });
 
   static String plainContent(PlazaNote note) => note.content.replaceAll(
       RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
@@ -1226,6 +1326,7 @@ class _NoteFeedRow extends StatelessWidget {
     return _PostBlock(
       ownerUserId: note.ownerUserId,
       nickname: isMine ? me.displayName : note.authorName,
+      account: note.authorAccount,
       timeMs: note.createdAt,
       content: _NoteFeedRow.plainContent(note),
       noteId: note.id,
@@ -1234,12 +1335,127 @@ class _NoteFeedRow extends StatelessWidget {
       repostCount: note.repostCount,
       commentCount: note.commentCount,
       viewCount: note.viewCount,
+      onReplyPosted: onReplyPosted,
+      pinned: pinned,
+      onTogglePin: onTogglePin,
+      onEdit: onEdit,
+      onDelete: onDelete,
+      quoteBox: note.repostOf.isNotEmpty ? _QuoteBox(note: note) : null,
       stats: _buildStatsRow(
         commentCount: note.commentCount,
         repostCount: note.repostCount,
         likeCount: note.likeCount,
         viewCount: note.viewCount,
         liked: CloudNotesService.instance.likedNoteIds.contains(note.id),
+      ),
+    );
+  }
+}
+
+/// 被回复原贴的引用框：线框包裹，内部为完整帖子样式——
+/// 头像、昵称、账号、时间戳、内容（字号颜色与原贴一致，最多3行），不显示四个指标。
+class _QuoteBox extends StatefulWidget {
+  final PlazaNote note;
+  const _QuoteBox({required this.note});
+
+  @override
+  State<_QuoteBox> createState() => _QuoteBoxState();
+}
+
+class _QuoteBoxState extends State<_QuoteBox> {
+  PlazaNote? _original;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final n = await CloudNotesService.instance
+          .getNoteById(widget.note.repostOf);
+      if (!mounted) return;
+      setState(() => _original = n);
+    } catch (_) {
+      // 原帖已删除/隐藏，使用转发时保存的快照。
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final src = _original;
+    final name = src?.authorName ?? widget.note.repostSourceAuthor;
+    final account = src?.authorAccount ?? '';
+    final timeMs = src?.createdAt ?? 0;
+    final content = src != null
+        ? _NoteFeedRow.plainContent(src)
+        : widget.note.quoteOfContent;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: _border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 被回复原贴头部：头像 + 昵称 + @账号 + 时间戳（同一行，颜色与正常帖子一致）
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _UserAvatar(userId: src?.ownerUserId, radius: 14),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: Text(name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: _text)),
+                    ),
+                    if (account.isNotEmpty) ...[
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text('@$account',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF8C8C8C))),
+                      ),
+                      const SizedBox(width: 3),
+                      const Text('·',
+                          style: TextStyle(
+                              fontSize: 12, color: Color(0xFF8C8C8C))),
+                      const SizedBox(width: 3),
+                    ],
+                    const SizedBox(width: 3),
+                    Text(_fullTime(timeMs),
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF8C8C8C))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          // 被回复原贴内容：字号颜色与原贴一致，最多3行
+          if (content.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(content,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 15,
+                    color: Colors.black,
+                    height: 1.6)),
+          ],
+        ],
       ),
     );
   }
@@ -1319,9 +1535,11 @@ Widget _statsCell(Widget icon, String text, {Color? color, VoidCallback? onTap})
 class _ReplyItem extends StatelessWidget {
   final PlazaActivity activity;
   final PlazaNote? originalNote;
+  final VoidCallback? onReplyPosted;
   const _ReplyItem({
     required this.activity,
     required this.originalNote,
+    this.onReplyPosted,
   });
 
   @override
@@ -1337,16 +1555,27 @@ class _ReplyItem extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ===== 原贴（完整，同帖子样式）=====
+        // ===== 原贴（完整，同帖子样式，支持回复/点赞/转发）=====
         _PostBlock(
           ownerUserId: original?.ownerUserId,
           nickname: originalIsMine
               ? me.displayName
               : (original?.authorName ?? '同修'),
+          account: original?.authorAccount ?? '',
           timeMs: original?.createdAt ?? 0,
           content: original != null
               ? content
               : (activity.noteTitle.isNotEmpty ? activity.noteTitle : ''),
+          noteId: original?.id,
+          allowActions: original != null,
+          likeCount: original?.likeCount ?? 0,
+          repostCount: original?.repostCount ?? 0,
+          commentCount: original?.commentCount ?? 0,
+          viewCount: original?.viewCount ?? 0,
+          onReplyPosted: onReplyPosted,
+          quoteBox: original != null && original.repostOf.isNotEmpty
+              ? _QuoteBox(note: original)
+              : null,
           stats: original != null
               ? _buildStatsRow(
                   commentCount: original.commentCount,
@@ -1391,12 +1620,14 @@ class _MyPostsTab extends StatefulWidget {
 
 class _MyPostsTabState extends State<_MyPostsTab> {
   final List<PlazaNote> _notes = [];
+  final Set<String> _pinnedIds = {};
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
   int _page = 1;
   String? _error;
   static const int _pageSize = 20;
+  static const String _pinnedKey = 'my_pinned_note_ids';
 
   @override
   void initState() {
@@ -1426,15 +1657,16 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     }
   }
 
-  Future<void> _load() async {
-    
-    setState(() {
-      _loading = true;
-      _error = null;
-      _notes.clear();
-      _page = 1;
-      _hasMore = true;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _notes.clear();
+        _page = 1;
+        _hasMore = true;
+      });
+    }
 
     // 帖子 = 所有分享到菩提空间的帖子（云端数据）。
     List<PlazaNote> cloudNotes = [];
@@ -1469,7 +1701,9 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         ...localNotes.where((n) => !cloudIds.contains(n.id)),
       ];
     }
-    merged.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    await _loadPinnedIds();
+    if (!mounted) return;
+    _sortNotes(merged);
 
     setState(() {
       _notes..clear()..addAll(merged);
@@ -1478,6 +1712,166 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       _error = errorText;
       _loading = false;
     });
+  }
+
+  /// 从本地读取置顶帖子 id 列表。
+  Future<void> _loadPinnedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _pinnedIds
+        ..clear()
+        ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
+    } catch (_) {}
+  }
+
+  /// 排序：置顶的帖子在最前，其余按更新时间倒序。
+  void _sortNotes(List<PlazaNote> notes) {
+    notes.sort((a, b) {
+      final ap = _pinnedIds.contains(a.id);
+      final bp = _pinnedIds.contains(b.id);
+      if (ap != bp) return ap ? -1 : 1;
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
+  }
+
+  /// 置顶/取消置顶帖子（本地保存，重启后仍生效）。
+  Future<void> _togglePin(PlazaNote note) async {
+    final wasPinned = _pinnedIds.contains(note.id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_pinnedKey) ?? [];
+      if (wasPinned) {
+        list.remove(note.id);
+        _pinnedIds.remove(note.id);
+      } else {
+        list.add(note.id);
+        _pinnedIds.add(note.id);
+      }
+      await prefs.setStringList(_pinnedKey, list);
+    } catch (_) {}
+    if (!mounted) return;
+    _sortNotes(_notes);
+    setState(() {});
+    _showToastText(context, wasPinned ? '已取消置顶' : '已置顶');
+  }
+
+  /// 编辑帖子内容：更新云端后重新加载列表。
+  Future<void> _editNote(PlazaNote note) async {
+    final controller = TextEditingController(text: note.content);
+    final saved = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('编辑帖子',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  maxLines: 6,
+                  minLines: 3,
+                  style: const TextStyle(fontSize: 14, color: _text),
+                  decoration: InputDecoration(
+                    hintText: '写下新的内容…',
+                    hintStyle: const TextStyle(color: _textHint),
+                    filled: true,
+                    fillColor: _bg,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(22)),
+                    ),
+                    onPressed: () {
+                      final text = controller.text.trim();
+                      if (text.isEmpty) return;
+                      Navigator.pop(sheetCtx, text);
+                    },
+                    child: const Text('保存'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    controller.dispose();
+    if (saved == null || saved.trim().isEmpty || !mounted) return;
+    try {
+      await CloudNotesService.instance
+          .updateSharedNote(cloudId: note.id, content: saved.trim());
+      if (!mounted) return;
+      _showToastText(context, '已更新');
+      _load(silent: true);
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
+  }
+
+  /// 删除帖子：从菩提空间移除，不再展示。
+  Future<void> _deleteNote(PlazaNote note) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除帖子',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteCloudNote(note.id);
+      _pinnedIds.remove(note.id);
+      if (!mounted) return;
+      setState(() => _notes.removeWhere((n) => n.id == note.id));
+      _showToastText(context, '已删除');
+    } catch (e) {
+      if (mounted) _showToastText(context, e.toString());
+    }
   }
 
   /// 本地笔记中已分享（shared=true）的部分，用于云端不可用时的兜底展示。
@@ -1528,6 +1922,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         _page++;
         _loadingMore = false;
       });
+      _sortNotes(_notes);
+      if (mounted) setState(() {});
     } catch (_) {
       if (!mounted) return;
       setState(() => _loadingMore = false);
@@ -1629,7 +2025,14 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 
   Widget _buildNoteCard(PlazaNote note) {
-    return _NoteFeedRow(note: note);
+    return _NoteFeedRow(
+      note: note,
+      onReplyPosted: _load,
+      pinned: _pinnedIds.contains(note.id),
+      onTogglePin: () => _togglePin(note),
+      onEdit: () => _editNote(note),
+      onDelete: () => _deleteNote(note),
+    );
   }
 }
 
@@ -1873,6 +2276,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     return _ReplyItem(
       activity: activity,
       originalNote: original,
+      onReplyPosted: _load,
     );
   }
 }
@@ -1963,7 +2367,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  return _NoteFeedRow(note: note);
+                  return _NoteFeedRow(note: note, onReplyPosted: _load);
                 },
                 childCount: _notes!.length,
               ),
@@ -2103,7 +2507,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  return _NoteFeedRow(note: note);
+                  return _NoteFeedRow(note: note, onReplyPosted: _load);
                 },
                 childCount: _notes!.length,
               ),
@@ -2537,7 +2941,7 @@ class _SettingsPageState extends State<_SettingsPage> {
                           const _SettingsReminderTile(),
                         ],
                       ),
-                      _sectionTitle('账号'),
+                      _sectionTitle('安全'),
                       SettingsCard(
                         children: [
                           _SettingsAccountTile(),
@@ -2680,19 +3084,14 @@ class _SettingsReminderTile extends StatelessWidget {
   }
 }
 
-/// 更换手机号行：未登录时引导登录。
-/// 账号名称与密码设置行。
+/// 忘记密码行：通过手机验证码重置登录密码，未登录也可使用。
 class _SettingsAccountTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_SettingsPageState>()!;
     return InkWell(
       onTap: () {
-        if (!AuthService.instance.isLoggedIn) {
-          state.requireLogin();
-          return;
-        }
-        Navigator.push(context, slideInFromLeft(const AccountSetupPage()))
+        Navigator.push(context, slideInFromLeft(const ForgotPasswordPage()))
             .then((_) => state.reloadForSettings());
       },
       child: Padding(
@@ -2706,27 +3105,19 @@ class _SettingsAccountTile extends StatelessWidget {
                 color: _primaryLight.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.badge_outlined, color: _primaryLight, size: 20),
+              child: const Icon(Icons.lock_reset, color: _primaryLight, size: 20),
             ),
             const SizedBox(width: 14),
-            Expanded(
-              child: FutureBuilder<String>(
-                future: AuthService.instance.getAccountName(),
-                builder: (context, snap) {
-                  final name = snap.data ?? '';
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('账号名称与密码',
-                          style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
-                      const SizedBox(height: 2),
-                      Text(
-                        name.isEmpty ? '未设置，可用于账号密码登录' : '账号：$name',
-                        style: const TextStyle(fontSize: 12, color: _textHint),
-                      ),
-                    ],
-                  );
-                },
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('忘记密码',
+                      style: TextStyle(fontSize: 16, color: _text, fontWeight: FontWeight.w500)),
+                  SizedBox(height: 2),
+                  Text('通过手机验证码重置登录密码',
+                      style: TextStyle(fontSize: 12, color: _textHint)),
+                ],
               ),
             ),
             const Icon(Icons.chevron_right, color: _textHint, size: 20),

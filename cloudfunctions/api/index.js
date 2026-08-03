@@ -31,6 +31,16 @@ function buildInitOptions() {
   } else if (process.env.CLOUDBASE_APIKEY) {
     opts.accessKey = process.env.CLOUDBASE_APIKEY;
   }
+  // 自定义登录私钥：从云函数环境变量 TCB_CUSTOM_LOGIN_CREDENTIALS 读取，
+  // 值为控制台「自定义登录」下载的 key json（含 private_key / private_key_id / env_id）。
+  // 这样私钥不写入代码，只存在云函数环境配置中。
+  if (process.env.TCB_CUSTOM_LOGIN_CREDENTIALS) {
+    try {
+      opts.credentials = JSON.parse(process.env.TCB_CUSTOM_LOGIN_CREDENTIALS);
+    } catch (e) {
+      console.log("[api] TCB_CUSTOM_LOGIN_CREDENTIALS 解析失败:", e.message);
+    }
+  }
   return opts;
 }
 
@@ -124,6 +134,37 @@ exports.main = async (event, context) => {
   const follows = db.collection("userFollows");
   const blocks = db.collection("userBlocks");
   const userAccounts = db.collection("userAccounts");
+
+  // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
+  async function ensureUserAccounts() {
+    try {
+      await db.createCollection("userAccounts");
+    } catch (e) {
+      // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
+    }
+  }
+
+  const _ = db.command;
+
+  // 给笔记列表附加作者账号名（authorAccount），供客户端展示 @账号。
+  async function attachAuthorAccounts(noteList) {
+    if (!noteList || noteList.length === 0) return;
+    const ids = [...new Set(noteList.map((n) => n.ownerUserId).filter(Boolean))];
+    if (ids.length === 0) return;
+    const accounts = {};
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      try {
+        const { data } = await userAccounts
+          .where({ uid: _.in(chunk) })
+          .get();
+        for (const a of data || []) accounts[a.uid] = a.username || "";
+      } catch (e) {}
+    }
+    for (const n of noteList) {
+      n.authorAccount = accounts[n.ownerUserId] || "";
+    }
+  }
 
   const action = event.action;
   console.log(`[api] action=${action} uid=${uid} tokenPresent=${!!(event.__accessToken)}`);
@@ -245,6 +286,7 @@ exports.main = async (event, context) => {
           .limit(pageSize)
           .get();
         const { total } = await base.count();
+        await attachAuthorAccounts(res.data);
         return ok({
           notes: res.data,
           total,
@@ -270,6 +312,7 @@ exports.main = async (event, context) => {
           .limit(pageSize)
           .get();
         const { total } = await base.count();
+        await attachAuthorAccounts(res.data);
         return ok({
           notes: res.data,
           total,
@@ -318,6 +361,7 @@ exports.main = async (event, context) => {
           const total = scored.length;
           const pageNotes = scored.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
           const notesOut = pageNotes.map(({ _hotScore, ...rest }) => rest);
+          await attachAuthorAccounts(notesOut);
           return ok({
             notes: notesOut,
             total,
@@ -332,6 +376,7 @@ exports.main = async (event, context) => {
           .get();
         const filtered = filterBlocked(res.data);
         const { total } = await base.count();
+        await attachAuthorAccounts(filtered);
         return ok({
           notes: filtered,
           total,
@@ -350,6 +395,7 @@ exports.main = async (event, context) => {
         if (note.visibility !== "public" && note.ownerUserId !== uid) {
           return fail("not_found");
         }
+        await attachAuthorAccounts([note]);
         return ok({ note });
       }
 
@@ -478,6 +524,7 @@ exports.main = async (event, context) => {
             }
           } catch (e) {}
         }
+        await attachAuthorAccounts(list);
         return ok({ notes: list });
       }
 
@@ -599,6 +646,7 @@ exports.main = async (event, context) => {
             }
           } catch (e) {}
         }
+        await attachAuthorAccounts(list);
         return ok({ notes: list });
       }
 
@@ -837,45 +885,103 @@ exports.main = async (event, context) => {
       // 设置/修改账号名称与密码（需已登录）。账号名称全局唯一。
       case "setAccount": {
         if (!uid) return fail("unauthorized");
+        await ensureUserAccounts();
+        const username = normalizeUsername(event.username);
+        if (!username) return fail("invalid_username");
+        // 密码可空：为空表示仅修改账号名称、保留原密码（编辑资料页场景）。
+        const password = String(event.password || "");
+        if (password && (password.length < 6 || password.length > 64)) {
+          return fail("invalid_password");
+        }
+        const usernameKey = username.toLowerCase();
+        // 新名称是否被其他用户占用。
+        const { data } = await userAccounts
+          .where({ usernameKey })
+          .limit(1)
+          .get();
+        const taken = data && data[0];
+        if (taken && taken.uid !== uid) return fail("username_taken");
+
+        // 按 uid 找到当前用户自己的记录（而不是按名称），改名为更新而非新建，
+        // 避免同一 uid 产生多条记录导致展示旧名称。
+        const mine = await userAccounts.where({ uid }).get();
+        const myDocs = mine.data || [];
+        // 清理历史可能产生的重复记录（同一 uid 只保留一条）。
+        for (const d of myDocs.slice(1)) {
+          await userAccounts.doc(d._id).remove();
+        }
+        const myDoc = myDocs[0];
+        const updateData = {
+          username,
+          usernameKey,
+          updatedAt: now(),
+        };
+        if (password) {
+          const salt = crypto.randomBytes(16).toString("hex");
+          updateData.salt = salt;
+          updateData.passwordHash = hashPassword(password, salt);
+          updateData.hasPassword = true;
+        }
+        if (myDoc) {
+          await userAccounts.doc(myDoc._id).update(updateData);
+        } else {
+          updateData.uid = uid;
+          updateData.createdAt = now();
+          if (!updateData.hasPassword) updateData.hasPassword = false;
+          await userAccounts.add(updateData);
+        }
+        return ok({ username });
+      }
+
+      // 手机号登录后自动生成默认账号（随机数字+尾号，并随机生成密码）：
+      // 已有账号则原样返回，不覆盖；没有则创建一条已设随机密码的记录。
+      case "ensureDefaultAccount": {
+        if (!uid) return fail("unauthorized");
+        await ensureUserAccounts();
         const username = normalizeUsername(event.username);
         if (!username) return fail("invalid_username");
         const password = String(event.password || "");
-        if (password.length < 6 || password.length > 64) {
-          return fail("invalid_password");
+        const mine = await userAccounts.where({ uid }).get();
+        const myDocs = mine.data || [];
+        if (myDocs.length > 0) {
+          for (const d of myDocs.slice(1)) {
+            await userAccounts.doc(d._id).remove();
+          }
+          return ok({ username: myDocs[0].username || "" });
         }
         const usernameKey = username.toLowerCase();
         const { data } = await userAccounts
           .where({ usernameKey })
           .limit(1)
           .get();
-        const existing = data && data[0];
-        if (existing && existing.uid !== uid) return fail("username_taken");
-        const salt = crypto.randomBytes(16).toString("hex");
-        const passwordHash = hashPassword(password, salt);
-        if (existing) {
-          await userAccounts.doc(existing._id).update({
-            username,
-            usernameKey,
-            salt,
-            passwordHash,
-            updatedAt: now(),
-          });
-        } else {
-          await userAccounts.add({
-            username,
-            usernameKey,
-            salt,
-            passwordHash,
-            uid,
-            createdAt: now(),
-            updatedAt: now(),
-          });
+        const taken = data && data[0];
+        if (taken && taken.uid !== uid) return fail("username_taken");
+        let salt = "";
+        let passwordHash = "";
+        let hasPassword = false;
+        if (password.length >= 6 && password.length <= 64) {
+          salt = crypto.randomBytes(16).toString("hex");
+          passwordHash = hashPassword(password, salt);
+          hasPassword = true;
         }
+        await userAccounts.add({
+          username,
+          usernameKey,
+          salt,
+          passwordHash,
+          hasPassword,
+          uid,
+          createdAt: now(),
+          updatedAt: now(),
+        });
         return ok({ username });
       }
 
-      // 账号名称 + 密码登录：校验通过后签发自定义登录票据，客户端用票据建立会话。
+      // 账号 + 密码登录（兼注册）：
+      //  - 账号存在但从未设置密码（手机号登录生成的默认账号）→ 本次视为注册，设置密码并登录。
+      //  - 已设置过密码 → 校验密码后登录。
       case "loginWithAccount": {
+        await ensureUserAccounts();
         const username = String(event.username || "").trim().toLowerCase();
         if (!username) return fail("bad_request");
         const password = String(event.password || "");
@@ -885,7 +991,22 @@ exports.main = async (event, context) => {
           .get();
         const acc = data && data[0];
         if (!acc) return fail("account_not_found");
-        if (hashPassword(password, acc.salt) !== acc.passwordHash) {
+        let registered = false;
+        // 以是否存有密码哈希为准（兼容早期记录没有 hasPassword 字段的情况）。
+        if (!acc.passwordHash) {
+          if (password.length < 6 || password.length > 64) {
+            return fail("invalid_password");
+          }
+          const salt = crypto.randomBytes(16).toString("hex");
+          const passwordHash = hashPassword(password, salt);
+          await userAccounts.doc(acc._id).update({
+            salt,
+            passwordHash,
+            hasPassword: true,
+            updatedAt: now(),
+          });
+          registered = true;
+        } else if (hashPassword(password, acc.salt) !== acc.passwordHash) {
           return fail("wrong_password");
         }
         let ticket = "";
@@ -896,12 +1017,13 @@ exports.main = async (event, context) => {
           console.log("[api] createTicket error:", e.message);
           return fail("ticket_error");
         }
-        return ok({ uid: acc.uid, ticket });
+        return ok({ uid: acc.uid, ticket, registered });
       }
 
       // 查询当前登录用户的账号名称（未设置返回空串）。
       case "getMyAccount": {
         if (!uid) return ok({ username: "" });
+        await ensureUserAccounts();
         const { data } = await userAccounts.where({ uid }).limit(1).get();
         const acc = data && data[0];
         return ok({ username: acc ? acc.username : "" });

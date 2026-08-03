@@ -20,6 +20,7 @@ class PlazaNote {
   final String title;
   final String content;
   final String authorName;
+  final String authorAccount;
   final String visibility;
   final String status;
   final int likeCount;
@@ -42,6 +43,7 @@ class PlazaNote {
     required this.title,
     required this.content,
     required this.authorName,
+    this.authorAccount = '',
     required this.visibility,
     required this.status,
     required this.likeCount,
@@ -63,6 +65,7 @@ class PlazaNote {
         title: json['title']?.toString() ?? '',
         content: json['content']?.toString() ?? '',
         authorName: json['authorName']?.toString() ?? '同修',
+        authorAccount: json['authorAccount']?.toString() ?? '',
         visibility: json['visibility']?.toString() ?? 'public',
         status: json['status']?.toString() ?? 'normal',
         likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,

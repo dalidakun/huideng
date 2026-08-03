@@ -643,9 +643,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 _buildQuoteCard(note),
               ],
               const SizedBox(height: 8),
-              Text(_formatTime(note.createdAt),
-                  style: const TextStyle(fontSize: 11, color: _textHint)),
-              const SizedBox(height: 16),
               const Divider(height: 1, color: _border),
               const SizedBox(height: 6),
               _buildActionsRow(note, liked),
@@ -795,17 +792,36 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Row(
             children: [
-              Text(note.authorName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              Flexible(
+                child: Text(note.authorName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+              ),
+              if (note.authorAccount.isNotEmpty) ...[
+                const SizedBox(width: 3),
+                Flexible(
+                  child: Text('@${note.authorAccount}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF8C8C8C))),
+                ),
+                const SizedBox(width: 3),
+                Text('·',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF8C8C8C))),
+                const SizedBox(width: 2),
+              ],
+              const SizedBox(width: 2),
+              Text(_formatTime(note.createdAt),
                   style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
+                      fontSize: 12, color: Color(0xFF8C8C8C))),
             ],
           ),
         ),

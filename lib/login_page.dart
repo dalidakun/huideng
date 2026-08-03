@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'auth_service.dart';
+import 'forgot_password_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _bg = Color(0xFFF5EDE3);
@@ -29,6 +31,7 @@ class _LoginPageState extends State<LoginPage> {
   int _countdown = 0;
   bool _sending = false;
   bool _loggingIn = false;
+  bool _showPwd = false;
 
   /// 登录方式：0 = 手机号验证码，1 = 账号名称 + 密码。
   int _mode = 0;
@@ -126,12 +129,12 @@ class _LoginPageState extends State<LoginPage> {
     }
     setState(() => _loggingIn = true);
     try {
-      await AuthService.instance.loginWithAccount(
+      final registered = await AuthService.instance.loginWithAccount(
         username: _accountController.text.trim(),
         password: _passwordController.text,
       );
       if (mounted) {
-        _showToast('登录成功');
+        _showToast(registered ? '注册成功，请牢记账号密码' : '登录成功');
         Navigator.of(context).pop();
       }
     } catch (e) {
@@ -143,11 +146,32 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   String _friendlyLoginError(String raw) {
-    if (raw.contains('account_not_found')) return '账号名称不存在，请先设置';
+    if (raw.contains('account_not_found')) return '账号不存在，请先用手机号登录';
     if (raw.contains('wrong_password')) return '密码错误';
+    if (raw.contains('invalid_password')) return '密码长度需为 6-64 位';
     if (raw.contains('ticket_error')) return '服务暂不可用，请稍后再试';
-    if (raw.contains('username_taken')) return '该账号名称已被使用';
+    if (raw.contains('username_taken')) return '该账号已被使用';
     return raw;
+  }
+
+  Future<void> _forgotPassword() async {
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+    );
+    if (ok == true && mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _copyCredentials() async {
+    final account = _accountController.text.trim();
+    final pwd = _passwordController.text;
+    if (account.isEmpty || pwd.isEmpty) {
+      _showToast('请先输入账号和密码');
+      return;
+    }
+    await Clipboard.setData(
+        ClipboardData(text: '燃灯App\n账号：$account\n密码：$pwd'));
+    if (mounted) _showToast('已复制，粘贴到微信收藏即可保存');
   }
 
   void _showToast(String text) {
@@ -212,7 +236,7 @@ class _LoginPageState extends State<LoginPage> {
             Icon(Icons.auto_stories_rounded, size: 56, color: _gold),
             const SizedBox(height: 12),
             Text(
-              '登录后即可分享笔记到菩提空间',
+              '登录后即可体验完整功能',
               textAlign: TextAlign.center,
               style: TextStyle(
                   fontSize: 14, color: _textSec, height: 1.6),
@@ -314,7 +338,7 @@ class _LoginPageState extends State<LoginPage> {
                 style: const TextStyle(fontSize: 16, color: _text),
                 decoration: InputDecoration(
                   counterText: '',
-                  hintText: '账号名称',
+                  hintText: '账号',
                   hintStyle: TextStyle(color: _textHint),
                   filled: true,
                   fillColor: _card,
@@ -333,7 +357,7 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 12),
               TextField(
                 controller: _passwordController,
-                obscureText: true,
+                obscureText: !_showPwd,
                 maxLength: 64,
                 style: const TextStyle(fontSize: 16, color: _text),
                 decoration: InputDecoration(
@@ -344,6 +368,14 @@ class _LoginPageState extends State<LoginPage> {
                   fillColor: _card,
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  suffixIcon: IconButton(
+                    onPressed: () => setState(() => _showPwd = !_showPwd),
+                    icon: Icon(
+                      _showPwd ? Icons.visibility_off : Icons.visibility,
+                      color: _textHint,
+                      size: 20,
+                    ),
+                  ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
@@ -377,19 +409,81 @@ class _LoginPageState extends State<LoginPage> {
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white),
                       )
-                    : Text(_mode == 0 ? '登录 / 注册' : '登录',
+                    : Text(_mode == 0 ? '登录' : '登录 / 注册',
                         style: const TextStyle(
                             fontSize: 16, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(height: 20),
-            Text(
-              _mode == 0
-                  ? '未注册的手机号验证通过后将自动注册'
-                  : '尚未设置账号？登录后进入「我的-设置-账号名称与密码」进行设置',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: _textHint),
-            ),
+            if (_mode == 1)
+              Align(
+                alignment: Alignment.center,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: _copyCredentials,
+                        borderRadius: BorderRadius.circular(8),
+                        splashColor: Colors.white,
+                        highlightColor: Colors.white,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.copy,
+                                  size: 16, color: Color(0xFF70867A)),
+                              SizedBox(width: 4),
+                              Text(
+                                '复制账号密码',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFF70867A),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const Text(
+                      ' 到微信收藏，方便保存记忆',
+                      style: TextStyle(fontSize: 12, color: _textSec),
+                    ),
+                  ],
+                ),
+              ),
+            if (_mode == 1) ...[
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.center,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _forgotPassword,
+                    borderRadius: BorderRadius.circular(8),
+                    splashColor: Colors.white,
+                    highlightColor: Colors.white,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      child: const Text(
+                        '忘记密码？',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _textSec,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

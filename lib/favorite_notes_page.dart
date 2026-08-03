@@ -167,7 +167,30 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                 children: [
                   Icon(Icons.person_outline, size: 12, color: _textHint),
                   const SizedBox(width: 4),
-                  Text(note.authorName, style: const TextStyle(fontSize: 12, color: _textSec)),
+                  Flexible(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(note.authorName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12, color: _textSec)),
+                        ),
+                        if (note.authorAccount.isNotEmpty) ...[
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text('@${note.authorAccount}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12, color: Color(0xFF8C8C8C))),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                   const Spacer(),
                   Icon(Icons.visibility_outlined, size: 12, color: _textHint),
                   const SizedBox(width: 3),

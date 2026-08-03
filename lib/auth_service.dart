@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math';
+
 import 'package:cloudbase_flutter/cloudbase_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -150,9 +153,16 @@ class AuthService {
       if (user == null || user.isAnonymous == true) {
         throw AuthException('no_user', '会话失效');
       }
-      currentUser.value = _toAuthUser(user);
-      await _ensureDefaultNickname(user);
+      // 会话里缓存的用户可能是旧的（昵称等修改后未重新拉取），用服务器最新信息刷新。
+      var freshUser = user;
+      try {
+        final ures = await app.auth.getUser();
+        if (ures.data?.user != null) freshUser = ures.data!.user!;
+      } catch (_) {}
+      currentUser.value = _toAuthUser(freshUser);
+      await _ensureDefaultNickname(freshUser);
       await _recordFirstJoin();
+      unawaited(_ensureDefaultAccount(user.phone ?? ''));
     } catch (_) {
       currentUser.value = null;
     }
@@ -206,6 +216,7 @@ class AuthService {
     currentUser.value = _toAuthUser(user);
     await _ensureDefaultNickname(user);
     await _recordFirstJoin();
+    await _ensureDefaultAccount(phone);
   }
 
   /// 更新当前用户昵称/签名。
@@ -244,6 +255,7 @@ class AuthService {
   Future<void> logout() async {
     _pendingVerifyOtp = null;
     _pendingPhone = null;
+    _pendingPhoneChangeVerify = null;
     final app = await _ensureApp();
     if (app != null) {
       try {
@@ -255,9 +267,10 @@ class AuthService {
 
   /// 设置/修改账号名称与密码（需已登录）。
   /// 账号名称全局唯一，成功后缓存本地用于展示。
+  /// [password] 可空：为空表示仅修改账号名称、保留原密码（编辑资料页场景）。
   Future<void> setAccount({
     required String username,
-    required String password,
+    String password = '',
   }) async {
     if (!isLoggedIn) {
       throw AuthException('not_logged_in', '请先登录');
@@ -271,9 +284,35 @@ class AuthService {
     }
   }
 
-  /// 使用账号名称 + 密码登录：
+  /// 忘记密码：通过手机验证码验证后重置登录密码（未登录也可使用）。
+  /// 需先调用 [requestSmsCode] 向该手机号发送验证码；
+  /// 校验通过后会用验证码完成登录（拿到账号身份），再把账号密码更新为新密码。
+  Future<void> resetPassword({
+    required String phone,
+    required String smsCode,
+    required String newPassword,
+  }) async {
+    if (newPassword.length < 6 || newPassword.length > 64) {
+      throw AuthException('invalid_password', '密码长度需为 6-64 位');
+    }
+    final pending = _pendingVerifyOtp;
+    if (pending == null || _pendingPhone != phone) {
+      throw AuthException('no_pending_otp', '请先获取验证码');
+    }
+    // 校验验证码并建立登录会话（uid 由此确认），新手机号会顺带注册，但需本人持有手机号。
+    await loginWithSmsCode(phone, smsCode);
+    // 登录后必然存在账号名称（无则已由 _ensureDefaultAccount 自动创建），仅更新密码。
+    final name = await getAccountName();
+    if (name.isEmpty) {
+      throw AuthException('no_account', '当前账号未设置账号名称，无法重置密码');
+    }
+    await setAccount(username: name, password: newPassword);
+  }
+
+  /// 使用账号名称 + 密码登录（兼注册）：
   /// 云函数校验通过后签发自定义登录票据，再用票据建立 CloudBase 会话。
-  Future<void> loginWithAccount({
+  /// 返回 true 表示本次是首次设置密码（注册），false 表示普通登录。
+  Future<bool> loginWithAccount({
     required String username,
     required String password,
   }) async {
@@ -298,6 +337,7 @@ class AuthService {
     await _recordFirstJoin();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user_account_name', username.trim());
+    return res['registered'] == true;
   }
 
   /// 查询当前登录用户的账号名称；未设置返回空串。失败时回退到本地缓存。
@@ -315,6 +355,51 @@ class AuthService {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString('user_account_name') ?? '';
     }
+  }
+
+  /// 手机号登录后自动生成默认账号：4 位随机数字 + 手机号后四位，并随机生成密码。
+  /// 已有账号（含默认账号）则原样返回、不覆盖；用户可在「设置-安全-忘记密码」重置密码。
+  Future<void> _ensureDefaultAccount(String phone) async {
+    if (!isLoggedIn) return;
+    final tail = _phoneTail(phone);
+    if (tail.isEmpty) return;
+    for (var i = 0; i < 5; i++) {
+      final username = _randomDigits(4) + tail;
+      final password = _randomPassword();
+      try {
+        final res = await CloudNotesService.instance.callApi(
+          'ensureDefaultAccount',
+          params: {'username': username, 'password': password},
+        );
+        final name = res['username']?.toString();
+        if (name != null && name.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('user_account_name', name);
+        }
+        return;
+      } catch (_) {
+        // 名称被占用则换一组随机数字重试。
+      }
+    }
+  }
+
+  String _randomDigits(int n) {
+    final r = Random();
+    return List.generate(n, (_) => r.nextInt(10).toString()).join();
+  }
+
+  /// 随机密码：去掉易混淆字符的字母+数字，长度 10。
+  String _randomPassword() {
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+    final r = Random();
+    return String.fromCharCodes(
+        List.generate(10, (_) => chars.codeUnitAt(r.nextInt(chars.length))));
+  }
+
+  String _phoneTail(String phone) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return '';
+    return digits.length >= 4 ? digits.substring(digits.length - 4) : digits;
   }
 
   /// 更换绑定手机号第一步：向新手机号发送验证码。

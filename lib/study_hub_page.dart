@@ -1726,13 +1726,28 @@ class StudyHubPageState extends State<StudyHubPage>
                               style: const TextStyle(
                                   fontSize: 12, color: _textSec)),
                         ),
-                        const SizedBox(width: 10),
+                        if (note.authorAccount.isNotEmpty) ...[
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text('@${note.authorAccount}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 13, color: Color(0xFF8C8C8C))),
+                          ),
+                          const SizedBox(width: 3),
+                          Text('·',
+                              style: const TextStyle(
+                                  fontSize: 13, color: Color(0xFF8C8C8C))),
+                          const SizedBox(width: 2),
+                        ],
+                        const SizedBox(width: 2),
                         const Icon(Icons.schedule,
-                            size: 12, color: _textHint),
-                        const SizedBox(width: 3),
+                            size: 13, color: Color(0xFF8C8C8C)),
+                        const SizedBox(width: 2),
                         Text(_formatNoteTime(note.createdAt),
                             style: const TextStyle(
-                                fontSize: 12, color: _textHint)),
+                                fontSize: 13, color: Color(0xFF8C8C8C))),
                       ],
                     ),
                   ),

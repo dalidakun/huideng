@@ -246,10 +246,25 @@ class _UserSpacePageState extends State<UserSpacePage> {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Icon(Icons.schedule, size: 12, color: _textHint),
-                  const SizedBox(width: 4),
+                  if (note.authorAccount.isNotEmpty) ...[
+                    Flexible(
+                      child: Text('@${note.authorAccount}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF8C8C8C))),
+                    ),
+                    const SizedBox(width: 3),
+                    Text('·',
+                        style: const TextStyle(
+                            fontSize: 13, color: Color(0xFF8C8C8C))),
+                    const SizedBox(width: 2),
+                  ],
+                  Icon(Icons.schedule, size: 13, color: Color(0xFF8C8C8C)),
+                  const SizedBox(width: 2),
                   Text(_formatTime(note.createdAt),
-                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                      style: const TextStyle(
+                          fontSize: 13, color: Color(0xFF8C8C8C))),
                   const Spacer(),
                   Icon(Icons.mode_comment_outlined,
                       size: 12, color: _textHint),

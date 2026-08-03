@@ -28,8 +28,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String? _avatarPath;
   String? _bannerPath;
   bool _showSavedText = false;
+  String _loadedAccount = '';
   final _nameCtrl = TextEditingController();
   final _taglineCtrl = TextEditingController();
+  final _accountCtrl = TextEditingController();
+  final _pwdCtrl = TextEditingController();
+
+  static final RegExp _nameRe =
+      RegExp(r'^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$');
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
 
@@ -45,6 +51,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
     _nameCtrl.dispose();
     _taglineCtrl.dispose();
+    _accountCtrl.dispose();
+    _pwdCtrl.dispose();
     super.dispose();
   }
 
@@ -63,6 +71,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
             ? user!.tagline!
             : prefs.getString('user_tagline')) ??
         '与经为伴，与法同行';
+    if (_isLoggedIn) {
+      final account = await AuthService.instance.getAccountName();
+      if (!mounted) return;
+      setState(() {
+        _loadedAccount = account;
+        _accountCtrl.text = account;
+      });
+    }
   }
 
   Future<void> _pickAvatar() async {
@@ -125,6 +141,35 @@ class _EditProfilePageState extends State<EditProfilePage> {
         tagline: tagline,
       );
     }
+    // 账号修改：账号有变化时需先手机号验证，通过后更新账号（同时设置/更新密码）。
+    final account = _accountCtrl.text.trim();
+    final accountChanged = _isLoggedIn && account != _loadedAccount;
+    if (accountChanged) {
+      if (!_nameRe.hasMatch(account)) {
+        _showToast('账号名称需为 2-20 位中英文、数字或下划线');
+        return;
+      }
+      final pwd = _pwdCtrl.text;
+      if (pwd.length < 6 || pwd.length > 64) {
+        _showToast('修改账号时需设置 6-64 位密码');
+        return;
+      }
+      final verified = await _verifyPhoneChange();
+      if (!mounted) return;
+      if (!verified) return; // 验证取消或失败，不保存账号修改
+      try {
+        await AuthService.instance.setAccount(username: account, password: pwd);
+        _loadedAccount = account;
+      } catch (e) {
+        final m = e.toString();
+        if (m.contains('username_taken')) {
+          _showToast('该账号名称已被其他用户使用，请换一个');
+        } else {
+          _showToast('账号更新失败，请稍后重试');
+        }
+        return;
+      }
+    }
     if (!mounted) return;
     // 横幅下边缘小字号提示，避免云端同步耗时造成卡顿。
     setState(() => _showSavedText = true);
@@ -141,6 +186,60 @@ class _EditProfilePageState extends State<EditProfilePage> {
           );
         } catch (_) {}
       }());
+    }
+  }
+
+  /// 修改账号前先验证当前绑定手机号：发验证码 → 用户输入 → 校验通过返回 true。
+  Future<bool> _verifyPhoneChange() async {
+    final phone = AuthService.instance.currentUser.value?.mobilePhoneNumber;
+    if (phone == null || phone.isEmpty) {
+      _showToast('当前账号未绑定手机号，无法验证');
+      return false;
+    }
+    try {
+      await AuthService.instance.requestSmsCode(phone);
+    } catch (_) {
+      _showToast('验证码发送失败，请稍后重试');
+      return false;
+    }
+    if (!mounted) return false;
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('手机验证',
+            style: TextStyle(
+                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 6,
+          keyboardType: TextInputType.number,
+          style: const TextStyle(fontSize: 16, color: _text),
+          decoration: const InputDecoration(hintText: '请输入短信验证码'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('确定',
+                style: TextStyle(color: _text, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (code == null || code.length != 6) return false;
+    try {
+      await AuthService.instance.loginWithSmsCode(phone, code);
+      return true;
+    } catch (_) {
+      if (mounted) _showToast('验证码错误或已过期');
+      return false;
     }
   }
 
@@ -393,6 +492,110 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                       horizontal: 16,
                                       vertical: 14),
                             ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text('账号',
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: _textSec)),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _accountCtrl,
+                            maxLength: 20,
+                            style: const TextStyle(
+                                fontSize: 16, color: _text),
+                            decoration: const InputDecoration(
+                              hintText: '2-20 位中英文、数字或下划线',
+                              hintStyle:
+                                  TextStyle(color: _textHint),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: _gold, width: 1.5),
+                              ),
+                              filled: true,
+                              fillColor: _card,
+                              contentPadding:
+                                  EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text('账号密码',
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: _textSec)),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _pwdCtrl,
+                            maxLength: 64,
+                            obscureText: true,
+                            style: const TextStyle(
+                                fontSize: 16, color: _text),
+                            decoration: const InputDecoration(
+                              hintText: '修改账号时需设置 6-64 位密码',
+                              hintStyle:
+                                  TextStyle(color: _textHint),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: Color(0xFFEFE6DB)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.all(
+                                    Radius.circular(12)),
+                                borderSide: BorderSide(
+                                    color: _gold, width: 1.5),
+                              ),
+                              filled: true,
+                              fillColor: _card,
+                              contentPadding:
+                                  EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Row(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.info_outline,
+                                  size: 14, color: _textHint),
+                              SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  '账号全局唯一，可用于「账号密码登录」。账号与手机号关联同一份用户数据，修改后所有笔记按新账号显示。',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: _textHint,
+                                      height: 1.5),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
