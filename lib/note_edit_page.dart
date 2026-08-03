@@ -64,7 +64,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
     var query = '';
     if (sel.isValid && sel.isCollapsed) {
       final cursor = sel.start;
-      final at = text.lastIndexOf('@', cursor - 1);
+      final at = cursor > 0 ? text.lastIndexOf('@', cursor - 1) : -1;
       if (at >= 0) {
         // 已成形标记内部、或 @ 前是 '[' 时不触发搜索。
         final insideExisting = at > 0 && text[at - 1] == '[';
