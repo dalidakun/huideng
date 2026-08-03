@@ -2061,15 +2061,30 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 
   Widget _buildGroupCard(PlazaNote root, List<PlazaNote> replies) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    if (replies.isEmpty) {
+      return _buildNoteCard(root);
+    }
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        _buildNoteCard(root),
-        if (replies.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 2, bottom: 8),
-            child: ReplyChain(replies: replies),
-          ),
+        // 一条竖线连接原贴头像与所有回复头像（头像为圆形不透明，线在头像间隙可见）。
+        Positioned(
+          left: 21,
+          top: 14,
+          bottom: 0,
+          child: Container(width: 2, color: _border),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildNoteCard(root),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: ReplyChain(replies: replies),
+            ),
+          ],
+        ),
       ],
     );
   }
