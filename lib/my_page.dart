@@ -2016,23 +2016,27 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
                     if (index == _groups.length) {
-                      return const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: _gold),
+                      if (_hasMore && widget.isLoggedIn) {
+                        return const Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: _gold),
+                            ),
                           ),
-                        ),
-                      );
+                        );
+                      }
+                      // 末尾收尾分割线，保证最后一条帖子下方也有分割线。
+                      return const Divider(
+                          height: 1, thickness: 0.6, color: Color(0xFFEDE5DB));
                     }
                     final g = _groups[index];
                     return _buildGroupCard(g.$1, g.$2);
                   },
-                  childCount:
-                      _groups.length + (_hasMore && widget.isLoggedIn ? 1 : 0),
+                  childCount: _groups.length + 1,
                 ),
               ),
             ),
@@ -2061,30 +2065,39 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 
   Widget _buildGroupCard(PlazaNote root, List<PlazaNote> replies) {
-    if (replies.isEmpty) {
-      return _buildNoteCard(root);
-    }
-    return Stack(
-      clipBehavior: Clip.none,
+    // 每个区域顶部一条浅色分割线，与其他帖子分隔。
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 一条竖线连接原贴头像与所有回复头像（头像为圆形不透明，线在头像间隙可见）。
-        Positioned(
-          left: 21,
-          top: 14,
-          bottom: 0,
-          child: Container(width: 2, color: _border),
-        ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildNoteCard(root),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: ReplyChain(replies: replies),
-            ),
-          ],
-        ),
+        const Divider(height: 1, thickness: 0.6, color: Color(0xFFEDE5DB)),
+        const SizedBox(height: 4),
+        if (replies.isEmpty) ...[
+          _buildNoteCard(root),
+        ] else ...[
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // 一条竖线连接原贴头像与所有回复头像（头像为圆形不透明，线在头像间隙可见）。
+              Positioned(
+                left: 21,
+                top: 14,
+                bottom: 0,
+                child: Container(width: 2, color: _border),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildNoteCard(root),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: ReplyChain(replies: replies),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
