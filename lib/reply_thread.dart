@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
 import 'note_sutra_links.dart';
+import 'user_avatar.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _text = Color(0xFF3E2723);
@@ -47,12 +48,8 @@ class _ReplyThreadState extends State<ReplyThread> {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
-  Widget _avatar() {
-    return CircleAvatar(
-      radius: 14,
-      backgroundColor: _primaryLight.withValues(alpha: 0.10),
-      child: const Icon(Icons.person, size: 16, color: _primaryLight),
-    );
+  Widget _avatar(String? userId) {
+    return UserAvatar(userId: userId, radius: 22);
   }
 
   Widget _header(PlazaNote note) {
@@ -96,25 +93,25 @@ class _ReplyThreadState extends State<ReplyThread> {
   Widget _metrics(PlazaNote note) {
     return Row(
       children: [
-        Icon(Icons.mode_comment_outlined, size: 14, color: _textSec),
-        const SizedBox(width: 3),
+        Icon(Icons.mode_comment_outlined, size: 16, color: _textSec),
+        const SizedBox(width: 4),
         Text('${note.commentCount}',
-            style: const TextStyle(fontSize: 12, color: _textSec)),
-        const SizedBox(width: 18),
-        Icon(Icons.repeat_rounded, size: 15, color: _textSec),
-        const SizedBox(width: 3),
+            style: const TextStyle(fontSize: 13, color: _textSec)),
+        const SizedBox(width: 20),
+        Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+        const SizedBox(width: 4),
         Text('${note.repostCount}',
-            style: const TextStyle(fontSize: 12, color: _textSec)),
-        const SizedBox(width: 18),
-        Icon(Icons.favorite_border_rounded, size: 14, color: _textSec),
-        const SizedBox(width: 3),
+            style: const TextStyle(fontSize: 13, color: _textSec)),
+        const SizedBox(width: 20),
+        Icon(Icons.favorite_border_rounded, size: 16, color: _textSec),
+        const SizedBox(width: 4),
         Text('${note.likeCount}',
-            style: const TextStyle(fontSize: 12, color: _textSec)),
-        const SizedBox(width: 18),
-        Icon(Icons.visibility_outlined, size: 14, color: _textSec),
-        const SizedBox(width: 3),
+            style: const TextStyle(fontSize: 13, color: _textSec)),
+        const SizedBox(width: 20),
+        Icon(Icons.visibility_outlined, size: 16, color: _textSec),
+        const SizedBox(width: 4),
         Text('${note.viewCount}',
-            style: const TextStyle(fontSize: 12, color: _textSec)),
+            style: const TextStyle(fontSize: 13, color: _textSec)),
       ],
     );
   }
@@ -151,20 +148,20 @@ class _ReplyThreadState extends State<ReplyThread> {
           children: [
             Column(
               children: [
-                _avatar(),
+                _avatar(original?.ownerUserId),
                 if (original != null)
                   Container(
                     width: 2,
-                    height: 24,
+                    height: 30,
                     color: _border,
                   ),
               ],
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             Expanded(
               child: original != null
                   ? _body(original)
-                  : const SizedBox(height: 32),
+                  : const SizedBox(height: 44),
             ),
           ],
         ),
@@ -172,8 +169,8 @@ class _ReplyThreadState extends State<ReplyThread> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _avatar(),
-            const SizedBox(width: 8),
+            _avatar(widget.replyNote.ownerUserId),
+            const SizedBox(width: 10),
             Expanded(child: _body(widget.replyNote)),
           ],
         ),

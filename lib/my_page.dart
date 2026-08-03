@@ -20,6 +20,7 @@ import 'note_edit_page.dart';
 import 'note_detail_page.dart';
 import 'quote_box.dart';
 import 'reply_thread.dart';
+import 'user_avatar.dart';
 import 'certification_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -67,6 +68,9 @@ class MyPageState extends State<MyPage>
   String _accountName = '';
   bool _verified = false;
   String _joinedDate = '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
+
+  /// 保存资料成功后，在横幅下边缘显示的"已保存"气泡。
+  bool _showSavedBubble = false;
 
   MyCounts _counts = const MyCounts();
 
@@ -284,7 +288,19 @@ class MyPageState extends State<MyPage>
 
   void _openEditProfile() {
     Navigator.push(context, slideInFromLeft(const EditProfilePage()))
-        .then((_) => _loadData());
+        .then((saved) {
+      _loadData();
+      if (saved == true) _flashSavedBubble();
+    });
+  }
+
+  /// 在个人主页横幅下边缘（与"编辑个人资料"按钮同一水平线）短暂显示"已保存"气泡。
+  void _flashSavedBubble() {
+    if (!mounted) return;
+    setState(() => _showSavedBubble = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showSavedBubble = false);
+    });
   }
 
   @override
@@ -330,7 +346,7 @@ class MyPageState extends State<MyPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          height: 240,
+          height: 210,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -361,31 +377,6 @@ class MyPageState extends State<MyPage>
                   ),
                 ),
               ),
-              if (isLoggedIn)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: GestureDetector(
-                    onTap: _openSettings,
-                    child: Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.3),
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.06),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(Icons.settings_outlined,
-                          size: 20, color: _text),
-                    ),
-                  ),
-                ),
               Positioned(
                 right: 8,
                 top: 168,
@@ -415,6 +406,26 @@ class MyPageState extends State<MyPage>
                   ),
                 ),
               ),
+              if (_showSavedBubble)
+                Positioned(
+                  right: 118,
+                  top: 168,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Text(
+                      '已保存',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
               Positioned(
                 left: 20,
                 top: 122,
@@ -449,7 +460,7 @@ class MyPageState extends State<MyPage>
           ),
         ),
         Transform.translate(
-          offset: const Offset(0, -28),
+          offset: const Offset(0, -2),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
@@ -509,7 +520,7 @@ class MyPageState extends State<MyPage>
                 overflow: TextOverflow.ellipsis,
               ),
               if (_joinedDate.isNotEmpty) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Row(
                   children: [
                     const Icon(Icons.calendar_month_outlined,
@@ -519,6 +530,17 @@ class MyPageState extends State<MyPage>
                       _joinedDate,
                       style: const TextStyle(fontSize: 13, color: _textHint),
                     ),
+                    const Spacer(),
+                    if (isLoggedIn)
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _openSettings,
+                        child: const Padding(
+                          padding: EdgeInsets.all(6),
+                          child: Icon(Icons.settings_outlined,
+                              size: 20, color: Color(0xFF8C8C8C)),
+                        ),
+                      ),
                   ],
                 ),
               ],
@@ -714,42 +736,6 @@ class _TabContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return child;
-  }
-}
-
-/// 用户头像：当前用户显示本地上传的头像图片，他人暂无云端头像数据显示默认图标。
-class _UserAvatar extends StatelessWidget {
-  final String? userId;
-  final double radius;
-  const _UserAvatar({this.userId, this.radius = 22});
-
-  @override
-  Widget build(BuildContext context) {
-    final me = AuthService.instance.currentUser.value;
-    final isMe = me != null && userId != null && userId == me.id;
-    if (!isMe) {
-      return CircleAvatar(
-        radius: radius,
-        backgroundColor: _primary.withValues(alpha: 0.10),
-        child: Icon(Icons.person, size: radius, color: _primaryLight),
-      );
-    }
-    return FutureBuilder<String?>(
-      future: SharedPreferences.getInstance()
-          .then((p) => p.getString('user_avatar_path')),
-      builder: (context, snap) {
-        final path = snap.data;
-        if (path != null && path.isNotEmpty && File(path).existsSync()) {
-          return CircleAvatar(
-              radius: radius, backgroundImage: FileImage(File(path)));
-        }
-        return CircleAvatar(
-          radius: radius,
-          backgroundColor: _primary.withValues(alpha: 0.10),
-          child: Icon(Icons.person, size: radius, color: _primaryLight),
-        );
-      },
-    );
   }
 }
 
@@ -1043,7 +1029,7 @@ class _PostBlockState extends State<_PostBlock> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _UserAvatar(userId: widget.ownerUserId, radius: 22),
+            UserAvatar(userId: widget.ownerUserId, radius: 22),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -2012,7 +1998,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
               child: SizedBox(height: 4),
             ),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -2217,7 +2203,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               child: SizedBox(height: 4),
             ),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -2379,7 +2365,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
@@ -2519,7 +2505,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
@@ -2688,7 +2674,7 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {

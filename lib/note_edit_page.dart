@@ -220,6 +220,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
         _savingCloud = false;
       });
       _showSavedToast(sharedNow ? '已保存并分享' : '已保存到草稿');
+      // 保存成功后返回上一页（修学主页等）。
+      Navigator.pop(context);
     }
   }
 

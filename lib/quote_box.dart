@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'user_avatar.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _bg = Color(0xFFF5EDE3);
@@ -80,11 +81,7 @@ class _QuoteBoxState extends State<QuoteBox> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                CircleAvatar(
-                  radius: 14,
-                  backgroundColor: _primaryLight.withValues(alpha: 0.10),
-                  child: const Icon(Icons.person, size: 16, color: _primaryLight),
-                ),
+                UserAvatar(userId: src?.ownerUserId ?? widget.note.ownerUserId, radius: 14),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Row(
