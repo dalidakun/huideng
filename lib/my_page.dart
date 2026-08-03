@@ -19,6 +19,7 @@ import 'user_list_page.dart';
 import 'note_edit_page.dart';
 import 'note_detail_page.dart';
 import 'quote_box.dart';
+import 'reply_chain.dart';
 import 'reply_thread.dart';
 import 'user_avatar.dart';
 import 'certification_page.dart';
@@ -346,7 +347,7 @@ class MyPageState extends State<MyPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          height: 210,
+          height: 226,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -410,18 +411,30 @@ class MyPageState extends State<MyPage>
                 Positioned(
                   right: 118,
                   top: 168,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Text(
-                      '已保存',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
+                  child: Material(
+                    color: _primary,
+                    borderRadius: BorderRadius.circular(20),
+                    elevation: 0,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 7),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.check_circle,
+                              size: 14, color: Colors.white),
+                          const SizedBox(width: 5),
+                          const Text(
+                            '已保存',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              decoration: TextDecoration.none,
+                              decorationColor: Colors.transparent,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -460,7 +473,7 @@ class MyPageState extends State<MyPage>
           ),
         ),
         Transform.translate(
-          offset: const Offset(0, -2),
+          offset: const Offset(0, -14),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
@@ -2002,7 +2015,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
-                    if (index == _notes.length) {
+                    if (index == _groups.length) {
                       return const Padding(
                         padding: EdgeInsets.all(20),
                         child: Center(
@@ -2015,15 +2028,49 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                         ),
                       );
                     }
-                    return _buildNoteCard(_notes[index]);
+                    final g = _groups[index];
+                    return _buildGroupCard(g.$1, g.$2);
                   },
-                  childCount: _notes.length + (_hasMore && widget.isLoggedIn ? 1 : 0),
+                  childCount:
+                      _groups.length + (_hasMore && widget.isLoggedIn ? 1 : 0),
                 ),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// 分组：非回复为根，回复按 repostOf 挂到对应的根下面（根只显示一次）。
+  List<(PlazaNote, List<PlazaNote>)> get _groups {
+    final byId = {for (final n in _notes) n.id: n};
+    final children = <String, List<PlazaNote>>{};
+    final roots = <PlazaNote>[];
+    for (final n in _notes) {
+      final isReply = n.repostKind == 'reply' || n.repostOf.isNotEmpty;
+      if (isReply && byId.containsKey(n.repostOf)) {
+        children.putIfAbsent(n.repostOf, () => []).add(n);
+      } else {
+        roots.add(n);
+      }
+    }
+    return [
+      for (final r in roots) (r, children[r.id] ?? const <PlazaNote>[]),
+    ];
+  }
+
+  Widget _buildGroupCard(PlazaNote root, List<PlazaNote> replies) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildNoteCard(root),
+        if (replies.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 8),
+            child: ReplyChain(replies: replies),
+          ),
+      ],
     );
   }
 

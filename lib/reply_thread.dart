@@ -48,10 +48,6 @@ class _ReplyThreadState extends State<ReplyThread> {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
-  Widget _avatar(String? userId) {
-    return UserAvatar(userId: userId, radius: 22);
-  }
-
   Widget _header(PlazaNote note) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -136,44 +132,36 @@ class _ReplyThreadState extends State<ReplyThread> {
     );
   }
 
+  /// 一个节点：左侧头像 + 竖线（非最后节点向下延伸），右侧内容。
+  Widget _nodeRow(PlazaNote note, {required bool connectDown}) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Column(
+            children: [
+              UserAvatar(userId: note.ownerUserId, radius: 22),
+              if (connectDown)
+                Expanded(
+                  child: Container(width: 2, color: _border),
+                ),
+            ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: _body(note)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final original = _original;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 原帖：头像 + 下方竖线
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              children: [
-                _avatar(original?.ownerUserId),
-                if (original != null)
-                  Container(
-                    width: 2,
-                    height: 30,
-                    color: _border,
-                  ),
-              ],
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: original != null
-                  ? _body(original)
-                  : const SizedBox(height: 44),
-            ),
-          ],
-        ),
-        // 回复：头像接在原帖竖线下方
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _avatar(widget.replyNote.ownerUserId),
-            const SizedBox(width: 10),
-            Expanded(child: _body(widget.replyNote)),
-          ],
-        ),
+        if (original != null) _nodeRow(original, connectDown: true),
+        _nodeRow(widget.replyNote, connectDown: false),
       ],
     );
   }
