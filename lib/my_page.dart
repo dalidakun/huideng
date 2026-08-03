@@ -63,7 +63,6 @@ class MyPageState extends State<MyPage>
   String _tagline = '与经为伴，与法同行';
   String _accountName = '';
   bool _verified = false;
-  String _verifiedName = '';
   String _joinedDate = '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
 
   MyCounts _counts = const MyCounts();
@@ -146,26 +145,17 @@ class MyPageState extends State<MyPage>
   Future<void> _loadVerification() async {
     final prefs = await SharedPreferences.getInstance();
     var verified = prefs.getBool('user_verified') ?? false;
-    var name = prefs.getString('user_verified_name') ?? '';
     if (_isLoggedIn) {
       try {
         final info = await CloudNotesService.instance.getMyVerification();
         verified = info.verified;
-        name = info.realNameMasked;
         await prefs.setBool('user_verified', verified);
-        if (name.isNotEmpty) {
-          await prefs.setString('user_verified_name', name);
-        }
       } catch (_) {}
     } else {
       verified = false;
-      name = '';
     }
     if (!mounted) return;
-    setState(() {
-      _verified = verified;
-      _verifiedName = name;
-    });
+    setState(() => _verified = verified);
   }
 
   void _openCertification() {
@@ -592,34 +582,11 @@ class MyPageState extends State<MyPage>
     );
   }
 
-  /// 已认证时昵称后的认证标识：金色对勾 + 脱敏姓名。
+  /// 已认证时昵称后的认证标识：仅金色对勾图标。
   Widget _buildVerifiedBadge() {
-    return Tooltip(
-      message: _verifiedName.isNotEmpty ? '已实名认证（$_verifiedName）' : '已实名认证',
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF7EEDF),
-          borderRadius: BorderRadius.circular(9),
-          border: Border.all(color: const Color(0xFFE5D3B5)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.verified, size: 14, color: Color(0xFFB8860B)),
-            if (_verifiedName.isNotEmpty) ...[
-              const SizedBox(width: 3),
-              Text(_verifiedName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFFB8860B),
-                      fontWeight: FontWeight.w600)),
-            ],
-          ],
-        ),
-      ),
+    return const Tooltip(
+      message: '已实名认证',
+      child: Icon(Icons.verified, size: 17, color: Color(0xFFB8860B)),
     );
   }
 
@@ -732,21 +699,48 @@ class _TabContent extends StatelessWidget {
 }
 
 /// 用户头像：当前用户显示本地上传的头像图片，他人暂无云端头像数据显示默认图标。
+/// verified=true 时在头像右下角叠加金色认证对勾。
 class _UserAvatar extends StatelessWidget {
   final String? userId;
   final double radius;
-  const _UserAvatar({this.userId, this.radius = 22});
+  final bool verified;
+  const _UserAvatar({this.userId, this.radius = 22, this.verified = false});
+
+  Widget _wrapBadge(Widget avatar) {
+    if (!verified) return avatar;
+    final badge = (radius * 0.72).clamp(11.0, 17.0).toDouble();
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        avatar,
+        Positioned(
+          right: -badge * 0.25,
+          bottom: -badge * 0.25,
+          child: Container(
+            width: badge,
+            height: badge,
+            decoration: const BoxDecoration(
+              color: Color(0xFFFFFAF5),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.verified,
+                size: badge - 2, color: const Color(0xFFB8860B)),
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
     final isMe = me != null && userId != null && userId == me.id;
     if (!isMe) {
-      return CircleAvatar(
+      return _wrapBadge(CircleAvatar(
         radius: radius,
         backgroundColor: _primary.withValues(alpha: 0.10),
         child: Icon(Icons.person, size: radius, color: _primaryLight),
-      );
+      ));
     }
     return FutureBuilder<String?>(
       future: SharedPreferences.getInstance()
@@ -754,14 +748,14 @@ class _UserAvatar extends StatelessWidget {
       builder: (context, snap) {
         final path = snap.data;
         if (path != null && path.isNotEmpty && File(path).existsSync()) {
-          return CircleAvatar(
-              radius: radius, backgroundImage: FileImage(File(path)));
+          return _wrapBadge(CircleAvatar(
+              radius: radius, backgroundImage: FileImage(File(path))));
         }
-        return CircleAvatar(
+        return _wrapBadge(CircleAvatar(
           radius: radius,
           backgroundColor: _primary.withValues(alpha: 0.10),
           child: Icon(Icons.person, size: radius, color: _primaryLight),
-        );
+        ));
       },
     );
   }
@@ -971,6 +965,13 @@ class _PostBlockState extends State<_PostBlock> {
       if (!mounted) return;
       setState(() => _repostCount++);
       _showToastText(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
+      if (widget.onReplyPosted != null) {
+        try {
+          final dynamic cb = widget.onReplyPosted!;
+          final r = cb();
+          if (r is Future) await r.catchError((_) {});
+        } catch (_) {}
+      }
     } catch (e) {
       if (mounted) _showToastText(context, e.toString());
     }
@@ -1044,7 +1045,10 @@ class _PostBlockState extends State<_PostBlock> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _UserAvatar(userId: widget.ownerUserId, radius: 22),
+            _UserAvatar(
+                userId: widget.ownerUserId,
+                radius: 22,
+                verified: widget.authorVerified),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -1542,7 +1546,10 @@ class _QuoteBoxState extends State<_QuoteBox> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _UserAvatar(userId: src?.ownerUserId, radius: 14),
+              _UserAvatar(
+                  userId: src?.ownerUserId,
+                  radius: 14,
+                  verified: src?.authorVerified ?? false),
               const SizedBox(width: 8),
               Expanded(
                 child: Row(

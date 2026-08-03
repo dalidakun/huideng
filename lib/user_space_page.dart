@@ -43,6 +43,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
   String get _account =>
       _notes.isNotEmpty ? _notes.first.authorAccount : '';
 
+  /// 对方是否已实名认证（从已加载的笔记中取）。
+  bool get _verified => _notes.isNotEmpty && _notes.first.authorVerified;
+
   /// 关注/取消关注对方（已关注的同修在首页「关注」栏目展示其新帖）。
   Future<void> _toggleFollow() async {
     final me = AuthService.instance.currentUser.value;
@@ -267,24 +270,55 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(width: 14),
-                  CircleAvatar(
-                    radius: 22,
-                    backgroundColor: _primary.withValues(alpha: 0.10),
-                    child:
-                        const Icon(Icons.person, size: 24, color: _primaryLight),
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor: _primary.withValues(alpha: 0.10),
+                        child: const Icon(Icons.person,
+                            size: 24, color: _primaryLight),
+                      ),
+                      if (_verified)
+                        Positioned(
+                          right: -3,
+                          bottom: -3,
+                          child: Container(
+                            width: 15,
+                            height: 15,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.verified,
+                                size: 13, color: Color(0xFFB8860B)),
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(widget.userName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: _text)),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(widget.userName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: _text)),
+                            ),
+                            if (_verified) ...[
+                              const SizedBox(width: 4),
+                              const Icon(Icons.verified,
+                                  size: 14, color: Color(0xFFB8860B)),
+                            ],
+                          ],
+                        ),
                         if (_account.isNotEmpty) ...[
                           const SizedBox(height: 2),
                           Text('@$_account',
@@ -455,6 +489,38 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 style: const TextStyle(
                     fontSize: 14, color: _textSec, height: 1.5),
               ),
+              if (note.repostOf.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _bg,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('@${note.repostSourceAuthor} 的笔记',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 11, color: _textSec)),
+                      const SizedBox(height: 3),
+                      Text(
+                        NoteSutraLinks.plainText(
+                            note.quoteOfContent.isNotEmpty
+                                ? note.quoteOfContent
+                                : note.content),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, color: _textSec, height: 1.4),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 children: [

@@ -265,10 +265,30 @@ class _UserListPageState extends State<UserListPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: _primary.withValues(alpha: 0.12),
-              child: Icon(Icons.person, size: 22, color: _primaryLight),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: _primary.withValues(alpha: 0.12),
+                  child: Icon(Icons.person, size: 22, color: _primaryLight),
+                ),
+                if (user.verified)
+                  Positioned(
+                    right: -3,
+                    bottom: -3,
+                    child: Container(
+                      width: 14,
+                      height: 14,
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.verified,
+                          size: 12, color: Color(0xFFB8860B)),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(width: 12),
             Expanded(

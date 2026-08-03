@@ -718,10 +718,30 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     final isSelf = me != null && note.ownerUserId == me.id;
     return Row(
       children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: _primary.withValues(alpha: 0.12),
-          child: Icon(Icons.person, size: 20, color: _primaryLight),
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: _primary.withValues(alpha: 0.12),
+              child: Icon(Icons.person, size: 20, color: _primaryLight),
+            ),
+            if (note.authorVerified)
+              Positioned(
+                right: -3,
+                bottom: -3,
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.verified,
+                      size: 12, color: Color(0xFFB8860B)),
+                ),
+              ),
+          ],
         ),
         const SizedBox(width: 10),
         Expanded(
