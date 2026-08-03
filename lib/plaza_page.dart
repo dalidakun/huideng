@@ -327,31 +327,11 @@ class _PlazaPageState extends State<PlazaPage> {
             children: [
               Row(
                 children: [
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      CircleAvatar(
-                        radius: 15,
-                        backgroundColor: _primary.withValues(alpha: 0.12),
-                        child: Icon(Icons.person,
-                            size: 16, color: _primaryLight),
-                      ),
-                      if (note.authorVerified)
-                        Positioned(
-                          right: -3,
-                          bottom: -3,
-                          child: Container(
-                            width: 12,
-                            height: 12,
-                            decoration: const BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.verified,
-                                size: 10, color: Color(0xFFB8860B)),
-                          ),
-                        ),
-                    ],
+                  CircleAvatar(
+                    radius: 15,
+                    backgroundColor: _primary.withValues(alpha: 0.12),
+                    child: Icon(Icons.person,
+                        size: 16, color: _primaryLight),
                   ),
                   const SizedBox(width: 8),
                   Expanded(

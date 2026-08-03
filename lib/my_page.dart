@@ -466,7 +466,7 @@ class MyPageState extends State<MyPage>
                               color: _text)),
                     ),
                     if (_verified) ...[
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4),
                       _buildVerifiedBadge(),
                     ] else ...[
                       const SizedBox(width: 12),
@@ -582,11 +582,27 @@ class MyPageState extends State<MyPage>
     );
   }
 
-  /// 已认证时昵称后的认证标识：仅金色对勾图标。
+  /// 已认证时昵称后的认证标识：金色对勾 + 「已认证」，线圈包裹。
   Widget _buildVerifiedBadge() {
-    return const Tooltip(
-      message: '已实名认证',
-      child: Icon(Icons.verified, size: 17, color: Color(0xFFB8860B)),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7EEDF),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: const Color(0xFFB8860B), width: 0.8),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.verified, size: 13, color: Color(0xFFB8860B)),
+          SizedBox(width: 3),
+          Text('已认证',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFFB8860B),
+                  fontWeight: FontWeight.w600)),
+        ],
+      ),
     );
   }
 
@@ -699,48 +715,21 @@ class _TabContent extends StatelessWidget {
 }
 
 /// 用户头像：当前用户显示本地上传的头像图片，他人暂无云端头像数据显示默认图标。
-/// verified=true 时在头像右下角叠加金色认证对勾。
 class _UserAvatar extends StatelessWidget {
   final String? userId;
   final double radius;
-  final bool verified;
-  const _UserAvatar({this.userId, this.radius = 22, this.verified = false});
-
-  Widget _wrapBadge(Widget avatar) {
-    if (!verified) return avatar;
-    final badge = (radius * 0.72).clamp(11.0, 17.0).toDouble();
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        avatar,
-        Positioned(
-          right: -badge * 0.25,
-          bottom: -badge * 0.25,
-          child: Container(
-            width: badge,
-            height: badge,
-            decoration: const BoxDecoration(
-              color: Color(0xFFFFFAF5),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.verified,
-                size: badge - 2, color: const Color(0xFFB8860B)),
-          ),
-        ),
-      ],
-    );
-  }
+  const _UserAvatar({this.userId, this.radius = 22});
 
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
     final isMe = me != null && userId != null && userId == me.id;
     if (!isMe) {
-      return _wrapBadge(CircleAvatar(
+      return CircleAvatar(
         radius: radius,
         backgroundColor: _primary.withValues(alpha: 0.10),
         child: Icon(Icons.person, size: radius, color: _primaryLight),
-      ));
+      );
     }
     return FutureBuilder<String?>(
       future: SharedPreferences.getInstance()
@@ -748,14 +737,14 @@ class _UserAvatar extends StatelessWidget {
       builder: (context, snap) {
         final path = snap.data;
         if (path != null && path.isNotEmpty && File(path).existsSync()) {
-          return _wrapBadge(CircleAvatar(
-              radius: radius, backgroundImage: FileImage(File(path))));
+          return CircleAvatar(
+              radius: radius, backgroundImage: FileImage(File(path)));
         }
-        return _wrapBadge(CircleAvatar(
+        return CircleAvatar(
           radius: radius,
           backgroundColor: _primary.withValues(alpha: 0.10),
           child: Icon(Icons.person, size: radius, color: _primaryLight),
-        ));
+        );
       },
     );
   }
@@ -1045,10 +1034,7 @@ class _PostBlockState extends State<_PostBlock> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _UserAvatar(
-                userId: widget.ownerUserId,
-                radius: 22,
-                verified: widget.authorVerified),
+            _UserAvatar(userId: widget.ownerUserId, radius: 22),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -1074,7 +1060,7 @@ class _PostBlockState extends State<_PostBlock> {
                             if (widget.authorVerified) ...[
                               const SizedBox(width: 3),
                               const Icon(Icons.verified,
-                                  size: 14, color: Color(0xFFB8860B)),
+                                  size: 17, color: Color(0xFFB8860B)),
                             ],
                             if (widget.account.isNotEmpty) ...[
                               const SizedBox(width: 3),
@@ -1546,10 +1532,7 @@ class _QuoteBoxState extends State<_QuoteBox> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _UserAvatar(
-                  userId: src?.ownerUserId,
-                  radius: 14,
-                  verified: src?.authorVerified ?? false),
+              _UserAvatar(userId: src?.ownerUserId, radius: 14),
               const SizedBox(width: 8),
               Expanded(
                 child: Row(

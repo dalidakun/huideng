@@ -270,31 +270,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(width: 14),
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: _primary.withValues(alpha: 0.10),
-                        child: const Icon(Icons.person,
-                            size: 24, color: _primaryLight),
-                      ),
-                      if (_verified)
-                        Positioned(
-                          right: -3,
-                          bottom: -3,
-                          child: Container(
-                            width: 15,
-                            height: 15,
-                            decoration: const BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.verified,
-                                size: 13, color: Color(0xFFB8860B)),
-                          ),
-                        ),
-                    ],
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: _primary.withValues(alpha: 0.10),
+                    child:
+                        const Icon(Icons.person, size: 24, color: _primaryLight),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -482,13 +462,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 ),
               ],
               const SizedBox(height: 6),
-              Text(
-                text,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 14, color: _textSec, height: 1.5),
-              ),
+              if (text.isNotEmpty)
+                Text(
+                  text,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 14, color: _textSec, height: 1.5),
+                ),
               if (note.repostOf.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Container(

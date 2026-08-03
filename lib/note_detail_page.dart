@@ -565,13 +565,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ],
               const SizedBox(height: 14),
-              NoteSutraLinks.buildRichText(
-                note.content,
-                style: const TextStyle(fontSize: 16, color: _text, height: 1.75),
-                library: _sutraLib,
-                onTap: (title, filePath) => _openSutra(title, filePath),
-              ),
-              if (note.quoteContent.isNotEmpty) ...[
+              if (note.content.isNotEmpty)
+                NoteSutraLinks.buildRichText(
+                  note.content,
+                  style:
+                      const TextStyle(fontSize: 16, color: _text, height: 1.75),
+                  library: _sutraLib,
+                  onTap: (title, filePath) => _openSutra(title, filePath),
+                ),
+              if (note.repostOf.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _buildQuoteCard(note),
               ],
@@ -718,30 +720,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     final isSelf = me != null && note.ownerUserId == me.id;
     return Row(
       children: [
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: _primary.withValues(alpha: 0.12),
-              child: Icon(Icons.person, size: 20, color: _primaryLight),
-            ),
-            if (note.authorVerified)
-              Positioned(
-                right: -3,
-                bottom: -3,
-                child: Container(
-                  width: 14,
-                  height: 14,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.verified,
-                      size: 12, color: Color(0xFFB8860B)),
-                ),
-              ),
-          ],
+        CircleAvatar(
+          radius: 18,
+          backgroundColor: _primary.withValues(alpha: 0.12),
+          child: Icon(Icons.person, size: 20, color: _primaryLight),
         ),
         const SizedBox(width: 10),
         Expanded(

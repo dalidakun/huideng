@@ -524,8 +524,11 @@ exports.main = async (event, context) => {
           base.quoteOfTitle = String(src.title || "无标题").slice(0, 100);
           base.quoteOfContent = String(src.content || "").slice(0, 500);
         } else {
+          // 直接转发：正文留空（只转发不附内容），保留原帖快照供展示。
           base.title = String(src.title || "无标题").slice(0, 100);
-          base.content = String(src.content || "");
+          base.content = "";
+          base.quoteOfTitle = String(src.title || "无标题").slice(0, 100);
+          base.quoteOfContent = String(src.content || "").slice(0, 500);
         }
         const res = await notes.add(base);
         await notes.doc(id).update({
