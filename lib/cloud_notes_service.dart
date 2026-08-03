@@ -168,6 +168,25 @@ class FeedbackListResult {
   });
 }
 
+/// 管理员条目（管理员管理页展示）。
+class AdminItem {
+  final String uid;
+  final String username;
+  final int createdAt;
+
+  const AdminItem({
+    required this.uid,
+    this.username = '',
+    this.createdAt = 0,
+  });
+
+  factory AdminItem.fromJson(Map<String, dynamic> json) => AdminItem(
+        uid: json['uid']?.toString() ?? '',
+        username: json['username']?.toString() ?? '',
+        createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// 菩提空间：单条互动动态（转发/我的评论/别人对我的回复）。
 class PlazaActivity {
   final String id;
@@ -765,6 +784,25 @@ class CloudNotesService {
   /// 管理员标记反馈为已处理 / 待处理。
   Future<void> markFeedbackHandled(String id, {bool handled = true}) async {
     await _call('markFeedbackHandled', params: {'id': id, 'handled': handled});
+  }
+
+  /// 管理员拉取管理员列表（含账号名称）。
+  Future<List<AdminItem>> getAdmins() async {
+    final res = await _call('getAdmins');
+    return (res['admins'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(AdminItem.fromJson)
+        .toList();
+  }
+
+  /// 管理员添加管理员：输入账号名称（或用户 uid）。
+  Future<void> addAdmin(String input) async {
+    await _call('addAdmin', params: {'username': input});
+  }
+
+  /// 管理员移除管理员（至少保留一位）。
+  Future<void> removeAdmin(String uid) async {
+    await _call('removeAdmin', params: {'uid': uid});
   }
 
   /// 通用调用「api」云函数（供账号名称/密码等认证相关 action 使用）。

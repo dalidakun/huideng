@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
+import 'admin_manage_page.dart';
 import 'feedback_admin_page.dart';
 import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
@@ -100,6 +101,19 @@ class _AboutPageState extends State<AboutPage> {
                     context,
                     MaterialPageRoute(
                       builder: (_) => const FeedbackAdminPage(),
+                    ),
+                  ),
+                ),
+                const SettingsDivider(),
+                SettingsTile(
+                  icon: Icons.groups_outlined,
+                  iconColor: sGold,
+                  title: '管理员管理',
+                  subtitle: '添加或移除管理员',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AdminManagePage(),
                     ),
                   ),
                 ),

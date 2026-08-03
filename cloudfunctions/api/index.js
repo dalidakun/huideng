@@ -1195,6 +1195,74 @@ exports.main = async (event, context) => {
         return ok({});
       }
 
+      // ==================== 管理员管理 ====================
+
+      // 管理员列表（含账号名称，供手机端直接管理）。
+      case "getAdmins": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        await ensureAdmins();
+        const res = await admins.limit(1000).get();
+        const list = res.data || [];
+        const accounts = {};
+        const ids = [...new Set(list.map((a) => a.uid).filter(Boolean))];
+        for (let i = 0; i < ids.length; i += 100) {
+          try {
+            const { data } = await userAccounts
+              .where({ uid: _.in(ids.slice(i, i + 100)) })
+              .get();
+            for (const a of data || []) accounts[a.uid] = a.username || "";
+          } catch (e) {}
+        }
+        return ok({
+          admins: list.map((a) => ({
+            uid: a.uid || "",
+            username: accounts[a.uid] || "",
+            createdAt: a.createdAt || 0,
+          })),
+        });
+      }
+
+      // 添加管理员：输入是账号名称（2-20 位中英文/数字/下划线）→ 查 userAccounts 取 uid；
+      // 否则视为用户 uid 直接添加。仅管理员可操作。
+      case "addAdmin": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        await ensureAdmins();
+        const input = String(event.username || event.uid || "").trim();
+        if (!input) return fail("bad_request");
+        let targetUid = "";
+        if (/^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$/.test(input)) {
+          const { data } = await userAccounts
+            .where({ usernameKey: input.toLowerCase() })
+            .limit(1)
+            .get();
+          const acc = data && data[0];
+          if (!acc || !acc.uid) return fail("user_not_found");
+          targetUid = acc.uid;
+        } else {
+          targetUid = input;
+        }
+        if (!targetUid) return fail("bad_request");
+        const existing = await admins.where({ uid: targetUid }).limit(1).get();
+        if (existing.data.length > 0) return fail("already_admin");
+        await admins.add({ uid: targetUid, createdBy: uid, createdAt: now() });
+        return ok({});
+      }
+
+      // 移除管理员：至少保留一位（防止把所有管理员都移除导致无人能管理）。
+      case "removeAdmin": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        await ensureAdmins();
+        const targetUid = String(event.uid || "").trim();
+        if (!targetUid) return fail("bad_request");
+        const existing = await admins.where({ uid: targetUid }).limit(1).get();
+        const doc = existing.data && existing.data[0];
+        if (!doc) return fail("not_admin");
+        const { total } = await admins.count();
+        if (total <= 1) return fail("last_admin");
+        await admins.doc(doc._id).remove();
+        return ok({});
+      }
+
       // ==================== 实名认证 ====================
 
       // 提交实名认证：服务端再次校验姓名与身份证号格式（地区码/出生日期/校验位），
