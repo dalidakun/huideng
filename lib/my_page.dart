@@ -780,6 +780,8 @@ class _PostBlock extends StatefulWidget {
   final VoidCallback? onReplyPosted;
   final Widget? quoteBox;
   final bool pinned;
+  final bool isRepost;
+  final bool isQuoteRepost;
   final VoidCallback? onTogglePin;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -801,6 +803,8 @@ class _PostBlock extends StatefulWidget {
     this.onReplyPosted,
     this.quoteBox,
     this.pinned = false,
+    this.isRepost = false,
+    this.isQuoteRepost = false,
     this.onTogglePin,
     this.onEdit,
     this.onDelete,
@@ -1040,6 +1044,19 @@ class _PostBlockState extends State<_PostBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (widget.isRepost) ...[
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.repeat, size: 12, color: _gold),
+                        const SizedBox(width: 2),
+                        Text(widget.isQuoteRepost ? '引用' : '转发',
+                            style: const TextStyle(
+                                fontSize: 11, color: _gold)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   // 第一行：昵称 + 时间戳 + 置顶标注 + 更多
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -1466,6 +1483,8 @@ class _NoteFeedRow extends StatelessWidget {
       onEdit: onEdit,
       onDelete: onDelete,
       quoteBox: note.repostOf.isNotEmpty ? _QuoteBox(note: note) : null,
+      isRepost: note.repostOf.isNotEmpty,
+      isQuoteRepost: note.quoteContent.isNotEmpty,
       stats: _buildStatsRow(
         commentCount: note.commentCount,
         repostCount: note.repostCount,
