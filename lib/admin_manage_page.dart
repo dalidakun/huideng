@@ -5,8 +5,8 @@ import 'cloud_notes_service.dart';
 import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
 
-/// 管理员管理页（仅管理员可见入口，云端也会校验权限）：
-/// 在手机上直接添加 / 移除管理员。
+/// 管理员页（仅管理员可见入口，云端也会校验权限）：
+/// 添加 / 移除管理员、发布 / 删除 App 公告。
 class AdminManagePage extends StatefulWidget {
   const AdminManagePage({super.key});
 
@@ -16,6 +16,7 @@ class AdminManagePage extends StatefulWidget {
 
 class _AdminManagePageState extends State<AdminManagePage> {
   List<AdminItem> _admins = [];
+  List<AnnouncementItem> _announcements = [];
   bool _loading = true;
 
   String? get _selfUid => AuthService.instance.currentUser.value?.id;
@@ -29,10 +30,14 @@ class _AdminManagePageState extends State<AdminManagePage> {
   Future<void> _reload() async {
     setState(() => _loading = true);
     try {
-      final res = await CloudNotesService.instance.getAdmins();
+      final results = await Future.wait([
+        CloudNotesService.instance.getAdmins(),
+        CloudNotesService.instance.getAnnouncements(),
+      ]);
       if (!mounted) return;
       setState(() {
-        _admins = res;
+        _admins = results[0] as List<AdminItem>;
+        _announcements = results[1] as List<AnnouncementItem>;
         _loading = false;
       });
     } catch (e) {
@@ -128,10 +133,78 @@ class _AdminManagePageState extends State<AdminManagePage> {
     }
   }
 
+  /// 发布公告：底部弹窗填写标题与内容 → 提交云端 → 刷新。
+  Future<void> _publishAnnouncement() async {
+    final result = await showModalBottomSheet<(String, String)>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: sCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => const _AnnouncementComposeSheet(),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await CloudNotesService.instance.addAnnouncement(
+        title: result.$1,
+        content: result.$2,
+      );
+      if (!mounted) return;
+      _showToast('公告已发布');
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(_friendlyError(e));
+    }
+  }
+
+  /// 删除公告：二次确认 → 提交云端 → 刷新。
+  Future<void> _deleteAnnouncement(AnnouncementItem item) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: sCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除公告', style: TextStyle(fontSize: 17, color: sText)),
+        content: Text(
+          '确定删除公告「${item.title}」吗？删除后所有用户将不可见。',
+          style: const TextStyle(fontSize: 14, color: sTextSec),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: sTextSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteAnnouncement(item.id);
+      if (!mounted) return;
+      _showToast('已删除公告');
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(_friendlyError(e));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SettingsPageScaffold(
-      title: '管理员管理',
+      title: '管理员',
+      trailing: TextButton.icon(
+        onPressed: _addAdmin,
+        icon: const Icon(Icons.person_add_alt_1, size: 18, color: sGold),
+        label: const Text('添加',
+            style: TextStyle(color: sGold, fontWeight: FontWeight.w600)),
+      ),
       child: _buildBody(),
     );
   }
@@ -150,7 +223,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
             borderRadius: BorderRadius.circular(12),
           ),
           child: const Text(
-            '管理员可查看和回复反馈、管理其他管理员。第一位管理员需要在云开发控制台数据库中登记（详见说明）。',
+            '管理员可查看和回复反馈、发布公告、管理其他管理员。第一位管理员需要在云开发控制台数据库中登记（详见说明）。',
             style: TextStyle(fontSize: 12, color: sTextSec, height: 1.6),
           ),
         ),
@@ -173,23 +246,121 @@ class _AdminManagePageState extends State<AdminManagePage> {
           )
         else
           ..._admins.map(_buildAdminTile),
-        const SizedBox(height: 20),
-        SizedBox(
-          height: 48,
-          child: ElevatedButton.icon(
-            onPressed: _addAdmin,
-            icon: const Icon(Icons.person_add_alt_1, size: 18),
-            label: const Text('添加管理员', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: sGold,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        const SizedBox(height: 28),
+        Row(
+          children: [
+            const Text('公告管理',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: sText)),
+            const Spacer(),
+            SizedBox(
+              height: 36,
+              child: FilledButton.icon(
+                onPressed: _publishAnnouncement,
+                icon: const Icon(Icons.campaign_outlined, size: 16),
+                label: const Text('发布公告', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: sGold,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
+        const SizedBox(height: 10),
+        if (_announcements.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: sCard,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Column(
+              children: [
+                Icon(Icons.campaign_outlined,
+                    size: 36, color: sTextHint),
+                SizedBox(height: 8),
+                Text('暂无公告',
+                    style: TextStyle(fontSize: 14, color: sTextSec)),
+              ],
+            ),
+          )
+        else
+          ..._announcements.map(_buildAnnouncementTile),
       ],
     );
+  }
+
+  Widget _buildAnnouncementTile(AnnouncementItem item) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: sCard,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: sText),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    item.content,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        const TextStyle(fontSize: 13, color: sTextSec, height: 1.5),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatTime(item.createdAt),
+                    style: const TextStyle(fontSize: 11, color: sTextHint),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              onPressed: () => _deleteAnnouncement(item),
+              icon: const Icon(Icons.delete_outline,
+                  size: 20, color: Colors.redAccent),
+              tooltip: '删除公告',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
   }
 
   Widget _buildAdminTile(AdminItem item) {
@@ -280,6 +451,127 @@ class _AdminManagePageState extends State<AdminManagePage> {
               tooltip: '移除管理员',
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 发布公告底部弹窗：标题 + 内容，确认后以 (标题, 内容) 返回。
+class _AnnouncementComposeSheet extends StatefulWidget {
+  const _AnnouncementComposeSheet();
+
+  @override
+  State<_AnnouncementComposeSheet> createState() =>
+      _AnnouncementComposeSheetState();
+}
+
+class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _contentController = TextEditingController();
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  void _confirm() {
+    final title = _titleController.text.trim();
+    final content = _contentController.text.trim();
+    if (title.isEmpty || content.isEmpty) return;
+    Navigator.pop(context, (title, content));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('发布公告',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: sText)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _titleController,
+                autofocus: true,
+                maxLength: 60,
+                style: const TextStyle(fontSize: 15, color: sText),
+                decoration: InputDecoration(
+                  hintText: '公告标题',
+                  hintStyle: const TextStyle(color: sTextHint),
+                  filled: true,
+                  fillColor: sBg,
+                  counterText: '',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _contentController,
+                maxLength: 2000,
+                minLines: 3,
+                maxLines: 6,
+                style: const TextStyle(fontSize: 14, color: sText),
+                decoration: InputDecoration(
+                  hintText: '公告内容…',
+                  hintStyle: const TextStyle(color: sTextHint),
+                  filled: true,
+                  fillColor: sBg,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: sTextSec,
+                        side: const BorderSide(color: Color(0xFFEBE1D6)),
+                        minimumSize: const Size(0, 44),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _confirm,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: sGold,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        minimumSize: const Size(0, 44),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('发布'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

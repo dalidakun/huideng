@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
+import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'post_time_link.dart';
 import 'user_avatar.dart';
+import 'user_space_page.dart';
 
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
@@ -40,7 +43,8 @@ class ReplyChain extends StatelessWidget {
   }
 
   /// 一个节点：左侧头像 + 向下竖线（最后一个节点不画线，连线两端留距），右侧内容。
-  Widget _node(PlazaNote note, {required bool connectDown}) {
+  Widget _node(BuildContext context, PlazaNote note,
+      {required bool connectDown}) {
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -58,14 +62,15 @@ class ReplyChain extends StatelessWidget {
             ],
           ),
           const SizedBox(width: 10),
-          Expanded(child: _body(note)),
+          Expanded(child: _body(context, note)),
         ],
       ),
     );
   }
 
   /// 置顶回复的头部：`回复@账户 · 时间 + 已置顶标签 + 三点菜单`。
-  Widget _pinnedHeader(PlazaNote note, String parentAccount) {
+  Widget _pinnedHeader(
+      BuildContext context, PlazaNote note, String parentAccount) {
     return Row(
       children: [
         Expanded(
@@ -92,9 +97,17 @@ class ReplyChain extends StatelessWidget {
               const Text('·',
                   style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
               const SizedBox(width: 2),
-              Text(_time(note.createdAt),
-                  style:
-                      const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+              PostTimeLink(
+                text: _time(note.createdAt),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => NoteDetailPage(
+                            noteId: note.id,
+                            scrollToReplyId: note.id,
+                          )),
+                ),
+              ),
             ],
           ),
         ),
@@ -120,7 +133,7 @@ class ReplyChain extends StatelessWidget {
     );
   }
 
-  Widget _body(PlazaNote note) {
+  Widget _body(BuildContext context, PlazaNote note) {
     final content = NoteSutraLinks.plainText(note.content);
     final pinned = pinnedIds.contains(note.id);
     final parentAccount = parentAccounts[note.repostOf] ?? '';
@@ -128,7 +141,7 @@ class ReplyChain extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (pinned)
-          _pinnedHeader(note, parentAccount)
+          _pinnedHeader(context, note, parentAccount)
         else
           Row(
             children: [
@@ -152,11 +165,20 @@ class ReplyChain extends StatelessWidget {
                     if (note.authorAccount.isNotEmpty) ...[
                       const SizedBox(width: 3),
                       Flexible(
-                        child: Text('@${note.authorAccount}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12, color: Color(0xFF8C8C8C))),
+                        // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+                        child: AccountLink(
+                          account: note.authorAccount,
+                          onTap: () {
+                            if (note.ownerUserId.isNotEmpty) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => UserSpacePage(
+                                        userId: note.ownerUserId)),
+                              );
+                            }
+                          },
+                        ),
                       ),
                       const SizedBox(width: 3),
                       const Text('·',
@@ -164,9 +186,17 @@ class ReplyChain extends StatelessWidget {
                               fontSize: 12, color: Color(0xFF8C8C8C))),
                       const SizedBox(width: 2),
                     ],
-                    Text(_time(note.createdAt),
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF8C8C8C))),
+                    PostTimeLink(
+                      text: _time(note.createdAt),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => NoteDetailPage(
+                                  noteId: note.id,
+                                  scrollToReplyId: note.id,
+                                )),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -253,7 +283,7 @@ class ReplyChain extends StatelessWidget {
     return Column(
       children: [
         for (var i = 0; i < replies.length; i++)
-          _node(replies[i], connectDown: i < replies.length - 1),
+          _node(context, replies[i], connectDown: i < replies.length - 1),
       ],
     );
   }

@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "versionCode": 1,
+  "downloadPage": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/download.html",
+  "downloadUrl": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/huideng_v1.0.0.apk",
+  "notes": "燃灯 App 发布说明。发布新版本时：更新 version 与 versionCode（必须大于旧版），上传新 APK 并把下载链接填到 downloadUrl。"
+}

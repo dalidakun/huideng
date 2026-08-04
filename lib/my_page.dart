@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,6 +21,8 @@ import 'note_edit_page.dart';
 import 'note_detail_page.dart';
 import 'quote_box.dart';
 import 'user_avatar.dart';
+import 'user_space_page.dart';
+import 'post_time_link.dart';
 import 'reply_thread.dart';
 import 'reply_chain.dart';
 import 'certification_page.dart';
@@ -768,7 +771,7 @@ class _TabContent extends StatelessWidget {
 }
 
 /// 时间显示：今年显示「x月x日」，去年及往年显示「x年x月x日」。
-String _fullTime(int ms) {
+String postTime(int ms) {
   if (ms <= 0) return '';
   final t = DateTime.fromMillisecondsSinceEpoch(ms);
   final now = DateTime.now();
@@ -779,7 +782,7 @@ String _fullTime(int ms) {
 /// 帖子块：左列头像，右侧第一行昵称/时间戳，内容与指标行与昵称同一左缘。
 /// onTap 为 null 时点击整块展开/收起内容，否则执行 onTap。
 /// allowActions=true 时指标行可交互（评论/转发/点赞），评论内嵌显示在下方。
-class _PostBlock extends StatefulWidget {
+class PostBlock extends StatefulWidget {
   final String? ownerUserId;
   final String nickname;
   final String account;
@@ -802,7 +805,8 @@ class _PostBlock extends StatefulWidget {
   final VoidCallback? onTogglePin;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
-  const _PostBlock({
+  final bool showFollowButton;
+  const PostBlock({
     required this.ownerUserId,
     required this.nickname,
     this.account = '',
@@ -825,13 +829,14 @@ class _PostBlock extends StatefulWidget {
     this.onTogglePin,
     this.onEdit,
     this.onDelete,
+    this.showFollowButton = true,
   });
 
   @override
-  State<_PostBlock> createState() => _PostBlockState();
+  State<PostBlock> createState() => _PostBlockState();
 }
 
-class _PostBlockState extends State<_PostBlock> {
+class _PostBlockState extends State<PostBlock> {
   bool _expanded = false;
   late int _likeCount = widget.likeCount;
   late int _repostCount = widget.repostCount;
@@ -857,9 +862,9 @@ class _PostBlockState extends State<_PostBlock> {
       final ok = await CloudNotesService.instance.toggleFollow(target);
       if (!mounted) return;
       setState(() => _following = ok);
-      _showToastText(context, ok ? '已关注' : '已取消关注');
+      showPostToast(context, ok ? '已关注' : '已取消关注');
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -872,10 +877,12 @@ class _PostBlockState extends State<_PostBlock> {
       if (!mounted) return;
       setState(() {
         _liked = liked;
-        _likeCount = count;
+        // 点赞时确保数字至少 +1（服务端偶尔返回旧值时的兜底）。
+        _likeCount =
+            liked ? math.max(count, _likeCount + 1) : math.max(0, count);
       });
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -890,7 +897,7 @@ class _PostBlockState extends State<_PostBlock> {
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => _ReplyInputSheet(
+      builder: (sheetCtx) => ReplyInputSheet(
         onSubmit: (content) => _submitReply(sheetCtx, content),
       ),
     );
@@ -908,7 +915,7 @@ class _PostBlockState extends State<_PostBlock> {
       if (!mounted) return;
       setState(() => _commentCount++);
       if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-      if (mounted) _showToastText(context, '已回复');
+      if (mounted) showPostToast(context, '已回复');
       if (widget.onReplyPosted != null) {
         try {
           final dynamic cb = widget.onReplyPosted!;
@@ -917,7 +924,7 @@ class _PostBlockState extends State<_PostBlock> {
         } catch (_) {}
       }
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -940,8 +947,8 @@ class _PostBlockState extends State<_PostBlock> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
-            _menuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
-            _menuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
+            postMenuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
+            postMenuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
             const SizedBox(height: 8),
           ],
         ),
@@ -973,7 +980,7 @@ class _PostBlockState extends State<_PostBlock> {
           quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
       if (!mounted) return;
       setState(() => _repostCount++);
-      _showToastText(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
+      showPostToast(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
       if (widget.onReplyPosted != null) {
         try {
           final dynamic cb = widget.onReplyPosted!;
@@ -982,7 +989,7 @@ class _PostBlockState extends State<_PostBlock> {
         } catch (_) {}
       }
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -1004,10 +1011,13 @@ class _PostBlockState extends State<_PostBlock> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
-            _menuItem(ctx, 'pin', Icons.push_pin_outlined,
-                widget.pinned ? '取消置顶' : '置顶'),
-            _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
-            _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            if (widget.onTogglePin != null)
+              postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
+                  widget.pinned ? '取消置顶' : '置顶'),
+            if (widget.onEdit != null)
+              postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            if (widget.onDelete != null)
+              postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
           ],
         ),
@@ -1078,12 +1088,21 @@ class _PostBlockState extends State<_PostBlock> {
                             if (widget.account.isNotEmpty) ...[
                               const SizedBox(width: 3),
                               Flexible(
-                                child: Text('@${widget.account}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Color(0xFF8C8C8C))),
+                                // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+                                child: AccountLink(
+                                  account: widget.account,
+                                  onTap: () {
+                                    final uid = widget.ownerUserId;
+                                    if (uid != null && uid.isNotEmpty) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                            builder: (_) =>
+                                                UserSpacePage(userId: uid)),
+                                      );
+                                    }
+                                  },
+                                ),
                               ),
                               const SizedBox(width: 3),
                               Text('·',
@@ -1093,11 +1112,21 @@ class _PostBlockState extends State<_PostBlock> {
                             ],
                             const SizedBox(width: 2),
                             Flexible(
-                              child: Text(_fullTime(widget.timeMs),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Color(0xFF8C8C8C))),
+                              // 点击发布时间戳进入帖子详情（按下时显示下划线）。
+                              child: PostTimeLink(
+                                text: postTime(widget.timeMs),
+                                onTap: () {
+                                  final id = widget.noteId;
+                                  if (id != null) {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                          builder: (_) =>
+                                              NoteDetailPage(noteId: id)),
+                                    );
+                                  }
+                                },
+                              ),
                             ),
                           ],
                         ),
@@ -1121,29 +1150,31 @@ class _PostBlockState extends State<_PostBlock> {
                               size: 18, color: Color(0xFF8C8C8C)),
                         ),
                       if (showMore) ...[
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _toggleFollow,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: _following
-                                  ? const Color(0xFFBDB6AC)
-                                  : Colors.black,
-                              borderRadius: BorderRadius.circular(12),
+                        if (widget.showFollowButton) ...[
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _toggleFollow,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: _following
+                                    ? const Color(0xFFBDB6AC)
+                                    : Colors.black,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(_following ? '已关注' : '关注',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600)),
                             ),
-                            child: Text(_following ? '已关注' : '关注',
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600)),
                           ),
-                        ),
-                        const SizedBox(width: 6),
+                          const SizedBox(width: 6),
+                        ],
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
-                          onTap: () => _showMoreMenu(
+                          onTap: () => showMoreMenu(
                               context, widget.ownerUserId!, widget.nickname),
                           child: const Icon(Icons.more_horiz,
                               size: 18, color: Color(0xFF8C8C8C)),
@@ -1217,7 +1248,7 @@ class _PostBlockState extends State<_PostBlock> {
                   // 指标行（与昵称同一左缘）
                   if (widget.allowActions) ...[
                     const SizedBox(height: 10),
-                    _buildStatsRow(
+                    buildStatsRow(
                       commentCount: _commentCount,
                       repostCount: _repostCount,
                       likeCount: _likeCount,
@@ -1242,7 +1273,7 @@ class _PostBlockState extends State<_PostBlock> {
 }
 
 /// 更多菜单：关注/取消关注、屏蔽/取消屏蔽。
-Future<void> _showMoreMenu(
+Future<void> showMoreMenu(
     BuildContext context, String targetUserId, String nickname) async {
   final me = AuthService.instance.currentUser.value;
   if (me == null || me.id == targetUserId) return;
@@ -1266,9 +1297,9 @@ Future<void> _showMoreMenu(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           ),
           const Divider(height: 1, color: _border),
-          _menuItem(ctx, following ? 'unfollow' : 'follow',
+          postMenuItem(ctx, following ? 'unfollow' : 'follow',
               Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
-          _menuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
+          postMenuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
               blocked ? '取消屏蔽' : '屏蔽该用户'),
           const SizedBox(height: 8),
         ],
@@ -1279,24 +1310,25 @@ Future<void> _showMoreMenu(
   try {
     if (choice == 'follow' || choice == 'unfollow') {
       final ok = await CloudNotesService.instance.toggleFollow(targetUserId);
-      if (context.mounted) _showToastText(context, ok ? '已关注' : '已取消关注');
+      if (context.mounted) showPostToast(context, ok ? '已关注' : '已取消关注');
     } else if (choice == 'block') {
       final ok = await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
-        _showToastText(context, ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+        showPostToast(context, ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
       }
     } else if (choice == 'unblock') {
       final ok = await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
-        _showToastText(context, ok ? '已屏蔽' : '已取消屏蔽');
+        showPostToast(context, ok ? '已屏蔽' : '已取消屏蔽');
       }
     }
   } catch (e) {
-    if (context.mounted) _showToastText(context, e.toString());
+    if (context.mounted) showPostToast(context, e.toString());
   }
 }
 
-Widget _menuItem(BuildContext ctx, String value, IconData icon, String label) {
+Widget postMenuItem(
+    BuildContext ctx, String value, IconData icon, String label) {
   return InkWell(
     onTap: () => Navigator.pop(ctx, value),
     child: Padding(
@@ -1312,7 +1344,7 @@ Widget _menuItem(BuildContext ctx, String value, IconData icon, String label) {
   );
 }
 
-void _showToastText(BuildContext context, String text) {
+void showPostToast(BuildContext context, String text) {
   final overlay = Overlay.of(context);
   late OverlayEntry entry;
   entry = OverlayEntry(
@@ -1356,15 +1388,15 @@ void _showToastText(BuildContext context, String text) {
 
 /// 回复输入弹窗：独立拥有 TextEditingController，随弹窗生命周期释放，
 /// 避免在弹窗退出动画期间 dispose 控制器触发 dependents.isEmpty 断言。
-class _ReplyInputSheet extends StatefulWidget {
+class ReplyInputSheet extends StatefulWidget {
   final void Function(String content) onSubmit;
-  const _ReplyInputSheet({required this.onSubmit});
+  const ReplyInputSheet({required this.onSubmit});
 
   @override
-  State<_ReplyInputSheet> createState() => _ReplyInputSheetState();
+  State<ReplyInputSheet> createState() => ReplyInputSheetState();
 }
 
-class _ReplyInputSheetState extends State<_ReplyInputSheet> {
+class ReplyInputSheetState extends State<ReplyInputSheet> {
   final _controller = TextEditingController();
 
   @override
@@ -1428,7 +1460,7 @@ class _ReplyInputSheetState extends State<_ReplyInputSheet> {
 }
 
 /// 回复某帖：打开回复输入弹窗，发表后生成连贴回复帖并回调刷新列表。
-Future<void> _replyToNote(
+Future<void> replyToNote(
     BuildContext context, PlazaNote target, dynamic onPosted) async {
   if (!AuthService.instance.isLoggedIn) return;
   await showModalBottomSheet<void>(
@@ -1437,14 +1469,14 @@ Future<void> _replyToNote(
     backgroundColor: _card,
     shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-    builder: (sheetCtx) => _ReplyInputSheet(
+    builder: (sheetCtx) => ReplyInputSheet(
       onSubmit: (content) =>
-          _submitReplyPost(sheetCtx, context, target, content, onPosted),
+          submitReplyPost(sheetCtx, context, target, content, onPosted),
     ),
   );
 }
 
-Future<void> _submitReplyPost(BuildContext sheetCtx, BuildContext parentCtx,
+Future<void> submitReplyPost(BuildContext sheetCtx, BuildContext parentCtx,
     PlazaNote target, String content, dynamic onPosted) async {
   if (content.isEmpty) return;
   try {
@@ -1452,19 +1484,19 @@ Future<void> _submitReplyPost(BuildContext sheetCtx, BuildContext parentCtx,
     await CloudNotesService.instance
         .repostNote(target.id, quote: content, kind: 'reply');
     if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-    if (parentCtx.mounted) _showToastText(parentCtx, '已回复');
+    if (parentCtx.mounted) showPostToast(parentCtx, '已回复');
     if (onPosted != null) {
       final dynamic cb = onPosted;
       final r = cb();
       if (r is Future) await r.catchError((_) {});
     }
   } catch (e) {
-    if (parentCtx.mounted) _showToastText(parentCtx, e.toString());
+    if (parentCtx.mounted) showPostToast(parentCtx, e.toString());
   }
 }
 
 /// 点赞某帖并回调刷新列表。
-Future<void> _likeTargetNote(
+Future<void> likeTargetNote(
     BuildContext context, PlazaNote target, dynamic onPosted) async {
   try {
     await CloudNotesService.instance.toggleLike(target.id);
@@ -1474,12 +1506,12 @@ Future<void> _likeTargetNote(
       if (r is Future) await r.catchError((_) {});
     }
   } catch (e) {
-    if (context.mounted) _showToastText(context, e.toString());
+    if (context.mounted) showPostToast(context, e.toString());
   }
 }
 
 /// 转发某帖（直接转发/引用转发）并回调刷新列表。
-Future<void> _forwardNote(
+Future<void> forwardNote(
     BuildContext context, PlazaNote target, dynamic onPosted) async {
   if (!AuthService.instance.isLoggedIn) return;
   final choice = await showModalBottomSheet<String>(
@@ -1498,8 +1530,8 @@ Future<void> _forwardNote(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           ),
           const Divider(height: 1, color: _border),
-          _menuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
-          _menuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
+          postMenuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
+          postMenuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
           const SizedBox(height: 8),
         ],
       ),
@@ -1530,20 +1562,20 @@ Future<void> _forwardNote(
     await CloudNotesService.instance.repostNote(target.id,
         quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
     if (!context.mounted) return;
-    _showToastText(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
+    showPostToast(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
     if (onPosted != null) {
       final dynamic cb = onPosted;
       final r = cb();
       if (r is Future) await r.catchError((_) {});
     }
   } catch (e) {
-    if (context.mounted) _showToastText(context, e.toString());
+    if (context.mounted) showPostToast(context, e.toString());
   }
 }
 
 /// 帖子行：与笔记详情页同风格——无卡片背景，
 /// 头像+用户名/时间 → 内容预览（最多8行，可展开）→ 统计数据行。
-class _NoteFeedRow extends StatelessWidget {
+class PostFeedRow extends StatelessWidget {
   final PlazaNote note;
   final VoidCallback? onReplyPosted;
   final VoidCallback? onTap;
@@ -1552,7 +1584,8 @@ class _NoteFeedRow extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final void Function(PlazaNote note)? onMore;
-  const _NoteFeedRow({
+  final bool showFollowButton;
+  const PostFeedRow({
     required this.note,
     this.onReplyPosted,
     this.onTap,
@@ -1561,6 +1594,7 @@ class _NoteFeedRow extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.onMore,
+    this.showFollowButton = true,
   });
 
   static String plainContent(PlazaNote note) =>
@@ -1588,21 +1622,21 @@ class _NoteFeedRow extends StatelessWidget {
           child: ReplyThread(
             replyNote: note,
             pinned: pinned,
-            onComment: (n) => _replyToNote(context, n, onReplyPosted),
-            onLike: (n) => _likeTargetNote(context, n, onReplyPosted),
-            onRepost: (n) => _forwardNote(context, n, onReplyPosted),
+            onComment: (n) => replyToNote(context, n, onReplyPosted),
+            onLike: (n) => likeTargetNote(context, n, onReplyPosted),
+            onRepost: (n) => forwardNote(context, n, onReplyPosted),
             onMore: onMore,
           ),
         ),
       );
     }
-    return _PostBlock(
+    return PostBlock(
       ownerUserId: note.ownerUserId,
       nickname: isMine ? me.displayName : note.authorName,
       account: note.authorAccount,
       authorVerified: note.authorVerified,
       timeMs: note.createdAt,
-      content: _NoteFeedRow.plainContent(note),
+      content: PostFeedRow.plainContent(note),
       noteId: note.id,
       allowActions: true,
       likeCount: note.likeCount,
@@ -1615,10 +1649,11 @@ class _NoteFeedRow extends StatelessWidget {
       onTogglePin: onTogglePin,
       onEdit: onEdit,
       onDelete: onDelete,
+      showFollowButton: showFollowButton,
       quoteBox: note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
       isRepost: note.repostOf.isNotEmpty && note.repostKind != 'reply',
       isQuoteRepost: note.quoteContent.isNotEmpty,
-      stats: _buildStatsRow(
+      stats: buildStatsRow(
         commentCount: note.commentCount,
         repostCount: note.repostCount,
         likeCount: note.likeCount,
@@ -1631,7 +1666,7 @@ class _NoteFeedRow extends StatelessWidget {
 
 /// 四个数据指标行（评论/转发/点赞/阅读），与菩提空间笔记详情页样式一致。
 /// 均匀分布占满整行，第一个图标与昵称/内容左对齐，右侧不留白。
-Widget _buildStatsRow({
+Widget buildStatsRow({
   required int commentCount,
   required int repostCount,
   required int likeCount,
@@ -1643,31 +1678,30 @@ Widget _buildStatsRow({
 }) {
   return Row(
     children: [
-      _statsCell(
+      statsCell(
           Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
           '$commentCount',
           onTap: onComment),
       const SizedBox(width: 48),
-      _statsCell(
+      statsCell(
           Icon(Icons.repeat_rounded, size: 16, color: _textSec), '$repostCount',
           onTap: onRepost),
       const SizedBox(width: 48),
-      _statsCell(
+      statsCell(
           Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
               size: 16, color: liked ? _gold : _textSec),
           '$likeCount',
           color: liked ? _gold : null,
           onTap: onLike),
       const SizedBox(width: 48),
-      _statsCell(
-          Image.asset('assets/images/ic_view.png', width: 16, height: 16),
+      statsCell(Image.asset('assets/images/ic_view.png', width: 16, height: 16),
           '$viewCount'),
     ],
   );
 }
 
 /// 指标单元格：图标+数字，数字过大时自动缩放，避免溢出/遮挡。
-Widget _statsCell(Widget icon, String text,
+Widget statsCell(Widget icon, String text,
     {Color? color, VoidCallback? onTap}) {
   final cell = Row(
     mainAxisSize: MainAxisSize.min,
@@ -1760,6 +1794,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     String? errorText;
     if (widget.isLoggedIn) {
       try {
+        await CloudNotesService.instance.refreshLikedNoteIds();
         final (list, more) = await CloudNotesService.instance.getMyNotes(
           page: 1,
           pageSize: _pageSize,
@@ -1838,7 +1873,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     if (!mounted) return;
     _sortNotes(_notes);
     setState(() {});
-    _showToastText(context, wasPinned ? '已取消置顶' : '已置顶');
+    showPostToast(context, wasPinned ? '已取消置顶' : '已置顶');
   }
 
   /// 编辑帖子内容：更新云端后重新加载列表。
@@ -1864,10 +1899,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       await CloudNotesService.instance
           .updateSharedNote(cloudId: note.id, content: saved.trim());
       if (!mounted) return;
-      _showToastText(context, '已更新');
+      showPostToast(context, '已更新');
       _load(silent: true);
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -1903,9 +1938,9 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       _pinnedIds.remove(note.id);
       if (!mounted) return;
       setState(() => _notes.removeWhere((n) => n.id == note.id));
-      _showToastText(context, '已删除');
+      showPostToast(context, '已删除');
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -2086,7 +2121,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     final me = AuthService.instance.currentUser.value;
     if (me == null || note.ownerUserId != me.id) {
       if (me != null && note.ownerUserId.isNotEmpty) {
-        await _showMoreMenu(context, note.ownerUserId, note.authorName);
+        await showMoreMenu(context, note.ownerUserId, note.authorName);
       }
       return;
     }
@@ -2106,10 +2141,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
-            _menuItem(ctx, 'pin', Icons.push_pin_outlined,
+            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
                 _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
-            _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
-            _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
           ],
         ),
@@ -2130,7 +2165,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 
   Widget _buildNoteCard(PlazaNote note) {
-    return _NoteFeedRow(
+    return PostFeedRow(
       note: note,
       onReplyPosted: _load,
       pinned: _pinnedIds.contains(note.id),
@@ -2214,6 +2249,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       _hasMore = true;
     });
     try {
+      await CloudNotesService.instance.refreshLikedNoteIds();
       final (list, more) = await CloudNotesService.instance.getMyNotes(
         page: 1,
         pageSize: _pageSize,
@@ -2365,7 +2401,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     } catch (_) {}
     if (!mounted) return;
     setState(() {});
-    _showToastText(context, wasPinned ? '已取消置顶' : '已置顶');
+    showPostToast(context, wasPinned ? '已取消置顶' : '已置顶');
     await _buildGroups();
   }
 
@@ -2392,10 +2428,10 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       await CloudNotesService.instance
           .updateSharedNote(cloudId: note.id, content: saved.trim());
       if (!mounted) return;
-      _showToastText(context, '已更新');
+      showPostToast(context, '已更新');
       _load();
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -2431,9 +2467,9 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       _pinnedIds.remove(note.id);
       if (!mounted) return;
       setState(() => _replies.removeWhere((n) => n.id == note.id));
-      _showToastText(context, '已删除');
+      showPostToast(context, '已删除');
     } catch (e) {
-      if (mounted) _showToastText(context, e.toString());
+      if (mounted) showPostToast(context, e.toString());
     }
   }
 
@@ -2442,7 +2478,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     final me = AuthService.instance.currentUser.value;
     if (me == null || note.ownerUserId != me.id) {
       if (me != null && note.ownerUserId.isNotEmpty) {
-        await _showMoreMenu(context, note.ownerUserId, note.authorName);
+        await showMoreMenu(context, note.ownerUserId, note.authorName);
       }
       return;
     }
@@ -2462,10 +2498,10 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
-            _menuItem(ctx, 'pin', Icons.push_pin_outlined,
+            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
                 _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
-            _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
-            _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
           ],
         ),
@@ -2623,7 +2659,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                             const SizedBox(width: 2),
                           ],
                           Flexible(
-                            child: Text(_fullTime(reply.createdAt),
+                            child: Text(postTime(reply.createdAt),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -2673,23 +2709,23 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                 ),
                 // 回复内容
                 const SizedBox(height: 4),
-                Text(_NoteFeedRow.plainContent(reply),
+                Text(PostFeedRow.plainContent(reply),
                     maxLines: 8,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 15, color: _text, height: 1.6)),
                 // 指标行（与下方帖子的指标对齐）
                 const SizedBox(height: 10),
-                _buildStatsRow(
+                buildStatsRow(
                   commentCount: reply.commentCount,
                   repostCount: reply.repostCount,
                   likeCount: reply.likeCount,
                   viewCount: reply.viewCount,
                   liked: CloudNotesService.instance.likedNoteIds
                       .contains(reply.id),
-                  onComment: () => _replyToNote(context, reply, _load),
-                  onRepost: () => _forwardNote(context, reply, _load),
-                  onLike: () => _likeTargetNote(context, reply, _load),
+                  onComment: () => replyToNote(context, reply, _load),
+                  onRepost: () => forwardNote(context, reply, _load),
+                  onLike: () => likeTargetNote(context, reply, _load),
                 ),
               ],
             ),
@@ -2714,7 +2750,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               bottom: 0,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
-            _NoteFeedRow(
+            PostFeedRow(
               note: root,
               onReplyPosted: _load,
               // 分组区域不显示已置顶（已置顶只在顶部置顶卡片展示）。
@@ -2734,9 +2770,9 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               root.id: root.authorAccount,
               for (final r in replies) r.id: r.authorAccount,
             },
-            onComment: (n) => _replyToNote(context, n, _load),
-            onLike: (n) => _likeTargetNote(context, n, _load),
-            onRepost: (n) => _forwardNote(context, n, _load),
+            onComment: (n) => replyToNote(context, n, _load),
+            onLike: (n) => likeTargetNote(context, n, _load),
+            onRepost: (n) => forwardNote(context, n, _load),
             onMore: (n) => _showReplyMenu(n),
           ),
         ),
@@ -2875,7 +2911,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  return _NoteFeedRow(note: note, onReplyPosted: _load);
+                  return PostFeedRow(note: note, onReplyPosted: _load);
                 },
                 childCount: _notes!.length,
               ),
@@ -3016,7 +3052,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  return _NoteFeedRow(note: note, onReplyPosted: _load);
+                  return PostFeedRow(note: note, onReplyPosted: _load);
                 },
                 childCount: _notes!.length,
               ),
@@ -3087,7 +3123,7 @@ class _DraftRow extends StatelessWidget {
     final ts = DateTime.tryParse(note['updatedAt']?.toString() ?? '');
     final nickname =
         AuthService.instance.currentUser.value?.displayName ?? '同修';
-    return _PostBlock(
+    return PostBlock(
       ownerUserId: AuthService.instance.currentUser.value?.id,
       nickname: nickname,
       timeMs: ts?.millisecondsSinceEpoch ?? 0,

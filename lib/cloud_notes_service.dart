@@ -100,6 +100,8 @@ class PlazaComment {
   final String noteId;
   final String authorId;
   final String authorName;
+  final String authorAccount;
+  final bool authorVerified;
   final String content;
   final int createdAt;
 
@@ -108,6 +110,8 @@ class PlazaComment {
     required this.noteId,
     required this.authorId,
     required this.authorName,
+    this.authorAccount = '',
+    this.authorVerified = false,
     required this.content,
     required this.createdAt,
   });
@@ -117,6 +121,8 @@ class PlazaComment {
         noteId: json['noteId']?.toString() ?? '',
         authorId: json['authorId']?.toString() ?? '',
         authorName: json['authorName']?.toString() ?? '同修',
+        authorAccount: json['authorAccount']?.toString() ?? '',
+        authorVerified: json['authorVerified'] == true,
         content: json['content']?.toString() ?? '',
         createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
       );
@@ -187,6 +193,29 @@ class AdminItem {
       );
 }
 
+/// 公告条目（主页公告栏与管理页展示）。
+class AnnouncementItem {
+  final String id;
+  final String title;
+  final String content;
+  final int createdAt;
+
+  const AnnouncementItem({
+    required this.id,
+    required this.title,
+    required this.content,
+    required this.createdAt,
+  });
+
+  factory AnnouncementItem.fromJson(Map<String, dynamic> json) =>
+      AnnouncementItem(
+        id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
+        title: json['title']?.toString() ?? '',
+        content: json['content']?.toString() ?? '',
+        createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// 菩提空间：单条互动动态（转发/我的评论/别人对我的回复）。
 class PlazaActivity {
   final String id;
@@ -224,17 +253,34 @@ class PlazaActivity {
       );
 }
 
-/// 广场用户（关注/粉丝列表展示用）。
+/// 广场用户（关注/粉丝列表展示用，可含签名/加入时间/账号）。
 class UserProfile {
   final String id;
   final String name;
   final bool verified;
+  final String tagline;
+  final int joinTime;
+  final String account;
 
   const UserProfile({
     required this.id,
     required this.name,
     this.verified = false,
+    this.tagline = '',
+    this.joinTime = 0,
+    this.account = '',
   });
+
+  factory UserProfile.fromJson(Map<String, dynamic> e) => UserProfile(
+        id: e['id']?.toString() ?? '',
+        name: e['name']?.toString() ?? '同修',
+        verified: e['verified'] == true,
+        tagline: e['tagline']?.toString() ?? '',
+        joinTime: (e['joinTime'] as num?)?.toInt() ??
+            (e['createdAt'] as num?)?.toInt() ??
+            0,
+        account: e['account']?.toString() ?? e['username']?.toString() ?? '',
+      );
 }
 
 /// 我的主页角标：互动未读数 / 关注数 / 粉丝数。
@@ -564,14 +610,18 @@ class CloudNotesService {
   Future<List<String>> getFollowingUserIds() async {
     if (!AuthService.instance.isLoggedIn) return [];
     final res = await _call('getFollowingUserIds');
-    return (res['ids'] as List<dynamic>? ?? []).map((e) => e.toString()).toList();
+    return (res['ids'] as List<dynamic>? ?? [])
+        .map((e) => e.toString())
+        .toList();
   }
 
   /// 拉取关注当前用户的所有用户 id 列表（粉丝，未登录返回空）。
   Future<List<String>> getFollowerUserIds() async {
     if (!AuthService.instance.isLoggedIn) return [];
     final res = await _call('getFollowerUserIds');
-    return (res['ids'] as List<dynamic>? ?? []).map((e) => e.toString()).toList();
+    return (res['ids'] as List<dynamic>? ?? [])
+        .map((e) => e.toString())
+        .toList();
   }
 
   /// 批量获取用户展示信息（昵称）。用于关注/粉丝列表。
@@ -580,11 +630,7 @@ class CloudNotesService {
     final res = await _call('getUserProfiles', params: {'ids': ids});
     return (res['users'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
-        .map((e) => UserProfile(
-              id: e['id']?.toString() ?? '',
-              name: e['name']?.toString() ?? '同修',
-              verified: e['verified'] == true,
-            ))
+        .map(UserProfile.fromJson)
         .toList();
   }
 
@@ -703,7 +749,9 @@ class CloudNotesService {
     });
     final list = res['activities'];
     final items = list is List
-        ? list.map((e) => PlazaActivity.fromJson(e as Map<String, dynamic>)).toList()
+        ? list
+            .map((e) => PlazaActivity.fromJson(e as Map<String, dynamic>))
+            .toList()
         : <PlazaActivity>[];
     return (items, res['hasMore'] == true);
   }
@@ -721,7 +769,9 @@ class CloudNotesService {
     });
     final list = res['notes'];
     final items = list is List
-        ? list.map((e) => PlazaNote.fromJson(e as Map<String, dynamic>)).toList()
+        ? list
+            .map((e) => PlazaNote.fromJson(e as Map<String, dynamic>))
+            .toList()
         : <PlazaNote>[];
     return (items, res['hasMore'] == true);
   }
@@ -760,13 +810,16 @@ class CloudNotesService {
   }
 
   /// 管理员拉取反馈列表。
+  /// [status] 可选：'new' / 'handled'，为空返回全部。
   Future<FeedbackListResult> getFeedbacks({
     int page = 1,
     int pageSize = 20,
+    String status = '',
   }) async {
     final res = await _call('getFeedbacks', params: {
       'page': page,
       'pageSize': pageSize,
+      if (status.isNotEmpty) 'status': status,
     });
     final list = res['feedbacks'];
     final items = list is List
@@ -803,6 +856,31 @@ class CloudNotesService {
   /// 管理员移除管理员（至少保留一位）。
   Future<void> removeAdmin(String uid) async {
     await _call('removeAdmin', params: {'uid': uid});
+  }
+
+  /// 拉取公告列表（所有用户可读，最新在前）。
+  Future<List<AnnouncementItem>> getAnnouncements() async {
+    final res = await _call('getAnnouncements');
+    return (res['announcements'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(AnnouncementItem.fromJson)
+        .toList();
+  }
+
+  /// 管理员发布公告。
+  Future<void> addAnnouncement({
+    required String title,
+    required String content,
+  }) async {
+    await _call('addAnnouncement', params: {
+      'title': title,
+      'content': content,
+    });
+  }
+
+  /// 管理员删除公告。
+  Future<void> deleteAnnouncement(String id) async {
+    await _call('deleteAnnouncement', params: {'id': id});
   }
 
   /// 通用调用「api」云函数（供账号名称/密码等认证相关 action 使用）。

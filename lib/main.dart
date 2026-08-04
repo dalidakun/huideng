@@ -15,6 +15,7 @@ import 'app_state.dart';
 import 'auth_service.dart';
 import 'sync_service.dart';
 import 'notification_service.dart';
+import 'update_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -113,11 +114,17 @@ class MyApp extends StatelessWidget {
           children: [
             if (child != null) child,
             const _AssistantPanelOverlay(),
+            const _AssistantRevealOverlay(),
           ],
         );
       },
       home: WillPopScope(
         onWillPop: () async {
+          // 圆形助手面板展开时，先收起它而不是退出应用。
+          if (assistantReveal.value) {
+            assistantReveal.value = false;
+            return false;
+          }
           // AI 面板展开时，先收起它而不是退出应用。
           if (assistantVisible.value) {
             assistantVisible.value = false;
@@ -156,6 +163,10 @@ class _AppEntryState extends State<_AppEntry> {
   void _finishSplash() {
     if (!mounted) return;
     setState(() => _showMain = true);
+    // 启动后静默检查更新（不阻塞使用，失败静默忽略）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(UpdateService.checkAndPrompt(context));
+    });
   }
 
   @override
@@ -172,7 +183,8 @@ class MainPage extends StatefulWidget {
   State<MainPage> createState() => _MainPageState();
 }
 
-class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
+class _MainPageState extends State<MainPage>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   int _currentIndex = 0;
   bool _searchMode = false;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
@@ -180,19 +192,31 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   final _sutraListKey = GlobalKey<SutraListPageState>();
   late final ValueNotifier<int> _tabIndex;
   late final List<Widget> _pages;
+  // 助手页 WebView 的 key：切到助手页时重新加载，同步另一处 WebView 的登录态。
+  final _assistantKey = GlobalKey<DiscussionPageState>();
+  // 底部菜单自动隐藏动画：value 0=完全显示，1=完全隐藏。
+  // 惰性初始化，避免热重载后旧实例字段未赋值导致红屏。
+  late final AnimationController _navCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 200),
+  );
+  // 上一帧滚动偏移与最近一次方向判定后的滚动方向（1=向下，-1=向上）。
+  double _lastScrollPixels = 0;
+  int _scrollDir = 0;
 
   @override
   void initState() {
     super.initState();
     _tabIndex = ValueNotifier<int>(0);
     _pages = [
-      StudyHubPage(key: _studyHubKey),
+      StudyHubPage(key: _studyHubKey, onOpenMyPage: _openMyPage),
       SutraListPage(
         key: _sutraListKey,
         activeTab: _tabIndex,
         onSearchModeChanged: _onSearchModeChanged,
+        onOpenAssistant: _openAssistantPage,
       ),
-      const _AssistantTabPage(),
+      _AssistantTabPage(discussionKey: _assistantKey),
       const MessagePage(),
       MyPage(key: _myKey),
     ];
@@ -207,6 +231,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   void dispose() {
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
     WidgetsBinding.instance.removeObserver(this);
+    _navCtrl.dispose();
     super.dispose();
   }
 
@@ -253,28 +278,18 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/sutra_book.png', width: 27, height: 27),
-      activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 27, height: 27),
-      label: '',
-    ),
-    BottomNavigationBarItem(
-      icon: Image.asset('assets/images/assistant.png', width: 24, height: 24),
-      activeIcon: Image.asset('assets/images/assistant_selected.png', width: 24, height: 24),
-      label: '',
-    ),
-    BottomNavigationBarItem(
-      icon: Image.asset('assets/images/chat.png', width: 23, height: 23),
-      activeIcon: Image.asset('assets/images/chat_selected.png', width: 23, height: 23),
-      label: '',
-    ),
-    BottomNavigationBarItem(
       icon: Image.asset('assets/images/search.png', width: 24, height: 24),
       activeIcon: Image.asset('assets/images/search_selected.png', width: 24, height: 24),
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/my.png', width: 24, height: 24),
-      activeIcon: Image.asset('assets/images/my_selected.png', width: 24, height: 24),
+      icon: Image.asset('assets/images/sutra_book.png', width: 27, height: 27),
+      activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 27, height: 27),
+      label: '',
+    ),
+    BottomNavigationBarItem(
+      icon: Image.asset('assets/images/chat.png', width: 23, height: 23),
+      activeIcon: Image.asset('assets/images/chat_selected.png', width: 23, height: 23),
       label: '',
     ),
   ];
@@ -287,15 +302,25 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     });
   }
 
-  /// 当前页面索引 → 底部菜单索引（搜索是模式入口，没有独立页面）。
+  /// 当前页面索引 → 底部菜单索引（搜索是模式入口；助手/我的无菜单项，不高亮）。
   int _navIndexForCurrent() {
-    if (_searchMode) return 4;
-    if (_currentIndex >= 4) return 5; // 「我的」
-    return _currentIndex;
+    if (_searchMode) return 1;
+    switch (_currentIndex) {
+      case 0: // 修学
+        return 0;
+      case 1: // 经藏
+        return 2;
+      case 2: // 助手（入口在经藏页右上角）
+        return -1;
+      case 3: // 消息
+        return 3;
+      default: // 我的
+        return -1;
+    }
   }
 
   void _switchToTab(int index) {
-    if (index == 4) {
+    if (index == 1) {
       // 底部「搜索」：进入/退出经藏搜索激活状态。
       if (_searchMode) {
         _searchMode = false;
@@ -317,49 +342,138 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       _searchMode = false;
       _sutraListKey.currentState?.deactivateSearch();
     }
-    final pageIndex = index == 5 ? 4 : index;
+    final pageIndex = index == 3 ? 3 : (index == 2 ? 1 : 0);
     _tabIndex.value = pageIndex;
     setState(() {
       _currentIndex = pageIndex;
     });
+    _revealNavBar();
     if (pageIndex == 0) _studyHubKey.currentState?.reload();
-    if (pageIndex == 4) _myKey.currentState?.reload();
+  }
+
+  /// 经藏页右上角助手入口：以圆形展开/缩回动画开关全屏 DeepSeek 面板。
+  void _openAssistantPage() {
+    assistantReveal.value = !assistantReveal.value;
+  }
+
+  /// 修学页左上角头像入口：打开「我的」页面。
+  void _openMyPage() {
+    if (_searchMode) {
+      _searchMode = false;
+      _sutraListKey.currentState?.deactivateSearch();
+    }
+    _tabIndex.value = 4;
+    setState(() {
+      _currentIndex = 4;
+    });
+    _revealNavBar();
+    _myKey.currentState?.reload();
+  }
+
+  /// 切页时立即弹回菜单并重置滚动方向跟踪。
+  void _revealNavBar() {
+    _scrollDir = 0;
+    _lastScrollPixels = 0;
+    if (_navCtrl.value > 0) {
+      _navCtrl.animateTo(
+        0,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutBack,
+      );
+    }
   }
 
   void switchToTab(int index) {
     _switchToTab(index);
   }
 
+  /// 菜单隐藏/显示动画时长：随滚动速度调整，快滑更短、慢拖更长。
+  Duration _navDurationFor(double delta) {
+    final speed = delta.abs();
+    if (speed > 60) return const Duration(milliseconds: 180);
+    if (speed > 20) return const Duration(milliseconds: 210);
+    return const Duration(milliseconds: 240);
+  }
+
+  /// 检测滚动方向并驱动菜单明暗：
+  /// - 向下滚动（内容上移）→ 菜单轻微变淡（仅透明度，不隐藏、不位移）
+  /// - 向上滚动（内容下移）→ 菜单立即恢复
+  /// - 忽略 <8px 的微小移动，方向反转需累积到阈值才生效，避免快速变向闪烁
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+    if (notification.depth != 0) return false;
+    final pixels = notification.metrics.pixels;
+    final delta = pixels - _lastScrollPixels;
+    _lastScrollPixels = pixels;
+    if (delta.abs() < 8) return false;
+    final dir = delta > 0 ? 1 : -1;
+    if (dir == _scrollDir) return false;
+    _scrollDir = dir;
+    final duration = _navDurationFor(delta);
+    if (dir > 0) {
+      // 变淡：透明度从 1 降到 0.6。
+      _navCtrl.animateTo(1, duration: duration, curve: Curves.easeOutCubic);
+    } else {
+      // 恢复：立即弹回全亮。
+      _navCtrl.animateTo(0, duration: duration, curve: Curves.easeOutCubic);
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 关闭键盘自适应压缩：WebView（助手/DeepSeek）在 adjustResize 下会被键盘
+    // 压成小视口，页面在消息区与输入框之间露出大片空白遮挡内容。
+    // 改为不压缩，由 DeepSeek 页面自身处理键盘重叠，输入框保持在键盘上方。
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // 内容区：底部让出菜单高度（仅作用于主页内容，不影响跳转后的页面），
           // 列表滚动时内容会从毛玻璃菜单下方掠过。
           Positioned.fill(
-            child: MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                padding: MediaQuery.of(context).padding.copyWith(
-                  bottom: MediaQuery.of(context).padding.bottom +
-                      _BottomNavBar.heightOnly(context),
+            child: NotificationListener<ScrollNotification>(
+              onNotification: _onScrollNotification,
+              child: MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  padding: MediaQuery.of(context).padding.copyWith(
+                    bottom: MediaQuery.of(context).padding.bottom +
+                        _BottomNavBar.heightOnly(context),
+                  ),
+                  // Scaffold 的 FAB 定位读取的是 viewPadding，需同步加高，
+                  // 否则右下角加号按钮会落到菜单栏上重叠。
+                  viewPadding: MediaQuery.of(context).viewPadding.copyWith(
+                    bottom: MediaQuery.of(context).viewPadding.bottom +
+                        _BottomNavBar.heightOnly(context),
+                  ),
                 ),
-              ),
-              child: IndexedStack(
-                index: _currentIndex,
-                children: _pages,
+                child: IndexedStack(
+                  index: _currentIndex,
+                  children: _pages,
+                ),
               ),
             ),
           ),
-          // X 风格毛玻璃悬浮菜单：始终悬浮在内容之上。
+          // X 风格毛玻璃悬浮菜单：向下滚动时轻微变淡（不位移、不隐藏），
+          // 向上滚动时恢复。
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
-            child: _BottomNavBar(
-              items: _bottomNavItems,
-              currentIndex: _navIndexForCurrent(),
-              onTap: _switchToTab,
+            child: AnimatedBuilder(
+              animation: _navCtrl,
+              builder: (context, child) {
+                return Opacity(
+                  // 淡出到 0.6，图标仍清晰可见。
+                  opacity: 1 - 0.4 * _navCtrl.value,
+                  child: child,
+                );
+              },
+              child: _BottomNavBar(
+                items: _bottomNavItems,
+                currentIndex: _navIndexForCurrent(),
+                onTap: _switchToTab,
+              ),
             ),
           ),
         ],
@@ -384,7 +498,7 @@ class _BottomNavBar extends StatelessWidget {
   static double heightOnly(BuildContext context) {
     final media = MediaQuery.of(context);
     final large = media.size.height >= 820 || media.size.width >= 430;
-    return large ? 50.0 : 44.0;
+    return large ? 60.0 : 54.0;
   }
 
   @override
@@ -396,7 +510,7 @@ class _BottomNavBar extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFFFFFAF5).withValues(alpha: 0.8),
+            color: const Color(0xFFFFFAF5).withValues(alpha: 0.4),
             border: const Border(
               top: BorderSide(color: Color(0xFFE8E0D5), width: 0.8),
             ),
@@ -437,7 +551,8 @@ class _BottomNavBar extends StatelessWidget {
 
 /// 底部「助手」标签页：DeepSeek 对话 WebView。
 class _AssistantTabPage extends StatelessWidget {
-  const _AssistantTabPage();
+  final GlobalKey<DiscussionPageState>? discussionKey;
+  const _AssistantTabPage({this.discussionKey});
 
   @override
   Widget build(BuildContext context) {
@@ -448,16 +563,47 @@ class _AssistantTabPage extends StatelessWidget {
         elevation: 0,
         shadowColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
-        title: const Text(
-          'AI 助手',
-          style: TextStyle(
-            color: Color(0xFF5d4037),
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-          ),
+        title: Row(
+          children: const [
+            Text(
+              '助手',
+              style: TextStyle(
+                color: Color(0xFF5d4037),
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            SizedBox(width: 6),
+            Text(
+              '·',
+              style: TextStyle(
+                color: Color(0xFF9E9588),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
+                style: TextStyle(
+                  color: Color(0xFF9E9588),
+                  fontSize: 10.5,
+                ),
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
       ),
-      body: const DiscussionPage(),
+      // WebView 底部让出菜单高度，避免 DeepSeek 的输入框被悬浮菜单遮挡。
+      // 键盘弹出时取消让位：避免输入法上方露出页面底色的色块。
+      body: SafeArea(
+        top: false,
+        bottom: MediaQuery.viewInsetsOf(context).bottom == 0,
+        child: DiscussionPage(key: discussionKey),
+      ),
     );
   }
 }
@@ -474,6 +620,8 @@ class _AssistantPanelOverlay extends StatefulWidget {
 class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
+  // 面板 WebView 的 key：每次展开时重新加载，同步另一个 WebView 里的登录态。
+  final _webKey = GlobalKey<DiscussionPageState>();
 
   @override
   void initState() {
@@ -488,6 +636,7 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
   void _onVisible() {
     if (!mounted) return;
     if (assistantVisible.value) {
+      _webKey.currentState?.reload();
       _ctrl.forward();
     } else {
       _ctrl.reverse();
@@ -549,8 +698,144 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
             ],
           );
         },
-        child: const DiscussionPage(),
+        child: DiscussionPage(key: _webKey),
       ),
     );
+  }
+}
+
+/// 经藏页右上角「助手」圆形展开面板：
+/// 从右上角一个点以圆形伸展为全屏 DeepSeek 页面，关闭时按原路径缩回。
+class _AssistantRevealOverlay extends StatefulWidget {
+  const _AssistantRevealOverlay();
+
+  @override
+  State<_AssistantRevealOverlay> createState() => _AssistantRevealOverlayState();
+}
+
+class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  // 面板 WebView 的 key：每次展开时重新加载，同步登录态。
+  final _webKey = GlobalKey<DiscussionPageState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 480),
+    );
+    assistantReveal.addListener(_onVisible);
+  }
+
+  void _onVisible() {
+    if (!mounted) return;
+    if (assistantReveal.value) {
+      _webKey.currentState?.reload();
+      _ctrl.forward();
+    } else {
+      _ctrl.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    assistantReveal.removeListener(_onVisible);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (context, child) {
+          final t = Curves.easeInOutCubic.transform(_ctrl.value);
+          final size = MediaQuery.of(context).size;
+          // 键盘弹出高度：输入框激活时 WebView 底部让出，输入框保持在键盘上方。
+          final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+          // 圆心取屏幕右上角，半径需覆盖整屏（对角线）。
+          final center = Offset(size.width, 0);
+          final maxRadius = Offset(size.width, size.height).distance;
+          // 完全收起时不拦截任何点击；开始展开即可交互。
+          return IgnorePointer(
+            ignoring: t == 0,
+            child: ClipPath(
+              clipper: _CircleRevealClipper(
+                progress: t,
+                center: center,
+                maxRadius: maxRadius,
+              ),
+              child: SafeArea(
+                // 顶部避开状态栏，底部避开手势条，避免遮挡 DeepSeek 页面的内容。
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: keyboard),
+                  child: Stack(
+                    children: [
+                      // 背景 + DeepSeek 页面。
+                      ColoredBox(color: const Color(0xFFF5EDE3), child: child),
+                      // 右上角收起按钮。
+                      if (t > 0.6)
+                        Positioned(
+                          top: 10,
+                          right: 12,
+                          child: Material(
+                            color: Colors.white,
+                            shape: const CircleBorder(),
+                            elevation: 4,
+                            child: InkWell(
+                              customBorder: const CircleBorder(),
+                              onTap: () => assistantReveal.value = false,
+                              child: const Padding(
+                                padding: EdgeInsets.all(8),
+                                child: Icon(
+                                  Icons.close,
+                                  size: 20,
+                                  color: Color(0xFF5d4037),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+        child: DiscussionPage(key: _webKey),
+      ),
+    );
+  }
+}
+
+/// 圆形展开裁剪器：以右上角为圆心，半径随 progress 从 0 增长到全屏对角线。
+class _CircleRevealClipper extends CustomClipper<Path> {
+  final double progress;
+  final Offset center;
+  final double maxRadius;
+
+  const _CircleRevealClipper({
+    required this.progress,
+    required this.center,
+    required this.maxRadius,
+  });
+
+  @override
+  Path getClip(Size size) {
+    return Path()
+      ..addOval(
+        Rect.fromCircle(center: center, radius: maxRadius * progress),
+      );
+  }
+
+  @override
+  bool shouldReclip(_CircleRevealClipper oldClipper) {
+    return oldClipper.progress != progress ||
+        oldClipper.center != center ||
+        oldClipper.maxRadius != maxRadius;
   }
 }

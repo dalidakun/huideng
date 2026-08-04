@@ -9,10 +9,10 @@ class DiscussionPage extends StatefulWidget {
   const DiscussionPage({super.key});
 
   @override
-  State<DiscussionPage> createState() => _DiscussionPageState();
+  State<DiscussionPage> createState() => DiscussionPageState();
 }
 
-class _DiscussionPageState extends State<DiscussionPage> {
+class DiscussionPageState extends State<DiscussionPage> {
   static const String _kChatUrl = 'https://chat.deepseek.com/';
 
   late final WebViewController _controller;
@@ -87,7 +87,6 @@ class _DiscussionPageState extends State<DiscussionPage> {
   Future<void> _injectDoubleClickReloadIfNeeded() async {
     if (_dblClickReloadInjected) return;
     _dblClickReloadInjected = true;
-
     // Some platform views may swallow Flutter gestures; inject dblclick inside the page too.
     try {
       await _controller.runJavaScript('''
@@ -102,6 +101,11 @@ class _DiscussionPageState extends State<DiscussionPage> {
     } catch (_) {
       // ignore
     }
+  }
+
+  /// 重新加载页面：登录态变化后用于让共享 Cookie 的另一个 WebView 同步会话。
+  void reload() {
+    _controller.reload();
   }
 
   @override

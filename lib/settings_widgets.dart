@@ -8,12 +8,18 @@ const Color sText = Color(0xFF3E2723);
 const Color sTextSec = Color(0xFF8B6B5A);
 const Color sTextHint = Color(0xFFC4B5A8);
 
-/// 设置类页面统一外壳：渐变圆角头部 + 返回按钮 + 标题 + 滚动主体。
+/// 设置类页面统一外壳：渐变圆角头部 + 返回按钮 + 标题 + 可选右上角操作 + 滚动主体。
 class SettingsPageScaffold extends StatelessWidget {
   final String title;
   final Widget child;
+  final Widget? trailing;
 
-  const SettingsPageScaffold({super.key, required this.title, required this.child});
+  const SettingsPageScaffold({
+    super.key,
+    required this.title,
+    required this.child,
+    this.trailing,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +48,10 @@ class SettingsPageScaffold extends StatelessWidget {
                       icon: const Icon(Icons.arrow_back_ios_new, color: sText, size: 20),
                     ),
                     const SizedBox(width: 4),
-                    Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: sText)),
+                    Expanded(
+                      child: Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: sText), overflow: TextOverflow.ellipsis),
+                    ),
+                    if (trailing != null) trailing!,
                   ],
                 ),
               ),

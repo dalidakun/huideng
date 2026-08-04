@@ -73,7 +73,8 @@ class _UserListPageState extends State<UserListPage> {
 
   Future<void> _toggleFollow(UserProfile user) async {
     if (!AuthService.instance.isLoggedIn) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const LoginPage()));
       return;
     }
     final ok = await CloudNotesService.instance.toggleFollow(user.id);
@@ -142,11 +143,13 @@ class _UserListPageState extends State<UserListPage> {
             children: [
               IconButton(
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+                icon: const Icon(Icons.arrow_back_ios_new,
+                    color: _text, size: 20),
               ),
               const SizedBox(width: 4),
               Text(_title,
-                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+                  style: const TextStyle(
+                      fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
               if (!_loading && _users.isNotEmpty)
                 Text('${_users.length} 位',
@@ -170,7 +173,8 @@ class _UserListPageState extends State<UserListPage> {
             Icon(Icons.lock_outline, size: 48, color: _textHint),
             const SizedBox(height: 14),
             const Text('登录后查看',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             const SizedBox(height: 6),
             const Text('登录即可查看你的关注与粉丝',
                 style: TextStyle(fontSize: 13, color: _textSec)),
@@ -203,7 +207,8 @@ class _UserListPageState extends State<UserListPage> {
             Icon(Icons.wifi_off_outlined, size: 48, color: _textHint),
             const SizedBox(height: 14),
             const Text('加载失败',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             const SizedBox(height: 12),
             ElevatedButton.icon(
               onPressed: _load,
@@ -226,11 +231,14 @@ class _UserListPageState extends State<UserListPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(_isFollowing ? Icons.people_alt_outlined : Icons.person_outline,
-                size: 48, color: _textHint),
+            Icon(
+                _isFollowing ? Icons.people_alt_outlined : Icons.person_outline,
+                size: 48,
+                color: _textHint),
             const SizedBox(height: 14),
             Text(_isFollowing ? '还没有关注同修' : '还没有粉丝',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             const SizedBox(height: 6),
             Text(_isFollowing ? '关注同修后，这里会显示你关注的同修' : '当同修关注你时，会出现在这里',
                 style: const TextStyle(fontSize: 13, color: _textSec)),
@@ -248,7 +256,8 @@ class _UserListPageState extends State<UserListPage> {
   Widget _buildUserTile(UserProfile user) {
     final me = AuthService.instance.currentUser.value;
     final isSelf = me != null && user.id == me.id;
-    final following = CloudNotesService.instance.followingUserIds.contains(user.id);
+    final following =
+        CloudNotesService.instance.followingUserIds.contains(user.id);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -297,16 +306,16 @@ class _UserListPageState extends State<UserListPage> {
               GestureDetector(
                 onTap: () => _toggleFollow(user),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: following
                         ? Colors.transparent
                         : _gold.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                        color: following
-                            ? _border
-                            : _gold.withValues(alpha: 0.4)),
+                        color:
+                            following ? _border : _gold.withValues(alpha: 0.4)),
                   ),
                   child: Text(
                     following ? '已关注' : '关注',

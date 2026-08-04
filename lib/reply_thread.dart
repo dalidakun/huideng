@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
+import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'post_time_link.dart';
 import 'user_avatar.dart';
+import 'user_space_page.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _text = Color(0xFF3E2723);
@@ -22,6 +25,9 @@ class ReplyThread extends StatefulWidget {
   final void Function(PlazaNote note)? onRepost;
   final void Function(PlazaNote note)? onMore;
   final bool pinned;
+
+  /// 详情页用于定位到回复节点的 GlobalKey。
+  final GlobalKey? replyNodeKey;
   const ReplyThread({
     super.key,
     required this.replyNote,
@@ -30,6 +36,7 @@ class ReplyThread extends StatefulWidget {
     this.onRepost,
     this.onMore,
     this.pinned = false,
+    this.replyNodeKey,
   });
 
   @override
@@ -82,18 +89,38 @@ class _ReplyThreadState extends State<ReplyThread> {
         if (note.authorAccount.isNotEmpty) ...[
           const SizedBox(width: 3),
           Flexible(
-            child: Text('@${note.authorAccount}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+            // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+            child: AccountLink(
+              account: note.authorAccount,
+              onTap: () {
+                if (note.ownerUserId.isNotEmpty) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            UserSpacePage(userId: note.ownerUserId)),
+                  );
+                }
+              },
+            ),
           ),
           const SizedBox(width: 3),
           const Text('·',
               style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
           const SizedBox(width: 2),
         ],
-        Text(_time(note.createdAt),
-            style: const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+        PostTimeLink(
+          text: _time(note.createdAt),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => NoteDetailPage(
+                      noteId: note.id,
+                      // 评论贴打开时定位到评论贴位置。
+                      scrollToReplyId: showMenu ? note.id : null,
+                    )),
+          ),
+        ),
         if (showMenu && widget.onMore != null) ...[
           const SizedBox(width: 4),
           GestureDetector(
@@ -138,9 +165,17 @@ class _ReplyThreadState extends State<ReplyThread> {
               const Text('·',
                   style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
               const SizedBox(width: 2),
-              Text(_time(note.createdAt),
-                  style:
-                      const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+              PostTimeLink(
+                text: _time(note.createdAt),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => NoteDetailPage(
+                            noteId: note.id,
+                            scrollToReplyId: note.id,
+                          )),
+                ),
+              ),
             ],
           ),
         ),
@@ -268,12 +303,17 @@ class _ReplyThreadState extends State<ReplyThread> {
   @override
   Widget build(BuildContext context) {
     final original = _original;
+    final replyNode =
+        _nodeRow(widget.replyNote, connectDown: false, showMenu: true);
+    final replyKey = widget.replyNodeKey;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (original != null)
           _nodeRow(original, connectDown: true, showMenu: false),
-        _nodeRow(widget.replyNote, connectDown: false, showMenu: true),
+        replyKey == null
+            ? replyNode
+            : KeyedSubtree(key: replyKey, child: replyNode),
       ],
     );
   }

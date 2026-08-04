@@ -59,7 +59,7 @@ class _AboutPageState extends State<AboutPage> {
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 40),
                 child: Text(
-                  '一盏燃灯，照见自己。',
+                  '燃一盏灯，看见自己，照亮别人',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 14, color: sTextSec, height: 1.7),
                 ),
@@ -108,8 +108,8 @@ class _AboutPageState extends State<AboutPage> {
                 SettingsTile(
                   icon: Icons.groups_outlined,
                   iconColor: sGold,
-                  title: '管理员管理',
-                  subtitle: '添加或移除管理员',
+                  title: '管理员',
+                  subtitle: '管理管理员与发布公告',
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(

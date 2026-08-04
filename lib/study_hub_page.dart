@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'user_avatar.dart';
 import 'login_page.dart';
 import 'reading_page.dart';
 import 'checkin_settings_page.dart';
@@ -15,7 +16,9 @@ import 'sutra_list_page.dart';
 import 'calendar_page.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
-import 'reply_thread.dart';
+import 'reply_chain.dart';
+import 'my_page.dart';
+import 'text_input_sheet.dart';
 import 'note_edit_page.dart';
 import 'note_sutra_links.dart';
 
@@ -48,7 +51,9 @@ class _PlazaFeedCache {
 }
 
 class StudyHubPage extends StatefulWidget {
-  const StudyHubPage({super.key});
+  /// 左上角头像点击回调：打开「我的」页面。
+  final VoidCallback? onOpenMyPage;
+  const StudyHubPage({super.key, this.onOpenMyPage});
 
   @override
   State<StudyHubPage> createState() => StudyHubPageState();
@@ -66,6 +71,7 @@ class StudyHubPageState extends State<StudyHubPage>
     _loadData();
     _refreshCurrentSmooth();
   }
+
   String? _currentTitle;
   String? _currentFilePath;
   double _progress = 0.0;
@@ -96,6 +102,9 @@ class StudyHubPageState extends State<StudyHubPage>
   bool _feedInitial = true;
   bool _feedLoading = false;
   bool _feedError = false;
+  List<AnnouncementItem> _announcements = [];
+  bool _announceLoading = false;
+  bool _announceError = false;
   static const int _feedPageSize = 20;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
@@ -107,8 +116,10 @@ class StudyHubPageState extends State<StudyHubPage>
   void initState() {
     super.initState();
     NoteSutraCatalog.load(); // 预加载经书目录，让卡片 @经书 提取可用
-    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-    _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+    _pulseController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1500));
+    _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(
+        CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
     _feedScroll.addListener(_onFeedScroll);
     _loadData();
@@ -207,7 +218,8 @@ class StudyHubPageState extends State<StudyHubPage>
       _checkinStreak = _calcStreak(prefs);
       _studyDays = prefs.getInt('study_day_count') ?? 0;
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
-      _customTypes = (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
+      _customTypes =
+          (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
       _plazaTabs = plazaTabs;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopSection());
@@ -217,7 +229,8 @@ class StudyHubPageState extends State<StudyHubPage>
     if (title == null) return false;
     try {
       final docs = await getApplicationDocumentsDirectory();
-      final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      final file =
+          File('${docs.path}${Platform.pathSeparator}sutras_list.json');
       if (!await file.exists()) return false;
       final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
       for (final e in decoded) {
@@ -236,7 +249,8 @@ class StudyHubPageState extends State<StudyHubPage>
     if (title == null) return;
     try {
       final docs = await getApplicationDocumentsDirectory();
-      final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      final file =
+          File('${docs.path}${Platform.pathSeparator}sutras_list.json');
       if (!await file.exists()) {
         _showTopToast('未找到经书列表，无法收藏', isError: true);
         return;
@@ -250,7 +264,8 @@ class StudyHubPageState extends State<StudyHubPage>
       }
       final wasFav = list[idx]['isFavorite'] == true;
       list[idx]['isFavorite'] = !wasFav;
-      list[idx]['favoriteTime'] = wasFav ? null : DateTime.now().toIso8601String();
+      list[idx]['favoriteTime'] =
+          wasFav ? null : DateTime.now().toIso8601String();
       await file.writeAsString(jsonEncode(list));
       if (!mounted) return;
       setState(() => _currentFavorite = !wasFav);
@@ -274,21 +289,28 @@ class StudyHubPageState extends State<StudyHubPage>
             color: Colors.transparent,
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
                 decoration: BoxDecoration(
                   color: _text.withValues(alpha: 0.92),
                   borderRadius: BorderRadius.circular(24),
                   boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.14), blurRadius: 14, offset: const Offset(0, 4)),
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.14),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4)),
                   ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(isError ? Icons.info_outline : Icons.star, size: 16, color: _gold),
+                    Icon(isError ? Icons.info_outline : Icons.star,
+                        size: 16, color: _gold),
                     const SizedBox(width: 6),
                     Flexible(
-                      child: Text(msg, style: const TextStyle(fontSize: 13, color: Colors.white)),
+                      child: Text(msg,
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.white)),
                     ),
                   ],
                 ),
@@ -308,19 +330,30 @@ class StudyHubPageState extends State<StudyHubPage>
     final raw = prefs.getString('checkin_records') ?? '[]';
     final List<dynamic> allRecords = jsonDecode(raw);
     final today = _today();
-    return allRecords.where((r) => r['date'] == today).map((r) => {'type': r['type'].toString(), 'label': r['label'].toString()}).toList();
+    return allRecords
+        .where((r) => r['date'] == today)
+        .map((r) =>
+            {'type': r['type'].toString(), 'label': r['label'].toString()})
+        .toList();
   }
 
   int _calcStreak(SharedPreferences prefs) {
     final raw = prefs.getString('checkin_records') ?? '[]';
-    final records = (jsonDecode(raw) as List<dynamic>).map((r) => r['date'].toString()).toSet();
+    final records = (jsonDecode(raw) as List<dynamic>)
+        .map((r) => r['date'].toString())
+        .toSet();
     int streak = 0;
     final today = DateTime.now();
     final startIndex = records.contains(_today()) ? 0 : 1;
     for (int i = startIndex; i < 365; i++) {
       final day = today.subtract(Duration(days: i));
-      final ds = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      if (records.contains(ds)) { streak++; } else { break; }
+      final ds =
+          '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      if (records.contains(ds)) {
+        streak++;
+      } else {
+        break;
+      }
     }
     return streak;
   }
@@ -335,16 +368,22 @@ class StudyHubPageState extends State<StudyHubPage>
 
   void _openSutra() {
     if (_currentTitle == null) return;
-    Navigator.push(context, MaterialPageRoute(builder: (_) => ReadingPage(title: _currentTitle!, filePath: _currentFilePath)));
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ReadingPage(
+                title: _currentTitle!, filePath: _currentFilePath)));
   }
 
   void _onFeedScroll() {
-    if (_feedScroll.position.pixels >= _feedScroll.position.maxScrollExtent - 200) {
+    if (_feedScroll.position.pixels >=
+        _feedScroll.position.maxScrollExtent - 200) {
       _loadMoreFeed();
     }
     // 只有当广场栏目栏被滚动到贴住顶部（AppBar 下边缘）时才显示“新增笔记”按钮。
     _measureTopSectionOnce();
-    final showFab = _topSectionHeight > 0 && _feedScroll.offset >= _topSectionHeight;
+    final showFab =
+        _topSectionHeight > 0 && _feedScroll.offset >= _topSectionHeight;
     if (showFab != _showFab) {
       setState(() => _showFab = showFab);
     }
@@ -417,8 +456,7 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       if (tab == 'latest' || tab == 'hot') {
         final sort = tab == 'hot' ? 'hot' : 'latest';
-        final (list, nextPage, hasMore) =
-            await _fetchFilteredFeed(1, sort);
+        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
         if (mounted) {
           setState(() {
             _feedNotes.addAll(list);
@@ -434,6 +472,8 @@ class StudyHubPageState extends State<StudyHubPage>
         if (mounted && _followedIds.isNotEmpty) {
           await _loadFollowingNotes();
         }
+      } else if (tab == 'announce') {
+        await _loadAnnouncements();
       } else {
         if (mounted) setState(() => _feedInitial = false);
       }
@@ -446,6 +486,30 @@ class StudyHubPageState extends State<StudyHubPage>
       }
     }
     _saveFeedToCache(tab);
+  }
+
+  /// 拉取公告列表（主页公告栏展示，最新在前）。
+  Future<void> _loadAnnouncements() async {
+    if (mounted) {
+      setState(() {
+        _announceLoading = true;
+        _announceError = false;
+      });
+    }
+    try {
+      final list = await CloudNotesService.instance.getAnnouncements();
+      if (!mounted) return;
+      setState(() {
+        _announcements = list;
+        _announceLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _announceLoading = false;
+        _announceError = true;
+      });
+    }
   }
 
   _PlazaFeedCache _cacheFor(String tab) =>
@@ -491,8 +555,7 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       if (tab == 'latest' || tab == 'hot') {
         final sort = tab == 'hot' ? 'hot' : 'latest';
-        final (list, nextPage, hasMore) =
-            await _fetchFilteredFeed(1, sort);
+        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
         if (!mounted) return;
         c.notes = list;
         c.page = nextPage;
@@ -715,8 +778,7 @@ class StudyHubPageState extends State<StudyHubPage>
                                   child: const Icon(Icons.drag_handle,
                                       color: _textHint),
                                 ),
-                                title: Text(
-                                    _plazaTabMeta[items[i]] ?? items[i],
+                                title: Text(_plazaTabMeta[items[i]] ?? items[i],
                                     style: const TextStyle(
                                         fontSize: 15, color: _text)),
                                 trailing: const Icon(Icons.unfold_more,
@@ -766,42 +828,16 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  Future<void> _toggleFollow(PlazaNote note) async {
-    if (!AuthService.instance.isLoggedIn) {
-      _showTopToast('请先登录后再关注同修');
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('followed_user_ids') ?? '';
-    final ids = raw.isEmpty
-        ? <String>{}
-        : raw.split(',').where((s) => s.isNotEmpty).toSet();
-    final following = !ids.contains(note.ownerUserId);
-    if (following) {
-      ids.add(note.ownerUserId);
-    } else {
-      ids.remove(note.ownerUserId);
-    }
-    await prefs.setString('followed_user_ids', ids.join(','));
-    if (!mounted) return;
-    setState(() => _followedIds
-      ..clear()
-      ..addAll(ids));
-    if (_plazaTabs[_tabIndex] == 'follow') {
-      setState(() {
-        _feedNotes.removeWhere((n) => n.id == note.id);
-        _feedVersion++;
-      });
-    }
-    _showTopToast(following ? '已关注' : '已取消关注');
-  }
-
   void _openPlazaNote(PlazaNote note) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)));
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)));
   }
 
   Future<void> _openSutraByPath(String title, String? filePath) async {
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => ReadingPage(title: title, filePath: filePath)));
+    await Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ReadingPage(title: title, filePath: filePath)));
     _loadData();
   }
 
@@ -819,7 +855,8 @@ class StudyHubPageState extends State<StudyHubPage>
     showModalBottomSheet(
       context: context,
       backgroundColor: _card,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
         return SafeArea(
           child: Column(
@@ -829,9 +866,14 @@ class StudyHubPageState extends State<StudyHubPage>
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
                 child: Row(
                   children: [
-                    Text('$latestDate 阅读', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                    Text('$latestDate 阅读',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: _text)),
                     const Spacer(),
-                    Text('${sutras.length} 部', style: TextStyle(fontSize: 13, color: _textHint)),
+                    Text('${sutras.length} 部',
+                        style: TextStyle(fontSize: 13, color: _textHint)),
                   ],
                 ),
               ),
@@ -850,20 +892,29 @@ class StudyHubPageState extends State<StudyHubPage>
                         if (title.isNotEmpty) _openSutraByPath(title, fp);
                       },
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
                         child: Row(
                           children: [
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
+                                  Text(title,
+                                      style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w500,
+                                          color: _text)),
                                   const SizedBox(height: 4),
-                                  Text('已读 ${(progress * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _textHint)),
+                                  Text(
+                                      '已读 ${(progress * 100).toStringAsFixed(1)}%',
+                                      style: TextStyle(
+                                          fontSize: 12, color: _textHint)),
                                 ],
                               ),
                             ),
-                            Icon(Icons.chevron_right, color: _textHint, size: 20),
+                            Icon(Icons.chevron_right,
+                                color: _textHint, size: 20),
                           ],
                         ),
                       ),
@@ -906,24 +957,57 @@ class StudyHubPageState extends State<StudyHubPage>
         shadowColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Color(0xFF212121)),
         title: Padding(
-          padding: const EdgeInsets.only(left: 12),
-          child: const Text(
-            '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
-            style: TextStyle(
-              color: Color(0xFF616161),
-              fontSize: 12,
-              fontWeight: FontWeight.normal,
-            ),
-            softWrap: false,
-            overflow: TextOverflow.visible,
+          padding: const EdgeInsets.only(left: 2),
+          child: Row(
+            children: [
+              GestureDetector(
+                onTap: widget.onOpenMyPage,
+                child: UserAvatar(
+                  userId: AuthService.instance.currentUser.value?.id,
+                  radius: 16,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                '修学',
+                style: TextStyle(
+                  color: Color(0xFF5d4037),
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                '·',
+                style: TextStyle(
+                  color: Color(0xFF9E9588),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '燃一盏灯，看见自己，照亮别人',
+                  style: TextStyle(
+                    color: Color(0xFF9E9588),
+                    fontSize: 10.5,
+                  ),
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: IconButton(
-              icon: const Icon(Icons.calendar_month_outlined, color: Color(0xFF71867A), size: 20),
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarPage())),
+              icon: const Icon(Icons.calendar_month_outlined,
+                  color: Color(0xFF71867A), size: 20),
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const CalendarPage())),
             ),
           ),
         ],
@@ -1003,7 +1087,10 @@ class StudyHubPageState extends State<StudyHubPage>
           color: _card,
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 2)),
           ],
         ),
         child: const Padding(
@@ -1012,7 +1099,8 @@ class StudyHubPageState extends State<StudyHubPage>
             child: SizedBox(
               width: 22,
               height: 22,
-              child: CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
+              child:
+                  CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
             ),
           ),
         ),
@@ -1023,7 +1111,10 @@ class StudyHubPageState extends State<StudyHubPage>
         color: _card,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
@@ -1037,23 +1128,39 @@ class StudyHubPageState extends State<StudyHubPage>
               child: Row(
                 children: [
                   Container(
-                    width: 28, height: 28,
-                    decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                    child: Icon(Icons.menu_book_rounded, size: 16, color: const Color(0xFF71867A)),
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                        color: _primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Icon(Icons.menu_book_rounded,
+                        size: 16, color: const Color(0xFF71867A)),
                   ),
                   const SizedBox(width: 10),
-                  const Text('当前学习', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                  const Text('当前学习',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: _text)),
                   const Spacer(),
                   if (_currentTitle != null)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                      decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(11)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: _overlay,
+                          borderRadius: BorderRadius.circular(11)),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.today, size: 12, color: _primaryLight),
+                          const Icon(Icons.today,
+                              size: 12, color: _primaryLight),
                           const SizedBox(width: 4),
-                          Text('已学$_studyDays天', style: const TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
+                          Text('已学$_studyDays天',
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: _primaryLight,
+                                  fontWeight: FontWeight.w500)),
                         ],
                       ),
                     ),
@@ -1071,7 +1178,12 @@ class StudyHubPageState extends State<StudyHubPage>
                 child: Row(
                   children: [
                     Expanded(
-                      child: Text(_displayTitle(_currentTitle!), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _textSec, height: 1.4)),
+                      child: Text(_displayTitle(_currentTitle!),
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: _textSec,
+                              height: 1.4)),
                     ),
                   ],
                 ),
@@ -1094,7 +1206,11 @@ class StudyHubPageState extends State<StudyHubPage>
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12, color: _textHint, fontWeight: FontWeight.w500)),
+                  Text('${(_progress * 100).toStringAsFixed(1)}%',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: _textHint,
+                          fontWeight: FontWeight.w500)),
                 ],
               ),
             ),
@@ -1114,9 +1230,12 @@ class StudyHubPageState extends State<StudyHubPage>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(_lockedTitle != null ? Icons.lock : Icons.lock_open, size: 13),
+                        Icon(
+                            _lockedTitle != null ? Icons.lock : Icons.lock_open,
+                            size: 13),
                         const SizedBox(width: 4),
-                        Text(_lockedTitle != null ? '已锁定' : '锁定经书', style: const TextStyle(fontSize: 13)),
+                        Text(_lockedTitle != null ? '已锁定' : '锁定经书',
+                            style: const TextStyle(fontSize: 13)),
                       ],
                     ),
                   ),
@@ -1132,16 +1251,24 @@ class StudyHubPageState extends State<StudyHubPage>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Image.asset(_currentFavorite ? 'assets/images/star_filled.png' : 'assets/images/star_outline.png', width: 13, height: 13),
+                        Image.asset(
+                            _currentFavorite
+                                ? 'assets/images/star_filled.png'
+                                : 'assets/images/star_outline.png',
+                            width: 13,
+                            height: 13),
                         const SizedBox(width: 4),
-                        Text(_currentFavorite ? '已收藏' : '收藏', style: const TextStyle(fontSize: 13)),
+                        Text(_currentFavorite ? '已收藏' : '收藏',
+                            style: const TextStyle(fontSize: 13)),
                       ],
                     ),
                   ),
                   const Spacer(),
                   TextButton(
                     onPressed: _showRecentSutras,
-                    style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
+                    style: TextButton.styleFrom(
+                        foregroundColor: _textSec,
+                        padding: const EdgeInsets.symmetric(horizontal: 16)),
                     child: const Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
                   ),
                 ],
@@ -1154,34 +1281,49 @@ class StudyHubPageState extends State<StudyHubPage>
                   const SizedBox(height: 2),
                   AnimatedBuilder(
                     animation: _pulseAnim,
-                    builder: (context, child) => Transform.scale(scale: _pulseAnim.value, child: child),
+                    builder: (context, child) =>
+                        Transform.scale(scale: _pulseAnim.value, child: child),
                     child: Container(
-                      width: 56, height: 56,
+                      width: 56,
+                      height: 56,
                       decoration: BoxDecoration(
                         color: _overlay,
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: Icon(Icons.auto_stories_rounded, size: 30, color: _primaryLight.withValues(alpha: 0.8)),
+                      child: Icon(Icons.auto_stories_rounded,
+                          size: 30,
+                          color: _primaryLight.withValues(alpha: 0.8)),
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Text('今日尚未开启经文之旅', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _text)),
+                  Text('今日尚未开启经文之旅',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: _text)),
                   const SizedBox(height: 4),
-                  Text('选择一部经文，开始今日修学', style: TextStyle(fontSize: 13, color: _textSec)),
+                  Text('选择一部经文，开始今日修学',
+                      style: TextStyle(fontSize: 13, color: _textSec)),
                   const SizedBox(height: 14),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SutraListPage())),
+                        onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const SutraListPage())),
                         icon: const Icon(Icons.explore, size: 17),
-                        label: const Text('浏览经藏', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                        label: const Text('浏览经藏',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w500)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _gold,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 11),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                           elevation: 0,
                         ),
                       ),
@@ -1200,12 +1342,25 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Widget _buildCheckInCard() {
     final types = [
-      {'key': 'meditation', 'label': '静坐', 'icon': Icons.self_improvement_outlined},
-      {'key': 'reading', 'label': '诵经', 'icon': Icons.chrome_reader_mode_outlined},
-      {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
+      {
+        'key': 'meditation',
+        'label': '静坐',
+        'icon': Icons.self_improvement_outlined
+      },
+      {
+        'key': 'reading',
+        'label': '诵经',
+        'icon': Icons.chrome_reader_mode_outlined
+      },
+      {
+        'key': 'mantra',
+        'label': '持咒',
+        'icon': Icons.notifications_none_outlined
+      },
       {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
       {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
-      ..._customTypes.map((t) => {'key': t['key'], 'label': t['label'], 'icon': Icons.playlist_add}),
+      ..._customTypes.map((t) =>
+          {'key': t['key'], 'label': t['label'], 'icon': Icons.playlist_add}),
     ];
     final doneCount = _todayCheckIns.length;
 
@@ -1214,7 +1369,10 @@ class StudyHubPageState extends State<StudyHubPage>
         color: _card,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2)),
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
@@ -1225,25 +1383,39 @@ class StudyHubPageState extends State<StudyHubPage>
             child: Row(
               children: [
                 Container(
-                  width: 30, height: 30,
-                  decoration: BoxDecoration(color: _primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                  child: Icon(Icons.check_circle_outline, size: 17, color: const Color(0xFF71867A)),
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                      color: _primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Icon(Icons.check_circle_outline,
+                      size: 17, color: const Color(0xFF71867A)),
                 ),
                 const SizedBox(width: 10),
-                Text('功课打卡', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+                Text('功课打卡',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
                 const Spacer(),
                 Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(color: _overlay, borderRadius: BorderRadius.circular(12)),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.today, size: 12, color: _primaryLight),
-                        const SizedBox(width: 4),
-                        Text('打卡$_checkinStreak天', style: TextStyle(fontSize: 11, color: _primaryLight, fontWeight: FontWeight.w500)),
-                      ],
-                    ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: _overlay, borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.today, size: 12, color: _primaryLight),
+                      const SizedBox(width: 4),
+                      Text('打卡$_checkinStreak天',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: _primaryLight,
+                              fontWeight: FontWeight.w500)),
+                    ],
                   ),
+                ),
               ],
             ),
           ),
@@ -1257,13 +1429,15 @@ class StudyHubPageState extends State<StudyHubPage>
               separatorBuilder: (_, __) => const SizedBox(width: 10),
               itemBuilder: (context, i) {
                 final t = types[i];
-                final checked = _todayCheckIns.any((r) => r['type'] == t['key']);
+                final checked =
+                    _todayCheckIns.any((r) => r['type'] == t['key']);
                 return _CheckInButton(
                   icon: t['icon'] as IconData?,
                   emoji: t['emoji'] as String?,
                   label: t['label'] as String,
                   checked: checked,
-                  onTap: () => _toggleCheckIn(t['key'] as String, t['label'] as String),
+                  onTap: () =>
+                      _toggleCheckIn(t['key'] as String, t['label'] as String),
                 );
               },
             ),
@@ -1285,7 +1459,11 @@ class StudyHubPageState extends State<StudyHubPage>
                   ),
                 ),
                 const SizedBox(width: 10),
-                Text('$doneCount/${types.length}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _primary)),
+                Text('$doneCount/${types.length}',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _primary)),
               ],
             ),
           ),
@@ -1295,8 +1473,15 @@ class StudyHubPageState extends State<StudyHubPage>
             child: Row(
               children: [
                 TextButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInSettingsPage())),
-                  style: TextButton.styleFrom(foregroundColor: _textSec, padding: EdgeInsets.zero, minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CheckInSettingsPage())),
+                  style: TextButton.styleFrom(
+                      foregroundColor: _textSec,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1308,8 +1493,13 @@ class StudyHubPageState extends State<StudyHubPage>
                 ),
                 const Spacer(),
                 TextButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckInGoalsPage())),
-                  style: TextButton.styleFrom(foregroundColor: _textSec, padding: const EdgeInsets.symmetric(horizontal: 16)),
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CheckInGoalsPage())),
+                  style: TextButton.styleFrom(
+                      foregroundColor: _textSec,
+                      padding: const EdgeInsets.symmetric(horizontal: 16)),
                   child: Text('打卡目标 ›', style: TextStyle(fontSize: 13)),
                 ),
               ],
@@ -1326,19 +1516,7 @@ class StudyHubPageState extends State<StudyHubPage>
   List<Widget> _buildFeedSlivers(double viewportH) {
     final tab = _plazaTabs[_tabIndex];
     if (tab == 'announce') {
-      return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minHeight: math.max(0.0, viewportH - _headerHeight()),
-              ),
-              child: _buildAnnounceBody(),
-            ),
-          ),
-        ),
-      ];
+      return _buildAnnounceSlivers(viewportH);
     }
     final hasNotes = _feedNotes.isNotEmpty;
     final minFeed = math.max(0.0, viewportH - _headerHeight());
@@ -1385,30 +1563,47 @@ class StudyHubPageState extends State<StudyHubPage>
       ];
     }
 
-    final feedLen = _feedNotes.length;
+    final feedGroups = _feedGroups;
+    final feedLen = feedGroups.length;
     final showFooter = _feedLoading || !_feedHasMore || _feedError;
     // 保守估计每条笔记高度，保证补足后的内容高度一定够吸顶。
     final feedEstimate = feedLen * 110.0 + (showFooter ? 70.0 : 0.0);
     final spacerH = math.max(0.0, minFeed - feedEstimate);
     return [
       SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
+        // 横向内边距移入每条帖子内部，保证分割线通栏贴边（与「我的 → 帖子」一致）。
+        padding: const EdgeInsets.only(top: 4, bottom: 32),
         sliver: SliverList(
           key: ValueKey('feed_$_feedVersion'),
           delegate: SliverChildBuilderDelegate(
             (context, index) {
+              final Widget body;
               if (index < feedLen) {
-                return _buildFeedTile(_feedNotes[index]);
+                final g = feedGroups[index];
+                body = _buildFeedGroupCard(g.$1, g.$2);
+              } else {
+                body = _buildFeedFooter();
               }
-              return _buildFeedFooter();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 帖子顶部通栏分割线（首条不画，避免顶部多一条线）。
+                  if (index > 0)
+                    const Divider(
+                        height: 1, thickness: 0.6, color: Color(0xFFD8CCBC)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: body,
+                  ),
+                ],
+              );
             },
             childCount: feedLen + (showFooter ? 1 : 0),
             addRepaintBoundaries: true,
           ),
         ),
       ),
-      if (spacerH > 0)
-        SliverToBoxAdapter(child: SizedBox(height: spacerH)),
+      if (spacerH > 0) SliverToBoxAdapter(child: SizedBox(height: spacerH)),
     ];
   }
 
@@ -1459,17 +1654,13 @@ class StudyHubPageState extends State<StudyHubPage>
         Icon(Icons.auto_awesome_outlined, size: 52, color: _textHint),
         const SizedBox(height: 14),
         Text(
-          isFollowing
-              ? (notLoggedIn ? '登录后关注同修' : '还没有关注同修')
-              : '菩提空间还没有笔记',
+          isFollowing ? (notLoggedIn ? '登录后关注同修' : '还没有关注同修') : '菩提空间还没有笔记',
           style: const TextStyle(
               fontSize: 16, fontWeight: FontWeight.w600, color: _text),
         ),
         const SizedBox(height: 6),
         Text(
-          isFollowing
-              ? '关注同修后，这里会显示他们的新笔记'
-              : '分享你的修学心得，让大家一起受益',
+          isFollowing ? '关注同修后，这里会显示他们的新笔记' : '分享你的修学心得，让大家一起受益',
           style: const TextStyle(fontSize: 13, color: _textSec),
         ),
         const SizedBox(height: 18),
@@ -1494,8 +1685,120 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 公告 tab：管理员发布公告的展示位，功能暂未接入，先出占位 UI。
-  Widget _buildAnnounceBody() {
+  /// 公告 tab：展示管理员发布的公告（最新在前），支持下拉刷新。
+  List<Widget> _buildAnnounceSlivers(double viewportH) {
+    if (_announceLoading && _announcements.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_announceError && _announcements.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(minHeight: math.max(0.0, viewportH - _headerHeight())),
+              child: _buildFeedError(),
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_announcements.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(minHeight: math.max(0.0, viewportH - _headerHeight())),
+              child: _buildAnnounceEmpty(),
+            ),
+          ),
+        ),
+      ];
+    }
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.only(top: 4, bottom: 32),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => _buildAnnouncementCard(_announcements[index]),
+            childCount: _announcements.length,
+          ),
+        ),
+      ),
+    ];
+  }
+
+  Widget _buildAnnouncementCard(AnnouncementItem item) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 2)),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _gold.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('公告',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF9A6B3F))),
+                ),
+                const Spacer(),
+                Text(_formatTime(item.createdAt),
+                    style:
+                        const TextStyle(fontSize: 11, color: _textHint)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              item.title,
+              style: const TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600, color: _text),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              item.content,
+              style: const TextStyle(fontSize: 14, color: _textSec, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnnounceEmpty() {
     return Column(
       mainAxisSize: MainAxisSize.max,
       mainAxisAlignment: MainAxisAlignment.center,
@@ -1519,6 +1822,13 @@ class StudyHubPageState extends State<StudyHubPage>
             style: TextStyle(fontSize: 13, color: _textSec)),
       ],
     );
+  }
+
+  String _formatTime(int ms) {
+    if (ms <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
   }
 
   Widget _buildFeedError() {
@@ -1549,348 +1859,193 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  Widget _buildFeedTile(PlazaNote note) {
-    // 回复帖：渲染成「原帖在上 + 回复在下 + 头像竖线连接」的连贴样式。
-    if (note.repostKind == 'reply') {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 10,
-                offset: const Offset(0, 2)),
-          ],
-        ),
-        padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-        child: ReplyThread(replyNote: note),
+  /// 分组：非回复为根，回复（含回复的回复）递归挂到对应父帖下面，根只显示一次。
+  /// 与「我的 → 回复」页一致，原贴一次展示、下面用头像连线串起所有评论。
+  List<(PlazaNote, List<PlazaNote>)> get _feedGroups {
+    final byId = {for (final n in _feedNotes) n.id: n};
+    final children = <String, List<PlazaNote>>{};
+    final roots = <PlazaNote>[];
+    for (final n in _feedNotes) {
+      // 只有真正的回复帖（repostKind=='reply'）才归入原贴的回复链；
+      // 转发/引用转发（repostOf 非空但非 reply）作为独立帖子展示。
+      if (n.repostKind == 'reply' && byId.containsKey(n.repostOf)) {
+        children.putIfAbsent(n.repostOf, () => []).add(n);
+      } else {
+        roots.add(n);
+      }
+    }
+    List<PlazaNote> collect(PlazaNote node) {
+      final subs = children[node.id] ?? const <PlazaNote>[];
+      return [
+        for (final c in subs) c,
+        for (final c in subs) ...collect(c),
+      ];
+    }
+
+    return [
+      for (final r in roots) (r, collect(r)),
+    ];
+  }
+
+  /// 分组卡片：根帖用「帖子」页同款样式（头像+昵称+指标+三点菜单），
+  /// 其下所有回复用「回复」页同款头像连线串起。
+  Widget _buildFeedGroupCard(PlazaNote root, List<PlazaNote> replies) {
+    final me = AuthService.instance.currentUser.value;
+    final isMine = me != null && root.ownerUserId == me.id;
+    final rootWidget = PostFeedRow(
+      note: root,
+      onReplyPosted: _refreshCurrentSmooth,
+      onTap: () => _openPlazaNote(root),
+      onEdit: isMine ? () => _editFeedNote(root) : null,
+      onDelete: isMine ? () => _deleteFeedNote(root) : null,
+      onMore: (n) => _showFeedReplyMenu(n),
+      // 广场以浏览为主：他人帖子不显示关注按钮，关注/屏蔽收进三点菜单。
+      showFollowButton: false,
+    );
+    if (replies.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: rootWidget,
       );
     }
-    final content = _plainTextCache.putIfAbsent(note.id, () => NoteSutraLinks.plainText(note.content));
-    final preview = content.length > 60
-        ? '${content.substring(0, 60)}...'
-        : content;
-    final sutraQuotes = _sutraQuoteCache.putIfAbsent(note.id, () => NoteSutraLinks.extract(note.content));
-    final isMine =
-        AuthService.instance.currentUser.value?.id == note.ownerUserId;
-    final isLoggedIn = AuthService.instance.isLoggedIn;
-    final followed = _followedIds.contains(note.ownerUserId);
-    final liked = CloudNotesService.instance.likedNoteIds.contains(note.id);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2)),
-        ],
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: () => _openPlazaNote(note),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 13, 12, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  if (note.repostOf.isNotEmpty && note.repostKind != 'reply') ...[
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.repeat, size: 12, color: _gold),
-                        const SizedBox(width: 2),
-                        Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
-                            style: const TextStyle(
-                                fontSize: 11, color: _gold)),
-                      ],
-                    ),
-                  ],
-                  if (isLoggedIn && !isMine) ...[
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () => _toggleFollow(note),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: followed
-                              ? Colors.transparent
-                              : _gold.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                              color: followed
-                                  ? _border
-                                  : _gold.withValues(alpha: 0.4)),
-                        ),
-                        child: Text(
-                          followed ? '已关注' : '关注',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: followed
-                                ? _textHint
-                                : const Color(0xFF9A6B3F),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              if (note.content.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  preview,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 14, color: _textSec, height: 1.5),
-                ),
-              ],
-              if (sutraQuotes.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final q in sutraQuotes)
-                        InkWell(
-                          onTap: () => _openSutraByPath(q.$1, q.$2),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.menu_book_rounded,
-                                    size: 14, color: _gold),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    q.$1,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Color(0xFF9A6B3F),
-                                        fontWeight: FontWeight.w600),
-                                  ),
-                                ),
-                                const Icon(Icons.chevron_right,
-                                    size: 14, color: _gold),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-              if (note.repostOf.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Builder(builder: (_) {
-                  // 引用转发用快照内容；直接转发 content 即原帖内容。
-                  final quoteSource = note.quoteOfContent.isNotEmpty
-                      ? note.quoteOfContent
-                      : note.content;
-                  final quoteSutras = NoteSutraLinks.extract(quoteSource);
-                  final quotePlain = _plainTextCache.putIfAbsent(
-                      'quote_${note.id}',
-                      () => NoteSutraLinks.plainText(quoteSource));
-                  final quotePreview = quotePlain.length > 80
-                      ? '${quotePlain.substring(0, 80)}...'
-                      : quotePlain;
-                  return Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: _bg,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                            '@${note.repostSourceAuthor} 的笔记',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12, color: _textSec)),
-                        if (quotePreview.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            quotePreview,
-                            maxLines: 4,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 13, color: _textSec, height: 1.5),
-                          ),
-                        ],
-                        for (final q in quoteSutras) ...[
-                          const SizedBox(height: 5),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.menu_book_rounded,
-                                  size: 13, color: _gold),
-                              const SizedBox(width: 4),
-                              Flexible(
-                                child: Text(
-                                  '@${q.$1}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF9A6B3F),
-                                      fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  );
-                }),
-              ],
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Flexible(
-                    child: Row(
-                      children: [
-                        const Icon(Icons.person_outline,
-                            size: 13, color: _textHint),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(note.authorName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 12, color: _textSec)),
-                        ),
-                        if (note.authorVerified) ...[
-                          const SizedBox(width: 3),
-                          const Icon(Icons.verified,
-                              size: 12, color: Color(0xFF70867A)),
-                        ],
-                        if (note.authorAccount.isNotEmpty) ...[
-                          const SizedBox(width: 3),
-                          Flexible(
-                            child: Text('@${note.authorAccount}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 13, color: Color(0xFF8C8C8C))),
-                          ),
-                          const SizedBox(width: 3),
-                          Text('·',
-                              style: const TextStyle(
-                                  fontSize: 13, color: Color(0xFF8C8C8C))),
-                          const SizedBox(width: 2),
-                        ],
-                        const SizedBox(width: 2),
-                        const Icon(Icons.schedule,
-                            size: 13, color: Color(0xFF8C8C8C)),
-                        const SizedBox(width: 2),
-                        Text(_formatNoteTime(note.createdAt),
-                            style: const TextStyle(
-                                fontSize: 13, color: Color(0xFF8C8C8C))),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image(image: _commentIcon,
-                          width: 13, height: 13),
-                      const SizedBox(width: 3),
-                      Text(_formatCount(note.commentCount),
-                          style: const TextStyle(
-                              fontSize: 12, color: _textSec)),
-                      const SizedBox(width: 8),
-                      const Icon(Icons.repeat_rounded,
-                          size: 13, color: _textSec),
-                      const SizedBox(width: 3),
-                      Text(_formatCount(note.repostCount),
-                          style: const TextStyle(
-                              fontSize: 12, color: _textSec)),
-                      const SizedBox(width: 8),
-                      Icon(
-                        liked
-                            ? Icons.favorite_rounded
-                            : Icons.favorite_border_rounded,
-                        size: 13,
-                        color: liked
-                            ? _gold
-                            : _textSec,
-                      ),
-                      const SizedBox(width: 3),
-                      Text(_formatCount(note.likeCount),
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: liked
-                                  ? _gold
-                                  : _textSec)),
-                      const SizedBox(width: 8),
-                      Image(image: _viewIcon,
-                          width: 13, height: 13),
-                      const SizedBox(width: 3),
-                      Text(_formatCount(note.viewCount),
-                          style: const TextStyle(
-                              fontSize: 12, color: _textSec)),
-                    ],
-                  ),
-                ],
-              ),
-            ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 21,
+              top: 62,
+              bottom: 0,
+              child: Container(width: 1, color: const Color(0xFFC9C9C9)),
+            ),
+            rootWidget,
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 6),
+          child: ReplyChain(
+            replies: replies,
+            parentAccounts: {
+              root.id: root.authorAccount,
+              for (final r in replies) r.id: r.authorAccount,
+            },
+            onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
+            onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
+            onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
+            onMore: (n) => _showFeedReplyMenu(n),
           ),
         ),
-      ),
+      ],
     );
   }
 
-  /// 将计数缩写为更紧凑的形式，避免大数字撑开布局被后面图标遮盖。
-  String _formatCount(int count) {
-    if (count >= 100000000) {
-      return '${(count / 100000000).toStringAsFixed(1)}亿';
+  /// 回复节点更多菜单：自己的回复显示编辑/删除，他人回复显示关注/屏蔽。
+  Future<void> _showFeedReplyMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null || note.ownerUserId != me.id) {
+      if (me != null && note.ownerUserId.isNotEmpty) {
+        await showMoreMenu(context, note.ownerUserId, note.authorName);
+      }
+      return;
     }
-    if (count >= 10000) {
-      return '${(count / 10000).toStringAsFixed(1)}万';
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(note.authorName,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'edit') {
+      _editFeedNote(note);
+    } else if (choice == 'delete') {
+      _deleteFeedNote(note);
     }
-    return '$count';
   }
 
-  String _formatNoteTime(int ms) {
-    if (ms <= 0) return '';
-    return _timeCache.putIfAbsent(ms, () {
-      final t = DateTime.fromMillisecondsSinceEpoch(ms);
-      _timeCacheNow = DateTime.now();
-      final today = DateTime(_timeCacheNow.year, _timeCacheNow.month, _timeCacheNow.day);
-      final day = DateTime(t.year, t.month, t.day);
-      final diff = today.difference(day).inDays;
-      if (diff == 0) {
-        return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-      }
-      if (diff == 1) return '昨天';
-      if (t.year == _timeCacheNow.year) return '${t.month}月${t.day}日';
-      return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
-    });
+  /// 编辑自己发布的帖子内容。
+  Future<void> _editFeedNote(PlazaNote note) async {
+    final saved = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '编辑帖子',
+        hint: '写下新的内容…',
+        initialText: note.content,
+        maxLength: 2000,
+        minLines: 3,
+        maxLines: 6,
+        confirmText: '保存',
+      ),
+    );
+    if (saved == null || saved.trim().isEmpty || !mounted) return;
+    try {
+      await CloudNotesService.instance
+          .updateSharedNote(cloudId: note.id, content: saved.trim());
+      if (!mounted) return;
+      _showTopToast('已更新');
+      _refreshCurrentSmooth();
+    } catch (e) {
+      if (mounted) _showTopToast(e.toString());
+    }
+  }
+
+  /// 删除自己发布的帖子。
+  Future<void> _deleteFeedNote(PlazaNote note) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除帖子',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteCloudNote(note.id);
+      if (!mounted) return;
+      setState(() => _feedNotes.removeWhere((n) => n.id == note.id));
+      _showTopToast('已删除');
+    } catch (e) {
+      if (mounted) _showTopToast(e.toString());
+    }
   }
 
   Future<void> _toggleCheckIn(String typeKey, String label) async {
@@ -1899,7 +2054,8 @@ class StudyHubPageState extends State<StudyHubPage>
     final List<dynamic> allRecords = jsonDecode(raw);
     final today = _today();
 
-    final idx = allRecords.indexWhere((r) => r['date'] == today && r['type'] == typeKey);
+    final idx = allRecords
+        .indexWhere((r) => r['date'] == today && r['type'] == typeKey);
     if (idx >= 0) {
       allRecords.removeAt(idx);
     } else {
@@ -1917,8 +2073,11 @@ class StudyHubPageState extends State<StudyHubPage>
   double _checkInAmount(String typeKey, SharedPreferences prefs) {
     switch (typeKey) {
       case 'meditation':
-        final list = jsonDecode(prefs.getString('setting_meditation_minutes') ?? '[]') as List<dynamic>;
-        return list.fold<double>(0, (s, e) => s + (double.tryParse(e.toString()) ?? 0));
+        final list =
+            jsonDecode(prefs.getString('setting_meditation_minutes') ?? '[]')
+                as List<dynamic>;
+        return list.fold<double>(
+            0, (s, e) => s + (double.tryParse(e.toString()) ?? 0));
       case 'reading':
         return _sumNamedCount(prefs.getString('setting_reading_titles'));
       case 'mantra':
@@ -1926,10 +2085,15 @@ class StudyHubPageState extends State<StudyHubPage>
       case 'buddha':
         return _sumNamedCount(prefs.getString('setting_buddha_items'));
       case 'copying':
-        final list = jsonDecode(prefs.getString('setting_copying_titles') ?? '[]') as List<dynamic>;
+        final list =
+            jsonDecode(prefs.getString('setting_copying_titles') ?? '[]')
+                as List<dynamic>;
         return list.length.toDouble();
       default:
-        final customs = (jsonDecode(prefs.getString('custom_checkin_types') ?? '[]') as List<dynamic>).cast<Map<String, dynamic>>();
+        final customs =
+            (jsonDecode(prefs.getString('custom_checkin_types') ?? '[]')
+                    as List<dynamic>)
+                .cast<Map<String, dynamic>>();
         for (final c in customs) {
           if (c['key'] == typeKey) {
             return double.tryParse((c['count'] ?? '').toString()) ?? 0;
@@ -1942,9 +2106,9 @@ class StudyHubPageState extends State<StudyHubPage>
   double _sumNamedCount(String? raw) {
     if (raw == null || raw.isEmpty) return 0;
     final list = jsonDecode(raw) as List<dynamic>;
-    return list.fold<double>(0, (s, e) => s + (double.tryParse((e['count'] ?? '').toString()) ?? 0));
+    return list.fold<double>(
+        0, (s, e) => s + (double.tryParse((e['count'] ?? '').toString()) ?? 0));
   }
-
 }
 
 class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
@@ -1971,7 +2135,8 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
   double get maxExtent => _height;
 
   @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
@@ -1992,7 +2157,8 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
                 padding: EdgeInsets.zero,
                 constraints:
                     const BoxConstraints.tightFor(width: 40, height: 40),
-                icon: const Icon(Icons.menu, color: Color(0xFF8B6B5A), size: 20),
+                icon:
+                    const Icon(Icons.menu, color: Color(0xFF8B6B5A), size: 20),
               ),
             ],
           ),
@@ -2048,21 +2214,29 @@ class _CheckInButton extends StatefulWidget {
   final bool checked;
   final VoidCallback onTap;
 
-  const _CheckInButton({this.icon, this.emoji, required this.label, required this.checked, required this.onTap});
+  const _CheckInButton(
+      {this.icon,
+      this.emoji,
+      required this.label,
+      required this.checked,
+      required this.onTap});
 
   @override
   State<_CheckInButton> createState() => _CheckInButtonState();
 }
 
-class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProviderStateMixin {
+class _CheckInButtonState extends State<_CheckInButton>
+    with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double> _scale;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 150));
-    _scale = Tween<double>(begin: 1.0, end: 0.92).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 150));
+    _scale = Tween<double>(begin: 1.0, end: 0.92)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
 
   @override
@@ -2076,6 +2250,7 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
     _ctrl.reverse();
     widget.onTap();
   }
+
   void _onTapCancel() => _ctrl.reverse();
 
   @override
@@ -2087,7 +2262,8 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
       onTapCancel: _onTapCancel,
       child: AnimatedBuilder(
         animation: _scale,
-        builder: (context, child) => Transform.scale(scale: _scale.value, child: child),
+        builder: (context, child) =>
+            Transform.scale(scale: _scale.value, child: child),
         child: Container(
           width: 60,
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -2099,15 +2275,18 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (widget.icon != null)
-                Icon(widget.icon, size: 22, color: checked ? _primary : const Color(0xFF71867A))
+                Icon(widget.icon,
+                    size: 22,
+                    color: checked ? _primary : const Color(0xFF71867A))
               else
                 Text(widget.emoji ?? '', style: TextStyle(fontSize: 20)),
               const SizedBox(height: 4),
-              Text(widget.label, style: TextStyle(
-                fontSize: 12,
-                color: checked ? _primary : _textSec,
-                fontWeight: checked ? FontWeight.w600 : FontWeight.w400,
-              )),
+              Text(widget.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: checked ? _primary : _textSec,
+                    fontWeight: checked ? FontWeight.w600 : FontWeight.w400,
+                  )),
             ],
           ),
         ),
@@ -2115,4 +2294,3 @@ class _CheckInButtonState extends State<_CheckInButton> with SingleTickerProvide
     );
   }
 }
-

@@ -18,6 +18,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
   bool _loadingMore = false;
   bool _hasMore = true;
   int _page = 0;
+  String _status = 'new';
 
   @override
   void initState() {
@@ -28,7 +29,8 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
   Future<void> _reload() async {
     setState(() => _loading = true);
     try {
-      final res = await CloudNotesService.instance.getFeedbacks(page: 1);
+      final res = await CloudNotesService.instance
+          .getFeedbacks(page: 1, status: _status);
       if (!mounted) return;
       setState(() {
         _items
@@ -50,8 +52,8 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
     if (_loadingMore || !_hasMore) return;
     setState(() => _loadingMore = true);
     try {
-      final res =
-          await CloudNotesService.instance.getFeedbacks(page: _page + 1);
+      final res = await CloudNotesService.instance
+          .getFeedbacks(page: _page + 1, status: _status);
       if (!mounted) return;
       setState(() {
         _items.addAll(res.items);
@@ -65,6 +67,12 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
       setState(() => _loadingMore = false);
       _showToast(e.toString());
     }
+  }
+
+  void _switchStatus(String status) {
+    if (_status == status) return;
+    setState(() => _status = status);
+    _reload();
   }
 
   void _showToast(String msg) {
@@ -92,7 +100,57 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
   Widget build(BuildContext context) {
     return SettingsPageScaffold(
       title: '反馈管理',
-      child: _buildBody(),
+      child: Column(
+        children: [
+          _buildTabBar(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Row(
+        children: [
+          Expanded(child: _buildTab('new', '待处理')),
+          Expanded(child: _buildTab('handled', '已处理')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTab(String status, String label) {
+    final selected = _status == status;
+    return GestureDetector(
+      onTap: () => _switchStatus(status),
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                color: selected ? sText : sTextSec,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Container(
+              width: 60,
+              height: 3,
+              decoration: BoxDecoration(
+                color: selected ? sGold : Colors.transparent,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -114,11 +172,12 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
                   Icon(Icons.forum_outlined,
                       size: 48, color: sTextHint.withValues(alpha: 0.6)),
                   const SizedBox(height: 14),
-                  const Text('暂无反馈',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: sText)),
+                  Text(
+                    _status == 'handled' ? '暂无已处理反馈' : '暂无待处理反馈',
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: sText)),
                   const SizedBox(height: 6),
                   const Text('用户提交的反馈会显示在这里',
                       style: TextStyle(fontSize: 13, color: sTextSec)),
@@ -157,7 +216,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
                           fontSize: 13,
                           color: sTextSec,
                           fontWeight: FontWeight.w600)),
-                  if (_unread > 0) ...[
+                  if (_status == 'new' && _unread > 0) ...[
                     const Text('  ·  ',
                         style: TextStyle(fontSize: 13, color: sTextSec)),
                     Text('$_unread 条待处理',

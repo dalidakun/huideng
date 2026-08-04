@@ -136,6 +136,7 @@ exports.main = async (event, context) => {
   const userAccounts = db.collection("userAccounts");
   const feedbacks = db.collection("feedbacks");
   const admins = db.collection("admins");
+  const announcements = db.collection("announcements");
   const verifications = db.collection("userVerifications");
 
   // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
@@ -160,6 +161,15 @@ exports.main = async (event, context) => {
   async function ensureFeedbacks() {
     try {
       await db.createCollection("feedbacks");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 确保 announcements 集合存在。
+  async function ensureAnnouncements() {
+    try {
+      await db.createCollection("announcements");
     } catch (e) {
       // 已存在或其它错误均忽略。
     }
@@ -1160,18 +1170,24 @@ exports.main = async (event, context) => {
         return ok({ isAdmin: await isAdminUser(uid) });
       }
 
-      // 管理员拉取反馈列表（分页，新反馈优先）。
+      // 管理员拉取反馈列表（分页，新反馈优先）。status 可选：new | handled，缺省返回全部。
       case "getFeedbacks": {
         await ensureFeedbacks();
         if (!(await isAdminUser(uid))) return fail("forbidden");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
-        const base = feedbacks.orderBy("createdAt", "desc");
+        const status = String(event.status || "").trim();
+        const validStatus = status === "new" || status === "handled";
+        const base = validStatus
+          ? feedbacks.where({ status }).orderBy("createdAt", "desc")
+          : feedbacks.orderBy("createdAt", "desc");
         const res = await base
           .skip((page - 1) * pageSize)
           .limit(pageSize)
           .get();
-        const { total } = await feedbacks.count();
+        const total = validStatus
+          ? (await feedbacks.where({ status }).count()).total
+          : (await feedbacks.count()).total;
         const { total: unread } = await feedbacks
           .where({ status: "new" })
           .count();
@@ -1192,6 +1208,45 @@ exports.main = async (event, context) => {
         const patch = { status };
         if (status === "handled") patch.handledAt = now();
         await feedbacks.doc(id).update(patch);
+        return ok({});
+      }
+
+      // ==================== 公告 ====================
+
+      // 拉取公告列表（所有用户可读，主页公告栏展示，最新在前）。
+      case "getAnnouncements": {
+        await ensureAnnouncements();
+        const res = await announcements
+          .orderBy("createdAt", "desc")
+          .limit(100)
+          .get();
+        return ok({ announcements: res.data });
+      }
+
+      // 管理员发布公告。
+      case "addAnnouncement": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        await ensureAnnouncements();
+        const title = String(event.title || "").trim().slice(0, 60);
+        const content = String(event.content || "").trim().slice(0, 2000);
+        if (!title) return fail("empty_title");
+        if (!content) return fail("empty_content");
+        await announcements.add({
+          title,
+          content,
+          createdBy: uid,
+          createdAt: now(),
+        });
+        return ok({});
+      }
+
+      // 管理员删除公告。
+      case "deleteAnnouncement": {
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        await ensureAnnouncements();
+        const id = String(event.id || "").trim();
+        if (!id) return fail("bad_request");
+        await announcements.doc(id).remove();
         return ok({});
       }
 
