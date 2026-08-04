@@ -15,6 +15,7 @@ import 'app_state.dart';
 import 'auth_service.dart';
 import 'sync_service.dart';
 import 'notification_service.dart';
+import 'notification_center.dart';
 import 'update_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -217,11 +218,13 @@ class _MainPageState extends State<MainPage>
         onOpenAssistant: _openAssistantPage,
       ),
       _AssistantTabPage(discussionKey: _assistantKey),
-      const MessagePage(),
+      MessagePage(onOpenMyPage: _openMyPage, activeTab: _tabIndex),
       MyPage(key: _myKey),
     ];
     WidgetsBinding.instance.addObserver(this);
     SyncService.instance.dataVersion.addListener(_onCloudDataChanged);
+    // 消息中心未读数轮询（底部「通知」角标实时同步服务器）。
+    NotificationCenter.instance.start();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
     });
@@ -230,6 +233,7 @@ class _MainPageState extends State<MainPage>
   @override
   void dispose() {
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
+    NotificationCenter.instance.stop();
     WidgetsBinding.instance.removeObserver(this);
     _navCtrl.dispose();
     super.dispose();
@@ -268,6 +272,8 @@ class _MainPageState extends State<MainPage>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       _checkForResult();
+      // 回到前台立即同步未读数，角标保持实时。
+      NotificationCenter.instance.refreshUnread();
     }
   }
 
@@ -288,8 +294,8 @@ class _MainPageState extends State<MainPage>
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/chat.png', width: 23, height: 23),
-      activeIcon: Image.asset('assets/images/chat_selected.png', width: 23, height: 23),
+      icon: const _NotificationTabIcon(active: false),
+      activeIcon: const _NotificationTabIcon(active: true),
       label: '',
     ),
   ];
@@ -542,6 +548,144 @@ class _BottomNavBar extends StatelessWidget {
                 }),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 底部「通知」标签图标：右上角显示未读角标（Badge）。
+/// - 圆形（1~9）/ 胶囊形（>9），背景 #70867A，白字，圆角 999，超出图标边界。
+/// - 收到新通知时 Scale 0→1.15→1 弹性动画，数字平滑递增；
+///   全部已读后淡出并缩小消失。
+class _NotificationTabIcon extends StatefulWidget {
+  final bool active;
+  const _NotificationTabIcon({required this.active});
+
+  @override
+  State<_NotificationTabIcon> createState() => _NotificationTabIconState();
+}
+
+class _NotificationTabIconState extends State<_NotificationTabIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pop = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+  int _prev = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    NotificationCenter.instance.unread.addListener(_onUnread);
+    _prev = NotificationCenter.instance.unread.value;
+  }
+
+  @override
+  void dispose() {
+    NotificationCenter.instance.unread.removeListener(_onUnread);
+    _pop.dispose();
+    super.dispose();
+  }
+
+  void _onUnread() {
+    final n = NotificationCenter.instance.unread.value;
+    if (n > 0 && n != _prev) {
+      _pop.forward(from: 0);
+    }
+    _prev = n;
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = NotificationCenter.instance.unread.value;
+    final visible = count > 0;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Image.asset(
+          widget.active
+              ? 'assets/images/chat_selected.png'
+              : 'assets/images/chat.png',
+          width: 23,
+          height: 23,
+        ),
+        Positioned(
+          top: -6,
+          right: -11,
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: visible ? 1 : 0,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              child: AnimatedScale(
+                scale: visible ? 1 : 0.5,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                child: AnimatedBuilder(
+                  animation: _pop,
+                  builder: (context, child) {
+                    final t = _pop.value;
+                    double s = 1;
+                    if (t > 0 && t < 0.6) {
+                      s = (t / 0.6) * 1.15;
+                    } else if (t >= 0.6) {
+                      s = 1.15 - ((t - 0.6) / 0.4) * 0.15;
+                    }
+                    return Transform.scale(scale: s, child: child);
+                  },
+                  child: count > 0
+                      ? _NotificationBadgePill(count: count)
+                      : const SizedBox(width: 16, height: 16),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Badge 本体：圆形（1~9）或胶囊形（>9），数字 >99 显示「99+」。
+class _NotificationBadgePill extends StatelessWidget {
+  final int count;
+  const _NotificationBadgePill({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = count > 99 ? '99+' : '$count';
+    final capsule = count > 9;
+    return Container(
+      height: 16,
+      constraints: BoxConstraints(minWidth: 16),
+      padding: EdgeInsets.symmetric(horizontal: capsule ? 5 : 0),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: const Color(0xFF70867A),
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 160),
+        transitionBuilder: (child, anim) =>
+            FadeTransition(opacity: anim, child: child),
+        child: Text(
+          text,
+          key: ValueKey(text),
+          style: const TextStyle(
+            color: Color(0xFFFFFFFF),
+            fontSize: 10.5,
+            fontWeight: FontWeight.w600,
+            height: 1.2,
           ),
         ),
       ),

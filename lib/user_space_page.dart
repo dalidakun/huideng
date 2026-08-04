@@ -19,6 +19,9 @@ const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 
+/// 昵称行操作按钮（关注按钮/三个点点圆圈）统一尺寸。
+const double _rowBtnSize = 26;
+
 /// 某位用户的菩提空间：展示对方公开发布的所有笔记（含转发），点击可查看评论/点赞等。
 class UserSpacePage extends StatefulWidget {
   final String userId;
@@ -69,7 +72,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
   /// 屏蔽/取消屏蔽对方：屏蔽后对方的帖子不再出现在修学主页菩提空间的推荐/最新等栏目。
   Future<void> _showBlockSheet() async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || me.id == widget.userId) return;
+    if (me == null) return;
+    if (me.id == widget.userId) {
+      _showToast(context, '这是你自己的主页');
+      return;
+    }
     final blocked =
         CloudNotesService.instance.blockedUserIds.contains(widget.userId);
     final account = _account;
@@ -240,19 +247,22 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) => [
-          SliverToBoxAdapter(child: _buildHeader()),
-          // 帖子/回复 tab 吸顶：滚动时横幅/头像上移，tab 钉在顶部。
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _UserTabsDelegate(
-              tab: _tab,
-              onChanged: (i) => setState(() => _tab = i),
+      body: SafeArea(
+        top: true,
+        child: NestedScrollView(
+          headerSliverBuilder: (context, innerBoxIsScrolled) => [
+            SliverToBoxAdapter(child: _buildHeader()),
+            // 帖子/回复 tab 吸顶：滚动时横幅/头像上移，tab 钉在顶部。
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _UserTabsDelegate(
+                tab: _tab,
+                onChanged: (i) => setState(() => _tab = i),
+              ),
             ),
-          ),
-        ],
-        body: _buildBody(),
+          ],
+          body: _buildBody(),
+        ),
       ),
     );
   }
@@ -267,7 +277,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          height: 226,
+          height: 200,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -276,10 +286,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 left: 0,
                 right: 0,
                 top: 0,
-                height: 160,
+                height: 150,
                 child: Container(
                   width: double.infinity,
-                  height: 160,
+                  height: 150,
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
@@ -301,62 +311,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   ),
                 ),
               ),
-              // 屏蔽三点 + 关注按钮（横幅下缘右侧，他人主页才有关注）。
-              Positioned(
-                right: 16,
-                top: 168,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _showBlockSheet,
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.3),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.06),
-                              blurRadius: 4,
-                              offset: const Offset(0, 1),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.more_horiz,
-                            size: 18, color: _text),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    if (!isSelf)
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _toggleFollow,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 7),
-                          decoration: BoxDecoration(
-                            color: following
-                                ? const Color(0xFFBDB6AC)
-                                : const Color(0xFF70867A),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Text(following ? '已关注' : '关注',
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
               // 大头像（重叠在横幅下缘）。
               Positioned(
                 left: 20,
-                top: 122,
+                top: 106,
                 child: Container(
                   width: 76,
                   height: 76,
@@ -389,19 +347,67 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Flexible(
-                      child: Text(widget.userName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: _text)),
+                    // 昵称 + 认证（左侧）。
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Flexible(
+                            child: Text(widget.userName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    color: _text)),
+                          ),
+                          if (_verified) ...[
+                            const SizedBox(width: 4),
+                            const Icon(Icons.verified,
+                                size: 17, color: Color(0xFF70867A)),
+                          ],
+                        ],
+                      ),
                     ),
-                    if (_verified) ...[
-                      const SizedBox(width: 4),
-                      const Icon(Icons.verified,
-                          size: 17, color: Color(0xFF70867A)),
+                    // 三个点点：中性灰圆圈包裹，直径与关注按钮高度一致（屏蔽菜单）。
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _showBlockSheet,
+                      child: Container(
+                        width: _rowBtnSize,
+                        height: _rowBtnSize,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFECE9E4),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(Icons.more_horiz,
+                            size: 18, color: Color(0xFF8C8C8C)),
+                      ),
+                    ),
+                    // 关注按钮：与三个点点同一行，位于其右侧（他人主页才显示）。
+                    if (!isSelf) ...[
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _toggleFollow,
+                        child: Container(
+                          height: _rowBtnSize,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: following
+                                ? const Color(0xFFBDB6AC)
+                                : const Color(0xFF70867A),
+                            borderRadius: BorderRadius.circular(_rowBtnSize / 2),
+                          ),
+                          child: Text(following ? '已关注' : '关注',
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -410,13 +416,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   Text('@$_account',
                       style: const TextStyle(fontSize: 13, color: _textHint)),
                 ],
-                // 签名与加入时间（服务端返回则展示，让其他用户可见该用户信息）。
-                if (_profileTagline.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(_profileTagline,
-                      style: const TextStyle(
-                          fontSize: 14, color: _textSec, height: 1.4)),
-                ],
+                // 签名：未设置时默认展示固定法语（用户可自行修改）。
+                const SizedBox(height: 6),
+                Text(
+                  _displayTagline,
+                  style: const TextStyle(
+                      fontSize: 14, color: _textSec, height: 1.4),
+                ),
+                // 注册加入时间。
                 if (_profileJoinTime > 0) ...[
                   const SizedBox(height: 4),
                   Text('${_joinDateText(_profileJoinTime)}加入',
@@ -726,6 +733,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
+  /// 展示的签名：未设置签名时，他人主页默认显示固定法语。
+  String get _displayTagline {
+    if (_profileTagline.isNotEmpty) return _profileTagline;
+    return '安忍不动，犹如大地；静虑深密，犹如密藏。';
+  }
+
   void _openNote(PlazaNote note) {
     Navigator.push(
       context,
@@ -740,7 +753,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
 class _UserTabsDelegate extends SliverPersistentHeaderDelegate {
   final int tab;
   final ValueChanged<int> onChanged;
-  static const double _height = 46;
+  static const double _height = 48;
   const _UserTabsDelegate({required this.tab, required this.onChanged});
 
   @override
@@ -754,43 +767,46 @@ class _UserTabsDelegate extends SliverPersistentHeaderDelegate {
       BuildContext context, double shrinkOffset, bool overlapsContent) {
     return ColoredBox(
       color: _bg,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Row(
-          children: [
-            for (final (i, label) in const [(0, '帖子'), (1, '回复')])
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => onChanged(i),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Column(
-                      children: [
-                        Text(
-                          label,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight:
-                                tab == i ? FontWeight.w600 : FontWeight.w400,
-                            color: tab == i ? _text : _textSec,
+      child: SizedBox(
+        height: _height,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              for (final (i, label) in const [(0, '帖子'), (1, '回复')])
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onChanged(i),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      child: Column(
+                        children: [
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight:
+                                  tab == i ? FontWeight.w600 : FontWeight.w400,
+                              color: tab == i ? _text : _textSec,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 3),
-                        Container(
-                          width: 36,
-                          height: 3,
-                          decoration: BoxDecoration(
-                            color: tab == i ? _gold : Colors.transparent,
-                            borderRadius: BorderRadius.circular(2),
+                          const SizedBox(height: 3),
+                          Container(
+                            width: 36,
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: tab == i ? _gold : Colors.transparent,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

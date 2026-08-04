@@ -1,0 +1,224 @@
+import 'package:flutter/material.dart';
+import 'sutra_list_page.dart';
+
+const Color _gold = Color(0xFFD4A06A);
+const Color _bg = Color(0xFFF5EDE3);
+const Color _card = Color(0xFFFFFAF5);
+const Color _text = Color(0xFF3E2723);
+const Color _textSec = Color(0xFF8B6B5A);
+const Color _textHint = Color(0xFFC4B5A8);
+
+/// 最近阅读页：展示最近读过的经书，点击进入阅读，长按可收藏/置顶等。
+class RecentSutrasPage extends StatefulWidget {
+  const RecentSutrasPage({super.key, this.parent});
+
+  /// 经藏页状态引用：长按菜单、置顶/收藏/完成阅读等操作都复用经藏页逻辑。
+  final SutraListPageState? parent;
+
+  @override
+  State<RecentSutrasPage> createState() => _RecentSutrasPageState();
+}
+
+class _RecentSutrasPageState extends State<RecentSutrasPage>
+    with RouteAware {
+  List<Map<String, String>> _recent = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.parent?.sutraDataVersion.addListener(_onParentChanged);
+    _loadRecent();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  @override
+  void dispose() {
+    widget.parent?.sutraDataVersion.removeListener(_onParentChanged);
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// 从阅读页返回时刷新最近阅读记录。
+  @override
+  void didPopNext() {
+    _refresh();
+  }
+
+  void _onParentChanged() {
+    if (mounted) _loadRecent();
+  }
+
+  Future<void> _refresh() async {
+    await widget.parent?.reloadRecentSutras();
+    if (mounted) _loadRecent();
+  }
+
+  Future<void> _loadRecent() async {
+    final parent = widget.parent;
+    if (parent == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      final raw = parent.getRecentSutras();
+      // 置顶的经书排在最上面，其余保持最近阅读顺序。
+      final pinned = raw
+          .where((e) => parent.findSutra(e['title'] ?? '')?.isPinned == true)
+          .toList();
+      final rest = raw
+          .where((e) => parent.findSutra(e['title'] ?? '')?.isPinned != true)
+          .toList();
+      _recent = [...pinned, ...rest];
+      _loading = false;
+    });
+  }
+
+  String _displayTitle(String title) =>
+      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: Column(
+        children: [
+          _buildHeader(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    return _loading
+        ? const Center(child: CircularProgressIndicator(color: _gold))
+        : _recent.isEmpty
+            ? _buildEmpty()
+            : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
+                itemCount: _recent.length,
+                itemBuilder: (context, index) =>
+                    _buildSutraTile(_recent[index]),
+              );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 10, 20, 18),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+              ),
+              const SizedBox(width: 4),
+              const Text('最近阅读', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+              const Spacer(),
+              Text('${_recent.length} 部', style: const TextStyle(fontSize: 13, color: _textSec)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmpty() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: [
+          Icon(Icons.history_rounded, size: 48, color: _textHint.withValues(alpha: 0.6)),
+          const SizedBox(height: 14),
+          const Text('暂无阅读记录', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          const SizedBox(height: 6),
+          const Text('读过的经书会出现在这里，方便你随时回顾', style: TextStyle(fontSize: 13, color: _textSec)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSutraTile(Map<String, String> entry) {
+    final title = entry['title'] ?? '';
+    final sutra = widget.parent?.findSutra(title);
+    final isRead = sutra?.isRead == true;
+    final isPinned = sutra?.isPinned == true;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => widget.parent?.openRecentSutra(title, entry['filePath']),
+          onLongPress: () {
+            final parent = widget.parent;
+            if (parent == null || sutra == null) return;
+            parent.showSutraMenu(context, sutra, showPin: true);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(color: _gold.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.history_rounded, size: 18, color: _gold),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _displayTitle(title),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: isRead ? _textSec : _text,
+                      fontWeight: isRead ? FontWeight.w400 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (isRead) ...[
+                  const Icon(Icons.check_circle, color: Color(0xFF8FBC8F), size: 18),
+                  const SizedBox(width: 6),
+                ],
+                if (isPinned) ...[
+                  const Icon(Icons.push_pin, color: _gold, size: 16),
+                  const SizedBox(width: 6),
+                ],
+                const Icon(Icons.chevron_right, color: _textHint, size: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

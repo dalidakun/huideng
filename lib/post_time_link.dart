@@ -36,7 +36,7 @@ class _PostTimeLinkState extends State<PostTimeLink> {
   }
 }
 
-/// @账户名链接：默认中性灰（与时间戳同色），按下时变为 70867A，点击进入用户主页。
+/// @账户名链接：以青色显示，提示用户可点击；点击进入用户主页。
 class AccountLink extends StatefulWidget {
   final String account;
   final VoidCallback? onTap;
@@ -63,7 +63,9 @@ class _AccountLinkState extends State<AccountLink> {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 12,
-          color: _pressed ? const Color(0xFF70867A) : const Color(0xFF8C8C8C),
+          color: _pressed
+              ? const Color(0xFF4C6E60)
+              : const Color(0xFF70867A),
         ),
       ),
     );

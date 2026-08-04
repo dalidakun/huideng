@@ -251,13 +251,14 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                                     ? DecorationImage(
                                         image: FileImage(File(_avatarPath!)),
                                         fit: BoxFit.cover)
-                                    : null,
+                                    : const DecorationImage(
+                                        image: AssetImage(
+                                            'assets/images/app_icon.png'),
+                                        fit: BoxFit.cover),
                               ),
                               child: Stack(
                                 alignment: Alignment.center,
                                 children: [
-                                  if (_avatarPath == null)
-                                    const Icon(Icons.person, size: 38, color: sTextHint),
                                   Container(
                                     width: 22,
                                     height: 22,

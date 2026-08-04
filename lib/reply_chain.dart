@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
+import 'note_stats_center.dart';
 import 'note_sutra_links.dart';
 import 'post_time_link.dart';
 import 'user_avatar.dart';
@@ -228,33 +229,41 @@ class ReplyChain extends StatelessWidget {
   }
 
   Widget _metrics(PlazaNote note) {
-    final liked = CloudNotesService.instance.likedNoteIds.contains(note.id);
-    return Row(
-      children: [
-        _cell(
-          Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
-          '${note.commentCount}',
-          onTap: onComment == null ? null : () => onComment!(note),
-        ),
-        const SizedBox(width: 48),
-        _cell(
-          Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-          '${note.repostCount}',
-          onTap: onRepost == null ? null : () => onRepost!(note),
-        ),
-        const SizedBox(width: 48),
-        _cell(
-          Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-              size: 16, color: liked ? _gold : _textSec),
-          '${note.likeCount}',
-          onTap: onLike == null ? null : () => onLike!(note),
-        ),
-        const SizedBox(width: 48),
-        Image.asset('assets/images/ic_view.png', width: 16, height: 16),
-        const SizedBox(width: 3),
-        Text('${note.viewCount}',
-            style: const TextStyle(fontSize: 13, color: _textSec)),
-      ],
+    // 实时监听指标广播，详情页操作后数字立即刷新。
+    return ListenableBuilder(
+      listenable: NoteStatsCenter.instance,
+      builder: (context, _) {
+        final n = NoteStatsCenter.instance.latest(note.id) ?? note;
+        final liked = CloudNotesService.instance.likedNoteIds.contains(n.id);
+        return Row(
+          children: [
+            _cell(
+              Image.asset('assets/images/ic_comment.png',
+                  width: 16, height: 16),
+              '${n.commentCount}',
+              onTap: onComment == null ? null : () => onComment!(note),
+            ),
+            const SizedBox(width: 48),
+            _cell(
+              Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+              '${n.repostCount}',
+              onTap: onRepost == null ? null : () => onRepost!(note),
+            ),
+            const SizedBox(width: 48),
+            _cell(
+              Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  size: 16, color: liked ? _gold : _textSec),
+              '${n.likeCount}',
+              onTap: onLike == null ? null : () => onLike!(note),
+            ),
+            const SizedBox(width: 48),
+            Image.asset('assets/images/ic_view.png', width: 16, height: 16),
+            const SizedBox(width: 3),
+            Text('${n.viewCount}',
+                style: const TextStyle(fontSize: 13, color: _textSec)),
+          ],
+        );
+      },
     );
   }
 

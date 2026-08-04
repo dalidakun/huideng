@@ -136,7 +136,6 @@ exports.main = async (event, context) => {
   const userAccounts = db.collection("userAccounts");
   const feedbacks = db.collection("feedbacks");
   const admins = db.collection("admins");
-  const announcements = db.collection("announcements");
   const verifications = db.collection("userVerifications");
 
   // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
@@ -161,15 +160,6 @@ exports.main = async (event, context) => {
   async function ensureFeedbacks() {
     try {
       await db.createCollection("feedbacks");
-    } catch (e) {
-      // 已存在或其它错误均忽略。
-    }
-  }
-
-  // 确保 announcements 集合存在。
-  async function ensureAnnouncements() {
-    try {
-      await db.createCollection("announcements");
     } catch (e) {
       // 已存在或其它错误均忽略。
     }
@@ -216,6 +206,35 @@ exports.main = async (event, context) => {
   }
 
   const _ = db.command;
+
+  // 消息中心「收到的互动」类型：点赞/评论/回复评论/转发/收藏/关注/@提及。
+  const receivedTypes = [
+    "like_me",
+    "reply",
+    "comment_reply",
+    "repost_me",
+    "favorite_me",
+    "follow_me",
+    "mention",
+  ];
+
+  // 截取文本前 N 个字符作为帖子摘要（通知列表展示用）。
+  function previewText(raw, max = 80) {
+    const s = String(raw || "").replace(/\s+/g, " ").trim();
+    return s.length > max ? s.slice(0, max) + "…" : s;
+  }
+
+  // 从评论/正文中解析 @账号 提及（账号规则与 normalizeUsername 一致）。
+  function extractMentions(raw) {
+    const text = String(raw || "");
+    const re = /@([\u4e00-\u9fa5a-zA-Z0-9_]{2,20})/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      out.push(m[1]);
+    }
+    return out;
+  }
 
   // 给笔记列表附加作者账号名（authorAccount），供客户端展示 @账号。
   async function attachAuthorAccounts(noteList) {
@@ -370,7 +389,11 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 50, 100);
-        const base = notes.where({ ownerUserId: uid });
+        // 排除公告（kind: announcement），公告只在公告栏展示。
+        const base = notes.where({
+          ownerUserId: uid,
+          kind: _.neq("announcement"),
+        });
         const res = await base
           .orderBy("updatedAt", "desc")
           .skip((page - 1) * pageSize)
@@ -397,6 +420,7 @@ exports.main = async (event, context) => {
           ownerUserId: userId,
           visibility: "public",
           status: "normal",
+          kind: _.neq("announcement"),
         });
         const res = await base
           .orderBy("createdAt", "desc")
@@ -418,7 +442,11 @@ exports.main = async (event, context) => {
         const pageSize = Math.min(Number(event.pageSize) || 20, 100);
         const sort = event.sort === "hot" ? "hot" : "latest";
         const base = notes
-          .where({ visibility: "public", status: "normal" });
+          .where({
+            visibility: "public",
+            status: "normal",
+            kind: _.neq("announcement"),
+          });
 
         // 屏蔽的用户内容从广场隐藏
         let blocked = [];
@@ -580,6 +608,7 @@ exports.main = async (event, context) => {
             noteTitle: newTitle,
             sourceTitle: String(src.title || "无标题").slice(0, 100),
             content: quote,
+            contentPreview: previewText(src.content),
             actorId: uid,
             actorName: reposterName,
             viewed: false,
@@ -603,12 +632,35 @@ exports.main = async (event, context) => {
       case "toggleNoteFavorite": {
         if (!uid) return fail("unauthorized");
         const noteId = String(event.noteId || "");
+        const { data } = await notes.doc(noteId).get();
+        const note = data && data[0];
+        if (!note) return fail("not_found");
         const existing = await favorites.where({ noteId, userId: uid }).get();
         if (existing.data.length > 0) {
           await favorites.doc(existing.data[0]._id).remove();
+          const fActs = await activities
+            .where({ userId: note.ownerUserId, type: "favorite_me", noteId, actorId: uid })
+            .limit(100)
+            .get();
+          for (const a of fActs.data || []) {
+            await activities.doc(a._id).remove();
+          }
           return ok({ favorited: false });
         }
         await favorites.add({ noteId, userId: uid, createdAt: now() });
+        if (note.ownerUserId && note.ownerUserId !== uid) {
+          await activities.add({
+            userId: note.ownerUserId,
+            type: "favorite_me",
+            noteId,
+            noteTitle: String(note.title || "无标题").slice(0, 100),
+            contentPreview: previewText(note.content),
+            actorId: uid,
+            actorName: String(event.authorName || "同修").slice(0, 30),
+            viewed: false,
+            createdAt: now(),
+          });
+        }
         return ok({ favorited: true });
       }
 
@@ -655,7 +707,7 @@ exports.main = async (event, context) => {
         return ok({ ids: res.data.map((r) => r.followerId) });
       }
 
-      // 批量获取用户展示信息（昵称）。名字取该用户最新一篇公开笔记的署名。
+      // 批量获取用户展示信息（昵称/签名/加入时间）。名字取该用户最新一篇公开笔记的署名。
       case "getUserProfiles": {
         const ids = (Array.isArray(event.ids) ? event.ids.map(String) : [])
           .filter(Boolean)
@@ -667,6 +719,37 @@ exports.main = async (event, context) => {
               .where({ uid: _.in(ids) })
               .get();
             for (const v of data || []) verified[v.uid] = true;
+          } catch (e) {}
+        }
+        // 账号名称：userAccounts 中登记的 username。
+        const accounts = {};
+        if (ids.length > 0) {
+          try {
+            await ensureUserAccounts();
+            for (let i = 0; i < ids.length; i += 100) {
+              const { data } = await userAccounts
+                .where({ uid: _.in(ids.slice(i, i + 100)) })
+                .get();
+              for (const a of data || []) accounts[a.uid] = a.username || "";
+            }
+          } catch (e) {}
+        }
+        // 签名/加入时间：从 userData.payload.prefs 取（由 SyncService 定期推送）。
+        const profiles = {};
+        if (ids.length > 0) {
+          try {
+            const { data: ud } = await userData
+              .where({ uid: _.in(ids) })
+              .limit(1000)
+              .get();
+            for (const row of ud || []) {
+              const prefs = row && row.payload && row.payload.prefs;
+              if (!prefs) continue;
+              profiles[row.uid] = {
+                tagline: String(prefs.user_tagline || "").slice(0, 60),
+                joinTime: Number(prefs.user_created_at) || 0,
+              };
+            }
           } catch (e) {}
         }
         const users = [];
@@ -681,7 +764,36 @@ exports.main = async (event, context) => {
             const n = ndata && ndata[0];
             if (n && n.authorName) name = String(n.authorName);
           } catch (e) {}
-          users.push({ id, name, verified: !!verified[id] });
+          const p = profiles[id] || {};
+          users.push({
+            id,
+            name,
+            account: accounts[id] || "",
+            verified: !!verified[id],
+            tagline: p.tagline || "",
+            joinTime: p.joinTime || 0,
+          });
+        }
+        return ok({ users });
+      }
+
+      // 搜索用户账号：按账号前缀/包含匹配 userAccounts，返回匹配用户的账号与 uid。
+      case "searchUsers": {
+        const q = String(event.query || "").trim().toLowerCase();
+        if (!q) return ok({ users: [] });
+        await ensureUserAccounts();
+        const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const { data } = await userAccounts
+          .where({
+            usernameKey: db.RegExp({ regexp: `^${esc}`, options: "i" }),
+          })
+          .limit(30)
+          .get();
+        const users = [];
+        for (const a of data || []) {
+          const uname = String(a.username || "");
+          if (!uname) continue;
+          users.push({ id: a.uid || "", account: uname, username: uname });
         }
         return ok({ users });
       }
@@ -695,11 +807,29 @@ exports.main = async (event, context) => {
           .get();
         if (existing.data.length > 0) {
           await follows.doc(existing.data[0]._id).remove();
+          const fActs = await activities
+            .where({ userId: target, type: "follow_me", actorId: uid })
+            .limit(100)
+            .get();
+          for (const a of fActs.data || []) {
+            await activities.doc(a._id).remove();
+          }
           return ok({ following: false });
         }
         await follows.add({
           followerId: uid,
           followeeId: target,
+          createdAt: now(),
+        });
+        await activities.add({
+          userId: target,
+          type: "follow_me",
+          noteId: "",
+          noteTitle: "",
+          contentPreview: "",
+          actorId: uid,
+          actorName: String(event.authorName || "同修").slice(0, 30),
+          viewed: false,
           createdAt: now(),
         });
         return ok({ following: true });
@@ -795,6 +925,7 @@ exports.main = async (event, context) => {
               noteId,
               noteTitle: String(note.title || "无标题").slice(0, 100),
               content: "",
+              contentPreview: previewText(note.content),
               actorId: uid,
               actorName: String(event.authorName || "同修").slice(0, 30),
               viewed: false,
@@ -847,6 +978,43 @@ exports.main = async (event, context) => {
             noteId,
             noteTitle,
             content,
+            contentPreview: previewText(note.content),
+            commentId: res.id,
+            actorId: uid,
+            actorName,
+            viewed: false,
+            createdAt: now(),
+          });
+        }
+        // @提及：评论中 @其他同修时给对方发通知。
+        // 若该同修已在同帖评论过，则视为「回复我的评论」；否则为「@提及我」。
+        const mentioned = extractMentions(content);
+        for (const uname of mentioned) {
+          let acc = null;
+          try {
+            const { data: ua } = await userAccounts
+              .where({ usernameKey: uname.toLowerCase() })
+              .limit(1)
+              .get();
+            acc = ua && ua[0];
+          } catch (e) {}
+          if (!acc || !acc.uid || acc.uid === uid) continue;
+          if (acc.uid === note.ownerUserId) continue; // 帖子作者已有 reply 通知
+          let type = "mention";
+          try {
+            const cBefore = await comments
+              .where({ noteId, authorId: acc.uid })
+              .limit(1)
+              .get();
+            if (cBefore.data.length > 0) type = "comment_reply";
+          } catch (e) {}
+          await activities.add({
+            userId: acc.uid,
+            type,
+            noteId,
+            noteTitle,
+            content,
+            contentPreview: previewText(note.content),
             commentId: res.id,
             actorId: uid,
             actorName,
@@ -889,23 +1057,19 @@ exports.main = async (event, context) => {
 
       case "getMyCounts": {
         if (!uid) return ok({ following: 0, followers: 0, unread: 0 });
-        const [f, fl, r1, r2, r3] = await Promise.all([
+        const [f, fl, ...unreadCounts] = await Promise.all([
           follows.where({ followerId: uid }).limit(1000).get(),
           follows.where({ followeeId: uid }).limit(1000).get(),
-          activities
-            .where({ userId: uid, type: "reply", viewed: false })
-            .count(),
-          activities
-            .where({ userId: uid, type: "repost_me", viewed: false })
-            .count(),
-          activities
-            .where({ userId: uid, type: "like_me", viewed: false })
-            .count(),
+          ...receivedTypes.map((t) =>
+            activities
+              .where({ userId: uid, type: t, viewed: false })
+              .count()
+          ),
         ]);
         return ok({
           following: f.data.length,
           followers: fl.data.length,
-          unread: r1.total + r2.total + r3.total,
+          unread: unreadCounts.reduce((s, r) => s + (r.total || 0), 0),
         });
       }
 
@@ -920,6 +1084,78 @@ exports.main = async (event, context) => {
           .limit(pageSize)
           .get();
         return ok({ comments: res.data });
+      }
+
+      // ==================== 消息中心 ====================
+
+      // 拉取「收到的互动」通知列表（分页，最新在前）。不自动标记已读，
+      // 只有用户真正查看对应通知或执行「全部标记已读」后未读数才减少。
+      case "getNotifications": {
+        if (!uid) return fail("unauthorized");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 50);
+        const base = activities.where({
+          userId: uid,
+          type: _.in(receivedTypes),
+        });
+        const res = await base
+          .orderBy("createdAt", "desc")
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        const { total } = await base.count();
+        return ok({
+          activities: res.data,
+          total,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
+      }
+
+      // 消息中心未读数（覆盖点赞/评论/回复评论/转发/收藏/关注/@提及）。
+      case "getNotificationUnreadCount": {
+        if (!uid) return ok({ unread: 0 });
+        let unread = 0;
+        for (const t of receivedTypes) {
+          const r = await activities
+            .where({ userId: uid, type: t, viewed: false })
+            .count();
+          unread += r.total || 0;
+        }
+        return ok({ unread });
+      }
+
+      // 标记通知已读：传 ids 标记指定通知；all=true 全部标记已读。
+      case "markNotificationsRead": {
+        if (!uid) return fail("unauthorized");
+        if (event.all === true) {
+          await activities
+            .where({ userId: uid, type: _.in(receivedTypes), viewed: false })
+            .update({ viewed: true });
+          return ok({});
+        }
+        const ids = (Array.isArray(event.ids) ? event.ids : [])
+          .map(String)
+          .filter(Boolean);
+        for (const id of ids) {
+          try {
+            await activities.doc(id).update({ viewed: true });
+          } catch (e) {}
+        }
+        return ok({});
+      }
+
+      // 删除通知（长按删除指定通知）。
+      case "deleteNotifications": {
+        if (!uid) return fail("unauthorized");
+        const ids = (Array.isArray(event.ids) ? event.ids : [])
+          .map(String)
+          .filter(Boolean);
+        for (const id of ids) {
+          try {
+            await activities.doc(id).remove();
+          } catch (e) {}
+        }
+        return ok({});
       }
 
       case "deleteComment": {
@@ -1212,41 +1448,56 @@ exports.main = async (event, context) => {
       }
 
       // ==================== 公告 ====================
+      // 公告以「广场笔记」形式存储（kind: announcement），可像普通帖子一样评论/转发/点赞。
 
       // 拉取公告列表（所有用户可读，主页公告栏展示，最新在前）。
       case "getAnnouncements": {
-        await ensureAnnouncements();
-        const res = await announcements
+        const res = await notes
+          .where({ kind: "announcement", visibility: "public", status: "normal" })
           .orderBy("createdAt", "desc")
           .limit(100)
           .get();
         return ok({ announcements: res.data });
       }
 
-      // 管理员发布公告。
+      // 管理员发布公告（同时生成一条广场笔记，供详情页评论/转发/点赞）。
       case "addAnnouncement": {
         if (!(await isAdminUser(uid))) return fail("forbidden");
-        await ensureAnnouncements();
         const title = String(event.title || "").trim().slice(0, 60);
         const content = String(event.content || "").trim().slice(0, 2000);
         if (!title) return fail("empty_title");
         if (!content) return fail("empty_content");
-        await announcements.add({
+        const authorName = (await getAccountName(uid)) || "管理员";
+        const res = await notes.add({
+          kind: "announcement",
+          ownerUserId: uid,
           title,
           content,
-          createdBy: uid,
+          authorName,
+          visibility: "public",
+          status: "normal",
+          likeCount: 0,
+          commentCount: 0,
+          viewCount: 0,
+          repostCount: 0,
           createdAt: now(),
+          updatedAt: now(),
         });
-        return ok({});
+        return ok({ id: res.id });
       }
 
-      // 管理员删除公告。
+      // 管理员删除公告（连带清理其点赞/评论/收藏/举报）。
       case "deleteAnnouncement": {
         if (!(await isAdminUser(uid))) return fail("forbidden");
-        await ensureAnnouncements();
         const id = String(event.id || "").trim();
         if (!id) return fail("bad_request");
-        await announcements.doc(id).remove();
+        const note = await getNote(notes, id);
+        if (!note || note.kind !== "announcement") return fail("not_found");
+        await notes.doc(id).remove();
+        await likes.where({ noteId: id }).remove();
+        await comments.where({ noteId: id }).remove();
+        await reports.where({ noteId: id }).remove();
+        await favorites.where({ noteId: id }).remove();
         return ok({});
       }
 
@@ -1387,6 +1638,20 @@ async function getOwnedNote(notesColl, id, uid) {
 async function getNote(notesColl, id) {
   const { data } = await notesColl.doc(id).get();
   return data && data[0];
+}
+
+// 查询账号名称（userAccounts 中登记的 username），无则返回空串。
+async function getAccountName(targetUid) {
+  if (!targetUid) return "";
+  try {
+    const { data } = await userAccounts
+      .where({ uid: targetUid })
+      .limit(1)
+      .get();
+    return (data && data[0] && data[0].username) || "";
+  } catch (e) {
+    return "";
+  }
 }
 
 // 账号名称规则：2-20 位，中英文、数字、下划线。

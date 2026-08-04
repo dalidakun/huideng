@@ -253,6 +253,58 @@ class PlazaActivity {
       );
 }
 
+/// 消息中心：单条「收到的互动」（点赞/评论/回复评论/转发/收藏/关注/@提及）。
+class NotificationItem {
+  final String id;
+  final String type; // like_me | reply | comment_reply | repost_me | favorite_me | follow_me | mention
+  final String noteId;
+  final String noteTitle;
+  final String content;
+  final String contentPreview;
+  final String commentId;
+  final String actorId;
+  final String actorName;
+  final bool viewed;
+  final int createdAt;
+
+  const NotificationItem({
+    required this.id,
+    required this.type,
+    this.noteId = '',
+    this.noteTitle = '',
+    this.content = '',
+    this.contentPreview = '',
+    this.commentId = '',
+    this.actorId = '',
+    this.actorName = '',
+    this.viewed = false,
+    required this.createdAt,
+  });
+
+  factory NotificationItem.fromJson(Map<String, dynamic> json) =>
+      NotificationItem(
+        id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
+        type: json['type']?.toString() ?? '',
+        noteId: json['noteId']?.toString() ?? '',
+        noteTitle: json['noteTitle']?.toString() ?? '',
+        content: json['content']?.toString() ?? '',
+        contentPreview: json['contentPreview']?.toString() ?? '',
+        commentId: json['commentId']?.toString() ?? '',
+        actorId: json['actorId']?.toString() ?? '',
+        actorName: json['actorName']?.toString() ?? '同修',
+        viewed: json['viewed'] == true,
+        createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// 消息中心分页结果。
+class NotificationPageResult {
+  final List<NotificationItem> items;
+  final bool hasMore;
+
+  const NotificationPageResult({required this.items, required this.hasMore});
+}
+
 /// 广场用户（关注/粉丝列表展示用，可含签名/加入时间/账号）。
 class UserProfile {
   final String id;
@@ -634,6 +686,38 @@ class CloudNotesService {
         .toList();
   }
 
+  /// 按账号前缀/包含搜索用户（@提及面板）。返回匹配账号与 uid，名称待 getUserProfiles 补齐。
+  Future<List<UserProfile>> searchUsers(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return [];
+    final res = await _call('searchUsers', params: {'query': q});
+    final list = (res['users'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(UserProfile.fromJson)
+        .toList();
+    final ids = list.map((u) => u.id).where((id) => id.isNotEmpty).toList();
+    if (ids.isEmpty) return list;
+    try {
+      final enriched = await getUserProfiles(ids);
+      final byId = {for (final u in enriched) u.id: u};
+      return [
+        for (final u in list)
+          byId[u.id] == null
+              ? u
+              : UserProfile(
+                  id: u.id,
+                  name: byId[u.id]!.name,
+                  account: u.account,
+                  verified: byId[u.id]!.verified,
+                  tagline: byId[u.id]!.tagline,
+                  joinTime: byId[u.id]!.joinTime,
+                ),
+      ];
+    } catch (_) {
+      return list;
+    }
+  }
+
   /// 我的主页角标：互动未读数 / 关注数 / 粉丝数（未登录返回全 0）。
   Future<MyCounts> getMyCounts() async {
     if (!AuthService.instance.isLoggedIn) return const MyCounts();
@@ -774,6 +858,57 @@ class CloudNotesService {
             .toList()
         : <PlazaNote>[];
     return (items, res['hasMore'] == true);
+  }
+
+  // ==================== 消息中心 ====================
+
+  /// 拉取「收到的互动」通知列表（分页，最新在前）。不自动标记已读。
+  Future<NotificationPageResult> getNotifications({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) {
+      return const NotificationPageResult(items: [], hasMore: false);
+    }
+    final res = await _call('getNotifications', params: {
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = res['activities'];
+    final items = list is List
+        ? list
+            .map((e) => NotificationItem.fromJson(e as Map<String, dynamic>))
+            .toList()
+        : <NotificationItem>[];
+    return NotificationPageResult(
+      items: items,
+      hasMore: res['hasMore'] == true,
+    );
+  }
+
+  /// 消息中心未读数（点赞/评论/回复评论/转发/收藏/关注/@提及）。
+  Future<int> getNotificationUnreadCount() async {
+    if (!AuthService.instance.isLoggedIn) return 0;
+    final res = await _call('getNotificationUnreadCount');
+    return (res['unread'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 标记通知已读：传 ids 标记指定通知；[all] 为 true 时全部标记已读。
+  Future<void> markNotificationsRead(List<String> ids, {bool all = false}) async {
+    if (!AuthService.instance.isLoggedIn) return;
+    if (all) {
+      await _call('markNotificationsRead', params: {'all': true});
+      return;
+    }
+    if (ids.isEmpty) return;
+    await _call('markNotificationsRead', params: {'ids': ids});
+  }
+
+  /// 删除指定通知。
+  Future<void> deleteNotifications(List<String> ids) async {
+    if (!AuthService.instance.isLoggedIn) return;
+    if (ids.isEmpty) return;
+    await _call('deleteNotifications', params: {'ids': ids});
   }
 
   /// 拉取当前用户云端整包数据（无记录返回 null）。

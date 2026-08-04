@@ -1137,7 +1137,7 @@ class StudyHubPageState extends State<StudyHubPage>
                         size: 16, color: const Color(0xFF71867A)),
                   ),
                   const SizedBox(width: 10),
-                  const Text('当前学习',
+                  const Text('精读经文',
                       style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -1745,54 +1745,77 @@ class StudyHubPageState extends State<StudyHubPage>
   Widget _buildAnnouncementCard(AnnouncementItem item) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          color: _card,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => NoteDetailPage(noteId: item.id)),
+          ),
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 10,
-                offset: const Offset(0, 2)),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _gold.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text('公告',
-                      style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF9A6B3F))),
-                ),
-                const Spacer(),
-                Text(_formatTime(item.createdAt),
-                    style:
-                        const TextStyle(fontSize: 11, color: _textHint)),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2)),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              item.title,
-              style: const TextStyle(
-                  fontSize: 16, fontWeight: FontWeight.w600, color: _text),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _gold.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text('公告',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF9A6B3F))),
+                    ),
+                    const Spacer(),
+                    Text(_formatTime(item.createdAt),
+                        style:
+                            const TextStyle(fontSize: 11, color: _textHint)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  item.title,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  item.content,
+                  style: const TextStyle(fontSize: 14, color: _textSec, height: 1.6),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.forum_outlined,
+                        size: 14, color: _textHint),
+                    const SizedBox(width: 4),
+                    Text('点击查看评论与互动',
+                        style: const TextStyle(fontSize: 12, color: _textHint)),
+                    const Spacer(),
+                    const Icon(Icons.chevron_right, size: 16, color: _textHint),
+                  ],
+                ),
+              ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              item.content,
-              style: const TextStyle(fontSize: 14, color: _textSec, height: 1.6),
-            ),
-          ],
+          ),
         ),
       ),
     );

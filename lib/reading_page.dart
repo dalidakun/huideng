@@ -12,6 +12,7 @@ import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart';
 import 'app_state.dart';
 import 'reader_preferences.dart';
+import 'note_edit_page.dart';
 
 class ReadingPage extends StatefulWidget {
   final String title;
@@ -59,6 +60,9 @@ class _ReadingPageState extends State<ReadingPage> {
   String _flipCacheKey = '';
   int _currentFlipPage = 0;
   bool _flipPageRestored = false;
+
+  /// 顶部标题双击回到顶部：记录上次点击时间。
+  DateTime? _lastTitleTap;
 
   @override
   void initState() {
@@ -181,6 +185,8 @@ class _ReadingPageState extends State<ReadingPage> {
       _lineHeight = prefs.getDouble('reader_line_height') ?? 1.8;
       _pageMode = prefs.getInt('reader_page_mode') ?? ReaderPreferences.pageModeScroll;
     });
+    // 同步全局夜间模式信号，消息中心等页面跟随切换浅色/深色配色。
+    appDarkMode.value = _isDarkMode;
   }
 
   Future<void> _saveScrollPosition() async {
@@ -432,6 +438,18 @@ class _ReadingPageState extends State<ReadingPage> {
     }
   }
 
+  /// 打开笔记编辑页：预填「$经书名」在顶部，可写笔记并发布到菩提空间。
+  void _openNoteEditor() {
+    final readable = widget.title
+        .replaceAll(RegExp(r'T\d+n[0-9A-Za-z]+_\d+$'), '')
+        .trim();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NoteEditPage(presetContent: '\$$readable '),
+      ),
+    );
+  }
+
   Future<void> _exportTxt() async {
     final trimmed = _content.trim();
     if (trimmed.isEmpty) {
@@ -571,6 +589,15 @@ class _ReadingPageState extends State<ReadingPage> {
               titleSpacing: 0,
               iconTheme: IconThemeData(color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121)),
               title: GestureDetector(
+                onTap: () {
+                  final now = DateTime.now();
+                  final last = _lastTitleTap;
+                  _lastTitleTap = now;
+                  if (last != null &&
+                      now.difference(last) < const Duration(milliseconds: 350)) {
+                    _scrollToStart();
+                  }
+                },
                 onLongPress: () {
                   Clipboard.setData(ClipboardData(text: widget.title));
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -886,10 +913,10 @@ class _ReadingPageState extends State<ReadingPage> {
                     width: 36,
                     height: 36,
                     child: _buildFloatingIcon(
-                      tooltip: '回到顶部',
-                      heroTag: 'sutra_to_start',
-                      onTap: _scrollToStart,
-                      child: const Icon(Icons.vertical_align_top, size: 18),
+                      tooltip: '写笔记',
+                      heroTag: 'sutra_note',
+                      onTap: _openNoteEditor,
+                      child: const Icon(Icons.edit_note, size: 18),
                     ),
                   ),
                 ),
@@ -929,6 +956,7 @@ class _ReadingPageState extends State<ReadingPage> {
     setState(() {
       _isDarkMode = !_isDarkMode;
     });
+    appDarkMode.value = _isDarkMode;
     _saveSettings();
   }
 

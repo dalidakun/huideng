@@ -357,14 +357,14 @@ class AuthService {
     }
   }
 
-  /// 手机号登录后自动生成默认账号：4 位随机数字 + 手机号后四位，并随机生成密码。
+  /// 手机号登录后自动生成默认账号：4 位随机字母/数字 + 手机号后四位，并随机生成密码。
   /// 已有账号（含默认账号）则原样返回、不覆盖；用户可在「设置-安全-忘记密码」重置密码。
   Future<void> _ensureDefaultAccount(String phone) async {
     if (!isLoggedIn) return;
     final tail = _phoneTail(phone);
     if (tail.isEmpty) return;
     for (var i = 0; i < 5; i++) {
-      final username = _randomDigits(4) + tail;
+      final username = _randomChars(4) + tail;
       final password = _randomPassword();
       try {
         final res = await CloudNotesService.instance.callApi(
@@ -383,9 +383,12 @@ class AuthService {
     }
   }
 
-  String _randomDigits(int n) {
+  /// 随机 n 位字母/数字（用于默认账号前缀）。
+  String _randomChars(int n) {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
     final r = Random();
-    return List.generate(n, (_) => r.nextInt(10).toString()).join();
+    return String.fromCharCodes(
+        List.generate(n, (_) => chars.codeUnitAt(r.nextInt(chars.length))));
   }
 
   /// 随机密码：去掉易混淆字符的字母+数字，长度 10。

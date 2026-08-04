@@ -5,12 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'note_stats_center.dart';
 import 'note_sutra_links.dart';
 import 'quote_box.dart';
 import 'reading_page.dart';
 import 'reply_thread.dart';
 import 'text_input_sheet.dart';
 import 'post_time_link.dart';
+import 'post_rich_content.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
@@ -139,6 +141,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         _comments = comments;
         _loading = false;
       });
+      // 阅读量等指标广播给 Feed，返回后列表数字立即更新。
+      NoteStatsCenter.instance.report(_note!);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -187,6 +191,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         );
         _liking = false;
       });
+      NoteStatsCenter.instance.report(_note!);
     } catch (e) {
       if (!mounted) return;
       setState(() => _liking = false);
@@ -313,6 +318,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 updatedAt: _note!.updatedAt,
               );
       });
+      NoteStatsCenter.instance.report(_note!);
       if (mounted && sheetContext.mounted) {
         Navigator.of(sheetContext).pop();
       }
@@ -353,7 +359,38 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     try {
       await CloudNotesService.instance.deleteComment(comment.id);
       if (!mounted) return;
-      setState(() => _comments.removeWhere((c) => c.id == comment.id));
+      setState(() {
+        _comments.removeWhere((c) => c.id == comment.id);
+        if (_note != null) {
+          final note = _note!;
+          _note = PlazaNote(
+            id: note.id,
+            ownerUserId: note.ownerUserId,
+            title: note.title,
+            content: note.content,
+            authorName: note.authorName,
+            authorAccount: note.authorAccount,
+            authorVerified: note.authorVerified,
+            visibility: note.visibility,
+            status: note.status,
+            likeCount: note.likeCount,
+            commentCount: note.commentCount > 0
+                ? note.commentCount - 1
+                : 0,
+            viewCount: note.viewCount,
+            repostCount: note.repostCount,
+            repostOf: note.repostOf,
+            repostSourceAuthor: note.repostSourceAuthor,
+            repostKind: note.repostKind,
+            quoteContent: note.quoteContent,
+            quoteOfTitle: note.quoteOfTitle,
+            quoteOfContent: note.quoteOfContent,
+            createdAt: note.createdAt,
+            updatedAt: note.updatedAt,
+          );
+        }
+      });
+      NoteStatsCenter.instance.report(_note!);
     } catch (e) {
       if (!mounted) return;
       _showToast(e.toString());
@@ -363,6 +400,20 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   void _promptLogin() {
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => const LoginPage()));
+  }
+
+  /// 定位到评论/回复贴节点：对齐到视口偏上（6%），上方原帖内容可上拉查看。
+  void _scrollToReply() {
+    if (_scrolledToReply) return;
+    final ctx = _replyNodeKey.currentContext;
+    if (ctx == null) return;
+    _scrolledToReply = true;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
+      alignment: 0.06,
+    );
   }
 
   Future<void> _toggleFavorite() async {
@@ -476,7 +527,37 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       await CloudNotesService.instance.repostNote(widget.noteId,
           quote: quote, kind: quote.isEmpty ? 'forward' : 'quote');
       if (!mounted) return;
-      setState(() => _reposting = false);
+      // 转发成功后本地立即 +1 并广播，详情页与 Feed 数字同步刷新。
+      setState(() {
+        _reposting = false;
+        if (_note != null) {
+          final note = _note!;
+          _note = PlazaNote(
+            id: note.id,
+            ownerUserId: note.ownerUserId,
+            title: note.title,
+            content: note.content,
+            authorName: note.authorName,
+            authorAccount: note.authorAccount,
+            authorVerified: note.authorVerified,
+            visibility: note.visibility,
+            status: note.status,
+            likeCount: note.likeCount,
+            commentCount: note.commentCount,
+            viewCount: note.viewCount,
+            repostCount: note.repostCount + 1,
+            repostOf: note.repostOf,
+            repostSourceAuthor: note.repostSourceAuthor,
+            repostKind: note.repostKind,
+            quoteContent: note.quoteContent,
+            quoteOfTitle: note.quoteOfTitle,
+            quoteOfContent: note.quoteOfContent,
+            createdAt: note.createdAt,
+            updatedAt: note.updatedAt,
+          );
+        }
+      });
+      NoteStatsCenter.instance.report(_note!);
       // 转发后停留在当前笔记详情页，不跳转到转发后的新笔记。
       _showToast(quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
     } catch (e) {
@@ -613,20 +694,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
     final note = _note!;
     final liked = CloudNotesService.instance.likedNoteIds.contains(note.id);
-    // 从评论贴时间戳进入时，首帧后滚动定位到该评论贴节点。
-    if (widget.scrollToReplyId != null && !_scrolledToReply) {
+    // 评论/回复贴定位：回复连贴等原帖异步加载完成后再滚动（onReadyToScroll），
+    // 保证定位后往上拉还能看到上方原帖内容；普通评论定位首帧即可完成。
+    if (widget.scrollToReplyId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _scrolledToReply) return;
-        _scrolledToReply = true;
-        final ctx = _replyNodeKey.currentContext;
-        if (ctx != null) {
-          Scrollable.ensureVisible(
-            ctx,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-            alignment: 0.1,
-          );
+        if (_note?.repostKind == 'reply' && widget.scrollToReplyId == _note?.id) {
+          return; // 回复连贴由 ReplyThread.onReadyToScroll 触发。
         }
+        _scrollToReply();
       });
     }
     return Column(
@@ -641,6 +717,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   replyNote: note,
                   replyNodeKey: (widget.scrollToReplyId == note.id)
                       ? _replyNodeKey
+                      : null,
+                  onReadyToScroll: (widget.scrollToReplyId == note.id)
+                      ? _scrollToReply
                       : null,
                 ),
               ] else ...[
@@ -670,13 +749,36 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                           ],
                           if (note.content.isNotEmpty) ...[
                             const SizedBox(height: 4),
-                            NoteSutraLinks.buildRichText(
+                            buildPostRichText(
                               note.content,
                               style: const TextStyle(
                                   fontSize: 16, color: _text, height: 1.75),
                               library: _sutraLib,
-                              onTap: (title, filePath) =>
-                                  _openSutra(title, filePath),
+                              onUserTap: (uid) {
+                                if (uid.isNotEmpty) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            UserSpacePage(userId: uid)),
+                                  );
+                                }
+                              },
+                              onSutraTap: (title, filePath) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => SutraDiscussionPage(
+                                          title: title, filePath: filePath)),
+                                );
+                              },
+                              onTopicTap: (topic) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => TopicPage(topic: topic)),
+                                );
+                              },
                             ),
                           ],
                           if (note.repostOf.isNotEmpty) ...[
@@ -718,7 +820,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   ),
                 )
               else
-                for (final c in _comments) _buildCommentRow(c),
+                for (final c in _comments)
+                  _buildCommentRow(
+                    c,
+                    nodeKey: (widget.scrollToReplyId != null &&
+                            c.id == widget.scrollToReplyId)
+                        ? _replyNodeKey
+                        : null,
+                  ),
             ],
           ),
         ),
@@ -726,7 +835,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  Widget _buildCommentRow(PlazaComment c) {
+  Widget _buildCommentRow(PlazaComment c, {GlobalKey? nodeKey}) {
     final me = AuthService.instance.currentUser.value;
     final canDelete =
         me != null && (c.authorId == me.id || _note?.ownerUserId == me.id);
@@ -744,6 +853,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     return InkWell(
       onLongPress: canDelete ? () => _deleteComment(c) : null,
       child: Padding(
+        key: nodeKey,
         padding: const EdgeInsets.only(bottom: 20),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,

@@ -317,14 +317,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                         image:
                                             FileImage(File(_avatarPath!)),
                                         fit: BoxFit.cover)
-                                    : null,
+                                    : const DecorationImage(
+                                        image: AssetImage(
+                                            'assets/images/app_icon.png'),
+                                        fit: BoxFit.cover),
                               ),
                               child: Stack(
                                 alignment: Alignment.center,
                                 children: [
-                                  if (_avatarPath == null)
-                                    const Icon(Icons.person,
-                                        size: 38, color: _primaryLight),
                                   Container(
                                     width: 22,
                                     height: 22,

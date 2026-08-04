@@ -20,12 +20,15 @@ import 'user_list_page.dart';
 import 'note_edit_page.dart';
 import 'note_detail_page.dart';
 import 'quote_box.dart';
+import 'note_sutra_links.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 import 'post_time_link.dart';
+import 'post_rich_content.dart';
 import 'reply_thread.dart';
 import 'reply_chain.dart';
 import 'certification_page.dart';
+import 'note_stats_center.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -212,11 +215,11 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                       ? DecorationImage(
                           image: FileImage(File(_avatarPath!)),
                           fit: BoxFit.cover)
-                      : null,
+                      : const DecorationImage(
+                          image: AssetImage('assets/images/app_icon.png'),
+                          fit: BoxFit.cover),
                 ),
-                child: _avatarPath == null
-                    ? const Icon(Icons.person, size: 140, color: _primaryLight)
-                    : null,
+                child: null,
               ),
               const SizedBox(height: 16),
               const Text('轻触任意处关闭',
@@ -479,12 +482,11 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                           ? DecorationImage(
                               image: FileImage(File(_avatarPath!)),
                               fit: BoxFit.cover)
-                          : null,
+                          : const DecorationImage(
+                              image: AssetImage('assets/images/app_icon.png'),
+                              fit: BoxFit.cover),
                     ),
-                    child: _avatarPath == null
-                        ? const Icon(Icons.person,
-                            size: 38, color: _primaryLight)
-                        : null,
+                    child: null,
                   ),
                 ),
               ),
@@ -841,10 +843,37 @@ class _PostBlockState extends State<PostBlock> {
   late int _likeCount = widget.likeCount;
   late int _repostCount = widget.repostCount;
   late int _commentCount = widget.commentCount;
+  late int _viewCount = widget.viewCount;
   late bool _liked = widget.noteId != null &&
       CloudNotesService.instance.likedNoteIds.contains(widget.noteId);
   late bool _following = widget.ownerUserId != null &&
       CloudNotesService.instance.followingUserIds.contains(widget.ownerUserId);
+
+  @override
+  void initState() {
+    super.initState();
+    // 实时同步指标：详情页点赞/评论/转发/阅读后，这里的数字立即更新。
+    NoteStatsCenter.instance.addListener(_onStatsChanged);
+  }
+
+  @override
+  void dispose() {
+    NoteStatsCenter.instance.removeListener(_onStatsChanged);
+    super.dispose();
+  }
+
+  void _onStatsChanged() {
+    final id = widget.noteId;
+    if (id == null) return;
+    final n = NoteStatsCenter.instance.latest(id);
+    if (n == null || !mounted) return;
+    setState(() {
+      _likeCount = n.likeCount;
+      _repostCount = n.repostCount;
+      _commentCount = n.commentCount;
+      _viewCount = n.viewCount;
+    });
+  }
 
   /// 关注/取消关注帖子作者（已关注的同修在首页「关注」栏目展示其新帖）。
   Future<void> _toggleFollow() async {
@@ -1050,6 +1079,9 @@ class _PostBlockState extends State<PostBlock> {
             widget.onEdit != null ||
             widget.onDelete != null);
     final content = widget.content;
+    // 测量用的纯文本：剥离 [@账号](user:ID) / [@经名](路径) 标记，渲染仍用原文。
+    final measureContent =
+        content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
     return InkWell(
       onTap: widget.onTap ?? () => setState(() => _expanded = !_expanded),
       child: Padding(
@@ -1146,8 +1178,11 @@ class _PostBlockState extends State<PostBlock> {
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: _showManageMenu,
-                          child: const Icon(Icons.more_horiz,
-                              size: 18, color: Color(0xFF8C8C8C)),
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.more_horiz,
+                                size: 18, color: Color(0xFF8C8C8C)),
+                          ),
                         ),
                       if (showMore) ...[
                         if (widget.showFollowButton) ...[
@@ -1176,8 +1211,11 @@ class _PostBlockState extends State<PostBlock> {
                           behavior: HitTestBehavior.opaque,
                           onTap: () => showMoreMenu(
                               context, widget.ownerUserId!, widget.nickname),
-                          child: const Icon(Icons.more_horiz,
-                              size: 18, color: Color(0xFF8C8C8C)),
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.more_horiz,
+                                size: 18, color: Color(0xFF8C8C8C)),
+                          ),
                         ),
                       ],
                     ],
@@ -1202,7 +1240,7 @@ class _PostBlockState extends State<PostBlock> {
                       builder: (context, constraints) {
                         final tp = TextPainter(
                           text: TextSpan(
-                              text: content,
+                              text: measureContent,
                               style: const TextStyle(
                                   fontSize: 15,
                                   color: Colors.black,
@@ -1215,14 +1253,43 @@ class _PostBlockState extends State<PostBlock> {
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(content,
-                                maxLines: _expanded ? null : 8,
-                                overflow:
-                                    _expanded ? null : TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 15,
-                                    color: Colors.black,
-                                    height: 1.6)),
+                            buildPostRichText(
+                              content,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  color: Colors.black,
+                                  height: 1.6),
+                              library:
+                                  NoteSutraCatalog.cachedTitleMap ?? const {},
+                              maxLines: _expanded ? null : 8,
+                              overflow:
+                                  _expanded ? null : TextOverflow.ellipsis,
+                              onUserTap: (uid) {
+                                if (uid.isNotEmpty) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            UserSpacePage(userId: uid)),
+                                  );
+                                }
+                              },
+                              onSutraTap: (title, path) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => SutraDiscussionPage(
+                                          title: title, filePath: path)),
+                                );
+                              },
+                              onTopicTap: (topic) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => TopicPage(topic: topic)),
+                                );
+                              },
+                            ),
                             if (overflow && !_expanded)
                               GestureDetector(
                                 onTap: () => setState(() => _expanded = true),
@@ -1252,7 +1319,7 @@ class _PostBlockState extends State<PostBlock> {
                       commentCount: _commentCount,
                       repostCount: _repostCount,
                       likeCount: _likeCount,
-                      viewCount: widget.viewCount,
+                      viewCount: _viewCount,
                       liked: _liked,
                       onComment: _openReplySheet,
                       onRepost: _repost,
@@ -1636,7 +1703,7 @@ class PostFeedRow extends StatelessWidget {
       account: note.authorAccount,
       authorVerified: note.authorVerified,
       timeMs: note.createdAt,
-      content: PostFeedRow.plainContent(note),
+      content: note.content,
       noteId: note.id,
       allowActions: true,
       likeCount: note.likeCount,
@@ -3110,22 +3177,27 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
 class _DraftRow extends StatelessWidget {
   final Map<String, dynamic> note;
   final VoidCallback onTap;
-  const _DraftRow({required this.note, required this.onTap});
-
-  static String _plainContent(Map<String, dynamic> note) =>
-      (note['content'] as String? ?? '')
-          .replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+  final String account;
+  final bool verified;
+  const _DraftRow({
+    required this.note,
+    required this.onTap,
+    this.account = '',
+    this.verified = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final note = this.note;
-    final content = _DraftRow._plainContent(note);
+    final content = note['content']?.toString() ?? '';
     final ts = DateTime.tryParse(note['updatedAt']?.toString() ?? '');
     final nickname =
         AuthService.instance.currentUser.value?.displayName ?? '同修';
     return PostBlock(
       ownerUserId: AuthService.instance.currentUser.value?.id,
       nickname: nickname,
+      account: account,
+      authorVerified: verified,
       timeMs: ts?.millisecondsSinceEpoch ?? 0,
       content: content,
       onTap: onTap,
@@ -3145,6 +3217,8 @@ class _MyDraftsTab extends StatefulWidget {
 class _MyDraftsTabState extends State<_MyDraftsTab> {
   List<Map<String, dynamic>> _notes = [];
   bool _loading = true;
+  String _account = '';
+  bool _verified = false;
 
   @override
   void initState() {
@@ -3183,6 +3257,8 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
       if (!mounted) return;
       setState(() {
         _notes = notes;
+        _account = prefs.getString('user_account_name') ?? '';
+        _verified = prefs.getBool('user_verified') ?? false;
         _loading = false;
       });
     } catch (_) {
@@ -3216,14 +3292,31 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+            // 横向内边距移入每条草稿内部，保证分割线通栏贴边（与主页帖子一致）。
+            padding: const EdgeInsets.only(top: 4, bottom: 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes[index];
-                  return _DraftRow(
-                    note: note,
-                    onTap: () => _openEdit(note),
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 草稿顶部通栏分割线（首条不画，避免顶部多一条线）。
+                      if (index > 0)
+                        const Divider(
+                            height: 1,
+                            thickness: 0.6,
+                            color: Color(0xFFD8CCBC)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: _DraftRow(
+                          note: note,
+                          account: _account,
+                          verified: _verified,
+                          onTap: () => _openEdit(note),
+                        ),
+                      ),
+                    ],
                   );
                 },
                 childCount: _notes.length,

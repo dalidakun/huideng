@@ -277,7 +277,7 @@ class _UserListPageState extends State<UserListPage> {
             CircleAvatar(
               radius: 20,
               backgroundColor: _primary.withValues(alpha: 0.12),
-              child: Icon(Icons.person, size: 22, color: _primaryLight),
+              backgroundImage: const AssetImage('assets/images/app_icon.png'),
             ),
             const SizedBox(width: 12),
             Expanded(

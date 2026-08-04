@@ -11,6 +11,7 @@ import 'reading_page.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'favorite_sutras_page.dart';
+import 'recent_sutras_page.dart';
 
 /// 用于监听路由返回（例如从阅读页 pop 回来时刷新“最近阅读”）。
 final RouteObserver<ModalRoute<void>> routeObserver =
@@ -85,19 +86,38 @@ class SutraListPageState extends State<SutraListPage>
   static const String _kApkLastUpdateTimeKey = 'apk_last_update_time';
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+  /// 主页内容滚动控制器：双击顶部 AppBar 时回到顶部。
+  final ScrollController _scrollController = ScrollController();
   bool _drawerOpen = false;
   late final AnimationController _drawerController;
   late final Animation<Offset> _drawerSlide;
   late final Animation<double> _overlayOpacity;
   String? _lastReadTitle;
   String? _lastReadFilePath;
+  double _lastReadProgress = 0.0;
+  int _readDays = 0;
+  int _todayReadCount = 0;
+  List<Map<String, String>> _recentSutras = [];
 
+  /// 随缘读经预览用的随机经书（保持稳定，避免每次重建都换）。
   Sutra? _randomSutra;
 
   /// 从全部经书中随机抽取一部。
   Sutra? _rollRandomSutra() {
     if (_allSutras.isEmpty) return null;
     return _allSutras[Random().nextInt(_allSutras.length)];
+  }
+
+  /// 「换一部」轮换选中的部类（保持稳定，避免每次重建都换）。
+  String? _randomFolder;
+
+  /// 从全部部类（56 部）中随机抽取一部，尽量不与当前重复。
+  String? _rollRandomFolder() {
+    if (_folders.isEmpty) return null;
+    final candidates = (_folders.length > 1 && _randomFolder != null)
+        ? _folders.where((f) => f != _randomFolder).toList()
+        : _folders;
+    return candidates[Random().nextInt(candidates.length)];
   }
 
   Set<String>? _assetKeys;
@@ -423,7 +443,7 @@ class SutraListPageState extends State<SutraListPage>
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
                     value: progress > 0 ? progress : null,
-                    color: const Color(0xFFba8e82),
+                    color: const Color(0xFF71867A),
                   ),
                 ),
         ),
@@ -446,7 +466,7 @@ class SutraListPageState extends State<SutraListPage>
         constraints: const BoxConstraints(),
         iconSize: 17,
         tooltip: '下载',
-        icon: const Icon(Icons.download, color: Color(0xFFba8e82)),
+        icon: const Icon(Icons.download, color: Color(0xFF71867A)),
         onPressed: () => _downloadSingle(sutra, id),
       ),
     );
@@ -622,6 +642,8 @@ class SutraListPageState extends State<SutraListPage>
     _initFolders();
     _loadSutras();
     _loadLastRead();
+    _loadReadingStats();
+    _loadRecentSutras();
     _loadAssetManifest();
     _loadDownloadedIds();
     widget.activeTab?.addListener(_onActiveTabChanged);    _searchController.addListener(_filterSutras);
@@ -661,6 +683,7 @@ class SutraListPageState extends State<SutraListPage>
     widget.activeTab?.removeListener(_onActiveTabChanged);
     routeObserver.unsubscribe(this);
     _drawerController.dispose();
+    _scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _sutraDataVersion.dispose();
@@ -782,6 +805,8 @@ class SutraListPageState extends State<SutraListPage>
   Future<void> reload() async {
     await _loadSutras();
     await _loadLastRead();
+    await _loadReadingStats();
+    await _loadRecentSutras();
   }
 
   Future<File> _sutraListFile() async {
@@ -901,9 +926,13 @@ class SutraListPageState extends State<SutraListPage>
     });
   }
 
-  void _showBottomSheet(BuildContext context, Sutra sutra) {
+  void _showBottomSheet(BuildContext context, Sutra sutra, {bool showPin = false}) {
     _dismissKeyboard();
-    final index = _allSutras.indexOf(sutra);
+    var index = _allSutras.indexOf(sutra);
+    if (index < 0) {
+      // 列表重新加载后对象引用可能失效（如随缘读经的随机经书），按标题回退查找。
+      index = _allSutras.indexWhere((s) => s.title == sutra.title);
+    }
     if (index < 0) return;
     showModalBottomSheet(
       context: context,
@@ -918,52 +947,48 @@ class SutraListPageState extends State<SutraListPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-               _buildMenuItem(
-                 icon: sutra.isFavorite ? Icons.favorite : Icons.favorite_border,
-                 title: sutra.isFavorite ? '取消收藏' : '收藏',
-                 onTap: () {
-                   _toggleFavorite(index);
-                   Navigator.pop(context);
-                 },
-               ),
-               _buildMenuItem(
-                 icon: sutra.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                 title: sutra.isPinned ? '取消置顶' : '置顶',
-                 onTap: () {
-                   _togglePin(index);
-                   Navigator.pop(context);
-                 },
-               ),
-               _buildMenuItem(
-                 icon: Icons.edit,
-                 title: '编辑标题',
-                 onTap: () {
-                   Navigator.pop(context);
-                   _editTitle(index);
-                 },
-               ),
-               _buildMenuItem(
-                 icon: sutra.isRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
-                 title: sutra.isRead ? '标记为未读' : '标记为已读',
-                 onTap: () {
-                   _toggleRead(index);
-                   Navigator.pop(context);
-                 },
-               ),
-               _buildMenuItem(
-                 icon: Icons.delete,
-                 title: '删除',
-                 onTap: () {
-                   _deleteSutra(index);
-                   Navigator.pop(context);
-                 },
-               ),
+              _buildMenuItem(
+                icon: sutra.isFavorite ? Icons.favorite : Icons.favorite_border,
+                title: sutra.isFavorite ? '取消收藏' : '收藏',
+                onTap: () {
+                  _toggleFavorite(index);
+                  Navigator.pop(context);
+                },
+              ),
+              if (showPin)
+                _buildMenuItem(
+                  icon: sutra.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                  title: sutra.isPinned ? '取消置顶' : '置顶',
+                  onTap: () {
+                    _togglePin(index);
+                    Navigator.pop(context);
+                  },
+                ),
+              _buildMenuItem(
+                icon: sutra.isRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
+                title: sutra.isRead ? '取消完成阅读' : '标记完成阅读',
+                onTap: () {
+                  _toggleRead(index);
+                  Navigator.pop(context);
+                },
+              ),
             ],
           ),
         );
       },
     );
   }
+
+  /// 供子页面（收藏页等）复用：弹出经书长按菜单。
+  void showSutraMenu(BuildContext context, Sutra sutra, {bool showPin = false}) {
+    _showBottomSheet(context, sutra, showPin: showPin);
+  }
+
+  /// 供子页面监听的经书数据版本号。
+  ValueListenable<int> get sutraDataVersion => _sutraDataVersion;
+
+  /// 供子页面读取收藏列表（置顶优先）。
+  List<Sutra> getFavoriteSutras() => _getFavoriteSutras();
 
   Widget _buildMenuItem({
     required IconData icon,
@@ -1005,98 +1030,6 @@ class SutraListPageState extends State<SutraListPage>
       _filterSutras();
     });
     _saveSutras();
-  }
-
-  void _editTitle(int index) async {
-    TextEditingController controller = TextEditingController(
-      text: _allSutras[index].title,
-    );
-
-    await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('编辑标题'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: '请输入标题',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (controller.text.isNotEmpty) {
-                setState(() {
-                  _allSutras[index] = Sutra(
-                    controller.text,
-                    _allSutras[index].size,
-                    isPinned: _allSutras[index].isPinned,
-                    isRead: _allSutras[index].isRead,
-                    isFavorite: _allSutras[index].isFavorite,
-                    filePath: _allSutras[index].filePath,
-                    folder: _allSutras[index].folder,
-                  );
-                  _filterSutras();
-                });
-                _saveSutras();
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _deleteSutra(int index) {
-    setState(() {
-      _allSutras.remove(_allSutras[index]);
-      _filterSutras();
-    });
-    _saveSutras();
-  }
-
-  void _addSutraToFolder(String folderName) async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['txt'],
-      allowMultiple: true,
-    );
-
-    if (result != null && result.files.isNotEmpty) {
-      int addedCount = 0;
-      setState(() {
-        for (var file in result.files) {
-          if (file.path != null) {
-            String fileName = file.path!;
-            if (fileName.toLowerCase().endsWith('.txt')) {
-              File f = File(file.path!);
-              txtFiles.add(f);
-              String name = fileName.split('/').last.split('\\').last.replaceAll('.txt', '');
-              int size = f.lengthSync();
-              String sizeStr = size < 1024 ? '${size}B' : size < 1024 * 1024 ? '${(size / 1024).toStringAsFixed(1)}k' : '${(size / (1024 * 1024)).toStringAsFixed(1)}M';
-              _allSutras.add(Sutra(name, sizeStr, filePath: file.path, folder: folderName));
-              addedCount++;
-            }
-          }
-        }
-        _filteredSutras = List.from(_allSutras);
-      });
-      _saveSutras();
-      
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已添加 $addedCount 本经书到 ${_folderDisplayNames[folderName] ?? folderName}'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
   }
 
   void _toggleFavorite(int index) {
@@ -1180,10 +1113,11 @@ class SutraListPageState extends State<SutraListPage>
     return _allSutras.where((s) => s.folder == folder).toList();
   }
 
-  /// 我的收藏：按收藏时间倒序。
+  /// 我的收藏：置顶优先，其余按收藏时间倒序。
   List<Sutra> _getFavoriteSutras() {
     final list = _allSutras.where((s) => s.isFavorite).toList();
     list.sort((a, b) {
+      if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
       if (a.favoriteTime == null && b.favoriteTime == null) return 0;
       if (a.favoriteTime == null) return 1;
       if (b.favoriteTime == null) return -1;
@@ -1196,13 +1130,53 @@ class SutraListPageState extends State<SutraListPage>
     final prefs = await SharedPreferences.getInstance();
     final t = prefs.getString('last_read_title');
     final fp = prefs.getString('last_read_filePath');
-    if (!mounted) return;
-    if (t != null && t.isNotEmpty) {
-      setState(() {
-        _lastReadTitle = t;
-        _lastReadFilePath = fp;
-      });
+    var progress = 0.0;
+    if (fp != null) {
+      progress = prefs.getDouble('progress_$fp') ?? 0.0;
     }
+    if (!mounted) return;
+    setState(() {
+      _lastReadTitle = t;
+      _lastReadFilePath = fp;
+      _lastReadProgress = progress;
+    });
+  }
+
+  /// 阅读统计：已读天数与今日已读册数（依据每日诵经历史）。
+  Future<void> _loadReadingStats() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('daily_sutra_history') ?? '{}';
+    var readDays = 0;
+    var todayCount = 0;
+    try {
+      final history = jsonDecode(raw);
+      if (history is Map) {
+        readDays = history.length;
+        final now = DateTime.now();
+        final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        final todayList = history[today];
+        if (todayList is List) todayCount = todayList.length;
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _readDays = readDays;
+      _todayReadCount = todayCount;
+    });
+  }
+
+  /// 最近阅读记录（来自 recent_sutras）。
+  Future<void> _loadRecentSutras() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList('recent_sutras') ?? [];
+    final list = raw.map((e) {
+      final parts = e.split('|||');
+      return {'title': parts[0], 'filePath': parts.length > 1 ? parts[1] : ''};
+    }).toList();
+    if (!mounted) return;
+    setState(() {
+      _recentSutras = list;
+    });
   }
 
   String _displayTitle(String title) =>
@@ -1214,6 +1188,16 @@ class SutraListPageState extends State<SutraListPage>
     }
     return null;
   }
+
+  /// 供子页面（最近阅读页等）按标题查找经书。
+  Sutra? findSutra(String title) => _findSutra(title);
+
+  /// 供子页面读取最近阅读记录。
+  List<Map<String, String>> getRecentSutras() =>
+      List<Map<String, String>>.from(_recentSutras);
+
+  /// 供子页面刷新最近阅读记录。
+  Future<void> reloadRecentSutras() => _loadRecentSutras();
 
   Future<bool> _canOpenSutra(Sutra sutra) async {
     final fp = sutra.filePath;
@@ -1278,162 +1262,143 @@ class SutraListPageState extends State<SutraListPage>
     }
   }
 
-  Widget _buildRecentReadCard() {
-    if (_lastReadTitle == null) return const SizedBox.shrink();
+  Widget _buildContinueReadingCard() {
+    final title = _lastReadTitle;
+    if (title == null) return const SizedBox.shrink();
+    final pct = (_lastReadProgress * 100).clamp(0.0, 100.0);
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8EFE2),
+      child: Material(
+        color: const Color(0xFFFFFAF5),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
-        ],
-      ),
-      child: InkWell(
+        child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () {
-          final sutra = _findSutra(_lastReadTitle!);
+        onTap: _openLastRead,
+        onLongPress: () {
+          final sutra = _findSutra(title);
           if (sutra != null) {
-            _openSutra(sutra);
-          } else {
-            _dismissKeyboard();
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ReadingPage(
-                  title: _lastReadTitle!,
-                  filePath: _lastReadFilePath,
-                ),
-              ),
-            );
+            _showBottomSheet(context, sutra);
           }
         },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          child: Row(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF5d4037).withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.history, color: Color(0xFF5d4037), size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '最近阅读 · 继续上次',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+              Row(
+                children: [
+                  Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF5d4037).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(7),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _displayTitle(_lastReadTitle!),
+                    child: const Icon(Icons.play_circle_fill, color: Color(0xFF5d4037), size: 15),
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      '继续阅读',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
+                      style: TextStyle(
                         color: Color(0xFF5d4037),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ],
+                  ),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _openLastRead,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE5A12E),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '立即进入',
+                            style: TextStyle(
+                              color: Color(0xFF3E2723),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          SizedBox(width: 2),
+                          Icon(Icons.arrow_forward, color: Color(0xFF3E2723), size: 12),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                _displayTitle(title),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF3E2723),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Color(0xFF999999), size: 20),
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: _lastReadProgress.clamp(0.0, 1.0),
+                  minHeight: 6,
+                  backgroundColor: const Color(0xFF5d4037).withValues(alpha: 0.16),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFD4A06A)),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '已读 ${pct.toStringAsFixed(1)}%',
+                style: const TextStyle(
+                  color: Color(0xFFB8860B),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ],
           ),
         ),
+      ),
       ),
     );
   }
 
-  Widget _buildRandomSutraCard() {
-    final sutra = _randomSutra;
-    if (sutra == null) return const SizedBox.shrink();
-    final folderName = _folderDisplayNames[sutra.folder] ?? sutra.folder;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF5d4037), Color(0xFF7a5c4e)],
+  void _openLastRead() {
+    final title = _lastReadTitle;
+    if (title == null) return;
+    openRecentSutra(title, _lastReadFilePath);
+  }
+
+  /// 打开一部经书：优先走本地列表（保持已读/收藏等状态），否则直接进入阅读页。
+  void openRecentSutra(String title, String? filePath) {
+    _dismissKeyboard();
+    final sutra = _findSutra(title);
+    if (sutra != null) {
+      _openSutra(sutra);
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ReadingPage(title: title, filePath: filePath),
         ),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: const Color(0xFF5d4037).withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 3)),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.casino, color: Color(0xFFF4E6D3), size: 16),
-              const SizedBox(width: 6),
-              const Text('随缘读经', style: TextStyle(color: Color(0xFFF4E6D3), fontSize: 12)),
-              const Spacer(),
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  setState(() {
-                    _randomSutra = _rollRandomSutra();
-                  });
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Icon(Icons.autorenew, color: Color(0xFFF4E6D3), size: 14),
-                      SizedBox(width: 4),
-                      Text('换一本', style: TextStyle(color: Color(0xFFF4E6D3), fontSize: 12)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: () {
-              _dismissKeyboard();
-              _openSutra(sutra);
-            },
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _displayTitle(sutra.title),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  [if (folderName != null) folderName, sutra.size].join(' · '),
-                  style: const TextStyle(color: Color(0xFFE8D9C4), fontSize: 13, height: 1.5),
-                ),
-                const SizedBox(height: 8),
-                const Align(
-                  alignment: Alignment.centerRight,
-                  child: Text('开始阅读 ›', style: TextStyle(color: Color(0xFFF4E6D3), fontSize: 12)),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+      );
+    }
   }
 
   Widget _buildSearchBar() {
@@ -1484,14 +1449,7 @@ class SutraListPageState extends State<SutraListPage>
       );
     }
     const milestones = [25, 50, 75, 100];
-    int? next;
-    for (final m in milestones) {
-      if (pct < m) {
-        next = m;
-        break;
-      }
-    }
-    final remain = next == null ? 0 : ((next / 100 * total).ceil() - read);
+    final remainVolumes = total - read;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
@@ -1499,11 +1457,11 @@ class SutraListPageState extends State<SutraListPage>
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF5d4037), Color(0xFF7a5c4e)],
+          colors: [Color(0xFF8D6E63), Color(0xFFBCAAA4)],
         ),
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: const Color(0xFF5d4037).withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 3)),
+          BoxShadow(color: const Color(0xFF8D6E63).withValues(alpha: 0.25), blurRadius: 10, offset: const Offset(0, 3)),
         ],
       ),
       child: Column(
@@ -1511,16 +1469,16 @@ class SutraListPageState extends State<SutraListPage>
         children: [
           Row(
             children: [
-              const Icon(Icons.auto_stories, color: Color(0xFFF4E6D3), size: 16),
+              const Icon(Icons.auto_stories, color: Color(0xFF4E342E), size: 16),
               const SizedBox(width: 6),
-              const Text('阅藏进度', style: TextStyle(color: Color(0xFFF4E6D3), fontSize: 13)),
+              const Text('阅藏进度', style: TextStyle(color: Color(0xFF4E342E), fontSize: 13, fontWeight: FontWeight.w600)),
               const Spacer(),
               Text(
                 '${pct.toStringAsFixed(1)}%',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 24,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w800,
                   height: 1,
                 ),
               ),
@@ -1538,7 +1496,7 @@ class SutraListPageState extends State<SutraListPage>
                   Container(
                     height: 10,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.22),
+                      color: const Color(0xFF5d4037).withValues(alpha: 0.16),
                       borderRadius: BorderRadius.circular(5),
                     ),
                   ),
@@ -1548,9 +1506,7 @@ class SutraListPageState extends State<SutraListPage>
                       child: Container(
                         height: 10,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFFF4E6D3), Color(0xFFE8C48A)],
-                          ),
+                          color: const Color(0xFFD4A06A),
                           borderRadius: BorderRadius.circular(5),
                         ),
                       ),
@@ -1558,12 +1514,12 @@ class SutraListPageState extends State<SutraListPage>
                   for (final m in milestones)
                     if (m < 100)
                       Positioned(
-                        left: constraints.maxWidth * m / 100 - 0.5,
-                        top: 0,
-                        bottom: 0,
+                        left: constraints.maxWidth * m / 100 - 0.75,
+                        top: 2,
+                        bottom: 2,
                         child: Container(
-                          width: 1,
-                          color: Colors.white.withValues(alpha: 0.45),
+                          width: 1.5,
+                          color: const Color(0xFF5d4037).withValues(alpha: 0.55),
                         ),
                       ),
                 ],
@@ -1589,11 +1545,11 @@ class SutraListPageState extends State<SutraListPage>
                               '圆满',
                               style: TextStyle(
                                 color: pct >= m
-                                    ? const Color(0xFFF4E6D3)
-                                    : Colors.white.withValues(alpha: 0.45),
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.6),
                                 fontSize: 11,
                                 fontWeight: pct >= m
-                                    ? FontWeight.w600
+                                    ? FontWeight.w700
                                     : FontWeight.normal,
                               ),
                             ),
@@ -1608,11 +1564,11 @@ class SutraListPageState extends State<SutraListPage>
                                 '$m%',
                                 style: TextStyle(
                                   color: pct >= m
-                                      ? const Color(0xFFF4E6D3)
-                                      : Colors.white.withValues(alpha: 0.45),
+                                      ? Colors.white
+                                      : Colors.white.withValues(alpha: 0.6),
                                   fontSize: 11,
                                   fontWeight: pct >= m
-                                      ? FontWeight.w600
+                                      ? FontWeight.w700
                                       : FontWeight.normal,
                                 ),
                               ),
@@ -1626,34 +1582,18 @@ class SutraListPageState extends State<SutraListPage>
           ),
           const SizedBox(height: 10),
           Text(
-            '已阅 $read 部 · 共 $total 部',
-            style: const TextStyle(color: Color(0xFFE8D9C4), fontSize: 12),
+            '已阅 $read 册 · 共 ${_folders.length} 部 · $total 册',
+            style: const TextStyle(color: Color(0xFF4E342E), fontSize: 12),
           ),
           const SizedBox(height: 4),
-          if (next != null)
-            Text(
-              '再读 $remain 部即可到达 $next%',
-              style: const TextStyle(
-                color: Color(0xFFF4E6D3),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            )
-          else
-            const Row(
-              children: [
-                Icon(Icons.emoji_events, color: Color(0xFFF4E6D3), size: 14),
-                SizedBox(width: 4),
-                Text(
-                  '阅藏圆满，功德无量',
-                  style: TextStyle(
-                    color: Color(0xFFF4E6D3),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+          Text(
+            '已读 $_readDays 天 · 今日已读 $_todayReadCount 册 · 剩余 $remainVolumes 册',
+            style: const TextStyle(
+              color: Color(0xFF5d4037),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
             ),
+          ),
         ],
       ),
     );
@@ -1737,182 +1677,452 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  Widget _buildFavoriteSection() {
-    final favorites = _getFavoriteSutras();
+  Widget _buildQuickGrid() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+          padding: const EdgeInsets.fromLTRB(14, 24, 14, 12),
           child: Row(
             children: [
-              const Icon(Icons.star_rounded, color: Color(0xFFD4A06A), size: 18),
+              const Icon(Icons.grid_view_rounded, color: Color(0xFFba8e82), size: 18),
               const SizedBox(width: 6),
               const Text(
-                '我的收藏',
+                '经典入口',
                 style: TextStyle(
                   color: Color(0xFF5d4037),
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(width: 6),
-              Text(
-                '${favorites.length} 部',
-                style: const TextStyle(color: Color(0xFF999999), fontSize: 12),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: SizedBox(
+            height: 132,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: _buildFavoriteTile()),
+                      const SizedBox(height: 10),
+                      Expanded(child: _buildRecentTile()),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: _buildRandomTile()),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              Expanded(child: _buildAllSutrasBar()),
+              const SizedBox(width: 8),
+              _buildChangeFolderButton(),
+            ],
+          ),
+        ),
+        if (_randomFolder != null) ...[
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: _buildRandomFolderSection(),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 全部经典通栏窄条：点击展开全部部类浏览。
+  Widget _buildAllSutrasBar() {
+    return Material(
+      color: const Color(0xFFFFFAF5),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AllSutrasPage(parent: this)),
+          );
+        },
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B6B5A).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.menu_book_rounded, size: 16, color: Color(0xFF8B6B5A)),
               ),
-              const Spacer(),
-              GestureDetector(
-                onTap: () {
-                  _dismissKeyboard();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const FavoriteSutrasPage()),
-                  );
-                },
-                child: const Row(
-                  children: [
-                    Text(
-                      '查看全部',
-                      style: TextStyle(color: Color(0xFFba8e82), fontSize: 12),
-                    ),
-                    Icon(Icons.chevron_right, color: Color(0xFFba8e82), size: 16),
-                  ],
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '全部经典',
+                  style: TextStyle(
+                    color: Color(0xFF5d4037),
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Text(
+                '${_folders.length} 个部类',
+                style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right, color: Color(0xFFC4B5A8), size: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 「换一部」按钮：刷新图标 + 文案，随机轮换一部，将该部经书全部展开显示。
+  Widget _buildChangeFolderButton() {
+    return Material(
+      color: const Color(0xFFFFFAF5),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          setState(() {
+            _randomFolder = _rollRandomFolder();
+          });
+        },
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.autorenew, color: Color(0xFF71867A), size: 14),
+              const SizedBox(width: 3),
+              const Text(
+                '换一部',
+                style: TextStyle(
+                  color: Color(0xFF71867A),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
           ),
         ),
-        if (favorites.isEmpty)
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFFAF5),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.star_border_rounded, color: Color(0xFFC4B5A8), size: 18),
-                SizedBox(width: 8),
-                Text(
-                  '暂无收藏，在经文中点击 ♥ 收藏后即可在此快速阅读',
-                  style: TextStyle(color: Color(0xFF8B6B5A), fontSize: 12.5),
-                ),
-              ],
-            ),
-          )
-        else
-          SizedBox(
-            height: 108,
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              scrollDirection: Axis.horizontal,
-              itemCount: favorites.length,
-              itemBuilder: (ctx, i) => _buildFavoriteCard(ctx, favorites[i]),
-            ),
-          ),
-      ],
+      ),
     );
   }
 
-  Widget _buildFavoriteCard(BuildContext ctx, Sutra sutra) {
+  /// 随机选中部类的全部经书列表：展示在该部类下全部经书，供逐一阅读。
+  Widget _buildRandomFolderSection() {
+    final folder = _randomFolder;
+    if (folder == null) return const SizedBox.shrink();
+    final sutras = _getAllSutrasInFolder(folder);
+    final name = _folderDisplayNames[folder] ?? folder;
     return Container(
-      width: 118,
-      margin: const EdgeInsets.only(right: 10),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFAF5),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF5d4037),
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Text(
+                  '共 ${sutras.length} 册',
+                  style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, thickness: 0.6, color: Color(0xFFEFE6DA)),
+          if (sutras.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text(
+                  '暂无内容',
+                  style: TextStyle(color: Color(0xFF999999), fontSize: 12),
+                ),
+              ),
+            )
+          else
+            ...sutras.map((s) => _buildSutraTile(context, s)),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  /// 我的收藏宫格：仅入口（跳转收藏列表）。
+  Widget _buildFavoriteTile() {
+    return Material(
+      color: const Color(0xFFFFFAF5),
+      borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => _openSutra(sutra),
-        onLongPress: () => _showBottomSheet(ctx, sutra),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+        onTap: () {
+          _dismissKeyboard();
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => FavoriteSutrasPage(parent: this)),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD4A06A).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: const Icon(Icons.star_rounded, size: 14, color: Color(0xFFD4A06A)),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '我的收藏',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color(0xFF5d4037),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Color(0xFFC4B5A8), size: 14),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 最近阅读宫格：仅入口（跳转最近阅读列表）。
+  Widget _buildRecentTile() {
+    return Material(
+      color: const Color(0xFFFFFAF5),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => RecentSutrasPage(parent: this)),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF5d4037).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: const Icon(Icons.history_rounded, size: 14, color: Color(0xFF5d4037)),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '最近阅读',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color(0xFF5d4037),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Color(0xFFC4B5A8), size: 14),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 随缘读经宫格：标题 + 随机经书信息（书名 + 部类 + 大小，可点书名阅读、点「换一本」重抽）。
+  Widget _buildRandomTile() {
+    final sutra = _randomSutra;
+    final folderName = sutra != null
+        ? (_folderDisplayNames[sutra.folder] ?? sutra.folder)
+        : null;
+    final info = [
+      if (folderName != null && folderName.isNotEmpty) folderName,
+      if (sutra?.size != null && sutra!.size.isNotEmpty) sutra.size,
+    ].join(' · ');
+    return Material(
+      color: const Color(0xFFFFFAF5),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          if (_randomSutra != null) _openSutra(_randomSutra!);
+        },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 10, 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
                   Container(
-                    width: 22,
-                    height: 22,
+                    width: 24,
+                    height: 24,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFD4A06A).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(6),
+                      color: const Color(0xFF71867A).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(7),
                     ),
-                    child: const Icon(Icons.auto_stories_rounded,
-                        size: 13, color: Color(0xFFD4A06A)),
+                    child: const Icon(Icons.casino_rounded, size: 14, color: Color(0xFF71867A)),
                   ),
-                  const Spacer(),
-                  Icon(
-                    sutra.isRead
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
-                    size: 13,
-                    color: sutra.isRead
-                        ? const Color(0xFF71867A)
-                        : const Color(0xFFC4B5A8),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      '随缘读经',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Color(0xFF5d4037),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      setState(() {
+                        _randomSutra = _rollRandomSutra();
+                      });
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.autorenew, color: Color(0xFF71867A), size: 13),
+                          SizedBox(width: 2),
+                          Text(
+                            '换一册',
+                            style: TextStyle(
+                              color: Color(0xFF71867A),
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
               Text(
-                _displayTitle(sutra.title),
-                maxLines: 2,
+                sutra != null ? _displayTitle(sutra.title) : '随机一部经典',
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  color: Color(0xFF5d4037),
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  height: 1.3,
+                  color: Color(0xFF3E2723),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  height: 1.4,
+                ),
+              ),
+              if (info.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  info,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8B6B5A),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+              const Spacer(),
+              const Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '开始阅读 ›',
+                  style: TextStyle(
+                    color: Color(0xFFE5A12E),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildCategorySection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
-          child: Row(
-            children: [
-              const Text(
-                '分类阅览',
-                style: TextStyle(
-                  color: Color(0xFF5d4037),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                '${_folders.length} 个部类',
-                style: const TextStyle(color: Color(0xFF999999), fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-        GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 2,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.8,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          children: _folders.map((f) => _buildFolderCard(f)).toList(),
-        ),
-      ],
     );
   }
 
@@ -1948,6 +2158,7 @@ class SutraListPageState extends State<SutraListPage>
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Row(
                 children: [
@@ -1965,28 +2176,31 @@ class SutraListPageState extends State<SutraListPage>
                       ),
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(2),
-                      child: LinearProgressIndicator(
-                        value: pct / 100,
-                        minHeight: 4,
-                        backgroundColor: const Color(0xFFF0E6D8),
-                        color: const Color(0xFFD4A06A),
-                      ),
-                    ),
-                  ),
                   const SizedBox(width: 6),
                   Text(
-                    '$read/$total',
-                    style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+                    '已读 ${pct.toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                      color: Color(0xFFD4A06A),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: LinearProgressIndicator(
+                  value: total == 0 ? 0 : read / total,
+                  minHeight: 8,
+                  backgroundColor: const Color(0xFFF0E6D8),
+                  color: const Color(0xFFD4A06A),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '共 $total 册 · 已阅 $read 册',
+                style: const TextStyle(color: Color(0xFF8B6B5A), fontSize: 11),
               ),
             ],
           ),
@@ -2054,6 +2268,7 @@ class SutraListPageState extends State<SutraListPage>
     required bool isExpanded,
     required VoidCallback onToggle,
     required IconData icon,
+    required bool showPin,
   }) {
     return Column(
       children: [
@@ -2113,7 +2328,7 @@ class SutraListPageState extends State<SutraListPage>
                       onTap: () {
                         _openSutra(sutra);
                       },
-                      onLongPress: () => _showBottomSheet(context, sutra),
+                      onLongPress: () => _showBottomSheet(context, sutra, showPin: showPin),
                     ),
                   ),
                 );
@@ -2149,7 +2364,18 @@ class SutraListPageState extends State<SutraListPage>
             elevation: 0,
             shadowColor: Colors.transparent,
             iconTheme: const IconThemeData(color: Color(0xFF212121)),
-            title: Row(
+            title: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onDoubleTap: () {
+                if (_scrollController.hasClients) {
+                  _scrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 400),
+                    curve: Curves.easeOutCubic,
+                  );
+                }
+              },
+              child: Row(
               children: [
                 Text(
                   _searchActive ? '搜索' : '经藏',
@@ -2181,6 +2407,7 @@ class SutraListPageState extends State<SutraListPage>
                   ),
                 ),
               ],
+              ),
             ),
             actions: [
               // 搜索激活时隐藏右上角「助手」入口。
@@ -2208,14 +2435,13 @@ class SutraListPageState extends State<SutraListPage>
                 child: _searchActive
                     ? _buildSearchResults()
                     : SingleChildScrollView(
+                        controller: _scrollController,
                         padding: const EdgeInsets.only(bottom: 40),
                         child: Column(
                           children: [
                             _buildProgressCard(),
-                            _buildRecentReadCard(),
-                            _buildFavoriteSection(),
-                            _buildRandomSutraCard(),
-                            _buildCategorySection(),
+                            _buildContinueReadingCard(),
+                            _buildQuickGrid(),
                           ],
                         ),
                       ),
@@ -2325,6 +2551,7 @@ class SutraListPageState extends State<SutraListPage>
                       });
                     },
                     icon: Icons.check_circle,
+                    showPin: false,
                   ),
                   _buildFolder(
                     title: '我的收藏',
@@ -2336,6 +2563,7 @@ class SutraListPageState extends State<SutraListPage>
                       });
                     },
                     icon: Icons.star,
+                    showPin: true,
                   ),
                   const Divider(height: 1),
                   ListTile(
@@ -2433,52 +2661,57 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
         elevation: 0,
         shadowColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        actionsPadding: const EdgeInsets.only(right: 24),
+        title: Row(
           children: [
-            Text(
-              widget.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFF5d4037),
-                fontSize: 16.5,
-                fontWeight: FontWeight.w700,
+            Flexible(
+              child: Text(
+                widget.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF5d4037),
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
+            const SizedBox(width: 8),
             Text(
-              '已读 $read / $total',
-              style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+              '已读 $read/$total 册',
+              style: const TextStyle(
+                color: Color(0xFFba8e82),
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ),
         actions: [
           if (downloading)
             Center(
-              child: Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: Text(
-                  '${widget.parent._folderDownloadDone[widget.folderName] ?? 0}/${widget.parent._folderDownloadTotal[widget.folderName]}',
-                  style: const TextStyle(
-                    color: Color(0xFFba8e82),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+              child: Text(
+                '${widget.parent._folderDownloadDone[widget.folderName] ?? 0}/${widget.parent._folderDownloadTotal[widget.folderName]}',
+                style: const TextStyle(
+                  color: Color(0xFFba8e82),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             )
-          else ...[
-            IconButton(
-              tooltip: '导入经书到本卷',
-              icon: const Icon(Icons.library_add_outlined, color: Color(0xFFba8e82), size: 20),
-              onPressed: () => widget.parent._addSutraToFolder(widget.folderName),
+          else
+            SizedBox(
+              width: 34,
+              height: 30,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                iconSize: 17,
+                tooltip: '下载本卷全部经文',
+                icon: const Icon(Icons.download_for_offline_outlined, color: Color(0xFF71867A)),
+                onPressed: () => widget.parent._downloadFolder(widget.folderName),
+              ),
             ),
-            IconButton(
-              tooltip: '下载本卷全部经文',
-              icon: const Icon(Icons.download_for_offline_outlined, color: Color(0xFFba8e82), size: 20),
-              onPressed: () => widget.parent._downloadFolder(widget.folderName),
-            ),
-          ],
         ],
       ),
       body: total == 0
@@ -2490,6 +2723,80 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
               itemCount: total,
               itemBuilder: (ctx, i) => widget.parent._buildSutraTile(ctx, _sutras[i]),
             ),
+    );
+  }
+}
+
+/// 全部经典页：按部类浏览全部经书。
+class AllSutrasPage extends StatefulWidget {
+  final SutraListPageState parent;
+
+  const AllSutrasPage({super.key, required this.parent});
+
+  @override
+  State<AllSutrasPage> createState() => _AllSutrasPageState();
+}
+
+class _AllSutrasPageState extends State<AllSutrasPage> {
+  @override
+  void initState() {
+    super.initState();
+    widget.parent._sutraDataVersion.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.parent._sutraDataVersion.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final folders = widget.parent._folders;
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5EDE3),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF5EDE3),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
+        title: Row(
+          children: [
+            const Text(
+              '全部经典',
+              style: TextStyle(
+                color: Color(0xFF5d4037),
+                fontSize: 16.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${folders.length} 个部类',
+              style: const TextStyle(
+                color: Color(0xFFba8e82),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: GridView.builder(
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.6,
+        ),
+        itemCount: folders.length,
+        itemBuilder: (ctx, i) => widget.parent._buildFolderCard(folders[i]),
+      ),
     );
   }
 }

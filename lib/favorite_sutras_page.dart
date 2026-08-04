@@ -17,9 +17,12 @@ const Color _textHint = Color(0xFFC4B5A8);
 
 class FavoriteSutrasPage extends StatefulWidget {
   /// [embedded] 为 true 时不显示自己的 Scaffold/头部，用于嵌入标签页。
-  const FavoriteSutrasPage({super.key, this.embedded = false});
+  const FavoriteSutrasPage({super.key, this.embedded = false, this.parent});
 
   final bool embedded;
+
+  /// 经藏页状态引用：长按菜单、置顶/收藏/完成阅读等操作都复用经藏页逻辑。
+  final SutraListPageState? parent;
 
   @override
   State<FavoriteSutrasPage> createState() => _FavoriteSutrasPageState();
@@ -32,11 +35,31 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
   @override
   void initState() {
     super.initState();
+    widget.parent?.sutraDataVersion.addListener(_onParentChanged);
     _loadFavorites();
+  }
+
+  @override
+  void dispose() {
+    widget.parent?.sutraDataVersion.removeListener(_onParentChanged);
+    super.dispose();
+  }
+
+  void _onParentChanged() {
+    if (mounted) _loadFavorites();
   }
 
   Future<void> _loadFavorites() async {
     try {
+      if (widget.parent != null) {
+        final sutras = List<Sutra>.from(widget.parent!.getFavoriteSutras());
+        if (!mounted) return;
+        setState(() {
+          _favoriteSutras = sutras;
+          _loading = false;
+        });
+        return;
+      }
       final docs = await getApplicationDocumentsDirectory();
       final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
       if (!await file.exists()) {
@@ -50,6 +73,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
           .where((s) => s.isFavorite)
           .toList();
       sutras.sort((a, b) {
+        if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
         if (a.favoriteTime == null && b.favoriteTime == null) return 0;
         if (a.favoriteTime == null) return 1;
         if (b.favoriteTime == null) return -1;
@@ -225,6 +249,11 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: () => _openSutra(sutra),
+        onLongPress: () {
+          final parent = widget.parent;
+          if (parent == null) return;
+          parent.showSutraMenu(context, sutra, showPin: true);
+        },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
@@ -243,6 +272,10 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
                   style: const TextStyle(fontSize: 15, color: _text, fontWeight: FontWeight.w500),
                 ),
               ),
+              if (sutra.isPinned) ...[
+                const Icon(Icons.push_pin, color: _gold, size: 16),
+                const SizedBox(width: 6),
+              ],
               const Icon(Icons.chevron_right, color: _textHint, size: 20),
             ],
           ),

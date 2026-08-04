@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'note_detail_page.dart';
 import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
 
@@ -310,47 +311,58 @@ class _AdminManagePageState extends State<AdminManagePage> {
               offset: const Offset(0, 2)),
         ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: sText),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => NoteDetailPage(noteId: item.id)),
+          ),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: sText),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        item.content,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 13, color: sTextSec, height: 1.5),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatTime(item.createdAt),
+                        style: const TextStyle(fontSize: 11, color: sTextHint),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.content,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style:
-                        const TextStyle(fontSize: 13, color: sTextSec, height: 1.5),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatTime(item.createdAt),
-                    style: const TextStyle(fontSize: 11, color: sTextHint),
-                  ),
-                ],
-              ),
+                ),
+                IconButton(
+                  onPressed: () => _deleteAnnouncement(item),
+                  icon: const Icon(Icons.delete_outline,
+                      size: 20, color: Colors.redAccent),
+                  tooltip: '删除公告',
+                ),
+              ],
             ),
-            IconButton(
-              onPressed: () => _deleteAnnouncement(item),
-              icon: const Icon(Icons.delete_outline,
-                  size: 20, color: Colors.redAccent),
-              tooltip: '删除公告',
-            ),
-          ],
+          ),
         ),
       ),
     );
