@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
+import 'app_state.dart';
+
 /// AI 助手展示面：底部 Tab、上滑面板、圆形展开面板。
 enum AssistantSurface { tab, panel, reveal }
 

@@ -1061,8 +1061,19 @@ class StudyHubPageState extends State<StudyHubPage>
     } else {
       await prefs.setString('locked_sutra_title', _currentTitle!);
       await prefs.setString('locked_sutra_file_path', _currentFilePath ?? '');
+      await _recordLockedSutra(prefs, _currentTitle!, _currentFilePath ?? '');
       _loadData();
     }
+  }
+
+  /// 记录锁定过的经文（精读依据）：去重置顶、上限 50 本。
+  Future<void> _recordLockedSutra(
+      SharedPreferences prefs, String title, String filePath) async {
+    final list = prefs.getStringList('locked_sutras') ?? [];
+    list.removeWhere((e) => e.startsWith('$title|||'));
+    list.insert(0, '$title|||$filePath');
+    if (list.length > 50) list.removeRange(50, list.length);
+    await prefs.setStringList('locked_sutras', list);
   }
 
   @override

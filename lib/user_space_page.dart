@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
+import 'checkin_history_stats.dart';
 import 'cloud_notes_service.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
@@ -600,12 +601,118 @@ class _UserSpacePageState extends State<UserSpacePage> {
         '${widget.userName} 暂无精读经文',
       );
     }
-    // 直接展示该经书的讨论页（无讨论时页面内显示「还没有讨论」）。
-    final sutra = data.reading.first;
-    return SutraDiscussionPage(
-      title: sutra.title,
-      filePath: sutra.filePath,
-      embedded: true,
+    return RefreshIndicator(
+      color: _gold,
+      onRefresh: _loadHomeData,
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
+        itemCount: data.reading.length,
+        itemBuilder: (context, i) {
+          final s = data.reading[i];
+          return _buildReadingRow(
+            s,
+            isCurrent: s.title == data.currentLockedTitle,
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildReadingRow(UserReadingSutra s, {bool isCurrent = false}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isCurrent ? const Color(0xFF70867A) : _border,
+            width: isCurrent ? 1.4 : 0.8),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  SutraDiscussionPage(title: s.title, filePath: s.filePath),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF70867A).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: const Icon(Icons.menu_book_rounded,
+                          size: 18, color: Color(0xFF70867A)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        s.title,
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          color: _text,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                    if (isCurrent) ...[
+                      const SizedBox(width: 6),
+                      Align(
+                        alignment: Alignment.topCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF70867A),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text('当前锁定',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.white,
+                                    height: 1.2)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('查看经书讨论',
+                        style: TextStyle(fontSize: 12, color: _textHint)),
+                    SizedBox(width: 2),
+                    Icon(Icons.chevron_right, size: 18, color: _textHint),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -632,7 +739,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
     }
     final tasks = _buildCheckinTaskLines(data.checkin);
     final goals = _buildCheckinGoalEntries(data.checkin);
-    if (tasks.isEmpty && goals.isEmpty) {
+    final stats = _buildHistoryStatEntries(data.checkin);
+    if (tasks.isEmpty && goals.isEmpty && stats.isEmpty) {
       return _tabPlaceholder(
         Icons.event_note_outlined,
         '对方还没有设置功课',
@@ -646,6 +754,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
         children: [
+          if (stats.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 6, bottom: 12),
+              child: CheckInHistoryStats(entries: stats),
+            ),
+          ],
           if (tasks.isNotEmpty) ...[
             _sectionTitle('功课设置'),
             ...tasks.map((t) => _buildTaskLine(t)),
@@ -722,6 +836,34 @@ class _UserSpacePageState extends State<UserSpacePage> {
           unit: info.unit,
           goal: goal,
           total: totals[k] ?? 0));
+    });
+    return out;
+  }
+
+  /// 历史统计条目：各类型自使用以来累计的总量（与目标无关）。
+  List<CheckInStatEntry> _buildHistoryStatEntries(Map<String, dynamic>? checkin) {
+    if (checkin == null) return [];
+    final totals = <String, double>{};
+    for (final r in _decodeMapList(checkin['checkin_records'])) {
+      final key = r['type']?.toString() ?? '';
+      if (key.isEmpty) continue;
+      final amt = double.tryParse((r['amount'] ?? 1).toString()) ?? 1;
+      totals[key] = (totals[key] ?? 0) + amt;
+    }
+    final customs = _decodeCustomTypes(checkin['custom_checkin_types']);
+    final typeInfo = <String, ({String label, String unit})>{
+      'meditation': (label: '静坐', unit: '分钟'),
+      'reading': (label: '诵经', unit: '遍'),
+      'mantra': (label: '持咒', unit: '遍'),
+      'buddha': (label: '称名', unit: '声'),
+      'copying': (label: '抄经', unit: '篇'),
+      for (final c in customs) c.key: (label: c.label, unit: c.unit),
+    };
+    final out = <CheckInStatEntry>[];
+    totals.forEach((k, v) {
+      final info = typeInfo[k];
+      if (info == null) return;
+      out.add(CheckInStatEntry(label: info.label, unit: info.unit, total: v));
     });
     return out;
   }

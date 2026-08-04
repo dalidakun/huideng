@@ -340,8 +340,11 @@ class UserHomeData {
   final bool readingAllowed;
   final bool checkinAllowed;
 
-  /// 精读：该用户最近阅读的经书列表。
+  /// 精读：该用户锁定过的经书列表。
   final List<UserReadingSutra> reading;
+
+  /// 当前锁定的经书标题（用于在列表中标记「当前锁定」）。
+  final String currentLockedTitle;
 
   /// 功课：对方打卡相关 prefs 键（未开启时为 null）。
   final Map<String, dynamic>? checkin;
@@ -350,6 +353,7 @@ class UserHomeData {
     this.readingAllowed = false,
     this.checkinAllowed = false,
     this.reading = const [],
+    this.currentLockedTitle = '',
     this.checkin,
   });
 
@@ -360,6 +364,7 @@ class UserHomeData {
             .whereType<Map<String, dynamic>>()
             .map(UserReadingSutra.fromJson)
             .toList(),
+        currentLockedTitle: e['currentLockedTitle']?.toString() ?? '',
         checkin: e['checkin'] is Map<String, dynamic>
             ? Map<String, dynamic>.from(e['checkin'] as Map)
             : null,

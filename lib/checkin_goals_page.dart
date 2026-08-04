@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'checkin_history_stats.dart';
 import 'sync_service.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -191,6 +192,10 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: CheckInHistoryStats(entries: _historyStats),
+          ),
           Container(
             margin: const EdgeInsets.only(bottom: 14),
             decoration: BoxDecoration(
@@ -231,6 +236,14 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
       ),
     );
   }
+
+  /// 历史统计条目：各类型自使用以来累计的总量。
+  List<CheckInStatEntry> get _historyStats => [
+        for (final t in _types)
+          if ((_totals[t.key] ?? 0) > 0)
+            CheckInStatEntry(
+                label: t.label, unit: t.unit, total: _totals[t.key] ?? 0),
+      ];
 
   Widget _buildTypeCard(_GoalType t) {
     final goal = _goals[t.key] ?? 0;

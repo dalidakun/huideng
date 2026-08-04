@@ -788,17 +788,38 @@ exports.main = async (event, context) => {
         const readingAllowed = prefs.privacy_show_reading === true;
         const checkinAllowed = prefs.privacy_show_checkin === true;
 
-        // 精读：当前精读经文（只展示一本，点击进入其讨论页）。
+        // 精读：该用户锁定过（含当前锁定）的经文，多本；当前锁定的一本置于最前。
         const reading = [];
         if (readingAllowed) {
-          const t = String(prefs.current_sutra_title || "").trim();
-          if (t) {
-            reading.push({
-              title: t,
-              filePath: String(prefs.current_sutra_file_path || ""),
+          const items = [];
+          if (Array.isArray(prefs.locked_sutras)) {
+            for (const e of prefs.locked_sutras) {
+              const s = String(e || "");
+              if (!s) continue;
+              const idx = s.indexOf("|||");
+              items.push(
+                idx > 0
+                  ? { title: s.slice(0, idx), filePath: s.slice(idx + 3) }
+                  : { title: s, filePath: "" }
+              );
+            }
+          }
+          const current = String(prefs.locked_sutra_title || "");
+          // 旧版本数据兜底：有当前锁定但尚无锁定历史时，补上当前锁定。
+          if (items.length === 0 && current) {
+            items.push({
+              title: current,
+              filePath: String(prefs.locked_sutra_file_path || ""),
             });
           }
+          items.sort((a, b) =>
+            (a.title === current ? 0 : 1) - (b.title === current ? 0 : 1)
+          );
+          for (const it of items) reading.push(it);
         }
+        const currentLockedTitle = readingAllowed
+          ? String(prefs.locked_sutra_title || "")
+          : "";
 
         // 功课：仅回传展示需要的打卡配置键，避免整包 payload 泄露其它数据。
         let checkin = null;
@@ -818,7 +839,7 @@ exports.main = async (event, context) => {
             if (prefs[k] != null) checkin[k] = prefs[k];
           }
         }
-        return ok({ readingAllowed, checkinAllowed, reading, checkin });
+        return ok({ readingAllowed, checkinAllowed, reading, checkin, currentLockedTitle });
       }
 
       // 搜索用户账号：按账号前缀/包含匹配 userAccounts，返回匹配用户的账号与 uid。

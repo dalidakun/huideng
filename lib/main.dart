@@ -770,8 +770,6 @@ class _AssistantPanelOverlay extends StatefulWidget {
 class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
-  // 面板 WebView 的 key：每次展开时重新加载，同步另一个 WebView 里的登录态。
-  final _webKey = GlobalKey<DiscussionPageState>();
 
   @override
   void initState() {
@@ -786,10 +784,16 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
   void _onVisible() {
     if (!mounted) return;
     if (assistantVisible.value) {
-      _webKey.currentState?.reload();
+      // 展开：把共享 WebView 挂到上滑面板表面（首次打开才真正创建）。
+      AssistantSession.instance.claim(AssistantSurface.panel);
       _ctrl.forward();
     } else {
-      _ctrl.reverse();
+      // 收起动画结束后才让出 WebView；若动画中途被取消（用户立刻重开），
+      // 仍处于打开态则不让出。
+      _ctrl.reverse().whenCompleteOrCancel(() {
+        if (!mounted || assistantVisible.value) return;
+        AssistantSession.instance.release(AssistantSurface.panel);
+      });
     }
   }
 
@@ -848,7 +852,7 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
             ],
           );
         },
-        child: DiscussionPage(key: _webKey),
+        child: const DiscussionPage(surface: AssistantSurface.panel),
       ),
     );
   }
@@ -866,8 +870,6 @@ class _AssistantRevealOverlay extends StatefulWidget {
 class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
-  // 面板 WebView 的 key：每次展开时重新加载，同步登录态。
-  final _webKey = GlobalKey<DiscussionPageState>();
 
   @override
   void initState() {
@@ -882,10 +884,16 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
   void _onVisible() {
     if (!mounted) return;
     if (assistantReveal.value) {
-      _webKey.currentState?.reload();
+      // 展开：把共享 WebView 挂到圆形展开表面（首次打开才真正创建）。
+      AssistantSession.instance.claim(AssistantSurface.reveal);
       _ctrl.forward();
     } else {
-      _ctrl.reverse();
+      // 收起动画结束后才让出 WebView；若动画中途被取消（用户立刻重开），
+      // 仍处于打开态则不让出。
+      _ctrl.reverse().whenCompleteOrCancel(() {
+        if (!mounted || assistantReveal.value) return;
+        AssistantSession.instance.release(AssistantSurface.reveal);
+      });
     }
   }
 
@@ -956,7 +964,7 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
             ),
           );
         },
-        child: DiscussionPage(key: _webKey),
+        child: const DiscussionPage(surface: AssistantSurface.reveal),
       ),
     );
   }
