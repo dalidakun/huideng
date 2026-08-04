@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'sync_service.dart';
 import 'user_avatar.dart';
 import 'login_page.dart';
 import 'reading_page.dart';
@@ -81,7 +82,11 @@ class StudyHubPageState extends State<StudyHubPage>
   String? _lockedTitle;
   String? _lockedFilePath;
   bool _currentFavorite = false;
+  /// 是否允许他人在主页查看我的「精读」（在读经书）。
+  bool _allowReadingShare = false;
   List<Map<String, dynamic>> _customTypes = [];
+  /// 实际配置的功课类型列表（功课打卡卡片与自动分享共用）。
+  List<Map<String, dynamic>> _checkInTypesList = [];
   bool _loaded = false;
   int _tabIndex = 0;
   List<String> _plazaTabs = ['latest', 'hot', 'follow', 'announce'];
@@ -214,12 +219,14 @@ class StudyHubPageState extends State<StudyHubPage>
         _progress = prefs.getDouble('progress_$_currentFilePath') ?? 0.0;
       }
       _currentFavorite = fav;
+      _allowReadingShare = prefs.getBool('privacy_show_reading') ?? false;
       _todayCheckIns = _loadTodayCheckIns(prefs);
       _checkinStreak = _calcStreak(prefs);
       _studyDays = prefs.getInt('study_day_count') ?? 0;
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes =
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
+      _checkInTypesList = _buildConfiguredCheckInTypes(prefs);
       _plazaTabs = plazaTabs;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopSection());
@@ -271,6 +278,117 @@ class StudyHubPageState extends State<StudyHubPage>
       setState(() => _currentFavorite = !wasFav);
     } catch (_) {
       _showTopToast('收藏失败，请重试', isError: true);
+    }
+  }
+
+  /// 精读经文卡右上角的「允许」开关：控制他人在主页查看我的精读。
+  Future<void> _toggleReadingShare(bool v) async {
+    setState(() => _allowReadingShare = v);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('privacy_show_reading', v);
+    await SyncService.instance.push();
+    if (mounted) {
+      _showTopToast(
+          v ? '已开启，其他同修可查看你的精读' : '已关闭，其他同修不可查看你的精读');
+    }
+  }
+
+  /// 长按精读经文卡的经书名：弹出「收藏 / 标记完成」窗口（与经藏长按菜单同款样式）。
+  Future<void> _showSutraActionsSheet() async {
+    final title = _currentTitle;
+    if (title == null) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (BuildContext context) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _sheetMenuItem(
+                context,
+                icon: _currentFavorite ? Icons.favorite : Icons.favorite_border,
+                title: _currentFavorite ? '取消收藏' : '收藏',
+                onTap: () {
+                  Navigator.pop(context);
+                  _toggleFavoriteCurrent();
+                },
+              ),
+              _sheetMenuItem(
+                context,
+                icon: Icons.mark_chat_read,
+                title: '标记完成阅读',
+                onTap: () {
+                  Navigator.pop(context);
+                  _markCurrentRead();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 经藏长按菜单同款菜单项：白底、图标 24 + 文字 16。
+  Widget _sheetMenuItem(
+    BuildContext ctx, {
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFF212121), size: 24),
+            const SizedBox(width: 16),
+            Text(
+              title,
+              style: const TextStyle(
+                color: Color(0xFF212121),
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 标记当前精读经文为已读完成。
+  Future<void> _markCurrentRead() async {
+    final title = _currentTitle;
+    if (title == null) return;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final file =
+          File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      if (!await file.exists()) {
+        _showTopToast('未找到经书列表，无法标记', isError: true);
+        return;
+      }
+      final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+      final list = decoded.map((e) => (e as Map<String, dynamic>)).toList();
+      final idx = list.indexWhere((e) => e['title'] == title);
+      if (idx < 0) {
+        _showTopToast('未找到该经书，无法标记', isError: true);
+        return;
+      }
+      list[idx]['isRead'] = true;
+      list[idx]['readTime'] = DateTime.now().toIso8601String();
+      await file.writeAsString(jsonEncode(list));
+      if (!mounted) return;
+      _showTopToast('已标记完成');
+    } catch (_) {
+      _showTopToast('标记失败，请重试', isError: true);
     }
   }
 
@@ -1173,6 +1291,7 @@ class StudyHubPageState extends State<StudyHubPage>
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _openSutra,
+              onLongPress: _currentTitle != null ? _showSutraActionsSheet : null,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Row(
@@ -1240,28 +1359,31 @@ class StudyHubPageState extends State<StudyHubPage>
                     ),
                   ),
                   const SizedBox(width: 18),
-                  TextButton(
-                    onPressed: _toggleFavoriteCurrent,
-                    style: TextButton.styleFrom(
-                      foregroundColor: _currentFavorite ? _gold : _textSec,
-                      padding: EdgeInsets.zero,
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Image.asset(
-                            _currentFavorite
-                                ? 'assets/images/star_filled.png'
-                                : 'assets/images/star_outline.png',
-                            width: 13,
-                            height: 13),
-                        const SizedBox(width: 4),
-                        Text(_currentFavorite ? '已收藏' : '收藏',
-                            style: const TextStyle(fontSize: 13)),
-                      ],
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 34,
+                        height: 22,
+                        child: FittedBox(
+                          fit: BoxFit.contain,
+                          child: Switch(
+                            value: _allowReadingShare,
+                            onChanged: _toggleReadingShare,
+                            activeTrackColor: const Color(0xFF71867A),
+                            activeThumbColor: Colors.white,
+                            inactiveTrackColor: const Color(0xFFE8E2DA),
+                            inactiveThumbColor: const Color(0xFFBDB6AC),
+                            trackOutlineColor: WidgetStateProperty.resolveWith(
+                                (_) => Colors.transparent),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(_allowReadingShare ? '已允许' : '允许',
+                          style: const TextStyle(
+                              fontSize: 12, color: _textSec)),
+                    ],
                   ),
                   const Spacer(),
                   TextButton(
@@ -1341,28 +1463,10 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Widget _buildCheckInCard() {
-    final types = [
-      {
-        'key': 'meditation',
-        'label': '静坐',
-        'icon': Icons.self_improvement_outlined
-      },
-      {
-        'key': 'reading',
-        'label': '诵经',
-        'icon': Icons.chrome_reader_mode_outlined
-      },
-      {
-        'key': 'mantra',
-        'label': '持咒',
-        'icon': Icons.notifications_none_outlined
-      },
-      {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
-      {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
-      ..._customTypes.map((t) =>
-          {'key': t['key'], 'label': t['label'], 'icon': Icons.playlist_add}),
-    ];
-    final doneCount = _todayCheckIns.length;
+    final types = _checkInTypes();
+    final shownKeys = {for (final t in types) t['key']};
+    final doneCount =
+        _todayCheckIns.where((r) => shownKeys.contains(r['type'])).length;
 
     return Container(
       decoration: BoxDecoration(
@@ -2090,7 +2194,229 @@ class StudyHubPageState extends State<StudyHubPage>
       });
     }
     await prefs.setString('checkin_records', jsonEncode(allRecords));
-    _loadData();
+    await _loadData();
+    await _maybeAutoShareCheckin(prefs);
+  }
+
+  /// 打卡类型列表：固定五项 + 自定义。若已配置具体功课，则只展示已配置的类型。
+  List<Map<String, dynamic>> _checkInTypes() {
+    return _checkInTypesList.isEmpty ? _allCheckInTypes() : _checkInTypesList;
+  }
+
+  List<Map<String, dynamic>> _allCheckInTypes() {
+    return [
+      {'key': 'meditation', 'label': '静坐', 'icon': Icons.self_improvement_outlined},
+      {'key': 'reading', 'label': '诵经', 'icon': Icons.chrome_reader_mode_outlined},
+      {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
+      {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
+      {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
+      ..._customTypes.map((t) =>
+          {'key': t['key'], 'label': t['label'], 'icon': Icons.playlist_add}),
+    ];
+  }
+
+  /// 依据功课设置筛选实际配置的类型；全部未配置时回退为固定五项，避免空卡。
+  List<Map<String, dynamic>> _buildConfiguredCheckInTypes(SharedPreferences prefs) {
+    final all = _allCheckInTypes();
+    final configured = all.where((t) {
+      switch (t['key']) {
+        case 'meditation':
+          return _hasNonEmptyItems(prefs, 'setting_meditation_minutes');
+        case 'reading':
+          return _hasNonEmptyNamed(prefs, 'setting_reading_titles');
+        case 'mantra':
+          return _hasNonEmptyNamed(prefs, 'setting_mantra_items');
+        case 'buddha':
+          return _hasNonEmptyNamed(prefs, 'setting_buddha_items');
+        case 'copying':
+          return _hasNonEmptyItems(prefs, 'setting_copying_titles');
+        default:
+          return true; // 自定义类型始终展示。
+      }
+    }).toList();
+    return configured.isEmpty ? all : configured;
+  }
+
+  bool _hasNonEmptyItems(SharedPreferences prefs, String key) {
+    final raw = prefs.getString(key);
+    if (raw == null) return false;
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) return d.any((e) => e.toString().trim().isNotEmpty);
+    } catch (_) {}
+    return false;
+  }
+
+  bool _hasNonEmptyNamed(SharedPreferences prefs, String key) {
+    final raw = prefs.getString(key);
+    if (raw == null) return false;
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) {
+        return d.any((e) {
+          final n = e is Map ? (e['name'] ?? '') : e;
+          return n.toString().trim().isNotEmpty;
+        });
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// 完成当日全部功课且开启「分享每日功课」时，弹窗展示当天功课并确认后发布到菩提空间（每日仅一次）。
+  Future<void> _maybeAutoShareCheckin(SharedPreferences prefs) async {
+    try {
+      if (!(prefs.getBool('privacy_share_daily_checkin') ?? false)) return;
+      if (!AuthService.instance.isLoggedIn) return;
+      final today = _today();
+      if (prefs.getString('shared_checkin_date') == today) return;
+      final types = _checkInTypes();
+      if (types.isEmpty) return;
+      final todayKeys = {for (final r in _todayCheckIns) r['type'] ?? ''};
+      if (!types.every((t) => todayKeys.contains(t['key']))) return;
+
+      final lines = _buildCheckInShareLines(prefs, types);
+      if (lines.isEmpty) return;
+      final content = '今天完成功课：\n${lines.join('\n')}';
+      if (!mounted) return;
+
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: _card,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('恭喜你完成今天的功课！',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: _text)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('今天完成的功课如下，是否分享到菩提空间？',
+                  style: TextStyle(fontSize: 13, color: _textSec)),
+              const SizedBox(height: 12),
+              Container(
+                width: double.maxFinite,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _overlay,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final l in lines)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Text(l,
+                            style: const TextStyle(
+                                fontSize: 14, color: _text, height: 1.4)),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消', style: TextStyle(color: _textSec)),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _gold),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('分享到菩提空间'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+      await CloudNotesService.instance
+          .publishNote(title: '今日功课完成', content: content);
+      await prefs.setString('shared_checkin_date', today);
+      if (mounted) _showTopToast('已分享到菩提空间');
+    } catch (_) {
+      // 分享失败静默处理，不打断打卡。
+    }
+  }
+
+  /// 依据当天已完成的功课，生成分享内容行（样式与功课设置一致）。
+  List<String> _buildCheckInShareLines(
+      SharedPreferences prefs, List<Map<String, dynamic>> types) {
+    final done = <String>{for (final r in _todayCheckIns) r['type'] ?? ''};
+    final lines = <String>[];
+    for (final t in types) {
+      final key = t['key'] as String;
+      if (!done.contains(key)) continue;
+      switch (key) {
+        case 'meditation':
+          for (final e in _decodeStrList(prefs.getString('setting_meditation_minutes'))) {
+            if (e.trim().isNotEmpty) lines.add('静坐 ${e.trim()}分钟');
+          }
+        case 'reading':
+          for (final e in _decodeNamedList(prefs.getString('setting_reading_titles'))) {
+            if (e.$1.isNotEmpty) {
+              lines.add('诵经 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
+            }
+          }
+        case 'mantra':
+          for (final e in _decodeNamedList(prefs.getString('setting_mantra_items'))) {
+            if (e.$1.isNotEmpty) {
+              lines.add('持咒 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
+            }
+          }
+        case 'buddha':
+          for (final e in _decodeNamedList(prefs.getString('setting_buddha_items'))) {
+            if (e.$1.isNotEmpty) {
+              lines.add('称名 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
+            }
+          }
+        case 'copying':
+          for (final e in _decodeStrList(prefs.getString('setting_copying_titles'))) {
+            if (e.trim().isNotEmpty) lines.add('抄经 ${e.trim()}');
+          }
+        default:
+          for (final c in _customTypes) {
+            if (c['key'] == key) {
+              final label = (c['label'] ?? '').toString();
+              final unit = (c['unit'] ?? '遍').toString();
+              final count = (c['count'] ?? '').toString();
+              if (label.isNotEmpty) {
+                lines.add('$label ${count.trim().isEmpty ? '0' : count.trim()}$unit');
+              }
+            }
+          }
+      }
+    }
+    return lines;
+  }
+
+  List<String> _decodeStrList(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) return d.map((e) => e.toString()).toList();
+    } catch (_) {}
+    return [];
+  }
+
+  List<(String, String)> _decodeNamedList(String? raw) {
+    final out = <(String, String)>[];
+    if (raw == null || raw.isEmpty) return out;
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) {
+        for (final e in d) {
+          if (e is Map) {
+            out.add(((e['name'] ?? '').toString(), (e['count'] ?? '').toString()));
+          } else {
+            out.add((e.toString(), ''));
+          }
+        }
+      }
+    } catch (_) {}
+    return out;
   }
 
   double _checkInAmount(String typeKey, SharedPreferences prefs) {

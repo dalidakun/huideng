@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'sync_service.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _bg = Color(0xFFF5EDE3);
@@ -25,6 +27,9 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
   List<_Item> _copyingItems = [];
   List<_CustomType> _customTypes = [];
 
+  /// 是否允许完成当日全部功课后自动分享到菩提空间。
+  bool _allowShareDailyCheckin = false;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +39,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
+      _allowShareDailyCheckin = prefs.getBool('privacy_share_daily_checkin') ?? false;
       _meditationItems = _decodeItems(prefs.getString('setting_meditation_minutes'));
       if (_meditationItems.isEmpty) _meditationItems.add(_Item(ctrl: TextEditingController(text: '30')));
       _readingItems = _decodeReading(prefs.getString('setting_reading_titles'));
@@ -104,7 +110,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     }
     for (final e in _buddhaItems) {
       final n = e.name.trim();
-      if (n.isNotEmpty) lines.add('称名 $n ${e.count}遍');
+      if (n.isNotEmpty) lines.add('称名 $n ${e.count}声');
     }
     for (final e in _copyingItems) {
       final v = e.text.trim();
@@ -155,7 +161,11 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     await prefs.setString('setting_buddha_items', jsonEncode(_buddhaItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_copying_titles', jsonEncode(_copyingItems.map((e) => e.text).toList()));
     await prefs.setString('custom_checkin_types', jsonEncode(_customTypes.map((e) => {'key': e.key, 'label': e.label, 'unit': e.unit, 'count': e.count}).toList()));
-    if (mounted) _showSavedToast();
+    if (mounted) {
+      _showSavedToast();
+      // 确认保存后直接返回主页，不留在这个编辑设置页面。
+      Navigator.popUntil(context, (route) => route.isFirst);
+    }
   }
 
   void _showSavedToast() {
@@ -192,6 +202,48 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                           decorationColor: Colors.transparent,
                         )),
                     ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    Future.delayed(const Duration(milliseconds: 1600), () {
+      if (entry.mounted) entry.remove();
+    });
+  }
+
+  void _showShareToast(bool enabled) {
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final topInset = MediaQuery.of(ctx).padding.top;
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Material(
+                color: _primary,
+                borderRadius: BorderRadius.circular(20),
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  child: Text(
+                    enabled ? '已开启，完成功课后将自动分享到菩提空间' : '已关闭，完成功课后不再自动分享',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                    ),
                   ),
                 ),
               ),
@@ -473,6 +525,36 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: SwitchListTile(
+              value: _allowShareDailyCheckin,
+              activeTrackColor: const Color(0xFF71867A),
+              activeThumbColor: Colors.white,
+              inactiveTrackColor: const Color(0xFFE8E2DA),
+              inactiveThumbColor: const Color(0xFFBDB6AC),
+              trackOutlineColor:
+                  WidgetStateProperty.resolveWith((_) => Colors.transparent),
+              onChanged: (v) async {
+                setState(() => _allowShareDailyCheckin = v);
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('privacy_share_daily_checkin', v);
+                await SyncService.instance.push();
+                if (mounted) _showShareToast(v);
+              },
+              title: const Text('分享每日功课到菩提空间',
+                  style: TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+              subtitle: const Text(
+                '开启后，完成当日全部功课时自动以笔记形式分享到菩提空间',
+                style: TextStyle(fontSize: 12, color: _textSec),
+              ),
+            ),
+          ),
           _buildSection(Icons.self_improvement_outlined, '静坐', [
             ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '30', suffix: '分钟', keyboardType: TextInputType.number)),
           ]),

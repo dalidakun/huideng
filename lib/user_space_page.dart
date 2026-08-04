@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -5,6 +7,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
+import 'post_rich_content.dart';
 import 'reply_chain.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
@@ -48,6 +51,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
   int _profileJoinTime = 0;
   late bool _following =
       CloudNotesService.instance.followingUserIds.contains(widget.userId);
+
+  /// 对方「精读 / 功课」数据（受对方隐私开关控制）。
+  UserHomeData? _homeData;
+  bool _homeLoaded = false;
+  bool _homeError = false;
 
   /// 对方账号（从已加载的笔记中取，用于「屏蔽@账号」等展示）。
   String get _account => _notes.isNotEmpty ? _notes.first.authorAccount : '';
@@ -221,6 +229,28 @@ class _UserSpacePageState extends State<UserSpacePage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
+    }
+    await _loadHomeData();
+  }
+
+  /// 拉取对方「精读 / 功课」数据（失败时保持空态，不影响帖子/回复展示）。
+  Future<void> _loadHomeData() async {
+    try {
+      final data =
+          await CloudNotesService.instance.getUserHomeData(widget.userId);
+      if (!mounted) return;
+      setState(() {
+        _homeData = data;
+        _homeLoaded = true;
+        _homeError = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _homeData = null;
+        _homeLoaded = true;
+        _homeError = true;
+      });
     }
   }
 
@@ -441,6 +471,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
     if (_loading) {
       return const Center(child: CircularProgressIndicator(color: _gold));
     }
+    if (_tab == 2) return _buildReadingTab();
+    if (_tab == 3) return _buildCheckinTab();
     if (_notes.isEmpty) {
       return RefreshIndicator(
         color: _gold,
@@ -538,6 +570,382 @@ class _UserSpacePageState extends State<UserSpacePage> {
       },
       child: child,
     );
+  }
+
+  /// 精读 Tab：对方最近在读的经书（点击进入经书讨论页，未开讨论时显示「还没有讨论」）。
+  Widget _buildReadingTab() {
+    final data = _homeData;
+    if (!_homeLoaded) {
+      return const Center(child: CircularProgressIndicator(color: _gold));
+    }
+    if (_homeError) {
+      return _tabPlaceholder(
+        Icons.cloud_off,
+        '精读信息加载失败',
+        '请检查网络后下拉重试',
+        onRefresh: _loadHomeData,
+      );
+    }
+    if (data == null || !data.readingAllowed) {
+      return _tabPlaceholder(
+        Icons.lock_outline,
+        '对方未开启精读分享',
+        '对方在「精读经文」中开启「允许」后可见',
+      );
+    }
+    if (data.reading.isEmpty) {
+      return _tabPlaceholder(
+        Icons.auto_stories_outlined,
+        '还没有精读记录',
+        '${widget.userName} 暂无精读经文',
+      );
+    }
+    // 直接展示该经书的讨论页（无讨论时页面内显示「还没有讨论」）。
+    final sutra = data.reading.first;
+    return SutraDiscussionPage(
+      title: sutra.title,
+      filePath: sutra.filePath,
+      embedded: true,
+    );
+  }
+
+  /// 功课 Tab：对方的打卡功课设置与目标设置（只读）。
+  Widget _buildCheckinTab() {
+    final data = _homeData;
+    if (!_homeLoaded) {
+      return const Center(child: CircularProgressIndicator(color: _gold));
+    }
+    if (_homeError) {
+      return _tabPlaceholder(
+        Icons.cloud_off,
+        '功课信息加载失败',
+        '请检查网络后下拉重试',
+        onRefresh: _loadHomeData,
+      );
+    }
+    if (data == null || !data.checkinAllowed) {
+      return _tabPlaceholder(
+        Icons.lock_outline,
+        '对方未开启功课分享',
+        '对方在「打卡目标」中开启「允许他人查看我的功课」后可见',
+      );
+    }
+    final tasks = _buildCheckinTaskLines(data.checkin);
+    final goals = _buildCheckinGoalEntries(data.checkin);
+    if (tasks.isEmpty && goals.isEmpty) {
+      return _tabPlaceholder(
+        Icons.event_note_outlined,
+        '对方还没有设置功课',
+        '${widget.userName} 暂未设置打卡功课与目标',
+      );
+    }
+    return RefreshIndicator(
+      color: _gold,
+      onRefresh: _loadHomeData,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
+        children: [
+          if (tasks.isNotEmpty) ...[
+            _sectionTitle('功课设置'),
+            ...tasks.map((t) => _buildTaskLine(t)),
+          ],
+          if (goals.isNotEmpty) ...[
+            _sectionTitle('目标设置'),
+            ...goals.map((g) => _buildGoalCard(g)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 由对方同步来的打卡 prefs 生成功课设置行文案。
+  List<String> _buildCheckinTaskLines(Map<String, dynamic>? checkin) {
+    if (checkin == null) return [];
+    final lines = <String>[];
+    for (final e in _decodeStringList(checkin['setting_meditation_minutes'])) {
+      if (e.trim().isNotEmpty) lines.add('静坐 ${e.trim()}分钟');
+    }
+    for (final e in _decodeNamedItems(checkin['setting_reading_titles'])) {
+      if (e.$1.isNotEmpty) {
+        lines.add('诵经 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
+      }
+    }
+    for (final e in _decodeNamedItems(checkin['setting_mantra_items'])) {
+      if (e.$1.isNotEmpty) {
+        lines.add('持咒 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
+      }
+    }
+    for (final e in _decodeNamedItems(checkin['setting_buddha_items'])) {
+      if (e.$1.isNotEmpty) {
+        lines.add('称名 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
+      }
+    }
+    for (final e in _decodeStringList(checkin['setting_copying_titles'])) {
+      if (e.trim().isNotEmpty) lines.add('抄经 ${e.trim()}');
+    }
+    for (final e in _decodeCustomTypes(checkin['custom_checkin_types'])) {
+      if (e.label.isNotEmpty) {
+        lines.add('${e.label} ${e.count.trim().isEmpty ? '0' : e.count.trim()}${e.unit}');
+      }
+    }
+    return lines;
+  }
+
+  /// 由对方同步来的打卡 prefs 生成目标卡片数据。
+  List<_GoalEntry> _buildCheckinGoalEntries(Map<String, dynamic>? checkin) {
+    if (checkin == null) return [];
+    final goals = _decodeMap(checkin['checkin_goals']);
+    final totals = <String, double>{};
+    for (final r in _decodeMapList(checkin['checkin_records'])) {
+      final key = r['type']?.toString() ?? '';
+      if (key.isEmpty) continue;
+      final amt = double.tryParse((r['amount'] ?? 1).toString()) ?? 1;
+      totals[key] = (totals[key] ?? 0) + amt;
+    }
+    final customs = _decodeCustomTypes(checkin['custom_checkin_types']);
+    final typeInfo = <String, ({String label, String unit})>{
+      'meditation': (label: '静坐', unit: '分钟'),
+      'reading': (label: '诵经', unit: '遍'),
+      'mantra': (label: '持咒', unit: '遍'),
+      'buddha': (label: '称名', unit: '声'),
+      'copying': (label: '抄经', unit: '篇'),
+      for (final c in customs) c.key: (label: c.label, unit: c.unit),
+    };
+    final out = <_GoalEntry>[];
+    goals.forEach((k, v) {
+      final info = typeInfo[k];
+      if (info == null) return;
+      final goal = double.tryParse(v.toString()) ?? 0;
+      out.add(_GoalEntry(
+          label: info.label,
+          unit: info.unit,
+          goal: goal,
+          total: totals[k] ?? 0));
+    });
+    return out;
+  }
+
+  Widget _sectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
+      child: Text(title,
+          style: const TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w700, color: _text)),
+    );
+  }
+
+  Widget _buildTaskLine(String line) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline,
+              size: 16, color: Color(0xFF71867A)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(line,
+                style: const TextStyle(fontSize: 14, color: _text)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGoalCard(_GoalEntry g) {
+    final progress = g.goal > 0 ? (g.total / g.goal).clamp(0.0, 1.0) : 0.0;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(g.label,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+              const Spacer(),
+              if (g.goal > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: _gold.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(12)),
+                  child: Text('目标 ${_fmtNum(g.goal)}${g.unit}',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: _gold,
+                          fontWeight: FontWeight.w600)),
+                )
+              else
+                Text('未设置目标',
+                    style: TextStyle(fontSize: 12, color: _textHint)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: _border,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                  g.goal > 0 ? _primary : _textHint),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text('已累计 ${_fmtNum(g.total)} ${g.unit}',
+                  style: const TextStyle(fontSize: 12, color: _textSec)),
+              const Spacer(),
+              if (g.goal > 0)
+                Text('${(progress * 100).toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _primary)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 空态占位：隐私未开启 / 无数据 / 加载失败（可下拉重试）。
+  Widget _tabPlaceholder(IconData icon, String title, String subtitle,
+      {Future<void> Function()? onRefresh}) {
+    return RefreshIndicator(
+      color: _gold,
+      onRefresh: onRefresh ?? () async {},
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 32),
+            child: Column(
+              children: [
+                Icon(icon, size: 48, color: _textHint.withValues(alpha: 0.6)),
+                const SizedBox(height: 14),
+                Text(title,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+                const SizedBox(height: 6),
+                Text(subtitle,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13, color: _textSec)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmtNum(double v) {
+    if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+    return v.toStringAsFixed(1);
+  }
+
+  /// 对方同步来的 prefs 值解析：JSON 字符串或数组 → 字符串列表。
+  List<String> _decodeStringList(Object? v) {
+    if (v is List) return v.map((e) => e.toString()).toList();
+    if (v is String) {
+      try {
+        final d = jsonDecode(v);
+        if (d is List) return d.map((e) => e.toString()).toList();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  /// 对方同步来的 prefs 值解析：JSON 字符串或数组 → Map 列表。
+  List<Map<String, dynamic>> _decodeMapList(Object? v) {
+    if (v is List) {
+      return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    }
+    if (v is String) {
+      try {
+        final d = jsonDecode(v);
+        if (d is List) {
+          return d
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  /// 对方同步来的 prefs 值解析：JSON 字符串或 Map → Map。
+  Map<String, dynamic> _decodeMap(Object? v) {
+    if (v is Map) return Map<String, dynamic>.from(v);
+    if (v is String) {
+      try {
+        final d = jsonDecode(v);
+        if (d is Map) return Map<String, dynamic>.from(d);
+      } catch (_) {}
+    }
+    return {};
+  }
+
+  /// 名称 + 次数项解析（兼容纯字符串列表 / {name,count} 列表，每个元素只解析一次）。
+  List<(String, String)> _decodeNamedItems(Object? v) {
+    final out = <(String, String)>[];
+    final list = _decodeRawList(v);
+    for (final e in list) {
+      if (e is Map) {
+        out.add(((e['name'] ?? '').toString(), (e['count'] ?? '').toString()));
+      } else {
+        final s = e.toString().trim();
+        if (s.isNotEmpty) out.add((s, ''));
+      }
+    }
+    return out;
+  }
+
+  /// 解析为原始列表（兼容 JSON 字符串 / 已解析 List），其它返回空。
+  List<dynamic> _decodeRawList(Object? v) {
+    if (v is List) return v;
+    if (v is String) {
+      try {
+        final d = jsonDecode(v);
+        if (d is List) return d;
+      } catch (_) {}
+    }
+    return const [];
+  }
+
+  /// 自定义打卡类型解析：{key, label, unit, count}。
+  List<_CustomTypeInfo> _decodeCustomTypes(Object? v) {
+    return [
+      for (final m in _decodeMapList(v))
+        _CustomTypeInfo(
+          key: (m['key'] ?? '').toString(),
+          label: (m['label'] ?? '').toString(),
+          unit: (m['unit'] ?? '遍').toString(),
+          count: (m['count'] ?? '').toString(),
+        ),
+    ];
   }
 
   /// 按最顶层原贴分组：非回复为根，回复（含回复的回复）递归挂到父帖下。
@@ -749,7 +1157,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
   }
 }
 
-/// 用户主页的「帖子/回复」吸顶 tab。
+/// 用户主页的「帖子/回复/精读/功课」吸顶 tab。
 class _UserTabsDelegate extends SliverPersistentHeaderDelegate {
   final int tab;
   final ValueChanged<int> onChanged;
@@ -773,7 +1181,12 @@ class _UserTabsDelegate extends SliverPersistentHeaderDelegate {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              for (final (i, label) in const [(0, '帖子'), (1, '回复')])
+              for (final (i, label) in const [
+                (0, '帖子'),
+                (1, '回复'),
+                (2, '精读'),
+                (3, '功课'),
+              ])
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -815,4 +1228,32 @@ class _UserTabsDelegate extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(covariant _UserTabsDelegate oldDelegate) =>
       oldDelegate.tab != tab;
+}
+
+/// 他人主页目标卡片数据。
+class _GoalEntry {
+  final String label;
+  final String unit;
+  final double goal;
+  final double total;
+  const _GoalEntry({
+    required this.label,
+    required this.unit,
+    required this.goal,
+    required this.total,
+  });
+}
+
+/// 他人主页自定义打卡类型信息。
+class _CustomTypeInfo {
+  final String key;
+  final String label;
+  final String unit;
+  final String count;
+  const _CustomTypeInfo({
+    required this.key,
+    required this.label,
+    required this.unit,
+    required this.count,
+  });
 }

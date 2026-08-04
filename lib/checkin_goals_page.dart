@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'sync_service.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _gold = Color(0xFFD4A06A);
@@ -23,6 +25,9 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
   Map<String, double> _goals = {};
   Map<String, double> _totals = {};
 
+  /// 是否允许他人在主页查看我的「功课」（打卡设置与目标）。
+  bool _showCheckinOnHome = false;
+
   @override
   void initState() {
     super.initState();
@@ -32,12 +37,15 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
 
+    _showCheckinOnHome = prefs.getBool('privacy_show_checkin') ?? false;
+    if (mounted) setState(() {});
+
     final customs = (jsonDecode(prefs.getString('custom_checkin_types') ?? '[]') as List<dynamic>).cast<Map<String, dynamic>>();
     final types = <_GoalType>[
       _GoalType(key: 'meditation', label: '静坐', unit: '分钟', icon: Icons.self_improvement_outlined),
       _GoalType(key: 'reading', label: '诵经', unit: '遍', icon: Icons.chrome_reader_mode_outlined),
       _GoalType(key: 'mantra', label: '持咒', unit: '遍', icon: Icons.notifications_none_outlined),
-      _GoalType(key: 'buddha', label: '称名', unit: '遍', icon: Icons.spa_outlined),
+      _GoalType(key: 'buddha', label: '称名', unit: '声', icon: Icons.spa_outlined),
       _GoalType(key: 'copying', label: '抄经', unit: '篇', icon: Icons.edit_outlined),
       ...customs.map((c) => _GoalType(
         key: c['key'].toString(),
@@ -125,6 +133,48 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
     return v.toStringAsFixed(1);
   }
 
+  void _showPrivacyToast(bool enabled) {
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final topInset = MediaQuery.of(ctx).padding.top;
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Material(
+                color: _primary,
+                borderRadius: BorderRadius.circular(20),
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  child: Text(
+                    enabled ? '已开启，其他同修可查看你的功课' : '已关闭，其他同修不可查看你的功课',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    Future.delayed(const Duration(milliseconds: 1600), () {
+      if (entry.mounted) entry.remove();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -141,6 +191,36 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: SwitchListTile(
+              value: _showCheckinOnHome,
+              activeTrackColor: const Color(0xFF71867A),
+              activeThumbColor: Colors.white,
+              inactiveTrackColor: const Color(0xFFE8E2DA),
+              inactiveThumbColor: const Color(0xFFBDB6AC),
+              trackOutlineColor:
+                  WidgetStateProperty.resolveWith((_) => Colors.transparent),
+              onChanged: (v) async {
+                setState(() => _showCheckinOnHome = v);
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('privacy_show_checkin', v);
+                await SyncService.instance.push();
+                if (mounted) _showPrivacyToast(v);
+              },
+              title: const Text('允许他人查看我的功课',
+                  style: TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+              subtitle: const Text(
+                '开启后，其他同修在查看你的主页时可看到你的功课设置与目标',
+                style: TextStyle(fontSize: 12, color: _textSec),
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(left: 4, bottom: 10),
             child: Text('设定目标，并依据每天打卡累计进度', style: TextStyle(fontSize: 12, color: _textHint)),

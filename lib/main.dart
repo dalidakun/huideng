@@ -12,6 +12,7 @@ import 'study_hub_page.dart';
 import 'my_page.dart';
 import 'message_page.dart';
 import 'app_state.dart';
+import 'assistant_session.dart';
 import 'auth_service.dart';
 import 'sync_service.dart';
 import 'notification_service.dart';
@@ -193,8 +194,6 @@ class _MainPageState extends State<MainPage>
   final _sutraListKey = GlobalKey<SutraListPageState>();
   late final ValueNotifier<int> _tabIndex;
   late final List<Widget> _pages;
-  // 助手页 WebView 的 key：切到助手页时重新加载，同步另一处 WebView 的登录态。
-  final _assistantKey = GlobalKey<DiscussionPageState>();
   // 底部菜单自动隐藏动画：value 0=完全显示，1=完全隐藏。
   // 惰性初始化，避免热重载后旧实例字段未赋值导致红屏。
   late final AnimationController _navCtrl = AnimationController(
@@ -217,7 +216,7 @@ class _MainPageState extends State<MainPage>
         onSearchModeChanged: _onSearchModeChanged,
         onOpenAssistant: _openAssistantPage,
       ),
-      _AssistantTabPage(discussionKey: _assistantKey),
+      _AssistantTabPage(),
       MessagePage(onOpenMyPage: _openMyPage, activeTab: _tabIndex),
       MyPage(key: _myKey),
     ];
@@ -256,7 +255,7 @@ class _MainPageState extends State<MainPage>
         });
         prefs.setBool('switch_to_sutra', false);
       }
-      
+
       final shouldSwitchToAssistant = prefs.getBool('switch_to_assistant');
       if (shouldSwitchToAssistant == true) {
         setState(() {
@@ -264,7 +263,13 @@ class _MainPageState extends State<MainPage>
         });
         prefs.setBool('switch_to_assistant', false);
       }
+      _syncAssistantTab();
     });
+  }
+
+  /// 助手 Tab 是否处于选中态，同步给共享 WebView 会话。
+  void _syncAssistantTab() {
+    AssistantSession.instance.setTabActive(_currentIndex == 2);
   }
   
   @override
@@ -353,6 +358,7 @@ class _MainPageState extends State<MainPage>
     setState(() {
       _currentIndex = pageIndex;
     });
+    _syncAssistantTab();
     _revealNavBar();
     if (pageIndex == 0) _studyHubKey.currentState?.reload();
   }
@@ -372,6 +378,7 @@ class _MainPageState extends State<MainPage>
     setState(() {
       _currentIndex = 4;
     });
+    _syncAssistantTab();
     _revealNavBar();
     _myKey.currentState?.reload();
   }
@@ -695,8 +702,7 @@ class _NotificationBadgePill extends StatelessWidget {
 
 /// 底部「助手」标签页：DeepSeek 对话 WebView。
 class _AssistantTabPage extends StatelessWidget {
-  final GlobalKey<DiscussionPageState>? discussionKey;
-  const _AssistantTabPage({this.discussionKey});
+  const _AssistantTabPage();
 
   @override
   Widget build(BuildContext context) {
@@ -746,7 +752,7 @@ class _AssistantTabPage extends StatelessWidget {
       body: SafeArea(
         top: false,
         bottom: MediaQuery.viewInsetsOf(context).bottom == 0,
-        child: DiscussionPage(key: discussionKey),
+        child: const DiscussionPage(surface: AssistantSurface.tab),
       ),
     );
   }

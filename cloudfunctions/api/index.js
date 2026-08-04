@@ -777,6 +777,50 @@ exports.main = async (event, context) => {
         return ok({ users });
       }
 
+      // 查看他人主页的「精读/功课」数据（受隐私开关 privacy_show_reading / privacy_show_checkin 控制）。
+      case "getUserHomeData": {
+        const id = String(event.userId || "");
+        if (!id) return ok({ readingAllowed: false, checkinAllowed: false, reading: [], checkin: null });
+        const { data } = await userData.where({ uid: id }).limit(1).get();
+        const row = data && data[0];
+        const prefs = (row && row.payload && row.payload.prefs) || {};
+
+        const readingAllowed = prefs.privacy_show_reading === true;
+        const checkinAllowed = prefs.privacy_show_checkin === true;
+
+        // 精读：当前精读经文（只展示一本，点击进入其讨论页）。
+        const reading = [];
+        if (readingAllowed) {
+          const t = String(prefs.current_sutra_title || "").trim();
+          if (t) {
+            reading.push({
+              title: t,
+              filePath: String(prefs.current_sutra_file_path || ""),
+            });
+          }
+        }
+
+        // 功课：仅回传展示需要的打卡配置键，避免整包 payload 泄露其它数据。
+        let checkin = null;
+        if (checkinAllowed) {
+          const keys = [
+            "setting_meditation_minutes",
+            "setting_reading_titles",
+            "setting_mantra_items",
+            "setting_buddha_items",
+            "setting_copying_titles",
+            "custom_checkin_types",
+            "checkin_goals",
+            "checkin_records",
+          ];
+          checkin = {};
+          for (const k of keys) {
+            if (prefs[k] != null) checkin[k] = prefs[k];
+          }
+        }
+        return ok({ readingAllowed, checkinAllowed, reading, checkin });
+      }
+
       // 搜索用户账号：按账号前缀/包含匹配 userAccounts，返回匹配用户的账号与 uid。
       case "searchUsers": {
         const q = String(event.query || "").trim().toLowerCase();

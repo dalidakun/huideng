@@ -31,6 +31,10 @@ class SyncService with WidgetsBindingObserver {
   String? _lastPushedJson;
   bool _busy = false;
 
+  /// 推送执行中标记：同步中发起的推送会排队，避免开关等即时操作被丢弃。
+  bool _pushBusy = false;
+  bool _pendingPush = false;
+
   /// 最近一次全量拉取是否失败。失败时周期任务会持续重试拉取，直到成功，
   /// 避免新设备登录时拉取失败后本地打卡数据覆盖云端导致历史丢失。
   bool _fullSyncPending = true;
@@ -317,17 +321,30 @@ class SyncService with WidgetsBindingObserver {
     }
   }
 
-  /// 推送到云端（内容未变化则跳过）。
+  /// 推送到云端（内容未变化则跳过）。全量拉取或推送进行中时排队，避免丢弃。
   Future<void> push() async {
-    if (_busy || !AuthService.instance.isLoggedIn) return;
-    final payload = await _collect();
-    final jsonStr = jsonEncode(payload);
-    if (jsonStr == _lastPushedJson) return;
+    if (!AuthService.instance.isLoggedIn) return;
+    if (_busy || _pushBusy) {
+      _pendingPush = true;
+      return;
+    }
+    _pushBusy = true;
     try {
-      await CloudNotesService.instance.setUserData(payload);
-      _lastPushedJson = jsonStr;
-    } catch (_) {
-      // 失败静默，等待下次周期推送。
+      final payload = await _collect();
+      final jsonStr = jsonEncode(payload);
+      if (jsonStr == _lastPushedJson) return;
+      try {
+        await CloudNotesService.instance.setUserData(payload);
+        _lastPushedJson = jsonStr;
+      } catch (_) {
+        // 失败静默，等待下次周期推送。
+      }
+    } finally {
+      _pushBusy = false;
+      if (_pendingPush) {
+        _pendingPush = false;
+        unawaited(push());
+      }
     }
   }
 

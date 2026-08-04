@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -796,9 +797,38 @@ class SutraListPageState extends State<SutraListPage>
       _filteredSutras = List.from(list);
     });
     _randomSutra ??= _rollRandomSutra();
+    unawaited(_ensureRandomFolder());
     _bestAssetPathByTitleCache.clear();
     _missingComputed = false;
     _recomputeMissingSutrasIfReady();
+  }
+
+  /// 默认在「全部经典」下方随机展示一部（与随缘读经一致），优先恢复上次展示的部类。
+  Future<void> _ensureRandomFolder() async {
+    if (_randomFolder != null) return;
+    String? restored;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('last_random_folder');
+      if (saved != null && saved.isNotEmpty && _folders.contains(saved)) {
+        restored = saved;
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _randomFolder = restored ?? _rollRandomFolder();
+    });
+    if (restored == null) {
+      await _persistRandomFolder();
+    }
+  }
+
+  /// 记录当前展示的部类，便于下次打开恢复。
+  Future<void> _persistRandomFolder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('last_random_folder', _randomFolder ?? '');
+    } catch (_) {}
   }
 
   /// 云端同步拉取后刷新经书列表与最近阅读。

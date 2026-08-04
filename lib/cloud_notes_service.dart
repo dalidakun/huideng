@@ -335,6 +335,50 @@ class UserProfile {
       );
 }
 
+/// 他人主页的「精读 / 功课」数据（由 getUserHomeData 返回，受对方隐私开关控制）。
+class UserHomeData {
+  final bool readingAllowed;
+  final bool checkinAllowed;
+
+  /// 精读：该用户最近阅读的经书列表。
+  final List<UserReadingSutra> reading;
+
+  /// 功课：对方打卡相关 prefs 键（未开启时为 null）。
+  final Map<String, dynamic>? checkin;
+
+  const UserHomeData({
+    this.readingAllowed = false,
+    this.checkinAllowed = false,
+    this.reading = const [],
+    this.checkin,
+  });
+
+  factory UserHomeData.fromJson(Map<String, dynamic> e) => UserHomeData(
+        readingAllowed: e['readingAllowed'] == true,
+        checkinAllowed: e['checkinAllowed'] == true,
+        reading: (e['reading'] as List<dynamic>? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .map(UserReadingSutra.fromJson)
+            .toList(),
+        checkin: e['checkin'] is Map<String, dynamic>
+            ? Map<String, dynamic>.from(e['checkin'] as Map)
+            : null,
+      );
+}
+
+/// 用户正在读（最近阅读）的一部经书。
+class UserReadingSutra {
+  final String title;
+  final String filePath;
+
+  const UserReadingSutra({required this.title, this.filePath = ''});
+
+  factory UserReadingSutra.fromJson(Map<String, dynamic> e) => UserReadingSutra(
+        title: e['title']?.toString() ?? '',
+        filePath: e['filePath']?.toString() ?? '',
+      );
+}
+
 /// 我的主页角标：互动未读数 / 关注数 / 粉丝数。
 class MyCounts {
   final int following;
@@ -684,6 +728,12 @@ class CloudNotesService {
         .whereType<Map<String, dynamic>>()
         .map(UserProfile.fromJson)
         .toList();
+  }
+
+  /// 拉取某位用户主页的「精读 / 功课」数据（对方开启相应隐私开关才返回内容）。
+  Future<UserHomeData> getUserHomeData(String userId) async {
+    final res = await _call('getUserHomeData', params: {'userId': userId});
+    return UserHomeData.fromJson(res);
   }
 
   /// 按账号前缀/包含搜索用户（@提及面板）。返回匹配账号与 uid，名称待 getUserProfiles 补齐。

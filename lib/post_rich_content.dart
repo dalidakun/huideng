@@ -135,13 +135,16 @@ Widget buildPostRichText(
 }
 
 /// 经书讨论页：上方为经书入口（经藏菜单样式：下载状态 + 阅读按钮），下方为讨论区。
+/// [embedded] 为 true 时不带 Scaffold/AppBar，可直接嵌入其它页面（如他人主页精读 tab）。
 class SutraDiscussionPage extends StatefulWidget {
   final String title;
   final String filePath;
+  final bool embedded;
   const SutraDiscussionPage({
     super.key,
     required this.title,
     required this.filePath,
+    this.embedded = false,
   });
 
   @override
@@ -300,17 +303,8 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        elevation: 0,
-        title: Text('${widget.title} · 讨论',
-            style: const TextStyle(
-                color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
-      ),
-      body: Column(
-        children: [
+    final body = Column(
+      children: [
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -540,7 +534,18 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
             ),
           ),
         ],
+      );
+    if (widget.embedded) return body;
+    return Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: _bg,
+        elevation: 0,
+        title: Text('${widget.title} · 讨论',
+            style: const TextStyle(
+                color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
       ),
+      body: body,
     );
   }
 
