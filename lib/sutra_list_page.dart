@@ -61,6 +61,58 @@ class Sutra {
   }
 }
 
+/// 经名末尾的 CBETA 编号，如「中阿含经T01n0026_005」中的 `T01n0026_005`。
+final RegExp _sutraIdSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
+final RegExp _sutraVolumeRe = RegExp(r'T\d+n[0-9A-Za-z]+_(\d+)$');
+
+/// 提取 CBETA 卷次编号（如「中阿含经T01n0026_005」-> 5），无卷次返回 0。
+int _sutraVolumeOf(String title) {
+  final m = _sutraVolumeRe.firstMatch(title);
+  return m == null ? 0 : int.tryParse(m.group(1)!) ?? 0;
+}
+
+/// 数字转中文卷名：1->「卷一」、10->「卷十」、21->「卷二十一」、120->「卷一百二十」。
+String _volumeLabel(int n) {
+  const digits = '零一二三四五六七八九';
+  if (n <= 0) return '';
+  if (n <= 10) return '卷${n == 10 ? '十' : digits[n]}';
+  if (n < 20) return '卷十${digits[n - 10]}';
+  if (n < 100) {
+    final tens = n ~/ 10;
+    final ones = n % 10;
+    return '卷${digits[tens]}十${ones == 0 ? '' : digits[ones]}';
+  }
+  if (n < 1000) {
+    final hundreds = n ~/ 100;
+    final rest = n % 100;
+    return '卷${digits[hundreds]}百${rest == 0 ? '' : _volumeLabel(rest).substring(1)}';
+  }
+  return '卷$n';
+}
+
+/// 统计同名（基础经名）出现多次的集合，即多卷经书的基础经名。
+Set<String> collectMultiVolumeBases(Iterable<Sutra> sutras) {
+  final counts = <String, int>{};
+  for (final s in sutras) {
+    final base = s.title.replaceAll(_sutraIdSuffixRe, '').trim();
+    if (base.isEmpty) continue;
+    counts[base] = (counts[base] ?? 0) + 1;
+  }
+  return {
+    for (final e in counts.entries)
+      if (e.value > 1) e.key,
+  };
+}
+
+/// 经书展示名：单卷经书只显示经名；多卷经书显示「经名 + 卷X」。
+/// [multiVolumeBases] 为空（或未提供）时表示无法判断多卷，只显示经名。
+String sutraDisplayTitle(String title, {Set<String>? multiVolumeBases}) {
+  final base = title.replaceAll(_sutraIdSuffixRe, '').trim();
+  if (multiVolumeBases == null || !multiVolumeBases.contains(base)) return base;
+  final volume = _sutraVolumeOf(title);
+  return volume <= 0 ? base : '$base${_volumeLabel(volume)}';
+}
+
 class SutraListPage extends StatefulWidget {
   /// 底部 Tab 索引变化通知。当切换回经藏页（索引值变化）时刷新“最近阅读”。
   final ValueListenable<int>? activeTab;
@@ -318,12 +370,34 @@ class SutraListPageState extends State<SutraListPage>
   Future<void> _loadDownloadedIds() async {
     final prefs = await SharedPreferences.getInstance();
     final ids = prefs.getStringList(_kDownloadedIdsKey) ?? const [];
+    // 兼容历史下载：扫描本地文件补齐，确保已下载的经文也显示「下载完成」对号。
+    final diskIds = await SutraDownloader.listDownloadedIds();
+    final merged = <String>{...ids, ...diskIds};
     if (!mounted) return;
     setState(() {
       _downloadedIds
         ..clear()
-        ..addAll(ids);
+        ..addAll(merged);
     });
+    if (diskIds.any((id) => !ids.contains(id))) {
+      await prefs.setStringList(_kDownloadedIdsKey, merged.toList());
+    }
+  }
+
+  /// 重新扫描本地下载目录，把缺失的状态补齐（阅读页等直接下载的经书也能显示对号）。
+  Future<void> syncDownloadedIdsFromDisk() async {
+    final diskIds = await SutraDownloader.listDownloadedIds();
+    if (!mounted) return;
+    var changed = false;
+    setState(() {
+      for (final id in diskIds) {
+        if (_downloadedIds.add(id)) changed = true;
+      }
+    });
+    if (changed) {
+      await _persistDownloadedIds();
+      _sutraDataVersion.value++;
+    }
   }
 
   Future<void> _persistDownloadedIds() async {
@@ -579,6 +653,9 @@ class SutraListPageState extends State<SutraListPage>
 
   List<Sutra> _defaultSutras = [];
   List<Sutra> _allSutras = [];
+
+  /// 多卷经书的基础经名集合（用于显示「卷X」卷标）。
+  Set<String> _multiVolumeBases = const {};
   List<Sutra> _filteredSutras = [];
   List<File> txtFiles = [];
 
@@ -813,6 +890,7 @@ class SutraListPageState extends State<SutraListPage>
   void _applySutraList(List<Sutra> list) {
     setState(() {
       _allSutras = List.from(list);
+      _multiVolumeBases = collectMultiVolumeBases(_allSutras);
       // 搜索激活时保持过滤（reload 会重置 _filteredSutras 为全量，
       // 若不重新过滤，搜索结果会和搜索框字符不一致）。
       _filteredSutras = _searchActive
@@ -892,10 +970,16 @@ class SutraListPageState extends State<SutraListPage>
     if (kIsWeb) return;
     try {
       final file = await _sutraListFile();
-      await file.writeAsString(
+      // 原子写：先写临时文件再改名替换，避免并发读取读到写到一半的损坏文件。
+      final tmp = File('${file.path}.tmp');
+      await tmp.writeAsString(
         jsonEncode(list.map((s) => s.toJson()).toList()),
         flush: true,
       );
+      if (await file.exists()) {
+        await file.delete();
+      }
+      await tmp.rename(file.path);
     } catch (_) {
       // 写入失败不影响内存中的列表。
     }
@@ -983,12 +1067,14 @@ class SutraListPageState extends State<SutraListPage>
 
   void _showBottomSheet(BuildContext context, Sutra sutra, {bool showPin = false}) {
     _dismissKeyboard();
-    var index = _allSutras.indexOf(sutra);
-    if (index < 0) {
-      // 列表重新加载后对象引用可能失效（如随缘读经的随机经书），按标题回退查找。
-      index = _allSutras.indexWhere((s) => s.title == sutra.title);
-    }
+    // 传入对象可能是旧引用（如随缘读经的随机经书），按标题解析到当前列表对象，
+    // 保证菜单文案与操作都基于最新状态。
+    final index = _allSutras.indexWhere((s) => s.title == sutra.title);
     if (index < 0) return;
+    final current = _allSutras[index];
+    // 点击时重新解析索引，避免弹窗打开期间列表被重载/重排导致误操作其他经书。
+    int resolveIndex() =>
+        _allSutras.indexWhere((s) => s.title == current.title);
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1003,34 +1089,70 @@ class SutraListPageState extends State<SutraListPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               _buildMenuItem(
-                icon: sutra.isFavorite ? Icons.favorite : Icons.favorite_border,
-                title: sutra.isFavorite ? '取消收藏' : '收藏',
-                onTap: () {
-                  _toggleFavorite(index);
+                icon: current.isFavorite ? Icons.favorite : Icons.favorite_border,
+                title: current.isFavorite ? '取消收藏' : '收藏',
+                onTap: () async {
+                  final idx = resolveIndex();
+                  String? msg;
+                  if (idx >= 0) {
+                    final wasFav = _allSutras[idx].isFavorite;
+                    // 先完整持久化再关闭弹窗，避免弹窗关闭触发的 reload 读到旧文件把状态覆盖掉。
+                    await _toggleFavorite(idx);
+                    msg = wasFav ? '已取消收藏' : '已收藏';
+                  }
+                  if (!context.mounted) return;
                   Navigator.pop(context);
+                  if (msg != null) _showToast(msg);
                 },
               ),
               if (showPin)
                 _buildMenuItem(
-                  icon: sutra.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                  title: sutra.isPinned ? '取消置顶' : '置顶',
-                  onTap: () {
-                    _togglePin(index);
+                  icon: current.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                  title: current.isPinned ? '取消置顶' : '置顶',
+                  onTap: () async {
+                    final idx = resolveIndex();
+                    String? msg;
+                    if (idx >= 0) {
+                      final wasPinned = _allSutras[idx].isPinned;
+                      await _togglePin(idx);
+                      msg = wasPinned ? '已取消置顶' : '已置顶';
+                    }
+                    if (!context.mounted) return;
                     Navigator.pop(context);
+                    if (msg != null) _showToast(msg);
                   },
                 ),
               _buildMenuItem(
-                icon: sutra.isRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
-                title: sutra.isRead ? '取消完成阅读' : '标记完成阅读',
-                onTap: () {
-                  _toggleRead(index);
+                icon: current.isRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
+                title: current.isRead ? '取消完成阅读' : '标记完成阅读',
+                onTap: () async {
+                  final idx = resolveIndex();
+                  String? msg;
+                  if (idx >= 0) {
+                    final wasRead = _allSutras[idx].isRead;
+                    await _toggleRead(idx);
+                    msg = wasRead ? '已取消完成阅读标记' : '已标记完成阅读';
+                  }
+                  if (!context.mounted) return;
                   Navigator.pop(context);
+                  if (msg != null) _showToast(msg);
                 },
               ),
             ],
           ),
         );
       },
+    );
+  }
+
+  /// 显示轻提示（收藏/标记等操作反馈）。
+  void _showToast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
+      ),
     );
   }
 
@@ -1050,6 +1172,9 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 供子页面判断某本经书是否已下载到本地。
   bool isSutraDownloaded(String id) => _downloadedIds.contains(id);
+
+  /// 供子页面打开经书：复用经藏页的下载进度小圆圈与「下载完成」提示。
+  Future<void> openSutraFromChild(Sutra sutra) => _openSutra(sutra);
 
   Widget _buildMenuItem({
     required IconData icon,
@@ -1244,7 +1369,10 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   String _displayTitle(String title) =>
-      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+      sutraDisplayTitle(title, multiVolumeBases: _multiVolumeBases);
+
+  /// 供子页面（收藏/最近阅读/功课等）复用统一的经名展示逻辑。
+  String displayTitle(String title) => _displayTitle(title);
 
   Sutra? _findSutra(String title) {
     for (final s in _allSutras) {
@@ -1310,6 +1438,8 @@ class SutraListPageState extends State<SutraListPage>
     final title = _lastReadTitle;
     if (title == null) return const SizedBox.shrink();
     final pct = (_lastReadProgress * 100).clamp(0.0, 100.0);
+    final sutra = _findSutra(title);
+    final isRead = sutra?.isRead == true;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: Material(
@@ -1390,8 +1520,8 @@ class SutraListPageState extends State<SutraListPage>
                 _displayTitle(title),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF3E2723),
+                style: TextStyle(
+                  color: isRead ? const Color(0xFF71867A) : const Color(0xFF3E2723),
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                 ),
@@ -2047,7 +2177,13 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 随缘读经宫格：标题 + 随机经书信息（书名 + 部类 + 大小，可点书名阅读、点「换一本」重抽）。
   Widget _buildRandomTile() {
-    final sutra = _randomSutra;
+    // 解析到当前列表对象，保证收藏/已读等状态在长按操作后即时反映。
+    var sutra = _randomSutra;
+    if (sutra != null) {
+      final st = sutra;
+      final idx = _allSutras.indexWhere((s) => s.title == st.title);
+      if (idx >= 0) sutra = _allSutras[idx];
+    }
     final folderName = sutra != null
         ? (_folderDisplayNames[sutra.folder] ?? sutra.folder)
         : null;
@@ -2063,6 +2199,11 @@ class SutraListPageState extends State<SutraListPage>
         onTap: () {
           _dismissKeyboard();
           if (_randomSutra != null) _openSutra(_randomSutra!);
+        },
+        onLongPress: () {
+          _dismissKeyboard();
+          final s = _randomSutra;
+          if (s != null) _showBottomSheet(context, s);
         },
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 10, 12),
@@ -2130,8 +2271,10 @@ class SutraListPageState extends State<SutraListPage>
                 sutra != null ? _displayTitle(sutra.title) : '随机一部经典',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF3E2723),
+                style: TextStyle(
+                  color: sutra != null && sutra.isRead
+                      ? const Color(0xFF71867A)
+                      : const Color(0xFF3E2723),
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                   height: 1.4,
@@ -2323,10 +2466,10 @@ class SutraListPageState extends State<SutraListPage>
           _displayTitle(sutra.title),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Color(0xFF5d4037),
+          style: TextStyle(
+            color: sutra.isRead ? const Color(0xFF71867A) : const Color(0xFF5d4037),
             fontSize: 14.5,
-            fontWeight: FontWeight.w500,
+            fontWeight: sutra.isRead ? FontWeight.w600 : FontWeight.w500,
           ),
         ),
         subtitle: showFolder && folderName != null
@@ -2394,10 +2537,12 @@ class SutraListPageState extends State<SutraListPage>
                       dense: true,
                       title: Text(
                         sutra.title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           height: 1.2,
-                          color: Color(0xFF616161),
+                          color: sutra.isRead
+                              ? const Color(0xFF71867A)
+                              : const Color(0xFF616161),
                         ),
                         overflow: TextOverflow.ellipsis,
                         maxLines: 1,

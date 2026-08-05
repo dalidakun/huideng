@@ -14,6 +14,8 @@ import 'sutra_favorites.dart';
 import 'app_state.dart';
 import 'reader_preferences.dart';
 import 'note_edit_page.dart';
+import 'reading_time_service.dart';
+import 'sutra_list_page.dart' show routeObserver;
 
 class ReadingPage extends StatefulWidget {
   final String title;
@@ -31,7 +33,8 @@ class ReadingPage extends StatefulWidget {
   State<ReadingPage> createState() => _ReadingPageState();
 }
 
-class _ReadingPageState extends State<ReadingPage> {
+class _ReadingPageState extends State<ReadingPage>
+    with WidgetsBindingObserver, RouteAware {
   String _content = '';
   double _fontSize = 16.0;
   double _lineHeight = 1.8;
@@ -66,9 +69,14 @@ class _ReadingPageState extends State<ReadingPage> {
   /// 顶部标题双击回到顶部：记录上次点击时间。
   DateTime? _lastTitleTap;
 
+  /// 是否已订阅路由生命周期（用于读经计时）。
+  bool _subscribed = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    ReadingTimeService.instance.start();
     _resolvedFilePath = widget.filePath == null
         ? null
         : (widget.filePath!.startsWith('assets/')
@@ -123,7 +131,41 @@ class _ReadingPageState extends State<ReadingPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null && !_subscribed) {
+      _subscribed = true;
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPush() => ReadingTimeService.instance.start();
+
+  @override
+  void didPopNext() => ReadingTimeService.instance.start();
+
+  @override
+  void didPushNext() => ReadingTimeService.instance.stop();
+
+  @override
+  void didPop() => ReadingTimeService.instance.stop();
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ReadingTimeService.instance.start();
+    } else {
+      ReadingTimeService.instance.stop();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (_subscribed) routeObserver.unsubscribe(this);
+    ReadingTimeService.instance.stop();
     _scrollController.dispose();
     _pageController?.dispose();
     _searchController.dispose();

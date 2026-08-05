@@ -8,6 +8,7 @@ const Color _card = Color(0xFFFFFAF5);
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
+const Color _readTeal = Color(0xFF71867A);
 
 /// 最近阅读页：展示最近读过的经书，点击进入阅读，长按可收藏/置顶等。
 class RecentSutrasPage extends StatefulWidget {
@@ -29,7 +30,7 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
   void initState() {
     super.initState();
     widget.parent?.sutraDataVersion.addListener(_onParentChanged);
-    _loadRecent();
+    _refresh();
   }
 
   @override
@@ -57,6 +58,8 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
   }
 
   Future<void> _refresh() async {
+    // 补齐阅读页直接下载的经书状态，保证「下载完成」对号正确显示。
+    await widget.parent?.syncDownloadedIdsFromDisk();
     await widget.parent?.reloadRecentSutras();
     if (mounted) _loadRecent();
   }
@@ -83,7 +86,7 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
   }
 
   String _displayTitle(String title) =>
-      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+      widget.parent?.displayTitle(title) ?? sutraDisplayTitle(title);
 
   @override
   Widget build(BuildContext context) {
@@ -201,15 +204,11 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 15,
-                      color: isRead ? _textSec : _text,
-                      fontWeight: isRead ? FontWeight.w400 : FontWeight.w500,
+                      color: isRead ? _readTeal : _text,
+                      fontWeight: isRead ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
                 ),
-                if (isRead) ...[
-                  const Icon(Icons.check_circle, color: Color(0xFF8FBC8F), size: 18),
-                  const SizedBox(width: 6),
-                ],
                 if (isPinned) ...[
                   const Icon(Icons.push_pin, color: _gold, size: 16),
                   const SizedBox(width: 6),

@@ -74,6 +74,10 @@ class AuthService {
   /// 启动会话恢复是否已完成（结束即置 true，避免启动期抢先匿名登录覆盖真实会话）。
   bool _restoreCompleted = false;
 
+  /// 启动会话恢复任务（单飞）：同一进程只执行一次，供各处等待恢复完成，
+  /// 避免并发恢复/并发刷新 token 相互干扰导致请求 401。
+  Future<void>? _restoreFuture;
+
   /// 会话恢复失败后是否已安排过后台重试（每个进程只重试一次）。
   bool _restoreRetried = false;
 
@@ -166,10 +170,20 @@ class AuthService {
     );
   }
 
+  /// 等待启动会话恢复完成：已在恢复中则复用，已结束则立即返回，未开始则启动一次。
+  /// 各云调用在发起前应先等待它，避免会话未恢复/未刷新完成时请求被云函数
+  /// 判定为未授权，导致首次打开页面「加载失败」。
+  Future<void> get restoreDone {
+    if (_restoreCompleted) return Future.value();
+    return _restoreFuture ??= _restoreSession();
+  }
+
   /// App 启动时调用：从本地恢复会话并校验有效性。
   /// 恢复失败（网络/瞬时异常）时不会直接登出：优先用本地缓存的登录身份兜底，
   /// 并延迟重试一次真正的恢复，避免「第二天打开就需要重新登录」。
-  Future<void> restoreSession() async {
+  Future<void> restoreSession() => _restoreFuture ??= _restoreSession();
+
+  Future<void> _restoreSession() async {
     final app = await _ensureApp();
     if (app == null) return;
     await _loadLocalTagline();
@@ -258,8 +272,12 @@ class AuthService {
   Future<void> ensureAnonymousForBrowse() async {
     if (isLoggedIn) return;
     // 启动时的会话恢复还在进行：等它结束再决定是否需要匿名会话，
-    // 避免抢先匿名登录把本地已持久化的真实会话覆盖掉。
-    if (!_restoreCompleted) return;
+    // 避免抢先匿名登录把本地已持久化的真实会话覆盖掉；
+    // 也避免在真实会话恢复完成前就带着过期/无效 token 发请求。
+    if (!_restoreCompleted) {
+      await restoreDone;
+      if (isLoggedIn) return;
+    }
     final app = await _ensureApp();
     if (app == null) return;
     try {

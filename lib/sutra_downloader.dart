@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -59,6 +60,25 @@ class SutraDownloader {
     if (id.isEmpty) return false;
     final f = await localFile(id);
     return f.exists();
+  }
+
+  /// 扫描本地已下载经书（`<documents>/sutras/**/*.txt`）的 ID 列表。
+  /// 用于把历史下载（如阅读页内直接下载）同步进状态，保证各处「下载完成」对号正确显示。
+  static Future<List<String>> listDownloadedIds() async {
+    if (kIsWeb) return const [];
+    try {
+      final root = await _root();
+      final ids = <String>{};
+      await for (final entity in root.list(recursive: true)) {
+        if (entity is File && entity.path.endsWith('.txt')) {
+          final m = _idRe.firstMatch(entity.uri.pathSegments.last);
+          if (m != null) ids.add(m.group(1)!);
+        }
+      }
+      return ids.toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// 将打包 asset 路径映射到本地已下载副本（不存在返回 null）。

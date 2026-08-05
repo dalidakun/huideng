@@ -31,6 +31,9 @@ class PlazaNote {
   final String repostOf;
   final String repostSourceAuthor;
 
+  /// 被转发原帖的作者用户 ID（用于屏蔽过滤：转发源作者被屏蔽也不展示）。
+  final String repostSourceUserId;
+
   /// 转发类型：forward / quote / reply（reply 不展示转发角标）。
   final String repostKind;
 
@@ -57,6 +60,7 @@ class PlazaNote {
     this.repostCount = 0,
     this.repostOf = '',
     this.repostSourceAuthor = '',
+    this.repostSourceUserId = '',
     this.repostKind = '',
     this.quoteContent = '',
     this.quoteOfTitle = '',
@@ -81,6 +85,7 @@ class PlazaNote {
         repostCount: (json['repostCount'] as num?)?.toInt() ?? 0,
         repostOf: json['repostOf']?.toString() ?? '',
         repostSourceAuthor: json['repostSourceAuthor']?.toString() ?? '',
+        repostSourceUserId: json['repostSourceUserId']?.toString() ?? '',
         repostKind: json['repostKind']?.toString() ?? '',
         quoteContent: json['quoteContent']?.toString() ?? '',
         quoteOfTitle: json['quoteOfTitle']?.toString() ?? '',

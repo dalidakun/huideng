@@ -14,6 +14,7 @@ const Color _card = Color(0xFFFFFAF5);
 const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
+const Color _readTeal = Color(0xFF71867A);
 
 class FavoriteSutrasPage extends StatefulWidget {
   /// [embedded] 为 true 时不显示自己的 Scaffold/头部，用于嵌入标签页。
@@ -33,11 +34,14 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
   List<Sutra> _favoriteSutras = [];
   bool _loading = true;
 
+  /// 无父页面（独立收藏页）时，用于判断多卷经书的基础经名集合。
+  Set<String> _multiVolumeBases = const {};
+
   @override
   void initState() {
     super.initState();
     widget.parent?.sutraDataVersion.addListener(_onParentChanged);
-    _loadFavorites();
+    _refresh();
   }
 
   @override
@@ -57,11 +61,17 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
   /// 从阅读页返回时刷新收藏列表，保证新收藏/取消收藏立即生效。
   @override
   void didPopNext() {
-    _loadFavorites();
+    _refresh();
   }
 
   void _onParentChanged() {
     if (mounted) _loadFavorites();
+  }
+
+  Future<void> _refresh() async {
+    // 补齐阅读页直接下载的经书状态，保证「下载完成」对号正确显示。
+    await widget.parent?.syncDownloadedIdsFromDisk();
+    _loadFavorites();
   }
 
   Future<void> _loadFavorites() async {
@@ -83,10 +93,9 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
         return;
       }
       final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
-      final sutras = decoded
-          .map((e) => Sutra.fromJson(e as Map<String, dynamic>))
-          .where((s) => s.isFavorite)
-          .toList();
+      final all = decoded.map((e) => Sutra.fromJson(e as Map<String, dynamic>)).toList();
+      final multi = collectMultiVolumeBases(all);
+      final sutras = all.where((s) => s.isFavorite).toList();
       sutras.sort((a, b) {
         if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
         if (a.favoriteTime == null && b.favoriteTime == null) return 0;
@@ -97,6 +106,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
       if (!mounted) return;
       setState(() {
         _favoriteSutras = sutras;
+        _multiVolumeBases = multi;
         _loading = false;
       });
     } catch (_) {
@@ -105,8 +115,11 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
     }
   }
 
-  String _displayTitle(String title) =>
-      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+  String _displayTitle(String title) {
+    final parent = widget.parent;
+    if (parent != null) return parent.displayTitle(title);
+    return sutraDisplayTitle(title, multiVolumeBases: _multiVolumeBases);
+  }
 
   Future<bool> _assetExists(String path) async {
     try {
@@ -130,6 +143,12 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
   }
 
   Future<void> _openSutra(Sutra sutra) async {
+    final parent = widget.parent;
+    if (parent != null) {
+      // 走经藏页统一逻辑：下载中显示进度小圆圈，下载完成弹「下载完成」提示。
+      await parent.openSutraFromChild(sutra);
+      return;
+    }
     final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
     if (id == null) {
       _openReading(sutra, sutra.filePath ?? '');
@@ -284,7 +303,11 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
                   _displayTitle(sutra.title),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 15, color: _text, fontWeight: FontWeight.w500),
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: sutra.isRead ? _readTeal : _text,
+                    fontWeight: sutra.isRead ? FontWeight.w600 : FontWeight.w500,
+                  ),
                 ),
               ),
               if (sutra.isPinned) ...[
@@ -302,7 +325,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
     );
   }
 
-  /// 下载中显示小圆进度圈（已下载后不显示任何标记）。
+  /// 下载中显示小圆进度圈（刚启动还没收到字节时转圈动画），已下载显示「下载完成」对号。
   Widget _buildDownloadState(Sutra sutra) {
     final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
     final parent = widget.parent;
@@ -315,11 +338,19 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
           width: 20,
           height: 20,
           child: CircularProgressIndicator(
-            value: p,
+            // 尚未收到任何进度时用 null 走转圈动画，收到进度后显示具体百分比弧。
+            value: p > 0 ? p : null,
             strokeWidth: 2,
             color: _gold,
+            backgroundColor: _gold.withValues(alpha: 0.12),
           ),
         ),
+      );
+    }
+    if (parent.isSutraDownloaded(id)) {
+      return const Padding(
+        padding: EdgeInsets.only(right: 8),
+        child: Icon(Icons.check_circle, color: Color(0xFF8FBC8F), size: 18),
       );
     }
     return const SizedBox.shrink();

@@ -20,9 +20,11 @@ import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'reply_chain.dart';
 import 'my_page.dart';
+import 'user_space_page.dart';
 import 'text_input_sheet.dart';
 import 'note_edit_page.dart';
 import 'note_sutra_links.dart';
+import 'reading_time_service.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -52,10 +54,32 @@ class _PlazaFeedCache {
   bool error = false;
 }
 
+/// 笔记是否来自被屏蔽用户：作者本人被屏蔽，或转发源作者被屏蔽，一律不展示。
+/// 这样「直接发的帖子 / 自己转发的帖子 / 别人转发其内容的帖子」都被隐藏；
+/// 例外：自己发出的评论保留（原帖作者被屏蔽时，上方以「已屏蔽用户」占位展示）。
+bool _isBlockedContent(PlazaNote n) {
+  final me = AuthService.instance.currentUser.value;
+  final blocked = CloudNotesService.instance.blockedUserIds;
+  if (blocked.isEmpty) return false;
+  if (n.ownerUserId == me?.id) return false;
+  if (blocked.contains(n.ownerUserId)) return true;
+  return n.repostSourceUserId.isNotEmpty &&
+      blocked.contains(n.repostSourceUserId);
+}
+
+/// 转发/回复的来源作者是否被屏蔽（用于把被屏蔽原帖替换为占位，保留自己的评论）。
+bool _repostSourceBlocked(PlazaNote n) =>
+    n.repostSourceUserId.isNotEmpty &&
+    CloudNotesService.instance.blockedUserIds.contains(n.repostSourceUserId);
+
 class StudyHubPage extends StatefulWidget {
   /// 左上角头像点击回调：打开「我的」页面。
   final VoidCallback? onOpenMyPage;
-  const StudyHubPage({super.key, this.onOpenMyPage});
+
+  /// 精读卡长按菜单修改收藏/已读状态后回调（用于通知经藏页刷新列表与收藏）。
+  final VoidCallback? onSutraStateChanged;
+
+  const StudyHubPage({super.key, this.onOpenMyPage, this.onSutraStateChanged});
 
   @override
   State<StudyHubPage> createState() => StudyHubPageState();
@@ -79,10 +103,13 @@ class StudyHubPageState extends State<StudyHubPage>
   double _progress = 0.0;
   List<Map<String, String>> _todayCheckIns = [];
   int _checkinStreak = 0;
-  int _studyDays = 0;
   String? _lockedTitle;
   String? _lockedFilePath;
   bool _currentFavorite = false;
+  /// 当前精读经文是否已标记完成阅读（青色标题）。
+  bool _currentRead = false;
+  /// 多卷经书的基础经名集合，用于显示「卷X」卷标。
+  Set<String> _multiVolumeBases = const {};
   /// 是否允许他人在主页查看我的「精读」（在读经书）。
   bool _allowReadingShare = false;
   List<Map<String, dynamic>> _customTypes = [];
@@ -128,6 +155,7 @@ class StudyHubPageState extends State<StudyHubPage>
         CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
     _feedScroll.addListener(_onFeedScroll);
+    ReadingTimeService.instance.ensureLoaded();
     _loadData();
     _loadFeed();
     // 登录会话是异步恢复的：首次加载广场时可能还没登录，
@@ -201,6 +229,8 @@ class StudyHubPageState extends State<StudyHubPage>
       path = prefs.getString('current_sutra_file_path');
     }
     final fav = await _isCurrentFavorite(title);
+    final read = await _isCurrentRead(title);
+    final mvBases = await _loadMultiVolumeBases();
 
     var plazaTabs = <String>['latest', 'hot', 'follow', 'announce'];
     final tabOrderRaw = prefs.getString('plaza_tab_order');
@@ -228,16 +258,17 @@ class StudyHubPageState extends State<StudyHubPage>
       _loaded = true;
       _currentTitle = title;
       _currentFilePath = path;
+      _multiVolumeBases = mvBases;
       _lockedTitle = lockT;
       _lockedFilePath = lockP;
       if (_currentFilePath != null) {
         _progress = prefs.getDouble('progress_$_currentFilePath') ?? 0.0;
       }
       _currentFavorite = fav;
+      _currentRead = read;
       _allowReadingShare = prefs.getBool('privacy_show_reading') ?? false;
       _todayCheckIns = _loadTodayCheckIns(prefs);
       _checkinStreak = _calcStreak(prefs);
-      _studyDays = prefs.getInt('study_day_count') ?? 0;
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes =
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
@@ -266,6 +297,38 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
+  Future<bool> _isCurrentRead(String? title) async {
+    if (title == null) return false;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final file =
+          File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      if (!await file.exists()) return false;
+      final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+      for (final e in decoded) {
+        if (e is Map && e['title'] == title) {
+          return e['isRead'] == true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 原子写 sutras_list.json（临时文件 + 改名替换），避免并发读取读到损坏内容。
+  Future<void> _writeSutraListAtomic(List<Map<String, dynamic>> list) async {
+    final docs = await getApplicationDocumentsDirectory();
+    final file =
+        File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(jsonEncode(list), flush: true);
+    if (await file.exists()) {
+      await file.delete();
+    }
+    await tmp.rename(file.path);
+  }
+
   Future<void> _toggleFavoriteCurrent() async {
     final title = _currentTitle;
     if (title == null) return;
@@ -288,11 +351,13 @@ class StudyHubPageState extends State<StudyHubPage>
       list[idx]['isFavorite'] = !wasFav;
       list[idx]['favoriteTime'] =
           wasFav ? null : DateTime.now().toIso8601String();
-      await file.writeAsString(jsonEncode(list));
+      await _writeSutraListAtomic(list);
       await SutraFavorites.syncStatePref(title);
       if (!mounted) return;
       setState(() => _currentFavorite = !wasFav);
+      widget.onSutraStateChanged?.call();
     } catch (_) {
+      if (!mounted) return;
       _showTopToast('收藏失败，请重试', isError: true);
     }
   }
@@ -304,8 +369,7 @@ class StudyHubPageState extends State<StudyHubPage>
     await prefs.setBool('privacy_show_reading', v);
     await SyncService.instance.push();
     if (mounted) {
-      _showTopToast(
-          v ? '已开启，其他同修可查看你的精读' : '已关闭，其他同修不可查看你的精读');
+      _showToast(v ? '已开启，其他同修可查看你的精读' : '已关闭，其他同修不可查看你的精读');
     }
   }
 
@@ -330,18 +394,29 @@ class StudyHubPageState extends State<StudyHubPage>
                 context,
                 icon: _currentFavorite ? Icons.favorite : Icons.favorite_border,
                 title: _currentFavorite ? '取消收藏' : '收藏',
-                onTap: () {
+                onTap: () async {
+                  String? msg;
+                  final wasFav = _currentFavorite;
+                  // 先完整持久化再关闭弹窗，避免关闭触发的 reload 读到旧文件把状态覆盖掉。
+                  await _toggleFavoriteCurrent();
+                  msg = wasFav ? '已取消收藏' : '已收藏';
+                  if (!context.mounted) return;
                   Navigator.pop(context);
-                  _toggleFavoriteCurrent();
+                  _showToast(msg);
                 },
               ),
               _sheetMenuItem(
                 context,
-                icon: Icons.mark_chat_read,
-                title: '标记完成阅读',
-                onTap: () {
+                icon: _currentRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
+                title: _currentRead ? '取消完成阅读' : '标记完成阅读',
+                onTap: () async {
+                  String? msg;
+                  final wasRead = _currentRead;
+                  await _toggleReadCurrent();
+                  msg = wasRead ? '已取消完成阅读标记' : '已标记完成阅读';
+                  if (!context.mounted) return;
                   Navigator.pop(context);
-                  _markCurrentRead();
+                  _showToast(msg);
                 },
               ),
             ],
@@ -379,8 +454,8 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 标记当前精读经文为已读完成。
-  Future<void> _markCurrentRead() async {
+  /// 标记/取消标记当前精读经文为已读完成（与经藏长按菜单一致，双向切换）。
+  Future<void> _toggleReadCurrent() async {
     final title = _currentTitle;
     if (title == null) return;
     try {
@@ -398,15 +473,31 @@ class StudyHubPageState extends State<StudyHubPage>
         _showTopToast('未找到该经书，无法标记', isError: true);
         return;
       }
-      list[idx]['isRead'] = true;
-      list[idx]['readTime'] = DateTime.now().toIso8601String();
-      await file.writeAsString(jsonEncode(list));
+      final wasRead = list[idx]['isRead'] == true;
+      list[idx]['isRead'] = !wasRead;
+      list[idx]['readTime'] =
+          wasRead ? null : DateTime.now().toIso8601String();
+      await _writeSutraListAtomic(list);
       await SutraFavorites.syncStatePref(title);
       if (!mounted) return;
-      _showTopToast('已标记完成');
+      setState(() => _currentRead = !wasRead);
+      widget.onSutraStateChanged?.call();
     } catch (_) {
+      if (!mounted) return;
       _showTopToast('标记失败，请重试', isError: true);
     }
+  }
+
+  /// 与经藏长按菜单一致的底部浮动提示（收藏/标记等操作反馈）。
+  void _showToast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
+      ),
+    );
   }
 
   void _showTopToast(String msg, {bool isError = false}) {
@@ -499,7 +590,22 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   String _displayTitle(String title) =>
-      title.replaceAll(RegExp(r'T\d+n[0-9a-z]+_\d+$'), '');
+      sutraDisplayTitle(title, multiVolumeBases: _multiVolumeBases);
+
+  Future<Set<String>> _loadMultiVolumeBases() async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final file =
+          File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      if (!await file.exists()) return const {};
+      final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+      return collectMultiVolumeBases(
+          decoded.map((e) => Sutra.fromJson(e as Map<String, dynamic>)));
+    } catch (_) {
+      // 读取失败时保持当前卷标集合，避免瞬时读坏导致卷标闪没。
+      return _multiVolumeBases;
+    }
+  }
 
   void _openSutra() {
     if (_currentTitle == null) return;
@@ -558,11 +664,11 @@ class StudyHubPageState extends State<StudyHubPage>
       final (list, more) = await CloudNotesService.instance
           .getPlazaNotes(page: cur, pageSize: _feedPageSize, sort: sort);
       for (final n in list) {
-        if (!blocked.contains(n.ownerUserId)) collected.add(n);
+        if (!_isBlockedContent(n)) collected.add(n);
       }
       hasMore = more;
       cur++;
-      if (collected.isNotEmpty || !hasMore) break;
+      if (collected.length >= _feedPageSize || !hasMore) break;
     }
     return (collected, cur, hasMore);
   }
@@ -668,7 +774,7 @@ class StudyHubPageState extends State<StudyHubPage>
       ..clear()
       ..addAll(blocked.isEmpty
           ? c.notes
-          : c.notes.where((n) => !blocked.contains(n.ownerUserId)));
+          : c.notes.where((n) => !_isBlockedContent(n)));
     _feedPage = c.page;
     _feedHasMore = c.hasMore;
     _feedInitial = c.initial;
@@ -706,7 +812,6 @@ class StudyHubPageState extends State<StudyHubPage>
         final ids = raw.isEmpty
             ? <String>{}
             : raw.split(',').where((s) => s.isNotEmpty).toSet();
-        final blocked = CloudNotesService.instance.blockedUserIds;
         final all = <PlazaNote>[];
         final seen = <String>{};
         var page = 1;
@@ -716,7 +821,7 @@ class StudyHubPageState extends State<StudyHubPage>
               .getPlazaNotes(page: page, pageSize: _feedPageSize);
           for (final n in list) {
             if (ids.contains(n.ownerUserId) &&
-                !blocked.contains(n.ownerUserId) &&
+                !_isBlockedContent(n) &&
                 seen.add(n.id)) {
               all.add(n);
             }
@@ -765,7 +870,6 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       final all = <PlazaNote>[];
       final seen = <String>{};
-      final blocked = CloudNotesService.instance.blockedUserIds;
       var page = 1;
       var hasMore = true;
       const maxPages = 10;
@@ -775,7 +879,7 @@ class StudyHubPageState extends State<StudyHubPage>
             .getPlazaNotes(page: page, pageSize: _feedPageSize);
         for (final n in list) {
           if (_followedIds.contains(n.ownerUserId) &&
-              !blocked.contains(n.ownerUserId) &&
+              !_isBlockedContent(n) &&
               seen.add(n.id)) {
             all.add(n);
           }
@@ -1231,17 +1335,11 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Widget _buildCurrentSutraCard() {
     if (!_loaded) {
-      return Container(
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 10,
-                offset: const Offset(0, 2)),
-          ],
-        ),
+    return Container(
+      decoration: BoxDecoration(
+        color: _overlay,
+        borderRadius: BorderRadius.circular(16),
+      ),
         child: const Padding(
           padding: EdgeInsets.all(40),
           child: Center(
@@ -1257,14 +1355,8 @@ class StudyHubPageState extends State<StudyHubPage>
     }
     return Container(
       decoration: BoxDecoration(
-        color: _card,
+        color: _overlay,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2)),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1292,27 +1384,38 @@ class StudyHubPageState extends State<StudyHubPage>
                           fontWeight: FontWeight.w600,
                           color: _text)),
                   const Spacer(),
-                  if (_currentTitle != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 3),
-                      decoration: BoxDecoration(
-                          color: _overlay,
-                          borderRadius: BorderRadius.circular(11)),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.today,
-                              size: 12, color: _primaryLight),
-                          const SizedBox(width: 4),
-                          Text('已学$_studyDays天',
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: _primaryLight,
-                                  fontWeight: FontWeight.w500)),
-                        ],
+                  if (_currentTitle != null) ...[
+                    GestureDetector(
+                      onTap: _toggleLock,
+                      child: Icon(
+                        _lockedTitle != null ? Icons.lock : Icons.lock_open,
+                        size: 17,
+                        color: _lockedTitle != null ? _gold : _textSec,
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () => _toggleReadingShare(!_allowReadingShare),
+                      child: Container(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _allowReadingShare
+                              ? const Color(0xFF71867A)
+                              : const Color(0xFFBDB6AC),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Text(
+                          _allowReadingShare ? '已允许' : '未允许',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1329,10 +1432,14 @@ class StudyHubPageState extends State<StudyHubPage>
                   children: [
                     Expanded(
                       child: Text(_displayTitle(_currentTitle!),
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 15,
-                              fontWeight: FontWeight.w500,
-                              color: _textSec,
+                              fontWeight: _currentRead
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                              color: _currentRead
+                                  ? const Color(0xFF71867A)
+                                  : _textSec,
                               height: 1.4)),
                     ),
                   ],
@@ -1366,62 +1473,33 @@ class StudyHubPageState extends State<StudyHubPage>
             ),
             const SizedBox(height: 4),
             Padding(
-              padding: const EdgeInsets.only(left: 20),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(10, 0, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  TextButton(
-                    onPressed: _toggleLock,
-                    style: TextButton.styleFrom(
-                      foregroundColor: _lockedTitle != null ? _gold : _textSec,
-                      padding: EdgeInsets.zero,
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                            _lockedTitle != null ? Icons.lock : Icons.lock_open,
-                            size: 13),
-                        const SizedBox(width: 4),
-                        Text(_lockedTitle != null ? '已锁定' : '锁定经书',
-                            style: const TextStyle(fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 18),
                   Row(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 34,
-                        height: 22,
-                        child: FittedBox(
-                          fit: BoxFit.contain,
-                          child: Switch(
-                            value: _allowReadingShare,
-                            onChanged: _toggleReadingShare,
-                            activeTrackColor: const Color(0xFF71867A),
-                            activeThumbColor: Colors.white,
-                            inactiveTrackColor: const Color(0xFFE8E2DA),
-                            inactiveThumbColor: const Color(0xFFBDB6AC),
-                            trackOutlineColor: WidgetStateProperty.resolveWith(
-                                (_) => Colors.transparent),
-                          ),
-                        ),
+                      ValueListenableBuilder<int>(
+                        valueListenable: ReadingTimeService.instance.todaySeconds,
+                        builder: (context, sec, _) => _buildTimeBadge(
+                            Icons.timer_outlined, '今日读经${_formatReadTime(sec)}'),
                       ),
-                      const SizedBox(width: 6),
-                      Text(_allowReadingShare ? '已允许' : '允许',
-                          style: const TextStyle(
-                              fontSize: 12, color: _textSec)),
+                      const SizedBox(width: 45),
+                      ValueListenableBuilder<int>(
+                        valueListenable: ReadingTimeService.instance.totalSeconds,
+                        builder: (context, sec, _) => _buildTimeBadge(
+                            Icons.history, '累积读经${_formatReadTime(sec)}'),
+                      ),
                     ],
                   ),
-                  const Spacer(),
                   TextButton(
                     onPressed: _showRecentSutras,
                     style: TextButton.styleFrom(
                         foregroundColor: _textSec,
-                        padding: const EdgeInsets.symmetric(horizontal: 16)),
+                        padding: const EdgeInsets.only(
+                            left: 4, right: 4, top: 0, bottom: 0),
+                        minimumSize: const Size(0, 26),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                     child: const Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
                   ),
                 ],
@@ -1487,10 +1565,51 @@ class StudyHubPageState extends State<StudyHubPage>
               ),
             ),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 7),
         ],
       ),
     );
+  }
+
+  /// 读经时长徽章：暖色底 + 图标 + 文字。
+  Widget _buildTimeBadge(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      decoration: BoxDecoration(
+          color: _overlay, borderRadius: BorderRadius.circular(11)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: _primaryLight),
+          const SizedBox(width: 4),
+          Text(text,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: _primaryLight,
+                  fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
+  /// 读经时长格式化：不足 60 秒显示秒，否则按 分钟/小时/天/年 递进。
+  String _formatReadTime(int seconds) {
+    if (seconds < 60) return '$seconds秒';
+    final minutes = seconds ~/ 60;
+    if (minutes < 60) return '$minutes分钟';
+    final hours = minutes ~/ 60;
+    if (hours < 24) {
+      final rem = minutes % 60;
+      return rem > 0 ? '$hours小时$rem分钟' : '$hours小时';
+    }
+    final days = hours ~/ 24;
+    if (days < 365) {
+      final rem = hours % 24;
+      return rem > 0 ? '$days天$rem小时' : '$days天';
+    }
+    final years = days ~/ 365;
+    final remDays = days % 365;
+    return remDays > 0 ? '$years年$remDays天' : '$years年';
   }
 
   Widget _buildCheckInCard() {
@@ -1501,14 +1620,8 @@ class StudyHubPageState extends State<StudyHubPage>
 
     return Container(
       decoration: BoxDecoration(
-        color: _card,
+        color: _overlay,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2)),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2020,17 +2133,35 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 分组：非回复为根，回复（含回复的回复）递归挂到对应父帖下面，根只显示一次。
   /// 与「我的 → 回复」页一致，原贴一次展示、下面用头像连线串起所有评论。
   List<(PlazaNote, List<PlazaNote>)> get _feedGroups {
-    final blocked = CloudNotesService.instance.blockedUserIds;
     final byId = {for (final n in _feedNotes) n.id: n};
     final children = <String, List<PlazaNote>>{};
     final roots = <PlazaNote>[];
     for (final n in _feedNotes) {
-      // 被屏蔽用户的内容（含原贴）一律不展示，避免缓存中残留数据仍可见。
-      if (blocked.contains(n.ownerUserId)) continue;
+      // 被屏蔽用户的内容（含原贴与被转发来源）一律不展示，避免缓存中残留数据仍可见。
+      if (_isBlockedContent(n)) continue;
       // 只有真正的回复帖（repostKind=='reply'）才归入原贴的回复链；
       // 转发/引用转发（repostOf 非空但非 reply）作为独立帖子展示。
       if (n.repostKind == 'reply' && byId.containsKey(n.repostOf)) {
         children.putIfAbsent(n.repostOf, () => []).add(n);
+      } else if (n.repostKind == 'reply' && _repostSourceBlocked(n)) {
+        // 评论的原帖作者已被屏蔽：生成「已屏蔽用户」占位根帖，保留自己这条评论。
+        final id = n.repostOf;
+        if (!children.containsKey(id)) {
+          roots.add(PlazaNote(
+            id: id,
+            ownerUserId: n.repostSourceUserId,
+            title: '',
+            content: '',
+            authorName: n.repostSourceAuthor,
+            visibility: 'public',
+            status: 'normal',
+            likeCount: 0,
+            commentCount: 0,
+            createdAt: 0,
+            updatedAt: 0,
+          ));
+        }
+        children.putIfAbsent(id, () => []).add(n);
       } else {
         roots.add(n);
       }
@@ -2052,6 +2183,10 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 其下所有回复用「回复」页同款头像连线串起。
   Widget _buildFeedGroupCard(PlazaNote root, List<PlazaNote> replies) {
     final me = AuthService.instance.currentUser.value;
+    // 根帖作者被屏蔽：上方显示「已屏蔽用户」占位，自己的评论仍连线在下方。
+    if (_isBlockedContent(root)) {
+      return _buildBlockedGroupCard(root, replies);
+    }
     final isMine = me != null && root.ownerUserId == me.id;
     final rootWidget = PostFeedRow(
       note: root,
@@ -2078,14 +2213,15 @@ class StudyHubPageState extends State<StudyHubPage>
             Positioned(
               left: 21,
               top: 62,
-              bottom: 0,
+              bottom: -18,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             rootWidget,
           ],
         ),
         Padding(
-          padding: const EdgeInsets.only(top: 6, bottom: 6),
+          // 上一个帖子的指标行与下面帖子之间留出更大间距，连线保持连续。
+          padding: const EdgeInsets.only(top: 18, bottom: 6),
           child: ReplyChain(
             replies: replies,
             parentAccounts: {
@@ -2098,6 +2234,92 @@ class StudyHubPageState extends State<StudyHubPage>
             onMore: (n) => _showFeedReplyMenu(n),
           ),
         ),
+      ],
+    );
+  }
+
+  /// 根帖作者被屏蔽时的分组卡片：上方显示「已屏蔽用户」占位，
+  /// 下方仍用头像连线展示自己的评论，点击占位可进入该用户主页取消屏蔽。
+  Widget _buildBlockedGroupCard(PlazaNote root, List<PlazaNote> replies) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 21,
+              top: 52,
+              bottom: -18,
+              child: Container(width: 1, color: const Color(0xFFC9C9C9)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: CircleAvatar(
+                      radius: 22,
+                      backgroundColor: Color(0x1A8B6B5A),
+                      child: Icon(Icons.block, size: 22, color: _textSec),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: root.ownerUserId.isNotEmpty
+                          ? () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => UserSpacePage(
+                                    userId: root.ownerUserId,
+                                    userName: root.authorName,
+                                  ),
+                                ),
+                              )
+                          : null,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _border),
+                          borderRadius: BorderRadius.circular(8),
+                          color: _bg,
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.block, size: 16, color: _textSec),
+                            SizedBox(width: 8),
+                            Text('已屏蔽用户',
+                                style:
+                                    TextStyle(fontSize: 14, color: _textSec)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (replies.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 18, bottom: 6),
+            child: ReplyChain(
+              replies: replies,
+              parentAccounts: {
+                root.id: root.authorAccount,
+                for (final r in replies) r.id: r.authorAccount,
+              },
+              onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
+              onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
+              onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
+              onMore: (n) => _showFeedReplyMenu(n),
+            ),
+          ),
       ],
     );
   }

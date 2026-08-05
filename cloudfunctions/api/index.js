@@ -455,7 +455,17 @@ exports.main = async (event, context) => {
           blocked = br.data.map((r) => r.blockedId);
         }
         const filterBlocked = (arr) =>
-          blocked.length ? arr.filter((n) => !blocked.includes(n.ownerUserId)) : arr;
+          blocked.length
+            ? arr.filter(
+                (n) =>
+                  n.ownerUserId === uid || // 自己的内容（含评论）始终可见
+                  (!blocked.includes(n.ownerUserId) &&
+                    !(
+                      n.repostSourceUserId &&
+                      blocked.includes(n.repostSourceUserId)
+                    ))
+              )
+            : arr;
 
         // 热门排序：阅读量 + 点赞×3 + 评论×5 + 转发×8，依次排列。
         if (sort === "hot") {
@@ -566,6 +576,7 @@ exports.main = async (event, context) => {
           repostCount: 0,
           repostOf: id,
           repostSourceAuthor: String(src.authorName || "同修").slice(0, 30),
+          repostSourceUserId: String(src.ownerUserId || ""),
           repostKind,
           status: "normal",
           createdAt: now(),

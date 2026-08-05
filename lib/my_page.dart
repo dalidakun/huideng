@@ -1174,16 +1174,18 @@ class _PostBlockState extends State<PostBlock> {
                                 fontWeight: FontWeight.w600)),
                         const SizedBox(width: 8),
                       ],
-                      if (canManage)
+                      if (canManage) ...[
+                        const SizedBox(width: 4),
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: _showManageMenu,
                           child: const Padding(
-                            padding: EdgeInsets.all(4),
+                            padding: EdgeInsets.all(2),
                             child: Icon(Icons.more_horiz,
                                 size: 18, color: Color(0xFF8C8C8C)),
                           ),
                         ),
+                      ],
                       if (showMore) ...[
                         if (widget.showFollowButton) ...[
                           GestureDetector(
@@ -1207,12 +1209,13 @@ class _PostBlockState extends State<PostBlock> {
                           ),
                           const SizedBox(width: 6),
                         ],
+                        const SizedBox(width: 4),
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => showMoreMenu(
                               context, widget.ownerUserId!, widget.nickname),
                           child: const Padding(
-                            padding: EdgeInsets.all(4),
+                            padding: EdgeInsets.all(2),
                             child: Icon(Icons.more_horiz,
                                 size: 18, color: Color(0xFF8C8C8C)),
                           ),
@@ -2804,6 +2807,10 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
 
   /// 分组卡片：原贴在上 + 头像连线 + 其下所有回复链。
   Widget _buildGroupCard(PlazaNote root, List<PlazaNote> replies) {
+    // 原贴作者已被屏蔽：上方显示「已屏蔽用户」占位，自己的评论仍连线在下方。
+    if (CloudNotesService.instance.blockedUserIds.contains(root.ownerUserId)) {
+      return _buildBlockedGroupCard(root, replies);
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2830,7 +2837,92 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
           ],
         ),
         Padding(
-          padding: const EdgeInsets.only(top: 6, bottom: 8),
+          padding: const EdgeInsets.only(top: 18, bottom: 8),
+          child: ReplyChain(
+            replies: replies,
+            parentAccounts: {
+              root.id: root.authorAccount,
+              for (final r in replies) r.id: r.authorAccount,
+            },
+            onComment: (n) => replyToNote(context, n, _load),
+            onLike: (n) => likeTargetNote(context, n, _load),
+            onRepost: (n) => forwardNote(context, n, _load),
+            onMore: (n) => _showReplyMenu(n),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 原贴作者被屏蔽时的分组卡片：上方显示「已屏蔽用户」占位，
+  /// 下方仍用头像连线展示自己的评论，点击占位可进入该用户主页取消屏蔽。
+  Widget _buildBlockedGroupCard(PlazaNote root, List<PlazaNote> replies) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 21,
+              top: 52,
+              bottom: -18,
+              child: Container(width: 1, color: const Color(0xFFC9C9C9)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: CircleAvatar(
+                      radius: 22,
+                      backgroundColor: Color(0x1A8B6B5A),
+                      child: Icon(Icons.block, size: 22, color: _textSec),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: root.ownerUserId.isNotEmpty
+                          ? () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => UserSpacePage(
+                                    userId: root.ownerUserId,
+                                    userName: root.authorName,
+                                  ),
+                                ),
+                              )
+                          : null,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _border),
+                          borderRadius: BorderRadius.circular(8),
+                          color: _bg,
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.block, size: 16, color: _textSec),
+                            SizedBox(width: 8),
+                            Text('已屏蔽用户',
+                                style:
+                                    TextStyle(fontSize: 14, color: _textSec)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 18, bottom: 8),
           child: ReplyChain(
             replies: replies,
             parentAccounts: {

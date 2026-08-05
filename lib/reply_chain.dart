@@ -224,6 +224,8 @@ class ReplyChain extends StatelessWidget {
         ],
         const SizedBox(height: 8),
         _metrics(note),
+        // 头像连线上下帖子之间留出更大间距。
+        const SizedBox(height: 14),
       ],
     );
   }

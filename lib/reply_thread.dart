@@ -51,6 +51,11 @@ class ReplyThread extends StatefulWidget {
 class _ReplyThreadState extends State<ReplyThread> {
   PlazaNote? _original;
 
+  /// 原帖作者是否已被当前用户屏蔽。
+  bool get _originalBlocked =>
+      _original != null &&
+      CloudNotesService.instance.blockedUserIds.contains(_original!.ownerUserId);
+
   @override
   void initState() {
     super.initState();
@@ -317,6 +322,67 @@ class _ReplyThreadState extends State<ReplyThread> {
     );
   }
 
+  /// 原帖作者被屏蔽：保留头像连线结构，内容替换为「已屏蔽用户」占位，
+  /// 点击占位可进入该用户主页取消屏蔽。
+  Widget _blockedOriginalNode(PlazaNote original) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Column(
+            children: [
+              const CircleAvatar(
+                radius: 22,
+                backgroundColor: Color(0x1A8B6B5A),
+                child: Icon(Icons.block, size: 22, color: _textSec),
+              ),
+              // 连线通到底，与下方回复头像衔接（与正常连贴样式一致）。
+              Expanded(
+                child: Container(width: 2, color: _border),
+              ),
+            ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: GestureDetector(
+                onTap: original.ownerUserId.isNotEmpty
+                    ? () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => UserSpacePage(
+                              userId: original.ownerUserId,
+                              userName: original.authorName,
+                            ),
+                          ),
+                        )
+                    : null,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: _border),
+                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFFF5EDE3),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.block, size: 16, color: _textSec),
+                      SizedBox(width: 8),
+                      Text('已屏蔽用户',
+                          style: TextStyle(fontSize: 14, color: _textSec)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final original = _original;
@@ -327,7 +393,9 @@ class _ReplyThreadState extends State<ReplyThread> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (original != null)
-          _nodeRow(original, connectDown: true, showMenu: false),
+          _originalBlocked
+              ? _blockedOriginalNode(original)
+              : _nodeRow(original, connectDown: true, showMenu: false),
         replyKey == null
             ? replyNode
             : KeyedSubtree(key: replyKey, child: replyNode),

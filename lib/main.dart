@@ -209,7 +209,12 @@ class _MainPageState extends State<MainPage>
     super.initState();
     _tabIndex = ValueNotifier<int>(0);
     _pages = [
-      StudyHubPage(key: _studyHubKey, onOpenMyPage: _openMyPage),
+      StudyHubPage(
+        key: _studyHubKey,
+        onOpenMyPage: _openMyPage,
+        onSutraStateChanged: () =>
+            unawaited(_sutraListKey.currentState?.reload()),
+      ),
       SutraListPage(
         key: _sutraListKey,
         activeTab: _tabIndex,

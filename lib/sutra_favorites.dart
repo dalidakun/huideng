@@ -71,7 +71,13 @@ class SutraFavorites {
         'readTime': null,
       });
     }
-    await f.writeAsString(jsonEncode(list), flush: true);
+    // 原子写：先写临时文件再改名替换，避免并发读取读到写到一半的损坏文件。
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(jsonEncode(list), flush: true);
+    if (await f.exists()) {
+      await f.delete();
+    }
+    await tmp.rename(f.path);
     await syncStatePref(title);
     return newState;
   }
