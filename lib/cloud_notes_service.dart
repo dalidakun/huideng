@@ -262,8 +262,20 @@ class NotificationItem {
   final String content;
   final String contentPreview;
   final String commentId;
+
+  /// 被点赞/互动帖子的转发类型（reply=回复帖，forward/quote=转发帖，空=原创帖）。
+  final String noteRepostKind;
   final String actorId;
   final String actorName;
+
+  /// 互动用户头像（base64，可能为空）。
+  final String actorAvatar;
+
+  /// 互动用户账号名（@账号，可能为空）。
+  final String actorAccount;
+
+  /// 互动用户是否实名认证。
+  final bool actorVerified;
   final bool viewed;
   final int createdAt;
 
@@ -275,8 +287,12 @@ class NotificationItem {
     this.content = '',
     this.contentPreview = '',
     this.commentId = '',
+    this.noteRepostKind = '',
     this.actorId = '',
     this.actorName = '',
+    this.actorAvatar = '',
+    this.actorAccount = '',
+    this.actorVerified = false,
     this.viewed = false,
     required this.createdAt,
   });
@@ -290,8 +306,12 @@ class NotificationItem {
         content: json['content']?.toString() ?? '',
         contentPreview: json['contentPreview']?.toString() ?? '',
         commentId: json['commentId']?.toString() ?? '',
+        noteRepostKind: json['repostKind']?.toString() ?? '',
         actorId: json['actorId']?.toString() ?? '',
         actorName: json['actorName']?.toString() ?? '同修',
+        actorAvatar: json['actorAvatar']?.toString() ?? '',
+        actorAccount: json['actorAccount']?.toString() ?? '',
+        actorVerified: json['actorVerified'] == true,
         viewed: json['viewed'] == true,
         createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
       );
@@ -691,18 +711,23 @@ class CloudNotesService {
   }
 
   /// 预取当前登录用户的关注/屏蔽记录。未登录时清空。
+  /// 先拉取成功再整体替换，避免网络抖动时清空本地集合导致屏蔽失效。
   Future<void> refreshFollowStates() async {
-    followingUserIds.clear();
-    blockedUserIds.clear();
-    if (!AuthService.instance.isLoggedIn) return;
+    if (!AuthService.instance.isLoggedIn) {
+      followingUserIds.clear();
+      blockedUserIds.clear();
+      return;
+    }
     try {
       final app = await AuthService.instance.ensureApp();
       if (app == null) return;
       final f = await _call('getFollowingUserIds');
       final fs = f['ids'];
-      if (fs is List) followingUserIds.addAll(fs.map((e) => e.toString()));
       final b = await _call('getBlockedUserIds');
       final bs = b['ids'];
+      followingUserIds.clear();
+      blockedUserIds.clear();
+      if (fs is List) followingUserIds.addAll(fs.map((e) => e.toString()));
       if (bs is List) blockedUserIds.addAll(bs.map((e) => e.toString()));
     } catch (_) {}
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'sutra_downloader.dart';
 import 'sutra_list_page.dart';
 
 const Color _gold = Color(0xFFD4A06A);
@@ -213,6 +214,7 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
                   const Icon(Icons.push_pin, color: _gold, size: 16),
                   const SizedBox(width: 6),
                 ],
+                _buildDownloadState(sutra),
                 const Icon(Icons.chevron_right, color: _textHint, size: 20),
               ],
             ),
@@ -220,5 +222,31 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
         ),
       ),
     );
+  }
+
+  /// 下载中显示小圆进度圈，已下载显示「下载完成」标记。
+  Widget _buildDownloadState(Sutra? sutra) {
+    final parent = widget.parent;
+    if (sutra == null || parent == null) return const SizedBox.shrink();
+    final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
+    if (id == null) return const SizedBox.shrink();
+    final p = parent.downloadProgressOf(id);
+    if (p != null && p < 1.0) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(value: p, strokeWidth: 2, color: _gold),
+        ),
+      );
+    }
+    if (parent.isSutraDownloaded(id)) {
+      return const Padding(
+        padding: EdgeInsets.only(right: 8),
+        child: Icon(Icons.check_circle, color: Color(0xFF8FBC8F), size: 18),
+      );
+    }
+    return const SizedBox.shrink();
   }
 }

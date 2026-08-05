@@ -4,6 +4,7 @@ import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 import 'user_avatar.dart';
+import 'user_space_page.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _bg = Color(0xFFF5EDE3);
@@ -42,6 +43,11 @@ class _QuoteBoxState extends State<QuoteBox> {
     }
   }
 
+  /// 原帖作者是否已被当前用户屏蔽。
+  bool get _originalAuthorBlocked =>
+      _original != null &&
+      CloudNotesService.instance.blockedUserIds.contains(_original!.ownerUserId);
+
   String _time(int ms) {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
@@ -52,6 +58,40 @@ class _QuoteBoxState extends State<QuoteBox> {
 
   @override
   Widget build(BuildContext context) {
+    if (_originalAuthorBlocked) {
+      // 原帖作者已被屏蔽：点击进入该用户主页，方便一键取消屏蔽。
+      final blockedOwnerId = _original!.ownerUserId;
+      final blockedOwnerName = _original!.authorName;
+      return InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => UserSpacePage(
+              userId: blockedOwnerId,
+              userName: blockedOwnerName,
+            ),
+          ),
+        ),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            border: Border.all(color: _border),
+            borderRadius: BorderRadius.circular(8),
+            color: _bg,
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.block, size: 16, color: _textSec),
+              SizedBox(width: 8),
+              Text('已屏蔽用户',
+                  style: TextStyle(fontSize: 14, color: _textSec)),
+            ],
+          ),
+        ),
+      );
+    }
     final src = _original;
     final name = src?.authorName ?? widget.note.repostSourceAuthor;
     final account = src?.authorAccount ?? '';

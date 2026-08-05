@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'reading_page.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
+import 'sutra_favorites.dart';
 import 'favorite_sutras_page.dart';
 import 'recent_sutras_page.dart';
 
@@ -357,9 +358,27 @@ class SutraListPageState extends State<SutraListPage>
       _markDownloaded(id);
       await _persistDownloadedIds();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('《${sutra.title}》下载完成')),
+      final shouldRead = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('下载完成'),
+          content: Text('《${_displayTitle(sutra.title)}》已下载完成，是否现在阅读？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD4A06A)),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('阅读'),
+            ),
+          ],
+        ),
       );
+      if (shouldRead == true && mounted) {
+        _openReading(sutra);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -455,7 +474,7 @@ class SutraListPageState extends State<SutraListPage>
         width: 34,
         height: 30,
         child: Center(
-          child: Icon(Icons.check_circle_outline, size: 15, color: Color(0xFF8FBC8F)),
+          child: Icon(Icons.check_circle, size: 15, color: Color(0xFF8FBC8F)),
         ),
       );
     }
@@ -794,13 +813,33 @@ class SutraListPageState extends State<SutraListPage>
   void _applySutraList(List<Sutra> list) {
     setState(() {
       _allSutras = List.from(list);
-      _filteredSutras = List.from(list);
+      // 搜索激活时保持过滤（reload 会重置 _filteredSutras 为全量，
+      // 若不重新过滤，搜索结果会和搜索框字符不一致）。
+      _filteredSutras = _searchActive
+          ? _filterListBySearch(List.from(list))
+          : List.from(list);
     });
     _randomSutra ??= _rollRandomSutra();
     unawaited(_ensureRandomFolder());
     _bestAssetPathByTitleCache.clear();
     _missingComputed = false;
     _recomputeMissingSutrasIfReady();
+  }
+
+  /// 按当前搜索框内容过滤 [list]，空查询返回全量。
+  List<Sutra> _filterListBySearch(List<Sutra> list) {
+    final q = _searchController.text.trim();
+    if (q.isEmpty) return list;
+    final filtered = list.where((sutra) {
+      if (sutra.title.contains(q)) return true;
+      return (_folderDisplayNames[sutra.folder] ?? '').contains(q);
+    }).toList();
+    filtered.sort((a, b) {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return 0;
+    });
+    return filtered;
   }
 
   /// 默认在「全部经典」下方随机展示一部（与随缘读经一致），优先恢复上次展示的部类。
@@ -938,21 +977,7 @@ class SutraListPageState extends State<SutraListPage>
 
   void _filterSutras() {
     setState(() {
-      final q = _searchController.text.trim();
-      if (q.isEmpty) {
-        _filteredSutras = List.from(_allSutras);
-      } else {
-        final filtered = _allSutras.where((sutra) {
-          if (sutra.title.contains(q)) return true;
-          return (_folderDisplayNames[sutra.folder] ?? '').contains(q);
-        }).toList();
-        filtered.sort((a, b) {
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          return 0;
-        });
-        _filteredSutras = filtered;
-      }
+      _filteredSutras = _filterListBySearch(List.from(_allSutras));
     });
   }
 
@@ -1020,6 +1045,12 @@ class SutraListPageState extends State<SutraListPage>
   /// 供子页面读取收藏列表（置顶优先）。
   List<Sutra> getFavoriteSutras() => _getFavoriteSutras();
 
+  /// 供子页面查询某本经书当前的下载进度（null 表示未在下载）。
+  double? downloadProgressOf(String id) => _downloadProgress[id];
+
+  /// 供子页面判断某本经书是否已下载到本地。
+  bool isSutraDownloaded(String id) => _downloadedIds.contains(id);
+
   Widget _buildMenuItem({
     required IconData icon,
     required String title,
@@ -1046,7 +1077,7 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  void _togglePin(int index) {
+  Future<void> _togglePin(int index) async {
     setState(() {
       _allSutras[index] = Sutra(
         _allSutras[index].title,
@@ -1059,10 +1090,11 @@ class SutraListPageState extends State<SutraListPage>
       );
       _filterSutras();
     });
-    _saveSutras();
+    await _saveSutras();
+    await SutraFavorites.syncStatePref(_allSutras[index].title);
   }
 
-  void _toggleFavorite(int index) {
+  Future<void> _toggleFavorite(int index) async {
     setState(() {
       _allSutras[index] = Sutra(
         _allSutras[index].title,
@@ -1077,10 +1109,11 @@ class SutraListPageState extends State<SutraListPage>
       );
       _filterSutras();
     });
-    _saveSutras();
+    await _saveSutras();
+    await SutraFavorites.syncStatePref(_allSutras[index].title);
   }
 
-  void _toggleRead(int index) {
+  Future<void> _toggleRead(int index) async {
     setState(() {
       _allSutras[index] = Sutra(
         _allSutras[index].title,
@@ -1095,7 +1128,8 @@ class SutraListPageState extends State<SutraListPage>
       );
       _filterSutras();
     });
-    _saveSutras();
+    await _saveSutras();
+    await SutraFavorites.syncStatePref(_allSutras[index].title);
   }
 
   Future<void> _pickFile() async {
@@ -1266,30 +1300,10 @@ class SutraListPageState extends State<SutraListPage>
       _openReading(sutra);
       return;
     }
-    final shouldDownload = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('经文尚未下载'),
-        content: Text('《${_displayTitle(sutra.title)}》的正文尚未下载（约 ${sutra.size}），是否现在下载？下载完成即可阅读。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD4A06A)),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('下载'),
-          ),
-        ],
-      ),
-    );
-    if (shouldDownload != true || !mounted) return;
+    // 该经书正在下载中时，避免重复启动下载。
+    final inFlight = _downloadProgress[id];
+    if (inFlight != null && inFlight < 1.0) return;
     await _downloadSingle(sutra, id);
-    if (!mounted) return;
-    if (_downloadedIds.contains(id)) {
-      _openReading(sutra);
-    }
   }
 
   Widget _buildContinueReadingCard() {
@@ -2138,15 +2152,22 @@ class SutraListPageState extends State<SutraListPage>
                 ),
               ],
               const Spacer(),
-              const Align(
+              Align(
                 alignment: Alignment.centerRight,
-                child: Text(
-                  '开始阅读 ›',
-                  style: TextStyle(
-                    color: Color(0xFFE5A12E),
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (sutra != null) _buildRandomDownloadIndicator(sutra),
+                    const SizedBox(width: 6),
+                    const Text(
+                      '开始阅读 ›',
+                      style: TextStyle(
+                        color: Color(0xFFE5A12E),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -2154,6 +2175,32 @@ class SutraListPageState extends State<SutraListPage>
         ),
       ),
     );
+  }
+
+  /// 随缘读经卡片「开始阅读」前的下载状态标记：
+  /// 下载中显示进度小圆圈（刚启动还没收到字节时转圈动画，避免看起来像卡住），
+  /// 已下载显示「下载完成」图标。
+  Widget _buildRandomDownloadIndicator(Sutra sutra) {
+    final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
+    if (id == null) return const SizedBox.shrink();
+    final p = _downloadProgress[id];
+    if (p != null && p < 1.0) {
+      return SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(
+          // 尚未收到任何进度时用 null 走转圈动画，收到进度后显示具体百分比弧。
+          value: p > 0 ? p : null,
+          strokeWidth: 2,
+          color: const Color(0xFF71867A),
+          backgroundColor: const Color(0xFF71867A).withValues(alpha: 0.12),
+        ),
+      );
+    }
+    if (_downloadedIds.contains(id)) {
+      return const Icon(Icons.check_circle, size: 16, color: Color(0xFF8FBC8F));
+    }
+    return const SizedBox.shrink();
   }
 
   Widget _buildFolderCard(String folder) {
@@ -2427,10 +2474,10 @@ class SutraListPageState extends State<SutraListPage>
                 const SizedBox(width: 6),
                 Flexible(
                   child: Text(
-                    _searchActive ? '输入经名，快速查找' : '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
+                    _searchActive ? '谛听，谛听，善思念之。' : '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
                     style: const TextStyle(
                       color: Color(0xFF9E9588),
-                      fontSize: 10.5,
+                      fontSize: 12,
                     ),
                     softWrap: false,
                     overflow: TextOverflow.ellipsis,

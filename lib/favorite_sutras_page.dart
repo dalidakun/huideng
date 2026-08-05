@@ -28,7 +28,8 @@ class FavoriteSutrasPage extends StatefulWidget {
   State<FavoriteSutrasPage> createState() => _FavoriteSutrasPageState();
 }
 
-class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
+class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
+    with RouteAware {
   List<Sutra> _favoriteSutras = [];
   bool _loading = true;
 
@@ -40,9 +41,23 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  @override
   void dispose() {
     widget.parent?.sutraDataVersion.removeListener(_onParentChanged);
+    routeObserver.unsubscribe(this);
     super.dispose();
+  }
+
+  /// 从阅读页返回时刷新收藏列表，保证新收藏/取消收藏立即生效。
+  @override
+  void didPopNext() {
+    _loadFavorites();
   }
 
   void _onParentChanged() {
@@ -276,11 +291,37 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage> {
                 const Icon(Icons.push_pin, color: _gold, size: 16),
                 const SizedBox(width: 6),
               ],
+              if (widget.parent != null) ...[
+                _buildDownloadState(sutra),
+              ],
               const Icon(Icons.chevron_right, color: _textHint, size: 20),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 下载中显示小圆进度圈（已下载后不显示任何标记）。
+  Widget _buildDownloadState(Sutra sutra) {
+    final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
+    final parent = widget.parent;
+    if (id == null || parent == null) return const SizedBox.shrink();
+    final p = parent.downloadProgressOf(id);
+    if (p != null && p < 1.0) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(
+            value: p,
+            strokeWidth: 2,
+            color: _gold,
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
   }
 }

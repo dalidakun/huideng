@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart';
+import 'sutra_favorites.dart';
 import 'app_state.dart';
 import 'reader_preferences.dart';
 import 'note_edit_page.dart';
@@ -51,6 +52,7 @@ class _ReadingPageState extends State<ReadingPage> {
   bool _needsDownload = false;
   bool _isDownloading = false;
   double _downloadProgress = 0;
+  bool _isFavorite = false;
   double? _savedPosition;
   double? _savedProgress;
   int _restoreAttempts = 0;
@@ -79,6 +81,7 @@ class _ReadingPageState extends State<ReadingPage> {
     _loadSettings();
     _loadSavedScrollState();
     _loadContent();
+    _loadFavoriteState();
   }
 
   void _saveCurrentSutra() {
@@ -180,9 +183,10 @@ class _ReadingPageState extends State<ReadingPage> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _fontSize = prefs.getDouble('fontSize') ?? 16.0;
+      // 兼容历史数据里存成 int 的取值（如 fontSize），统一转 double。
+      _fontSize = (prefs.get('fontSize') as num?)?.toDouble() ?? 16.0;
       _isDarkMode = prefs.getBool('isDarkMode') ?? false;
-      _lineHeight = prefs.getDouble('reader_line_height') ?? 1.8;
+      _lineHeight = (prefs.get('reader_line_height') as num?)?.toDouble() ?? 1.8;
       _pageMode = prefs.getInt('reader_page_mode') ?? ReaderPreferences.pageModeScroll;
     });
     // 同步全局夜间模式信号，消息中心等页面跟随切换浅色/深色配色。
@@ -884,6 +888,16 @@ class _ReadingPageState extends State<ReadingPage> {
                               label: '编辑',
                               onTap: _openEditor,
                             ),
+                            _buildMoreMenuItem(
+                              icon: Icon(
+                                _isFavorite
+                                    ? Icons.favorite
+                                    : Icons.favorite_border,
+                                size: 18,
+                              ),
+                              label: _isFavorite ? '取消收藏' : '收藏',
+                              onTap: _toggleFavorite,
+                            ),
                           ],
                         ),
                       ),
@@ -964,6 +978,34 @@ class _ReadingPageState extends State<ReadingPage> {
     setState(() {
       _showMoreMenu = !_showMoreMenu;
     });
+  }
+
+  /// 加载当前经书收藏状态（菜单图标/文字随状态切换）。
+  Future<void> _loadFavoriteState() async {
+    final fav = await SutraFavorites.isFavorite(
+        widget.title, _resolvedFilePath ?? widget.filePath);
+    if (mounted) {
+      setState(() {
+        _isFavorite = fav;
+      });
+    }
+  }
+
+  /// 收藏 / 取消收藏当前经书，并同步到「我的收藏」。
+  Future<void> _toggleFavorite() async {
+    final nowFav = await SutraFavorites.toggle(
+        widget.title, _resolvedFilePath ?? widget.filePath);
+    if (!mounted) return;
+    setState(() {
+      _showMoreMenu = false;
+      _isFavorite = nowFav;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(nowFav ? '已收藏，可在「我的收藏」中查看' : '已取消收藏'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   /// 右下角浮动图标：与助手页底部圆圈按钮同款（浅色圆底 + 阴影）。

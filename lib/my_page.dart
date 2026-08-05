@@ -71,7 +71,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   String? _avatarPath;
   String? _bannerPath;
   String _nickname = '同修';
-  String _tagline = '与经为伴，与法同行';
+  String _tagline = '燃一盏灯，看见自己，照亮别人。';
   String _accountName = '';
   bool _verified = false;
   String _joinedDate =
@@ -129,10 +129,10 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
       if (_isLoggedIn) {
         _nickname = user?.displayName ?? '同修';
         _tagline =
-            (user?.tagline?.isNotEmpty ?? false) ? user!.tagline! : '与经为伴，与法同行';
+            (user?.tagline?.isNotEmpty ?? false) ? user!.tagline! : '燃一盏灯，看见自己，照亮别人。';
       } else {
         _nickname = prefs.getString('user_nickname') ?? '同修';
-        _tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+        _tagline = prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
       }
       final createdMs = prefs.getInt('user_created_at');
       if (createdMs != null) {

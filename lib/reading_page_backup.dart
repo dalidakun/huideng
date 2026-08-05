@@ -98,7 +98,8 @@ class _ReadingPageState extends State<ReadingPage> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _fontSize = prefs.getDouble('fontSize') ?? 16.0;
+      // 兼容历史数据里存成 int 的取值，统一转 double。
+      _fontSize = (prefs.get('fontSize') as num?)?.toDouble() ?? 16.0;
       _isDarkMode = prefs.getBool('isDarkMode') ?? false;
     });
   }

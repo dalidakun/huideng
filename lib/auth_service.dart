@@ -63,29 +63,55 @@ class AuthService {
   bool get isLoggedIn => currentUser.value != null;
 
   /// 本地签名（tagline），CloudBase 不存此字段，保留本地。
-  String _localTagline = '与经为伴，与法同行';
+  String _localTagline = '燃一盏灯，看见自己，照亮别人。';
+
+  /// 本地昵称缓存：云端同步未完成/失败时兜底，保证重启后昵称不丢失。
+  String? _localNickname;
 
   CloudBase? _app;
+  Future<CloudBase?>? _appFuture;
+
+  /// 启动会话恢复是否已完成（结束即置 true，避免启动期抢先匿名登录覆盖真实会话）。
+  bool _restoreCompleted = false;
+
+  /// 会话恢复失败后是否已安排过后台重试（每个进程只重试一次）。
+  bool _restoreRetried = false;
+
+  /// 本地登录身份缓存（uid/手机号/昵称）：会话恢复失败时兜底保持登录态。
+  AuthUser? _cachedLogin;
+
+  static const String _kCachedUid = 'user_login_uid';
+  static const String _kCachedPhone = 'user_login_phone';
+  static const String _kCachedNickname = 'user_login_nickname';
 
   /// 最近一次 [requestSmsCode] 返回的验证码校验回调，用于 [loginWithSmsCode]。
   Future<SignInRes> Function(VerifyOtpParams params)? _pendingVerifyOtp;
   String? _pendingPhone;
 
   /// 最近一次 [requestPhoneChange] 返回的换绑校验回调，用于 [confirmPhoneChange]。
-  Future<GetUserRes> Function(UpdateUserVerifyParams params)? _pendingPhoneChangeVerify;
+  Future<GetUserRes> Function(UpdateUserVerifyParams params)?
+      _pendingPhoneChangeVerify;
 
-  /// 初始化（惰性）。未配置环境时返回 null。
-  Future<CloudBase?> _ensureApp() async {
-    if (_app != null) return _app;
+  /// 初始化（惰性，幂等）。未配置环境时返回 null。
+  /// 用 Future 缓存保证全进程只创建「一个」CloudBase 实例：启动时
+  /// [restoreSession] 与各页面云调用会并发走到这里，若初始化两次，
+  /// 后初始化的实例读到的是已被前一次刷新轮换掉的旧 refresh token，
+  /// 会导致该实例上所有请求 401、会话被判定失效。
+  Future<CloudBase?> _ensureApp() {
+    return _appFuture ??= _initApp();
+  }
+
+  Future<CloudBase?> _initApp() async {
     if (CloudBaseAppConfig.envId.isEmpty) return null;
-    _app = await CloudBase.init(
+    final app = await CloudBase.init(
       env: CloudBaseAppConfig.envId,
       region: CloudBaseAppConfig.region,
       accessKey: CloudBaseAppConfig.accessKey.isEmpty
           ? null
           : CloudBaseAppConfig.accessKey,
     );
-    return _app;
+    _app = app;
+    return app;
   }
 
   /// 初始化并返回 CloudBase 实例（供云函数等服务使用），未配置环境时返回 null。
@@ -126,20 +152,29 @@ class AuthService {
 
   AuthUser _toAuthUser(User user) {
     final meta = user.userMetadata;
+    final serverNick = meta?.nickName;
+    final nick = (serverNick != null && serverNick.isNotEmpty)
+        ? serverNick
+        : (_localNickname != null && _localNickname!.isNotEmpty
+            ? _localNickname
+            : null);
     return AuthUser(
       id: user.id ?? '',
       mobilePhoneNumber: user.phone,
-      nickname: meta?.nickName,
+      nickname: nick,
       tagline: _localTagline,
     );
   }
 
   /// App 启动时调用：从本地恢复会话并校验有效性。
-  /// 未配置环境、会话失效或网络失败时静默清除，不阻塞启动。
+  /// 恢复失败（网络/瞬时异常）时不会直接登出：优先用本地缓存的登录身份兜底，
+  /// 并延迟重试一次真正的恢复，避免「第二天打开就需要重新登录」。
   Future<void> restoreSession() async {
     final app = await _ensureApp();
     if (app == null) return;
     await _loadLocalTagline();
+    await _loadLocalNickname();
+    _cachedLogin = await _loadCachedLogin();
     try {
       final res = await app.auth.getSession();
       if (!res.isSuccess) {
@@ -159,13 +194,61 @@ class AuthService {
         final ures = await app.auth.getUser();
         if (ures.data?.user != null) freshUser = ures.data!.user!;
       } catch (_) {}
-      currentUser.value = _toAuthUser(freshUser);
-      await _ensureDefaultNickname(freshUser);
-      await _recordFirstJoin();
+      await _applyUser(freshUser);
       unawaited(_ensureDefaultAccount(user.phone ?? ''));
-    } catch (_) {
-      currentUser.value = null;
+    } catch (e) {
+      // 恢复失败：有本地登录身份缓存时保持登录态并安排一次后台重试，
+      // 避免瞬时网络/会话刷新失败把用户踢下线；确无缓存才显示未登录。
+      debugPrint('[auth] restoreSession failed: $e');
+      final cached = _cachedLogin;
+      if (cached != null) {
+        currentUser.value = cached;
+        if (!_restoreRetried) {
+          _restoreRetried = true;
+          unawaited(_retryRestoreSession());
+        }
+      } else {
+        currentUser.value = null;
+      }
+    } finally {
+      _restoreCompleted = true;
     }
+  }
+
+  /// 后台重试一次会话恢复：成功则用真实用户覆盖缓存身份。
+  /// 仍失败则清掉缓存兜底身份并回到未登录，避免"假登录 + 云端数据全空"。
+  Future<void> _retryRestoreSession() async {
+    await Future.delayed(const Duration(seconds: 4));
+    try {
+      final app = await _ensureApp();
+      if (app != null) {
+        final res = await app.auth.getSession();
+        if (res.isSuccess && res.data?.user != null) {
+          final user = res.data!.user!;
+          if (user.isAnonymous != true) {
+            await _applyUser(user);
+            unawaited(_ensureDefaultAccount(user.phone ?? ''));
+            return;
+          }
+        }
+      }
+    } catch (_) {
+      // 仍失败：继续走下面的登出兜底。
+    }
+    // 会话确实不可用：清掉缓存身份，回到未登录，数据不会丢，重新登录即恢复。
+    _cachedLogin = null;
+    await _clearCachedLogin();
+    currentUser.value = null;
+  }
+
+  /// 把一次真实登录会话应用到当前状态：写缓存身份、广播登录态、补默认昵称。
+  Future<void> _applyUser(User user) async {
+    final authUser = _toAuthUser(user);
+    _cachedLogin = authUser;
+    await _saveCachedLogin(authUser);
+    currentUser.value = authUser;
+    await _ensureDefaultNickname(user);
+    await _recordFirstJoin();
   }
 
   /// 确保存在一个可用于调用云函数的会话：
@@ -174,6 +257,9 @@ class AuthService {
   ///  - 否则：匿名登录，仅用于浏览公开内容（广场），不会改变 [currentUser]。
   Future<void> ensureAnonymousForBrowse() async {
     if (isLoggedIn) return;
+    // 启动时的会话恢复还在进行：等它结束再决定是否需要匿名会话，
+    // 避免抢先匿名登录把本地已持久化的真实会话覆盖掉。
+    if (!_restoreCompleted) return;
     final app = await _ensureApp();
     if (app == null) return;
     try {
@@ -213,9 +299,8 @@ class AuthService {
       throw AuthException('no_user', '登录失败，未获取到用户信息');
     }
     await _loadLocalTagline();
-    currentUser.value = _toAuthUser(user);
-    await _ensureDefaultNickname(user);
-    await _recordFirstJoin();
+    await _loadLocalNickname();
+    await _applyUser(user);
     await _ensureDefaultAccount(phone);
   }
 
@@ -229,8 +314,10 @@ class AuthService {
       await prefs.setString('user_tagline', tagline);
     }
     if (nickname != null && nickname.isNotEmpty && app != null) {
-      final res = await app.auth
-          .updateUser(UpdateUserReq(nickname: nickname));
+      _localNickname = nickname;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_nickname', nickname);
+      final res = await app.auth.updateUser(UpdateUserReq(nickname: nickname));
       if (!res.isSuccess) {
         throw AuthException(
           res.error?.code ?? 'error',
@@ -262,6 +349,10 @@ class AuthService {
         await app.auth.signOut();
       } catch (_) {}
     }
+    _cachedLogin = null;
+    await _clearCachedLogin();
+    _restoreRetried = false;
+    _restoreCompleted = true;
     currentUser.value = null;
   }
 
@@ -275,8 +366,8 @@ class AuthService {
     if (!isLoggedIn) {
       throw AuthException('not_logged_in', '请先登录');
     }
-    final res = await CloudNotesService.instance
-        .callApi('setAccount', params: {'username': username, 'password': password});
+    final res = await CloudNotesService.instance.callApi('setAccount',
+        params: {'username': username, 'password': password});
     final name = res['username']?.toString();
     if (name != null && name.isNotEmpty) {
       final prefs = await SharedPreferences.getInstance();
@@ -317,7 +408,8 @@ class AuthService {
     required String password,
   }) async {
     final app = await _requireApp();
-    final res = await CloudNotesService.instance.callApi('loginWithAccount', params: {
+    final res =
+        await CloudNotesService.instance.callApi('loginWithAccount', params: {
       'username': username,
       'password': password,
     });
@@ -332,9 +424,8 @@ class AuthService {
       throw AuthException('no_user', '登录失败，未获取到用户信息');
     }
     await _loadLocalTagline();
-    currentUser.value = _toAuthUser(user);
-    await _ensureDefaultNickname(user);
-    await _recordFirstJoin();
+    await _loadLocalNickname();
+    await _applyUser(user);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user_account_name', username.trim());
     return res['registered'] == true;
@@ -357,7 +448,7 @@ class AuthService {
     }
   }
 
-  /// 手机号登录后自动生成默认账号：4 位随机字母/数字 + 手机号后四位，并随机生成密码。
+  /// 手机号登录后自动生成默认账号：4 位随机小写字母 + 手机号后四位，并随机生成密码。
   /// 已有账号（含默认账号）则原样返回、不覆盖；用户可在「设置-安全-忘记密码」重置密码。
   Future<void> _ensureDefaultAccount(String phone) async {
     if (!isLoggedIn) return;
@@ -383,9 +474,9 @@ class AuthService {
     }
   }
 
-  /// 随机 n 位字母/数字（用于默认账号前缀）。
+  /// 随机 n 位小写字母（用于默认账号前缀）。
   String _randomChars(int n) {
-    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    const chars = 'abcdefghjkmnpqrstuvwxyz';
     final r = Random();
     return String.fromCharCodes(
         List.generate(n, (_) => chars.codeUnitAt(r.nextInt(chars.length))));
@@ -446,6 +537,8 @@ class AuthService {
   Future<void> _ensureDefaultNickname(User user) async {
     final meta = user.userMetadata;
     if (meta?.nickName != null && meta!.nickName!.isNotEmpty) return;
+    // 本地已保存自定义昵称（云端同步可能未完成/失败）时不覆盖默认昵称。
+    if (_localNickname != null && _localNickname!.isNotEmpty) return;
     final tail = AuthUser(
       id: user.id ?? '',
       mobilePhoneNumber: user.phone,
@@ -454,8 +547,7 @@ class AuthService {
     final app = _app;
     if (app == null) return;
     try {
-      final res = await app.auth
-          .updateUser(UpdateUserReq(nickname: '同修$tail'));
+      final res = await app.auth.updateUser(UpdateUserReq(nickname: '同修$tail'));
       if (!res.isSuccess) return;
       final u = res.data?.user;
       if (u != null) currentUser.value = _toAuthUser(u);
@@ -464,12 +556,48 @@ class AuthService {
 
   Future<void> _loadLocalTagline() async {
     final prefs = await SharedPreferences.getInstance();
-    _localTagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+    _localTagline = prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
+  }
+
+  Future<void> _loadLocalNickname() async {
+    final prefs = await SharedPreferences.getInstance();
+    _localNickname = prefs.getString('user_nickname');
+  }
+
+  Future<AuthUser?> _loadCachedLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final uid = prefs.getString(_kCachedUid);
+    if (uid == null || uid.isEmpty) return null;
+    return AuthUser(
+      id: uid,
+      mobilePhoneNumber: prefs.getString(_kCachedPhone),
+      nickname: prefs.getString(_kCachedNickname),
+      tagline: _localTagline,
+    );
+  }
+
+  Future<void> _saveCachedLogin(AuthUser user) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kCachedUid, user.id);
+    if (user.mobilePhoneNumber != null) {
+      await prefs.setString(_kCachedPhone, user.mobilePhoneNumber!);
+    }
+    if (user.nickname != null && user.nickname!.isNotEmpty) {
+      await prefs.setString(_kCachedNickname, user.nickname!);
+    }
+  }
+
+  Future<void> _clearCachedLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kCachedUid);
+    await prefs.remove(_kCachedPhone);
+    await prefs.remove(_kCachedNickname);
   }
 
   Future<void> _recordFirstJoin() async {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.containsKey('user_created_at')) return;
-    await prefs.setInt('user_created_at', DateTime.now().millisecondsSinceEpoch);
+    await prefs.setInt(
+        'user_created_at', DateTime.now().millisecondsSinceEpoch);
   }
 }

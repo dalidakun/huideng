@@ -50,6 +50,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
   bool _loadingMore = false;
   String _profileTagline = '';
   int _profileJoinTime = 0;
+  String _profileAccount = '';
+  bool _profileVerified = false;
   late bool _following =
       CloudNotesService.instance.followingUserIds.contains(widget.userId);
 
@@ -58,11 +60,20 @@ class _UserSpacePageState extends State<UserSpacePage> {
   bool _homeLoaded = false;
   bool _homeError = false;
 
-  /// 对方账号（从已加载的笔记中取，用于「屏蔽@账号」等展示）。
-  String get _account => _notes.isNotEmpty ? _notes.first.authorAccount : '';
+  /// 对方账号（优先用资料接口返回的账号，未拉取到则从已加载的笔记中取）。
+  String get _account =>
+      _profileAccount.isNotEmpty ? _profileAccount : (_notes.isNotEmpty ? _notes.first.authorAccount : '');
 
-  /// 对方是否已实名认证（从已加载的笔记中取）。
-  bool get _verified => _notes.isNotEmpty && _notes.first.authorVerified;
+  /// 对方是否已实名认证（优先用资料接口返回的认证状态）。
+  bool get _verified =>
+      _profileVerified || (_notes.isNotEmpty && _notes.first.authorVerified);
+
+  /// 是否已屏蔽对方。
+  bool get _isBlocked =>
+      CloudNotesService.instance.blockedUserIds.contains(widget.userId);
+
+  /// 是否查看的是自己的主页。
+  bool get _isSelf => AuthService.instance.currentUser.value?.id == widget.userId;
 
   /// 关注/取消关注对方（已关注的同修在首页「关注」栏目展示其新帖）。
   Future<void> _toggleFollow() async {
@@ -134,6 +145,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       if (!mounted) return;
       setState(() {});
       _showToast(context, ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+      if (!ok) _load();
     } catch (e) {
       if (mounted) _showToast(context, e.toString());
     }
@@ -188,6 +200,49 @@ class _UserSpacePageState extends State<UserSpacePage> {
   }
 
   Future<void> _load() async {
+    if (_isBlocked && !_isSelf) {
+      // 已屏蔽对方：帖子/回复/精读/功课等栏目统一显示「已屏蔽用户」占位，
+      // 但头部仍需展示对方的 @账户 与注册时间，方便识别/取消屏蔽。
+      String tagline = '';
+      int joinTime = 0;
+      String account = '';
+      bool verified = false;
+      try {
+        final profiles =
+            await CloudNotesService.instance.getUserProfiles([widget.userId]);
+        if (profiles.isNotEmpty) {
+          tagline = profiles.first.tagline;
+          joinTime = profiles.first.joinTime;
+          account = profiles.first.account;
+          verified = profiles.first.verified;
+        }
+      } catch (_) {}
+      // getUserProfiles 未取到 @账户 时，从对方公开笔记的 authorAccount 兜底补齐。
+      if (account.isEmpty) {
+        try {
+          final (list, _) = await CloudNotesService.instance
+              .getUserNotes(widget.userId, page: 1);
+          if (list.isNotEmpty) {
+            account = list.first.authorAccount;
+            if (verified == false) verified = list.first.authorVerified;
+          }
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _notes.clear();
+          _profileTagline = tagline;
+          _profileJoinTime = joinTime;
+          _profileAccount = account;
+          _profileVerified = verified;
+          _homeData = null;
+          _homeLoaded = false;
+          _homeError = false;
+        });
+      }
+      return;
+    }
     setState(() {
       _loading = true;
       _hasMore = true;
@@ -199,12 +254,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
       // 签名/加入时间：查看自己主页时用本地数据；他人用 getUserProfiles。
       String tagline = '';
       int joinTime = 0;
+      String account = '';
+      bool verified = false;
       final me = AuthService.instance.currentUser.value;
       if (me != null && me.id == widget.userId) {
         try {
           final prefs = await SharedPreferences.getInstance();
-          tagline = prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+          tagline = prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
           joinTime = prefs.getInt('user_created_at') ?? 0;
+          account = prefs.getString('user_account_name') ?? '';
+          verified = prefs.getBool('user_verified') ?? false;
         } catch (_) {}
       } else {
         try {
@@ -213,6 +272,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
           if (profiles.isNotEmpty) {
             tagline = profiles.first.tagline;
             joinTime = profiles.first.joinTime;
+            account = profiles.first.account;
+            verified = profiles.first.verified;
           }
         } catch (_) {}
       }
@@ -223,6 +284,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
           ..addAll(list);
         _profileTagline = tagline;
         _profileJoinTime = joinTime;
+        _profileAccount = account;
+        _profileVerified = verified;
         _page = 1;
         _hasMore = hasMore;
         _loading = false;
@@ -471,6 +534,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget _buildBody() {
     if (_loading) {
       return const Center(child: CircularProgressIndicator(color: _gold));
+    }
+    if (_isBlocked && !_isSelf) {
+      return _buildBlockedPlaceholder();
     }
     if (_tab == 2) return _buildReadingTab();
     if (_tab == 3) return _buildCheckinTab();
@@ -969,6 +1035,38 @@ class _UserSpacePageState extends State<UserSpacePage> {
     );
   }
 
+  /// 已屏蔽用户：帖子/回复/精读/功课所有栏目统一显示该占位（如需查看请取消屏蔽）。
+  Widget _buildBlockedPlaceholder() {
+    return RefreshIndicator(
+      color: _gold,
+      onRefresh: _load,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 32),
+            child: Column(
+              children: [
+                const Icon(Icons.block, size: 48, color: _textHint),
+                const SizedBox(height: 14),
+                const Text('已屏蔽用户',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+                const SizedBox(height: 6),
+                const Text('如需查看，请取消屏蔽。',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 13, color: _textSec)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 空态占位：隐私未开启 / 无数据 / 加载失败（可下拉重试）。
   Widget _tabPlaceholder(IconData icon, String title, String subtitle,
       {Future<void> Function()? onRefresh}) {
@@ -1178,6 +1276,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
     if (me == null || note.ownerUserId != me.id) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
+        // 屏蔽/关注后刷新，让被屏蔽用户的主页立即变为「已屏蔽」占位。
+        if (mounted) setState(() {});
       }
       return;
     }

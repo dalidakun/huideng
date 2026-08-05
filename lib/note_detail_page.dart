@@ -792,9 +792,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ],
               const SizedBox(height: 8),
-              // 与首页帖子对齐：操作行评论图标从头像右侧开始。
+              // 与首页帖子对齐：操作行评论图标与帖子内容左边缘对齐
+              // （动作单元格内含 6px 水平内边距，外层左缩进减掉该值）。
               Padding(
-                padding: const EdgeInsets.only(left: 54),
+                padding: const EdgeInsets.only(left: 48),
                 child: _buildActionsRow(note, liked),
               ),
               // 原贴（含操作行）与下面的评论用分割线分开。

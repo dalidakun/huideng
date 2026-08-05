@@ -67,7 +67,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _taglineCtrl.text = (user?.tagline?.isNotEmpty == true
             ? user!.tagline!
             : prefs.getString('user_tagline')) ??
-        '与经为伴，与法同行';
+        '燃一盏灯，看见自己，照亮别人。';
     if (_isLoggedIn) {
       final account = await AuthService.instance.getAccountName();
       if (!mounted) return;
@@ -122,7 +122,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final prefs = await SharedPreferences.getInstance();
     final nickname = _nameCtrl.text.trim();
     final tagline = _taglineCtrl.text.trim().isEmpty
-        ? '与经为伴，与法同行'
+        ? '燃一盏灯，看见自己，照亮别人。'
         : _taglineCtrl.text.trim();
     if (nickname.isNotEmpty) {
       await prefs.setString('user_nickname', nickname);

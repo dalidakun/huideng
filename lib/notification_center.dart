@@ -9,7 +9,18 @@ import 'cloud_notes_service.dart';
 class NotificationActor {
   final String userId;
   final String name;
-  const NotificationActor(this.userId, this.name);
+
+  /// 头像 base64（可能为空，空时用默认 App 图标）。
+  final String avatar;
+
+  /// 账号名（@账号，可能为空）。
+  final String account;
+
+  /// 是否实名认证。
+  final bool verified;
+
+  const NotificationActor(this.userId, this.name,
+      [this.avatar = '', this.account = '', this.verified = false]);
 }
 
 /// 聚合后的通知组：相同帖子 + 相同互动类型合并为一条通知。
@@ -21,6 +32,10 @@ class NotificationGroup {
   /// 对应帖子 id（关注通知为空）。
   final String noteId;
   final String noteTitle;
+
+  /// 互动对象帖子的转发类型：reply=回复帖，空/forward/quote=普通帖。
+  /// 点赞通知用它区分「喜欢了你的回复」与「点赞了你的帖子」。
+  String noteRepostKind;
 
   /// 评论类通知定位到该评论。
   String commentId;
@@ -47,6 +62,7 @@ class NotificationGroup {
     required this.type,
     this.noteId = '',
     this.noteTitle = '',
+    this.noteRepostKind = '',
     this.commentId = '',
     this.noteContent = '',
     required this.actors,
@@ -130,6 +146,7 @@ class NotificationCenter {
           type: it.type,
           noteId: it.noteId,
           noteTitle: it.noteTitle,
+          noteRepostKind: it.noteRepostKind,
           commentId: it.type == 'follow_me' ? '' : it.commentId,
           noteContent: it.type == 'follow_me'
               ? ''
@@ -154,7 +171,13 @@ class NotificationCenter {
       g.activityIds.add(it.id);
       final exists = g.actors.any((a) => a.userId == it.actorId && it.actorId.isNotEmpty);
       if (!exists) {
-        g.actors.add(NotificationActor(it.actorId, it.actorName));
+        g.actors.add(NotificationActor(
+          it.actorId,
+          it.actorName,
+          it.actorAvatar,
+          it.actorAccount,
+          it.actorVerified,
+        ));
       }
     }
     return [for (final k in order) groups[k]!];
@@ -162,12 +185,19 @@ class NotificationCenter {
 
   /// 补齐帖子内容摘要：帖子摘要为空且帖子还在时拉取正文；失败保留原样。
   Future<void> _attachNotePreviews(List<NotificationGroup> groups) async {
-    final pending = groups.where((g) => g.type != 'follow_me' && g.noteContent.isEmpty);
+    final pending = groups.where((g) {
+      if (g.type == 'follow_me') return false;
+      if (g.noteContent.isEmpty) return true;
+      // 点赞通知缺少转发类型时回源补齐（区分「喜欢了你的回复」/「点赞了你的帖子」）。
+      if (g.type == 'like_me' && g.noteRepostKind.isEmpty) return true;
+      return false;
+    });
     await Future.wait(pending.map((g) async {
       if (g.noteId.isEmpty) return;
       try {
         final note = await CloudNotesService.instance.getNoteById(g.noteId);
-        g.noteContent = note.content;
+        if (g.noteContent.isEmpty) g.noteContent = note.content;
+        if (g.noteRepostKind.isEmpty) g.noteRepostKind = note.repostKind;
       } catch (_) {}
     }));
   }

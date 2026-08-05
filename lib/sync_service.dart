@@ -52,6 +52,10 @@ class SyncService with WidgetsBindingObserver {
     'apk_last_update_time',
     'downloaded_sutra_ids',
     'user_avatar_path',
+    // 本地登录身份缓存（设备本地兜底用），不随数据同步上传。
+    'user_login_uid',
+    'user_login_phone',
+    'user_login_nickname',
   };
 
   static const int _maxFileChars = 400000;

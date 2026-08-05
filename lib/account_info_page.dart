@@ -21,7 +21,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
   String? _avatarPath;
   String? _bannerPath;
   String _nickname = '同修';
-  String _tagline = '与经为伴，与法同行';
+  String _tagline = '燃一盏灯，看见自己，照亮别人。';
   String _phone = '';
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
@@ -51,7 +51,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
       _nickname = user?.displayName ?? prefs.getString('user_nickname') ?? '同修';
       _tagline = user?.tagline?.isNotEmpty == true
           ? user!.tagline!
-          : prefs.getString('user_tagline') ?? '与经为伴，与法同行';
+          : prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
       _phone = user?.mobilePhoneNumber ?? '';
     });
   }
@@ -148,7 +148,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
     if (result == null) return;
     final prefs = await SharedPreferences.getInstance();
     final nickname = result['nickname']!;
-    final tagline = result['tagline']!.isEmpty ? '与经为伴，与法同行' : result['tagline']!;
+    final tagline = result['tagline']!.isEmpty ? '燃一盏灯，看见自己，照亮别人。' : result['tagline']!;
     if (nickname.isNotEmpty) await prefs.setString('user_nickname', nickname);
     await prefs.setString('user_tagline', tagline);
     if (_isLoggedIn) {

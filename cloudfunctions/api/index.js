@@ -991,6 +991,7 @@ exports.main = async (event, context) => {
               noteTitle: String(note.title || "无标题").slice(0, 100),
               content: "",
               contentPreview: previewText(note.content),
+              repostKind: String(note.repostKind || ""),
               actorId: uid,
               actorName: String(event.authorName || "同修").slice(0, 30),
               viewed: false,
@@ -1169,10 +1170,52 @@ exports.main = async (event, context) => {
           .limit(pageSize)
           .get();
         const { total } = await base.count();
+        // 拉取互动用户头像（base64，存于 userData.payload.files.avatar）、
+        // 账号名与认证状态，消息页直接展示真实头像而非默认 App 图标。
+        const items = res.data || [];
+        const actorIds = [...new Set(items.map((a) => a.actorId).filter(Boolean))];
+        const avatars = {};
+        const accounts = {};
+        const verified = {};
+        if (actorIds.length > 0) {
+          try {
+            await ensureUserAccounts();
+            for (let i = 0; i < actorIds.length; i += 100) {
+              const chunk = actorIds.slice(i, i + 100);
+              const { data: ua } = await userAccounts
+                .where({ uid: _.in(chunk) })
+                .get();
+              for (const a of ua || []) accounts[a.uid] = a.username || "";
+            }
+          } catch (e) {}
+          try {
+            const { data: vd } = await verifications
+              .where({ uid: _.in(actorIds) })
+              .get();
+            for (const v of vd || []) verified[v.uid] = true;
+          } catch (e) {}
+          try {
+            const { data: ud } = await userData
+              .where({ uid: _.in(actorIds) })
+              .limit(1000)
+              .get();
+            for (const row of ud || []) {
+              const av = row && row.payload && row.payload.files && row.payload.files.avatar;
+              if (av && typeof av.data === "string" && av.data) {
+                avatars[row.uid] = av.data;
+              }
+            }
+          } catch (e) {}
+        }
+        for (const a of items) {
+          if (avatars[a.actorId]) a.actorAvatar = avatars[a.actorId];
+          if (accounts[a.actorId]) a.actorAccount = accounts[a.actorId];
+          if (verified[a.actorId]) a.actorVerified = true;
+        }
         return ok({
-          activities: res.data,
+          activities: items,
           total,
-          hasMore: (page - 1) * pageSize + res.data.length < total,
+          hasMore: (page - 1) * pageSize + items.length < total,
         });
       }
 

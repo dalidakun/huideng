@@ -14,6 +14,7 @@ import 'reading_page.dart';
 import 'checkin_settings_page.dart';
 import 'checkin_goals_page.dart';
 import 'sutra_list_page.dart';
+import 'sutra_favorites.dart';
 import 'calendar_page.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
@@ -129,11 +130,24 @@ class StudyHubPageState extends State<StudyHubPage>
     _feedScroll.addListener(_onFeedScroll);
     _loadData();
     _loadFeed();
+    // 登录会话是异步恢复的：首次加载广场时可能还没登录，
+    // 等登录态就绪后重新拉取屏蔽列表并刷新，让被屏蔽用户的帖子立即消失。
+    AuthService.instance.currentUser.addListener(_onAuthChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _measureTopSection();
       precacheImage(_commentIcon, context);
       precacheImage(_viewIcon, context);
     });
+  }
+
+  /// 登录态变化时刷新广场：屏蔽列表/关注列表就绪后，被屏蔽内容立即隐藏。
+  void _onAuthChanged() {
+    final u = AuthService.instance.currentUser.value;
+    if (u != null) {
+      _loadFeed();
+    } else {
+      _refreshCurrentSmooth();
+    }
   }
 
   @override
@@ -152,6 +166,7 @@ class StudyHubPageState extends State<StudyHubPage>
 
   @override
   void dispose() {
+    AuthService.instance.currentUser.removeListener(_onAuthChanged);
     routeObserver.unsubscribe(this);
     _pulseController.dispose();
     _feedScroll.dispose();
@@ -274,6 +289,7 @@ class StudyHubPageState extends State<StudyHubPage>
       list[idx]['favoriteTime'] =
           wasFav ? null : DateTime.now().toIso8601String();
       await file.writeAsString(jsonEncode(list));
+      await SutraFavorites.syncStatePref(title);
       if (!mounted) return;
       setState(() => _currentFavorite = !wasFav);
     } catch (_) {
@@ -385,6 +401,7 @@ class StudyHubPageState extends State<StudyHubPage>
       list[idx]['isRead'] = true;
       list[idx]['readTime'] = DateTime.now().toIso8601String();
       await file.writeAsString(jsonEncode(list));
+      await SutraFavorites.syncStatePref(title);
       if (!mounted) return;
       _showTopToast('已标记完成');
     } catch (_) {
@@ -646,9 +663,12 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 把某栏目的缓存内容恢复到当前展示状态（不触发网络请求）。
   void _restoreFeedFromCache(String tab) {
     final c = _cacheFor(tab);
+    final blocked = CloudNotesService.instance.blockedUserIds;
     _feedNotes
       ..clear()
-      ..addAll(c.notes);
+      ..addAll(blocked.isEmpty
+          ? c.notes
+          : c.notes.where((n) => !blocked.contains(n.ownerUserId)));
     _feedPage = c.page;
     _feedHasMore = c.hasMore;
     _feedInitial = c.initial;
@@ -1120,7 +1140,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   '燃一盏灯，看见自己，照亮别人',
                   style: TextStyle(
                     color: Color(0xFF9E9588),
-                    fontSize: 10.5,
+                    fontSize: 12,
                   ),
                   softWrap: false,
                   overflow: TextOverflow.ellipsis,
@@ -1633,7 +1653,8 @@ class StudyHubPageState extends State<StudyHubPage>
     if (tab == 'announce') {
       return _buildAnnounceSlivers(viewportH);
     }
-    final hasNotes = _feedNotes.isNotEmpty;
+    final feedGroups = _feedGroups;
+    final hasNotes = feedGroups.isNotEmpty;
     final minFeed = math.max(0.0, viewportH - _headerHeight());
 
     if (!hasNotes) {
@@ -1678,7 +1699,6 @@ class StudyHubPageState extends State<StudyHubPage>
       ];
     }
 
-    final feedGroups = _feedGroups;
     final feedLen = feedGroups.length;
     final showFooter = _feedLoading || !_feedHasMore || _feedError;
     // 保守估计每条笔记高度，保证补足后的内容高度一定够吸顶。
@@ -2000,10 +2020,13 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 分组：非回复为根，回复（含回复的回复）递归挂到对应父帖下面，根只显示一次。
   /// 与「我的 → 回复」页一致，原贴一次展示、下面用头像连线串起所有评论。
   List<(PlazaNote, List<PlazaNote>)> get _feedGroups {
+    final blocked = CloudNotesService.instance.blockedUserIds;
     final byId = {for (final n in _feedNotes) n.id: n};
     final children = <String, List<PlazaNote>>{};
     final roots = <PlazaNote>[];
     for (final n in _feedNotes) {
+      // 被屏蔽用户的内容（含原贴）一律不展示，避免缓存中残留数据仍可见。
+      if (blocked.contains(n.ownerUserId)) continue;
       // 只有真正的回复帖（repostKind=='reply'）才归入原贴的回复链；
       // 转发/引用转发（repostOf 非空但非 reply）作为独立帖子展示。
       if (n.repostKind == 'reply' && byId.containsKey(n.repostOf)) {
@@ -2085,6 +2108,8 @@ class StudyHubPageState extends State<StudyHubPage>
     if (me == null || note.ownerUserId != me.id) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
+        // 屏蔽/关注后刷新当前栏目，让被屏蔽用户的帖子立即消失。
+        _refreshCurrentSmooth();
       }
       return;
     }

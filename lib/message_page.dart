@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'auth_service.dart';
+import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'notification_center.dart';
+import 'post_time_link.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
@@ -55,6 +59,31 @@ class _TypeStyle {
       _map[type] ??
       const _TypeStyle.icon(
           Icons.notifications_none, Color(0xFF8B6B5A), '与你互动了');
+}
+
+/// 互动类型图标（评论用帖子默认评论图标，其余用 Material 图标）。
+class _TypeIcon extends StatelessWidget {
+  final _TypeStyle style;
+
+  const _TypeIcon({required this.style});
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 38.0;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: style.color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: style.asset != null
+          ? Image.asset(style.asset!, width: size * 0.47, height: size * 0.47,
+              color: style.color)
+          : Icon(style.icon, size: size * 0.53, color: style.color),
+    );
+  }
 }
 
 class _Palette {
@@ -175,8 +204,9 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
     if (!mounted) return;
     if (widget.activeTab?.value == 3) {
       _pageFade.forward(from: 0);
-      // 切回通知页时顺带刷新未读数。
+      // 切回通知页时顺带刷新未读数，并静默拉取最新通知列表。
       NotificationCenter.instance.refreshUnread();
+      _silentRefresh();
     }
   }
 
@@ -339,10 +369,10 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
-                  '诸行无常，一切皆苦；诸法无我，寂灭为乐。',
+                  '诸菩萨非己所安，不加于物。',
                   style: TextStyle(
                     color: p.textHint,
-                    fontSize: 10.5,
+                    fontSize: 12,
                   ),
                   softWrap: false,
                   overflow: TextOverflow.ellipsis,
@@ -446,6 +476,34 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
             );
           }
           final g = _groups[index];
+          if (g.type == 'like_me' || g.type == 'repost_me') {
+            // 点赞/转发共用同一格局（以点赞类为标准）。
+            return _LikeNotificationCard(
+              key: ValueKey('like:${g.noteId}:${g.latestAt}'),
+              group: g,
+              palette: p,
+              onTap: () => _openGroup(g),
+              onLongPress: () => _showActions(g),
+            );
+          }
+          if (g.type == 'reply' || g.type == 'comment_reply') {
+            return _ReplyNotificationCard(
+              key: ValueKey('reply:${g.noteId}:${g.latestAt}'),
+              group: g,
+              palette: p,
+              onTap: () => _openGroup(g),
+              onLongPress: () => _showActions(g),
+            );
+          }
+          if (g.type == 'follow_me') {
+            return _FollowNotificationCard(
+              key: ValueKey('follow:${g.latestAt}'),
+              group: g,
+              palette: p,
+              onTap: () => _openGroup(g),
+              onLongPress: () => _showActions(g),
+            );
+          }
           return _NotificationCard(
             key: ValueKey('${g.type}:${g.noteId}:${g.latestAt}'),
             group: g,
@@ -533,12 +591,15 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       return;
     }
     if (g.noteId.isEmpty) return;
-    final scrollTo = (g.type == 'reply' ||
-            g.type == 'comment_reply' ||
-            g.type == 'mention' ||
-            g.type == 'repost_me')
-        ? g.commentId
-        : null;
+    // 点赞的是回复帖时，定位到被点赞的回复；其余交互帖定位到对应评论。
+    final scrollTo = (g.type == 'like_me' && g.noteRepostKind == 'reply')
+        ? g.noteId
+        : (g.type == 'reply' ||
+                g.type == 'comment_reply' ||
+                g.type == 'mention' ||
+                g.type == 'repost_me')
+            ? g.commentId
+            : null;
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -617,12 +678,14 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
         }
       case 'post':
         if (g.noteId.isNotEmpty) {
-          final scrollTo = (g.type == 'reply' ||
-                  g.type == 'comment_reply' ||
-                  g.type == 'mention' ||
-                  g.type == 'repost_me')
-              ? g.commentId
-              : null;
+          final scrollTo = (g.type == 'like_me' && g.noteRepostKind == 'reply')
+              ? g.noteId
+              : (g.type == 'reply' ||
+                      g.type == 'comment_reply' ||
+                      g.type == 'mention' ||
+                      g.type == 'repost_me')
+                  ? g.commentId
+                  : null;
           Navigator.push(
             context,
             MaterialPageRoute(
@@ -657,8 +720,15 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
 
   String _typeLabel(NotificationGroup g) {
     final actors = g.actors;
-    if (actors.isEmpty) return _TypeStyle.of(g.type).action;
-    if (actors.length == 1) return '${actors.first.name} ${_TypeStyle.of(g.type).action}';
+    final style = _TypeStyle.of(g.type);
+    if (g.type == 'like_me') {
+      final base = g.noteRepostKind == 'reply' ? '喜欢了你的回复' : '点赞了你的帖子';
+      if (actors.isEmpty) return base;
+      if (actors.length == 1) return '${actors.first.name} $base';
+      return '${actors.first.name} 和另外 ${g.count - 1} 人$base';
+    }
+    if (actors.isEmpty) return style.action;
+    if (actors.length == 1) return '${actors.first.name} ${style.action}';
     return '${actors.take(2).map((a) => a.name).join('、')} 等 ${g.count} 人';
   }
 }
@@ -749,19 +819,7 @@ class _NotificationCardState extends State<_NotificationCard>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // 互动类型图标（评论用帖子默认评论图标，其余用 Material 图标）。
-                Container(
-                  width: 38,
-                  height: 38,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: style.color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: style.asset != null
-                      ? Image.asset(style.asset!,
-                          width: 18, height: 18, color: style.color)
-                      : Icon(style.icon, size: 20, color: style.color),
-                ),
+                _TypeIcon(style: style),
                 const SizedBox(width: 12),
                 // 头像堆叠
                 Padding(
@@ -770,6 +828,7 @@ class _NotificationCardState extends State<_NotificationCard>
                     actors: g.actors,
                     palette: p,
                     expanded: _pressed,
+                    onAvatarTap: (a) => _openActorSpace(context, a),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -789,7 +848,7 @@ class _NotificationCardState extends State<_NotificationCard>
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               Text(
-                                _formatTime(g.latestAt),
+                                _formatNotifTime(g.latestAt),
                                 style: TextStyle(
                                     fontSize: 11, color: p.textHint),
                               ),
@@ -816,7 +875,9 @@ class _NotificationCardState extends State<_NotificationCard>
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13,
-                            color: unread ? p.textSec : p.textHint,
+                            color: g.type == 'repost_me'
+                                ? p.text
+                                : (unread ? p.textSec : p.textHint),
                             height: 1.45,
                           ),
                         ),
@@ -870,8 +931,207 @@ class _NotificationCardState extends State<_NotificationCard>
       overflow: TextOverflow.ellipsis,
     );
   }
+}
 
-  String _formatTime(int ms) {
+// ==================== 点赞通知卡片 ====================
+
+/// 点赞通知卡片（like_me）：
+/// 第一行：点赞用户头像（单人单头像 / 多人并排、最新点赞在前）；
+/// 第二行：昵称 + 认证标志 + 动作文案 + 点赞时间戳；
+/// 第三行：我的评论/帖子内容。
+class _LikeNotificationCard extends StatefulWidget {
+  final NotificationGroup group;
+  final _Palette palette;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  const _LikeNotificationCard({
+    super.key,
+    required this.group,
+    required this.palette,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  @override
+  State<_LikeNotificationCard> createState() => _LikeNotificationCardState();
+}
+
+class _LikeNotificationCardState extends State<_LikeNotificationCard>
+    with SingleTickerProviderStateMixin {
+  bool _pressed = false;
+
+  late final AnimationController _enter = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 420))
+    ..forward();
+  late final Animation<double> _enterAnim =
+      CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
+
+  @override
+  void dispose() {
+    _enter.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.group;
+    final style = _TypeStyle.of(g.type);
+    final p = widget.palette;
+    final unread = g.hasUnread;
+    final actors = g.actors;
+    final isReply = g.type == 'like_me' && g.noteRepostKind == 'reply';
+
+    return AnimatedBuilder(
+      animation: _enter,
+      builder: (context, child) {
+        final t = _enterAnim.value;
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, -18 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.97 : 1.0,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: unread ? p.unreadTint : p.card,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 互动类型图标。
+                _TypeIcon(style: style),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 第一行：头像。
+                      _LikeAvatarRow(
+                        actors: actors,
+                        palette: p,
+                        onAvatarTap: (a) => _openActorSpace(context, a),
+                      ),
+                      const SizedBox(height: 8),
+                      // 第二行：昵称 + 认证 + 动作文案 + 时间戳。
+                      _buildActionLine(g, p, unread, isReply),
+                      // 第三行：我的评论/帖子内容。
+                      if (g.noteContent.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          g.noteContent,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            // 与回复类内容字号一致。
+                            fontSize: 15,
+                            color: p.text,
+                            height: 1.6,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 第二行：昵称（多人时取第一个）+ 认证标志 + 动作文案 + 时间戳。
+  Widget _buildActionLine(
+      NotificationGroup g, _Palette p, bool unread, bool isReply) {
+    final actors = g.actors;
+    final name = actors.isNotEmpty ? actors.first.name : '同修';
+    final verified = actors.isNotEmpty && actors.first.verified;
+    final others = actors.length - 1;
+    // 点赞/转发/收藏等共用同一格局：动作文案随类型变化。
+    final base = isReply ? '喜欢了你的回复' : _TypeStyle.of(g.type).action;
+    final action = actors.length <= 1 ? base : '和另外$others人$base';
+
+    final nameStyle = TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w700,
+      color: unread ? p.text : p.textSec,
+    );
+    final plainStyle = TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w400,
+      color: unread ? p.text : p.textSec,
+    );
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 3,
+            runSpacing: 2,
+            children: [
+              Text(name, style: nameStyle),
+              if (verified) ...[
+                const Icon(Icons.verified, size: 15, color: Color(0xFF70867A)),
+              ],
+              const SizedBox(width: 1),
+              Text(action, style: plainStyle),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              _formatLikeTime(g.latestAt),
+              style: TextStyle(fontSize: 11, color: p.textHint),
+            ),
+            if (unread) ...[
+              const SizedBox(height: 4),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF71867A),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  String _formatLikeTime(int ms) {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
@@ -889,6 +1149,71 @@ class _NotificationCardState extends State<_NotificationCard>
   }
 }
 
+/// 点赞头像行：单人单头像；多人并排（最新点赞在前），最多展示 5 个头像 + 「+N」。
+class _LikeAvatarRow extends StatelessWidget {
+  final List<NotificationActor> actors;
+  final _Palette palette;
+
+  /// 点击某个头像进入该用户主页。
+  final void Function(NotificationActor actor)? onAvatarTap;
+
+  const _LikeAvatarRow({
+    required this.actors,
+    required this.palette,
+    this.onAvatarTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (actors.isEmpty) {
+      return _ActorAvatar(
+        actor: const NotificationActor('', '同修'),
+        radius: 18,
+        palette: palette,
+      );
+    }
+    final shown = actors.take(5).toList();
+    final extra = actors.length - shown.length;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < shown.length; i++) ...[
+          if (i > 0) const SizedBox(width: 5),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onAvatarTap == null
+                ? null
+                : () => onAvatarTap!(shown[i]),
+            child: _ActorAvatar(actor: shown[i], radius: 18, palette: palette),
+          ),
+        ],
+        if (extra > 0) ...[
+          const SizedBox(width: 5),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color:
+                  palette.dark ? const Color(0xFF3A332B) : const Color(0xFFEDE3D5),
+              shape: BoxShape.circle,
+              border: Border.all(color: palette.card, width: 1.5),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '+$extra',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: palette.textSec,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 // ==================== 头像堆叠 ====================
 
 class _AvatarStack extends StatelessWidget {
@@ -896,15 +1221,20 @@ class _AvatarStack extends StatelessWidget {
   final _Palette palette;
   final bool expanded;
 
+  /// 点击某个头像进入该用户主页。
+  final void Function(NotificationActor actor)? onAvatarTap;
+
   const _AvatarStack({
     required this.actors,
     required this.palette,
     this.expanded = false,
+    this.onAvatarTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    const double r = 16;
+    // 头像大小与点赞卡片统一（radius 18）。
+    const double r = 18;
     const double d = r * 2;
     // 重叠率 30%：后续头像左移 d * 0.7；按压时轻微展开（重叠率降为 20%）。
     final step = d * (expanded ? 0.8 : 0.7);
@@ -922,7 +1252,13 @@ class _AvatarStack extends StatelessWidget {
           for (var i = 0; i < shown.length; i++)
             Positioned(
               left: i * step,
-              child: _stackAvatar(shown[i], r),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onAvatarTap == null
+                    ? null
+                    : () => onAvatarTap!(shown[i]),
+                child: _stackAvatar(shown[i], r),
+              ),
             ),
           if (extra > 0)
             Positioned(
@@ -952,12 +1288,624 @@ class _AvatarStack extends StatelessWidget {
   }
 
   Widget _stackAvatar(NotificationActor actor, double r) {
+    return _ActorAvatar(actor: actor, radius: r, palette: palette);
+  }
+}
+
+/// 互动用户头像：有 base64 头像时展示真实头像，否则回退到默认 App 头像。
+class _ActorAvatar extends StatelessWidget {
+  final NotificationActor actor;
+  final double radius;
+  final _Palette palette;
+
+  const _ActorAvatar({
+    required this.actor,
+    required this.radius,
+    required this.palette,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final avatarB64 = actor.avatar;
+    if (avatarB64.isNotEmpty) {
+      try {
+        return Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: palette.card, width: 1.5),
+          ),
+          child: ClipOval(
+            child: Image.memory(
+              base64Decode(avatarB64),
+              width: radius * 2,
+              height: radius * 2,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _fallback(),
+            ),
+          ),
+        );
+      } catch (_) {}
+    }
+    return _fallback();
+  }
+
+  Widget _fallback() {
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(color: palette.card, width: 1.5),
       ),
-      child: UserAvatar(userId: actor.userId, radius: r - 1.5),
+      child: UserAvatar(userId: actor.userId, radius: radius - 1.5),
     );
   }
+}
+
+/// 回复类通知卡片（reply / comment_reply）：
+/// 与主页帖子同款样式：头像 + 昵称 + @账号 + 时间 + 三点菜单（关注/屏蔽），
+/// 下方「回复@我的账号」+ 回复内容，底部为 6 个指标（评论/转发/点赞/阅读/收藏/分享）。
+class _ReplyNotificationCard extends StatefulWidget {
+  final NotificationGroup group;
+  final _Palette palette;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  const _ReplyNotificationCard({
+    super.key,
+    required this.group,
+    required this.palette,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  @override
+  State<_ReplyNotificationCard> createState() => _ReplyNotificationCardState();
+}
+
+class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
+    with SingleTickerProviderStateMixin {
+  bool _pressed = false;
+
+  /// 被回复的帖子（用于底部指标计数）。
+  PlazaNote? _note;
+
+  late final AnimationController _enter = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 420))
+    ..forward();
+  late final Animation<double> _enterAnim =
+      CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNote();
+  }
+
+  @override
+  void dispose() {
+    _enter.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadNote() async {
+    final nid = widget.group.noteId;
+    if (nid.isEmpty) return;
+    try {
+      final n = await CloudNotesService.instance.getNoteById(nid);
+      if (mounted) setState(() => _note = n);
+    } catch (_) {}
+  }
+
+  /// 三点菜单：关注/取消关注、屏蔽/取消屏蔽。
+  Future<void> _showUserMenu(NotificationActor actor) async {
+    if (actor.userId.isEmpty) return;
+    await showMoreMenu(context, actor.userId, actor.name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.group;
+    final p = widget.palette;
+    final unread = g.hasUnread;
+    final actor = g.actors.isNotEmpty ? g.actors.first : null;
+    final name = actor?.name ?? '同修';
+    final verified = actor?.verified ?? false;
+    final account = actor?.account ?? '';
+
+    return AnimatedBuilder(
+      animation: _enter,
+      builder: (context, child) {
+        final t = _enterAnim.value;
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, -18 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.97 : 1.0,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: unread ? p.unreadTint : p.card,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 头像在左（与主页帖子同尺寸，去掉回复类型图标让整体左移）。
+                if (actor != null) ...[
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _openUser(actor),
+                    child: _ActorAvatar(actor: actor, radius: 18, palette: p),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 第一行：昵称 + 认证 + @账号 + 时间 + 三点菜单。
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: p.text,
+                                    ),
+                                  ),
+                                ),
+                                if (verified) ...[
+                                  const SizedBox(width: 3),
+                                  const Icon(Icons.verified,
+                                      size: 17, color: Color(0xFF70867A)),
+                                ],
+                                if (account.isNotEmpty) ...[
+                                  const SizedBox(width: 3),
+                                  Flexible(
+                                    child: AccountLink(
+                                      account: account,
+                                      onTap: actor == null
+                                          ? null
+                                          : () => _openUser(actor),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text('·',
+                                      style: TextStyle(
+                                          fontSize: 12, color: p.textHint)),
+                                  const SizedBox(width: 2),
+                                ],
+                                const SizedBox(width: 2),
+                                Flexible(
+                                  child: Text(
+                                    _formatMonthDay(g.latestAt),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 12, color: p.textHint),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: actor == null
+                                ? null
+                                : () => _showUserMenu(actor),
+                            child: const Padding(
+                              padding: EdgeInsets.all(4),
+                              child: Icon(Icons.more_horiz,
+                                  size: 18, color: Color(0xFF8C8C8C)),
+                            ),
+                          ),
+                        ],
+                      ),
+                      // 回复@我的账号。
+                      const SizedBox(height: 4),
+                      _ReplyToMeLine(palette: p),
+                      // 回复内容。
+                      if (g.noteContent.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          g.noteContent,
+                          maxLines: 6,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: p.text,
+                            height: 1.6,
+                          ),
+                        ),
+                      ],
+                      // 底部 6 个指标（与详情页同款：评论/转发/点赞/阅读/收藏/分享）。
+                      const SizedBox(height: 10),
+                      _buildMetricsRow(p),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 底部指标行：评论/转发/点赞/阅读 带数字，收藏/分享 仅图标。
+  Widget _buildMetricsRow(_Palette p) {
+    final nid = widget.group.noteId;
+    final note = _note;
+    final liked = nid.isNotEmpty &&
+        CloudNotesService.instance.likedNoteIds.contains(nid);
+    final favorited = nid.isNotEmpty &&
+        CloudNotesService.instance.favoriteNoteIds.contains(nid);
+    final sec = p.textSec;
+    return Row(
+      children: [
+        Expanded(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _metricCell(Image.asset('assets/images/ic_comment.png',
+                  width: 18, height: 18), sec, '${note?.commentCount ?? 0}'),
+              _metricCell(Icon(Icons.repeat_rounded,
+                  size: 18, color: sec), sec, '${note?.repostCount ?? 0}'),
+              _metricCell(
+                  Icon(liked
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                      size: 18,
+                      color: liked ? _gold : sec),
+                  liked ? _gold : sec,
+                  '${note?.likeCount ?? 0}'),
+              _metricCell(Image.asset('assets/images/ic_view.png',
+                  width: 18, height: 18), sec, '${note?.viewCount ?? 0}'),
+            ],
+          ),
+        ),
+        const SizedBox(width: 36),
+        _metricCell(
+            Icon(favorited
+                ? Icons.bookmark_rounded
+                : Icons.bookmark_border_rounded,
+                size: 18,
+                color: favorited ? _gold : sec),
+            favorited ? _gold : sec,
+            ''),
+        const SizedBox(width: 6),
+        _metricCell(Icon(Icons.share_rounded, size: 18, color: sec), sec, ''),
+      ],
+    );
+  }
+
+  Widget _metricCell(Widget icon, Color color, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: 18, height: 18, child: icon),
+        if (text.isNotEmpty) ...[
+          const SizedBox(width: 3),
+          Text(text,
+              style: TextStyle(fontSize: 15, height: 1, color: color)),
+        ],
+      ],
+    );
+  }
+
+  void _openUser(NotificationActor actor) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            UserSpacePage(userId: actor.userId, userName: actor.name),
+      ),
+    );
+  }
+}
+
+/// 关注通知卡片（follow_me）：
+/// 第一行 = 头像（单个用户一个头像，多个用户头像排列）；
+/// 第二行 = 最新关注者的昵称 + 关注文案 + 关注时间戳。
+class _FollowNotificationCard extends StatefulWidget {
+  final NotificationGroup group;
+  final _Palette palette;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  const _FollowNotificationCard({
+    super.key,
+    required this.group,
+    required this.palette,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  @override
+  State<_FollowNotificationCard> createState() => _FollowNotificationCardState();
+}
+
+class _FollowNotificationCardState extends State<_FollowNotificationCard>
+    with SingleTickerProviderStateMixin {
+  bool _pressed = false;
+
+  late final AnimationController _enter = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 420))
+    ..forward();
+  late final Animation<double> _enterAnim =
+      CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
+
+  @override
+  void dispose() {
+    _enter.dispose();
+    super.dispose();
+  }
+
+  void _openUser(NotificationActor actor) {
+    if (actor.userId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            UserSpacePage(userId: actor.userId, userName: actor.name),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.group;
+    final p = widget.palette;
+    final unread = g.hasUnread;
+    final actors = g.actors;
+    final single = actors.length <= 1;
+    final actor = actors.isNotEmpty ? actors.first : null;
+    final name = actor?.name ?? '同修';
+    final verified = actor?.verified ?? false;
+    final actionText = single
+        ? ' 关注了你'
+        : ' 和另外 ${g.count - 1} 个人关注了你';
+    final nameStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w700,
+      color: g.hasUnread ? p.text : p.textSec,
+    );
+    final plainStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w400,
+      color: g.hasUnread ? p.text : p.textSec,
+    );
+
+    return AnimatedBuilder(
+      animation: _enter,
+      builder: (context, child) {
+        final t = _enterAnim.value;
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, -18 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.97 : 1.0,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: unread ? p.unreadTint : p.card,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 互动类型图标（关注）。
+                _TypeIcon(style: _TypeStyle.of(g.type)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 第一行：头像（单个 / 多个排列，统一大小、点击进入主页）。
+                      if (actor != null)
+                        single
+                            ? GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => _openUser(actor),
+                                child: _ActorAvatar(
+                                    actor: actor, radius: 18, palette: p),
+                              )
+                            : _AvatarStack(
+                                actors: actors,
+                                palette: p,
+                                expanded: _pressed,
+                                onAvatarTap: (a) => _openUser(a),
+                              ),
+                      // 第二行：昵称 + 认证（如有）+ 关注文案，时间戳靠右。
+                      const SizedBox(height: 8),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(children: [
+                                TextSpan(text: name, style: nameStyle),
+                                if (verified) ...[
+                                  WidgetSpan(
+                                    alignment: PlaceholderAlignment.middle,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(left: 3),
+                                      child: Icon(Icons.verified,
+                                          size: 14, color: Color(0xFF70867A)),
+                                    ),
+                                  ),
+                                ],
+                                TextSpan(text: actionText, style: plainStyle),
+                              ]),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (g.latestAt > 0) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              _formatNotifTime(g.latestAt),
+                              style: TextStyle(fontSize: 12, color: p.textHint),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「回复@B账号」一行：异步读取当前登录用户账号名（B 即通知接收者本人）。
+class _ReplyToMeLine extends StatefulWidget {
+  final _Palette palette;
+
+  const _ReplyToMeLine({required this.palette});
+
+  @override
+  State<_ReplyToMeLine> createState() => _ReplyToMeLineState();
+}
+
+class _ReplyToMeLineState extends State<_ReplyToMeLine> {
+  String _account = '';
+
+  @override
+  void initState() {
+    super.initState();
+    AuthService.instance.getAccountName().then((name) {
+      if (mounted && name != _account) setState(() => _account = name);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.palette;
+    if (_account.isEmpty) {
+      return Text('回复了我',
+          style: TextStyle(fontSize: 13, color: p.textSec));
+    }
+    // @账户 以青色显示，点击进入自己的个人主页（AccountLink 自带 @ 前缀）。
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('回复', style: TextStyle(fontSize: 13, color: p.textSec)),
+        AccountLink(
+          account: _account,
+          onTap: () {
+            final me = AuthService.instance.currentUser.value;
+            if (me != null && me.id.isNotEmpty) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => UserSpacePage(
+                      userId: me.id, userName: _account.isEmpty ? '同修' : _account),
+                ),
+              );
+            }
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// 回复时间戳：今年显示「x月x日」，往年显示「x年x月x日」。
+String _formatMonthDay(int ms) {
+  if (ms <= 0) return '';
+  final t = DateTime.fromMillisecondsSinceEpoch(ms);
+  final now = DateTime.now();
+  if (t.year == now.year) return '${t.month}月${t.day}日';
+  return '${t.year}年${t.month}月${t.day}日';
+}
+
+/// 关注/通知时间戳：刚刚 / x分钟前 / x小时前 / 昨天 / 前天 / x月x日 / x年x月x日。
+String _formatNotifTime(int ms) {
+  if (ms <= 0) return '';
+  final t = DateTime.fromMillisecondsSinceEpoch(ms);
+  final now = DateTime.now();
+  final diff = now.difference(t);
+  if (diff.inMinutes < 1) return '刚刚';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}分钟前';
+  if (diff.inHours < 24 && t.day == now.day) return '${diff.inHours}小时前';
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(t.year, t.month, t.day);
+  final dayDiff = today.difference(day).inDays;
+  if (dayDiff == 1) return '昨天';
+  if (dayDiff == 2) return '前天';
+  if (t.year == now.year) return '${t.month}月${t.day}日';
+  return '${t.year}年${t.month}月${t.day}日';
+}
+
+/// 点击通知卡片里的某个头像进入该用户个人主页。
+void _openActorSpace(BuildContext context, NotificationActor actor) {
+  if (actor.userId.isEmpty) return;
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) =>
+          UserSpacePage(userId: actor.userId, userName: actor.name),
+    ),
+  );
 }
