@@ -611,9 +611,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   Row(
                     children: [
                       Expanded(
+                        // 账号名完整展示：允许换行，不在任何屏幕宽度下截断。
                         child: Text('@$_account',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 13, color: _textHint)),
                       ),

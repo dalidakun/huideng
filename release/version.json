@@ -1,7 +1,7 @@
 {
-  "version": "1.0.0",
-  "versionCode": 1,
+  "version": "1.0.6",
+  "versionCode": 7,
   "downloadPage": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/download.html",
-  "downloadUrl": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/huideng_v1.0.0.apk",
-  "notes": "燃灯 App 发布说明。发布新版本时：更新 version 与 versionCode（必须大于旧版），上传新 APK 并把下载链接填到 downloadUrl。"
+  "downloadUrl": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/huideng_v1.0.6.apk",
+  "notes": "1.0.6：帖子时间戳移出昵称行（放内容与指标之间，含回复链/连贴/引用框/详情页/通知卡），昵称优先完整显示、@账户名过长省略、百分比不省略不换行；时间戳带小时（今日x时/x月x日x时）；广场有新帖未查看时底部「修学」菜单图标显示 70867A 小圆点；修复头像/横幅重复图片：换图时清理旧文件、启动时兜底清理，系统相册不再出现多份重复图片。"
 }

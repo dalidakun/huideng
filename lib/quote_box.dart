@@ -14,7 +14,7 @@ const Color _border = Color(0xFFEBE1D6);
 const Color _primaryLight = Color(0xFF8B6B5A);
 
 /// 被转发/被回复原帖的引用框（列表与详情共用同一样式）：
-/// 线框包裹，内部为头像 + 昵称 + @账号 + 时间戳 + 内容（最多3行）。
+/// 线框包裹，内部为头像 + 昵称 + @账号 + 内容（最多3行）+ 时间戳。
 class QuoteBox extends StatefulWidget {
   final PlazaNote note;
   const QuoteBox({super.key, required this.note});
@@ -52,8 +52,11 @@ class _QuoteBoxState extends State<QuoteBox> {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今日${t.hour}时';
+    }
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
@@ -163,22 +166,14 @@ class _QuoteBoxState extends State<QuoteBox> {
                       if (account.isNotEmpty) ...[
                         const SizedBox(width: 3),
                         Flexible(
+                          // 账号名过长时省略显示，保证昵称完整。
                           child: Text('@$account',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                   fontSize: 12, color: Color(0xFF8C8C8C))),
                         ),
-                        const SizedBox(width: 3),
-                        const Text('·',
-                            style: TextStyle(
-                                fontSize: 12, color: Color(0xFF8C8C8C))),
-                        const SizedBox(width: 2),
                       ],
-                      const SizedBox(width: 2),
-                      Text(_time(timeMs),
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF8C8C8C))),
                     ],
                   ),
                 ),
@@ -192,6 +187,11 @@ class _QuoteBoxState extends State<QuoteBox> {
                   style: const TextStyle(
                       fontSize: 15, color: _text, height: 1.6)),
             ],
+            // 原帖发布时间：内容下方。
+            const SizedBox(height: 6),
+            Text(_time(timeMs),
+                style:
+                    const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
           ],
         ),
       ),

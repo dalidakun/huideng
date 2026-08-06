@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
+import 'image_crop_page.dart';
 
 const Color _primaryLight = Color(0xFF8B6B5A);
 const Color _gold = Color(0xFFD4A06A);
@@ -22,6 +23,21 @@ class EditProfilePage extends StatefulWidget {
 
   @override
   State<EditProfilePage> createState() => _EditProfilePageState();
+}
+
+/// 待裁剪的图片请求：相册选图后页面本体原地切换为裁剪界面。
+class _CropRequest {
+  final String path;
+  final double ratio;
+  final int maxOutput;
+  final bool isAvatar;
+
+  const _CropRequest({
+    required this.path,
+    required this.ratio,
+    required this.maxOutput,
+    required this.isAvatar,
+  });
 }
 
 class _EditProfilePageState extends State<EditProfilePage> {
@@ -78,26 +94,27 @@ class _EditProfilePageState extends State<EditProfilePage> {
     }
   }
 
+  /// 裁剪请求：选图后页面本体原地切换为裁剪界面（不推路由），
+  /// 避免相册返回时路由弹跳造成「先回到上一页、再弹出裁剪页」。
+  _CropRequest? _crop;
+
   Future<void> _pickAvatar() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       allowMultiple: false,
+      // 关闭插件内置压缩：避免选图后长时间等待才返回，且原图保真度更高（裁剪页内自行缩放）。
+      allowCompression: false,
     );
     if (result == null || result.files.single.path == null) return;
-    try {
-      final src = File(result.files.single.path!);
-      final ext = src.path.split('.').last;
-      final docs = await getApplicationDocumentsDirectory();
-      final dest = File('${docs.path}/avatar.$ext');
-      if (dest.existsSync()) dest.deleteSync();
-      await src.copy(dest.path);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_avatar_path', dest.path);
-      if (!mounted) return;
-      setState(() => _avatarPath = dest.path);
-    } catch (_) {
-      if (mounted) _showToast('头像设置失败');
-    }
+    if (!mounted) return;
+    setState(() {
+      _crop = _CropRequest(
+        path: result.files.single.path!,
+        ratio: 1.0,
+        maxOutput: 512,
+        isAvatar: true,
+      );
+    });
   }
 
   Future<void> _pickBanner() async {
@@ -105,16 +122,72 @@ class _EditProfilePageState extends State<EditProfilePage> {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: false,
+        allowCompression: false,
       );
       if (result == null || result.files.isEmpty) return;
-      final picked = File(result.files.single.path!);
-      final dir = await getApplicationDocumentsDirectory();
-      final dest = File('${dir.path}/user_banner_${DateTime.now().millisecondsSinceEpoch}.png');
-      await picked.copy(dest.path);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_banner_path', dest.path);
       if (!mounted) return;
-      setState(() => _bannerPath = dest.path);
+      // 按横幅实际展示比例（屏宽 / 160 高）裁剪选区。
+      final ratio = MediaQuery.of(context).size.width / 160.0;
+      setState(() {
+        _crop = _CropRequest(
+          path: result.files.single.path!,
+          ratio: ratio,
+          maxOutput: 800,
+          isAvatar: false,
+        );
+      });
+    } catch (_) {}
+  }
+
+  /// 裁剪确认：保存为带时间戳的新文件（FileImage 缓存按路径+缩放键控，
+  /// 固定文件名会导致 ImageCache 一直命中旧头像），并退出裁剪界面。
+  Future<void> _applyCropResult(Uint8List cropped) async {
+    final isAvatar = _crop?.isAvatar ?? true;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dest = File(
+          '${docs.path}/${isAvatar ? 'avatar' : 'user_banner'}_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await dest.writeAsBytes(cropped, flush: true);
+      // 只保留最新一张：旧的头像/横幅文件一并删除，避免系统相册
+      // （扫描应用目录的 ROM）显示多份重复图片。
+      await _cleanupOldImages(docs.path, dest.path);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          isAvatar ? 'user_avatar_path' : 'user_banner_path', dest.path);
+      if (!mounted) return;
+      setState(() {
+        _crop = null;
+        if (isAvatar) {
+          _avatarPath = dest.path;
+        } else {
+          _bannerPath = dest.path;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _crop = null);
+      if (isAvatar) _showToast('头像设置失败');
+    }
+  }
+
+  /// 删除该目录下所有旧的头像/横幅图片文件（新文件已生成后），只保留最新一张；
+  /// 失败静默。历史遗留的重复图片也会在这里被清掉。
+  Future<void> _cleanupOldImages(String docsPath, String keepPath) async {
+    try {
+      final dir = Directory(docsPath);
+      if (!await dir.exists()) return;
+      await for (final e in dir.list()) {
+        if (e is! File) continue;
+        final name = e.path.split(Platform.pathSeparator).last;
+        final isAvatarOrBanner =
+            (name.startsWith('avatar_') || name.startsWith('user_banner_')) &&
+                name.endsWith('.jpg');
+        if (isAvatarOrBanner && e.path != keepPath) {
+          try {
+            await e.delete();
+          } catch (_) {}
+        }
+      }
     } catch (_) {}
   }
 
@@ -215,6 +288,27 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 裁剪模式：页面本体原地切换为裁剪界面（不推路由，避免相册返回时
+    // 路由弹跳造成「先回到上一页、再弹出裁剪页」）；系统返回键先退出裁剪。
+    final crop = _crop;
+    if (crop != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          setState(() => _crop = null);
+        },
+        child: ImageCropPage(
+          filePath: crop.path,
+          ratio: crop.ratio,
+          maxOutput: crop.maxOutput,
+          onResult: _applyCropResult,
+          onCancel: () {
+            if (mounted) setState(() => _crop = null);
+          },
+        ),
+      );
+    }
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
         statusBarColor: Color(0xFFD2C5B3),

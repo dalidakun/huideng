@@ -782,6 +782,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                               },
                             ),
                           ],
+                          // 与首页帖子同款时间戳：内容与引用框之间。
+                          const SizedBox(height: 6),
+                          Text(_feedTime(note.createdAt),
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF8C8C8C))),
                           if (note.repostOf.isNotEmpty) ...[
                             const SizedBox(height: 8),
                             QuoteBox(note: note),
@@ -867,7 +872,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 昵称行：昵称 + 认证 + @账户名 + 时间（与帖子头部一致）。
+                  // 昵称行：昵称 + 认证 + @账户名（时间戳在评论内容下方，与帖子头部一致）。
                   Row(
                     children: [
                       Flexible(
@@ -887,7 +892,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                       if (account.isNotEmpty) ...[
                         const SizedBox(width: 3),
                         Flexible(
-                          // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+                          // 点击 @账户名 进入该用户个人主页（按下时变暗）。
                           child: AccountLink(
                             account: account,
                             onTap: () {
@@ -902,33 +907,28 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                             },
                           ),
                         ),
-                        const SizedBox(width: 3),
-                        Text('·',
-                            style: const TextStyle(
-                                fontSize: 12, color: Color(0xFF8C8C8C))),
-                        const SizedBox(width: 2),
                       ],
-                      const SizedBox(width: 2),
-                      // 评论时间戳可点击（进入该评论所在的笔记详情）。
-                      PostTimeLink(
-                        text: _feedTime(c.createdAt),
-                        onTap: () {
-                          final nid = _note?.id;
-                          if (nid != null) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => NoteDetailPage(noteId: nid)),
-                            );
-                          }
-                        },
-                      ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(c.content,
                       style: const TextStyle(
                           fontSize: 15, color: _text, height: 1.6)),
+                  // 评论时间戳可点击（进入该评论所在的笔记详情）。
+                  const SizedBox(height: 6),
+                  PostTimeLink(
+                    text: _feedTime(c.createdAt),
+                    onTap: () {
+                      final nid = _note?.id;
+                      if (nid != null) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => NoteDetailPage(noteId: nid)),
+                        );
+                      }
+                    },
+                  ),
                   // 与帖子同款的六个操作图标（评论/转发/点赞/阅读/收藏/分享）。
                   const SizedBox(height: 10),
                   _buildCommentActionsRow(c),
@@ -1005,7 +1005,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  /// 昵称行（不含头像）：昵称 + 认证 + @账户名 + 阅藏进度 + 时间 + 三点菜单。
+  /// 昵称行（不含头像）：昵称 + 认证 + @账户名 + 阅藏进度 + 三点菜单
+  /// （时间戳在内容下方，与首页帖子一致；任一元素都不换行）。
   Widget _buildUserNameRow(PlazaNote note) {
     final me = AuthService.instance.currentUser.value;
     final isSelf = me != null && note.ownerUserId == me.id;
@@ -1036,7 +1037,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               if (note.authorAccount.isNotEmpty) ...[
                 const SizedBox(width: 3),
                 Flexible(
-                  // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+                  // 点击 @账户名 进入该用户个人主页（按下时变暗）。
                   child: AccountLink(
                     account: note.authorAccount,
                     onTap: () {
@@ -1051,26 +1052,18 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     },
                   ),
                 ),
-                // 阅藏进度百分比：灰色（时间戳同色）。
+                // 阅藏进度百分比：灰色（与账户名同色系）。
                 const SizedBox(width: 3),
                 Text('·',
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF8C8C8C))),
                 const SizedBox(width: 2),
                 Text(postPct,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF8C8C8C))),
-                const SizedBox(width: 3),
-                Text('·',
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF8C8C8C))),
-                const SizedBox(width: 2),
               ],
-              const SizedBox(width: 2),
-              // 与首页帖子同款时间戳（今年显示 x月x日，往年显示 x年x月x日）。
-              Text(_feedTime(note.createdAt),
-                  style:
-                      const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
             ],
           ),
         ),
@@ -1273,12 +1266,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  /// 与首页帖子同款时间格式：今年显示「x月x日」，往年显示「x年x月x日」。
+  /// 与首页帖子同款时间格式：今天「今日x时」，今年「x月x日x时」，往年「x年x月x日x时」。
   String _feedTime(int ms) {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今日${t.hour}时';
+    }
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 }

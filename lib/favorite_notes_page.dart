@@ -195,6 +195,7 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                         if (note.authorAccount.isNotEmpty) ...[
                           const SizedBox(width: 3),
                           Flexible(
+                            // 账号名过长时省略显示，保证昵称完整。
                             child: Text('@${note.authorAccount}',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -209,6 +210,8 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                                 fontSize: 12, color: Color(0xFF8C8C8C))),
                         const SizedBox(width: 2),
                         Text(postPct,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 12, color: Color(0xFF8C8C8C))),
                       ],

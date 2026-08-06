@@ -686,8 +686,11 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今日${t.hour}时';
+    }
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 }
 
@@ -1064,7 +1067,10 @@ class _TopicPageState extends State<TopicPage> {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今日${t.hour}时';
+    }
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 }

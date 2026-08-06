@@ -86,7 +86,7 @@ class StudyHubPage extends StatefulWidget {
 }
 
 class StudyHubPageState extends State<StudyHubPage>
-    with TickerProviderStateMixin, RouteAware {
+    with TickerProviderStateMixin, RouteAware, WidgetsBindingObserver {
   static SharedPreferences? _warmPrefs;
 
   static Future<void> warmPrefs() async {
@@ -139,6 +139,22 @@ class StudyHubPageState extends State<StudyHubPage>
   bool _announceLoading = false;
   bool _announceError = false;
   static const int _feedPageSize = 20;
+  /// 「最新/最热」新帖提醒：后台静默统计新帖数量，只更新「X条新帖子」提醒条，
+  /// 不自动刷新列表，点击提醒或下拉才手动刷出，避免浏览时被打断。
+  Timer? _newPostTimer;
+  bool _newPostChecking = false;
+  bool _appActive = true;
+  int _newPostCount = 0;
+  /// 滚动到顶部提醒条被隐藏时，是否显示悬浮的「显示X帖子」按钮。
+  bool _showNewPostPill = false;
+  /// 全局「有新帖未查看」标记：驱动底部「修学」菜单图标上的 70867A 小圆点。
+  static final ValueNotifier<int> newPostBadge = ValueNotifier<int>(0);
+  static const Duration _newPostCheckInterval = Duration(seconds: 30);
+
+  void _setNewPostCount(int v) {
+    _newPostCount = v;
+    newPostBadge.value = v;
+  }
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
@@ -158,6 +174,10 @@ class StudyHubPageState extends State<StudyHubPage>
     ReadingTimeService.instance.ensureLoaded();
     _loadData();
     _loadFeed();
+    // 后台静默统计新帖数量，只更新「X条新帖子」提醒，不自动刷新列表。
+    WidgetsBinding.instance.addObserver(this);
+    _newPostTimer =
+        Timer.periodic(_newPostCheckInterval, (_) => _checkNewPosts());
     // 登录会话是异步恢复的：首次加载广场时可能还没登录，
     // 等登录态就绪后重新拉取屏蔽列表并刷新，让被屏蔽用户的帖子立即消失。
     AuthService.instance.currentUser.addListener(_onAuthChanged);
@@ -188,13 +208,29 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 从阅读页等路由返回时立即刷新“当前读经”进度。
   @override
   void didPopNext() {
+    _appActive = true;
     _loadData();
     _refreshCurrentSmooth();
+  }
+
+  /// 其他页面覆盖在主页上时暂停轮询，返回时再立即刷新。
+  @override
+  void didPushNext() {
+    _appActive = false;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 只暂停/恢复新帖数量统计，不自动刷新列表。
+    _appActive = state == AppLifecycleState.resumed;
   }
 
   @override
   void dispose() {
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    WidgetsBinding.instance.removeObserver(this);
+    _newPostTimer?.cancel();
+    _newPostTimer = null;
     routeObserver.unsubscribe(this);
     _pulseController.dispose();
     _feedScroll.dispose();
@@ -628,6 +664,7 @@ class StudyHubPageState extends State<StudyHubPage>
     if (showFab != _showFab) {
       setState(() => _showFab = showFab);
     }
+    _updateNewPostPill();
   }
 
   void _measureTopSectionOnce() {
@@ -693,7 +730,9 @@ class StudyHubPageState extends State<StudyHubPage>
       _feedPage = 1;
       _feedHasMore = true;
       _feedLoading = false;
+      _setNewPostCount(0);
     });
+    _updateNewPostPill();
     try {
       if (tab == 'latest' || tab == 'hot') {
         final sort = tab == 'hot' ? 'hot' : 'latest';
@@ -792,6 +831,50 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
+  /// 后台静默统计当前栏目新帖数量：只更新「X条新帖子」提醒，不刷新列表。
+  Future<void> _checkNewPosts() async {
+    if (!mounted || !_appActive || _newPostChecking) return;
+    final tab = _plazaTabs[_tabIndex];
+    if (tab != 'latest' && tab != 'hot') return;
+    if (_feedNotes.isEmpty || _feedInitial || _feedLoading) return;
+    _newPostChecking = true;
+    try {
+      final sort = tab == 'hot' ? 'hot' : 'latest';
+      final (list, _, _) = await _fetchFilteredFeed(1, sort);
+      if (!mounted) return;
+      final known = _feedNotes.map((n) => n.id).toSet();
+      final count = list.where((n) => !known.contains(n.id)).length;
+      if (count > 0 && count != _newPostCount) {
+        setState(() => _setNewPostCount(count));
+        _updateNewPostPill();
+      }
+    } catch (_) {
+      // 静默失败，下一轮再试。
+    } finally {
+      _newPostChecking = false;
+    }
+  }
+
+  /// 计算悬浮「显示X帖子」按钮是否可见：有新帖且已滚动到顶部提醒条被隐藏。
+  void _updateNewPostPill() {
+    final show = _newPostCount > 0 &&
+        _topSectionHeight > 0 &&
+        _feedScroll.hasClients &&
+        _feedScroll.offset >= _topSectionHeight + 60;
+    if (show != _showNewPostPill) {
+      setState(() => _showNewPostPill = show);
+    }
+  }
+
+  /// 点击悬浮按钮：回到帖子顶部，同时刷新出新帖。
+  Future<void> _refreshFromPill() async {
+    if (_feedScroll.hasClients) {
+      await _feedScroll.animateTo(0,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+    _loadFeed();
+  }
+
   /// 后台预取指定栏目的最新数据，直接写入缓存；若用户正好在该栏目则同步到界面。
   Future<void> _refreshFeedInBackground(String tab) async {
     if (tab == 'announce') return;
@@ -838,7 +921,8 @@ class StudyHubPageState extends State<StudyHubPage>
       if (!mounted) return;
       if (_plazaTabs[_tabIndex] == tab) {
         _restoreFeedFromCache(tab);
-        setState(() {});
+        setState(() => _setNewPostCount(0));
+        _updateNewPostPill();
       }
     } catch (_) {
       if (!mounted) return;
@@ -846,7 +930,8 @@ class StudyHubPageState extends State<StudyHubPage>
       c.initial = false;
       if (_plazaTabs[_tabIndex] == tab) {
         _restoreFeedFromCache(tab);
-        setState(() {});
+        setState(() => _setNewPostCount(0));
+        _updateNewPostPill();
       }
     }
   }
@@ -939,8 +1024,10 @@ class StudyHubPageState extends State<StudyHubPage>
     _saveFeedToCache(prevTab);
     setState(() {
       _tabIndex = i;
+      _setNewPostCount(0);
       _restoreFeedFromCache(_plazaTabs[i]);
     });
+    _updateNewPostPill();
     if (_cacheFor(_plazaTabs[i]).initial) {
       // 该栏目从未加载过，首次进入才全量加载。
       _loadFeed();
@@ -1289,39 +1376,53 @@ class StudyHubPageState extends State<StudyHubPage>
       body: LayoutBuilder(
         builder: (context, constraints) {
           final viewportH = constraints.maxHeight;
-          return RefreshIndicator(
-            onRefresh: _loadFeed,
-            color: _gold,
-            child: CustomScrollView(
-              controller: _feedScroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              slivers: [
-                SliverToBoxAdapter(
-                  child: Padding(
-                    key: _topSectionKey,
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
-                    child: Column(
-                      children: [
-                        _buildCurrentSutraCard(),
-                        const SizedBox(height: 14),
-                        _buildCheckInCard(),
-                      ],
+          return Stack(
+            children: [
+              RefreshIndicator(
+                onRefresh: _loadFeed,
+                color: _gold,
+                child: CustomScrollView(
+                  controller: _feedScroll,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        key: _topSectionKey,
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                        child: Column(
+                          children: [
+                            _buildCurrentSutraCard(),
+                            const SizedBox(height: 14),
+                            _buildCheckInCard(),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _PlazaHeaderDelegate(
+                        tabIndex: _tabIndex,
+                        tabs: _plazaTabs,
+                        onTabChanged: _onTabChanged,
+                        onReorderPressed: () => _showTabSortDialog(),
+                        textScale: MediaQuery.textScalerOf(context).scale(1.0),
+                      ),
+                    ),
+                    ..._buildFeedSlivers(viewportH),
+                  ],
                 ),
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _PlazaHeaderDelegate(
-                    tabIndex: _tabIndex,
-                    tabs: _plazaTabs,
-                    onTabChanged: _onTabChanged,
-                    onReorderPressed: () => _showTabSortDialog(),
-                    textScale: MediaQuery.textScalerOf(context).scale(1.0),
-                  ),
+              ),
+              // 滚动后顶部提醒条被隐藏时的悬浮按钮：回到顶部并刷新出新帖。
+              Positioned(
+                top: _headerHeight() + 8,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  ignoring: !_showNewPostPill,
+                  child: _showNewPostPill ? _buildNewPostPill() : null,
                 ),
-                ..._buildFeedSlivers(viewportH),
-              ],
-            ),
+              ),
+            ],
           );
         },
       ),
@@ -1802,6 +1903,8 @@ class StudyHubPageState extends State<StudyHubPage>
     final feedEstimate = feedLen * 110.0 + (showFooter ? 70.0 : 0.0);
     final spacerH = math.max(0.0, minFeed - feedEstimate);
     return [
+      if (_newPostCount > 0)
+        SliverToBoxAdapter(child: _buildNewPostBanner()),
       SliverPadding(
         // 横向内边距移入每条帖子内部，保证分割线通栏贴边（与「我的 → 帖子」一致）。
         padding: const EdgeInsets.only(top: 4, bottom: 32),
@@ -1837,6 +1940,52 @@ class StudyHubPageState extends State<StudyHubPage>
       ),
       if (spacerH > 0) SliverToBoxAdapter(child: SizedBox(height: spacerH)),
     ];
+  }
+
+  /// 「最新/最热」栏目顶部的新帖提醒：仅一行文字，点击立即刷新出这些新帖。
+  Widget _buildNewPostBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+      child: InkWell(
+        onTap: _loadFeed,
+        child: Text(
+          '显示$_newPostCount帖子',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF70867A)),
+        ),
+      ),
+    );
+  }
+
+  /// 悬浮的新帖按钮：白字 + 70867A 纯色椭圆胶囊，滚动后顶部落出屏幕时展示。
+  Widget _buildNewPostPill() {
+    return Center(
+      child: Material(
+        color: const Color(0xFF70867A),
+        borderRadius: BorderRadius.circular(999),
+        elevation: 4,
+        child: InkWell(
+          onTap: _refreshFromPill,
+          borderRadius: BorderRadius.circular(999),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.arrow_upward, size: 15, color: Colors.white),
+                const SizedBox(width: 5),
+                Text('显示$_newPostCount帖子',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildFeedFooter() {

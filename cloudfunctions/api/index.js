@@ -1398,13 +1398,23 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         const payload = event.payload && typeof event.payload === "object" ? event.payload : null;
         if (!payload) return fail("empty_payload");
-        const json = JSON.stringify(payload);
-        if (json.length > 2 * 1024 * 1024) return fail("payload_too_large");
         const { data } = await userData.where({ uid }).limit(1).get();
         const row = data && data[0];
+        // 合并而非整包覆盖：客户端是增量全量推送，某次推送缺少某类文件
+        //（如横幅压缩后仍超限被跳过）时，不能把云端已有的头像/横幅/经书列表清掉。
+        const prev = row && row.payload && typeof row.payload === "object" ? row.payload : {};
+        const merged = {
+          prefs: { ...(prev.prefs || {}), ...(payload.prefs || {}) },
+          files: { ...(prev.files || {}), ...(payload.files || {}) },
+        };
+        for (const k of Object.keys(payload)) {
+          if (!(k in merged)) merged[k] = payload[k];
+        }
+        const json = JSON.stringify(merged);
+        if (json.length > 2 * 1024 * 1024) return fail("payload_too_large");
         const record = {
           uid,
-          payload,
+          payload: merged,
           payloadJson: json,
           updatedAt: now(),
         };

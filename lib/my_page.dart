@@ -573,9 +573,8 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                     Row(
                       children: [
                         Expanded(
+                          // 账号名完整展示：允许换行，不在任何屏幕宽度下截断。
                           child: Text('@$_accountName',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                   fontSize: 13, color: _textHint)),
                         ),
@@ -828,13 +827,16 @@ class _TabContent extends StatelessWidget {
   }
 }
 
-/// 时间显示：今年显示「x月x日」，去年及往年显示「x年x月x日」。
+/// 时间显示：今天「今日x时」，今年「x月x日x时」，往年「x年x月x日x时」。
 String postTime(int ms) {
   if (ms <= 0) return '';
   final t = DateTime.fromMillisecondsSinceEpoch(ms);
   final now = DateTime.now();
-  if (t.year == now.year) return '${t.month}月${t.day}日';
-  return '${t.year}年${t.month}月${t.day}日';
+  if (t.year == now.year && t.month == now.month && t.day == now.day) {
+    return '今日${t.hour}时';
+  }
+  if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+  return '${t.year}年${t.month}月${t.day}日${t.hour}时';
 }
 
 /// 帖子块：左列头像，右侧第一行昵称/时间戳，内容与指标行与昵称同一左缘。
@@ -1179,7 +1181,7 @@ class _PostBlockState extends State<PostBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 第一行：昵称 + 时间戳 + 置顶标注 + 更多
+                  // 第一行：昵称 + @账户名 + 阅藏进度百分比 + 置顶标注 + 更多
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
@@ -1209,7 +1211,8 @@ class _PostBlockState extends State<PostBlock> {
                             if (widget.account.isNotEmpty) ...[
                               const SizedBox(width: 3),
                               Flexible(
-                                // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+                                // 点击 @账户名 进入该用户个人主页（按下时变暗），
+                                // 过长时省略显示，保证昵称完整。
                                 child: AccountLink(
                                   account: widget.account,
                                   onTap: () {
@@ -1236,29 +1239,7 @@ class _PostBlockState extends State<PostBlock> {
                                   style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF8C8C8C))),
                               const SizedBox(width: 3),
-                              Text('·',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Color(0xFF8C8C8C))),
-                              const SizedBox(width: 2),
                             ],
-                            const SizedBox(width: 2),
-                            Flexible(
-                              // 点击发布时间戳进入帖子详情（按下时显示下划线）。
-                              child: PostTimeLink(
-                                text: postTime(widget.timeMs),
-                                onTap: () {
-                                  final id = widget.noteId;
-                                  if (id != null) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                          builder: (_) =>
-                                              NoteDetailPage(noteId: id)),
-                                    );
-                                  }
-                                },
-                              ),
-                            ),
                           ],
                         ),
                       ),
@@ -1414,6 +1395,22 @@ class _PostBlockState extends State<PostBlock> {
                     const SizedBox(height: 8),
                     widget.quoteBox!,
                   ],
+                  // 发布时间：放在内容和指标行之间（顶部行只留昵称+@账户名+进度百分比），
+                  // 点击时间戳进入帖子详情。
+                  const SizedBox(height: 6),
+                  PostTimeLink(
+                    text: postTime(widget.timeMs),
+                    onTap: () {
+                      final id = widget.noteId;
+                      if (id != null) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => NoteDetailPage(noteId: id)),
+                        );
+                      }
+                    },
+                  ),
                   // 指标行（与昵称同一左缘）
                   if (widget.allowActions) ...[
                     const SizedBox(height: 10),
@@ -2794,7 +2791,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 第一行：昵称 + 账号 + 时间 + 已置顶 + 三点菜单
+                // 第一行：昵称 + 账号 + 已置顶 + 三点菜单（时间戳在内容下方）
                 Row(
                   children: [
                     Expanded(
@@ -2817,25 +2814,14 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                           if (reply.authorAccount.isNotEmpty) ...[
                             const SizedBox(width: 3),
                             Flexible(
+                              // 账号名过长时省略显示，保证昵称完整。
                               child: Text('@${reply.authorAccount}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF8C8C8C))),
                             ),
-                            const SizedBox(width: 3),
-                            const Text('·',
-                                style: TextStyle(
-                                    fontSize: 12, color: Color(0xFF8C8C8C))),
-                            const SizedBox(width: 2),
                           ],
-                          Flexible(
-                            child: Text(postTime(reply.createdAt),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 12, color: Color(0xFF8C8C8C))),
-                          ),
                         ],
                       ),
                     ),
@@ -2885,6 +2871,11 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 15, color: _text, height: 1.6)),
+                // 发布时间：内容与指标行之间。
+                const SizedBox(height: 6),
+                Text(postTime(reply.createdAt),
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF8C8C8C))),
                 // 指标行（与下方帖子的指标对齐）
                 const SizedBox(height: 10),
                 buildStatsRow(

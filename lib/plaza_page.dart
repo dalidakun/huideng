@@ -596,8 +596,8 @@ class _PlazaPageState extends State<PlazaPage> {
     if (diff == 0) return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     if (diff == 1) return '昨天';
     if (t.year == now.year) {
-      return '${t.month}月${t.day}日';
+      return '${t.month}月${t.day}日${t.hour}时';
     }
-    return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
@@ -229,6 +230,8 @@ class _MainPageState extends State<MainPage>
     SyncService.instance.dataVersion.addListener(_onCloudDataChanged);
     // 消息中心未读数轮询（底部「通知」角标实时同步服务器）。
     NotificationCenter.instance.start();
+    // 启动时清理应用目录里残留的旧头像/横幅文件（只保留当前使用的）。
+    unawaited(_cleanupAvatarBannerFiles());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
     });
@@ -249,6 +252,31 @@ class _MainPageState extends State<MainPage>
     _studyHubKey.currentState?.reload();
     _myKey.currentState?.reload();
     unawaited(_sutraListKey.currentState?.reload());
+  }
+
+  /// 清理应用文档目录里残留的旧头像/横幅文件（只保留 prefs 当前引用的），
+  /// 避免部分 ROM 的系统相册扫描应用目录时显示多份重复图片。
+  Future<void> _cleanupAvatarBannerFiles() async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final prefs = await SharedPreferences.getInstance();
+      final keep = <String>{
+        prefs.getString('user_avatar_path') ?? '',
+        prefs.getString('user_banner_path') ?? '',
+      };
+      await for (final e in docs.list()) {
+        if (e is! File) continue;
+        final name = e.path.split(Platform.pathSeparator).last;
+        final isAvatarOrBanner =
+            (name.startsWith('avatar_') || name.startsWith('user_banner_')) &&
+                name.endsWith('.jpg');
+        if (isAvatarOrBanner && !keep.contains(e.path)) {
+          try {
+            await e.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
   }
 
   void _checkForResult() {
@@ -289,8 +317,8 @@ class _MainPageState extends State<MainPage>
 
   final List<BottomNavigationBarItem> _bottomNavItems = [
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/study.png', width: 24, height: 24),
-      activeIcon: Image.asset('assets/images/study_selected.png', width: 24, height: 24),
+      icon: const _StudyTabIcon(active: false),
+      activeIcon: const _StudyTabIcon(active: true),
       label: '',
     ),
     BottomNavigationBarItem(
@@ -571,6 +599,48 @@ class _BottomNavBar extends StatelessWidget {
 /// - 圆形（1~9）/ 胶囊形（>9），背景 #70867A，白字，圆角 999，超出图标边界。
 /// - 收到新通知时 Scale 0→1.15→1 弹性动画，数字平滑递增；
 ///   全部已读后淡出并缩小消失。
+class _StudyTabIcon extends StatelessWidget {
+  final bool active;
+  const _StudyTabIcon({required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    // 修学广场有新帖未查看时（顶部「显示X帖子」提醒可见），右上角显示 70867A 小圆点。
+    return ValueListenableBuilder<int>(
+      valueListenable: StudyHubPageState.newPostBadge,
+      builder: (context, count, _) {
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Image.asset(
+              active
+                  ? 'assets/images/study_selected.png'
+                  : 'assets/images/study.png',
+              width: 24,
+              height: 24,
+            ),
+            if (count > 0)
+              Positioned(
+                top: -2,
+                right: -4,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF70867A),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _NotificationTabIcon extends StatefulWidget {
   final bool active;
   const _NotificationTabIcon({required this.active});

@@ -71,6 +71,22 @@ class SyncService with WidgetsBindingObserver {
   /// 头像压缩后最长边像素。
   static const int _avatarMaxSize = 512;
 
+  /// 横幅压缩后最长边像素。
+  static const int _bannerMaxSize = 800;
+
+  /// 压缩文件到能放进上传包的字节数内：反复缩小尺寸直到 base64 长度
+  /// 不超过 [_maxFileChars]（否则 _collect 会静默跳过，头像/横幅永远上传不上去）。
+  Uint8List? _fitForUpload(Uint8List bytes, int maxSide) {
+    var side = maxSide;
+    for (var i = 0; i < 5; i++) {
+      final out = _downscale(bytes, side);
+      if (base64Encode(out).length <= _maxFileChars) return out;
+      side = (side * 0.7).round();
+      if (side < 128) return null;
+    }
+    return null;
+  }
+
   /// 应用启动时调用：注册监听 + 启动定时推送 + 处理已恢复的会话。
   void init() {
     WidgetsBinding.instance.addObserver(this);
@@ -149,6 +165,8 @@ class SyncService with WidgetsBindingObserver {
     } finally {
       _busy = false;
     }
+    // 云端恢复的昵称/签名立即刷新到登录态展示（重装/清数据后启动时读到的是默认值）。
+    await AuthService.instance.reloadLocalProfile();
     await push();
     // 登录/恢复会话后立即上报阅藏进度与读经时长，主页尽快有数据。
     await _reportCanonProgress();
@@ -279,11 +297,11 @@ class SyncService with WidgetsBindingObserver {
       if (await f.exists()) {
         try {
           final bytes = await f.readAsBytes();
-          final b64 = base64Encode(_downscaleAvatar(bytes));
-          if (b64.length <= _maxFileChars) {
+          final fitted = _fitForUpload(bytes, _avatarMaxSize);
+          if (fitted != null) {
             final name =
                 avatarPath.split(Platform.pathSeparator).last;
-            files['avatar'] = {'name': name, 'data': b64};
+            files['avatar'] = {'name': name, 'data': base64Encode(fitted)};
           }
         } catch (_) {}
       }
@@ -295,11 +313,11 @@ class SyncService with WidgetsBindingObserver {
       if (await f.exists()) {
         try {
           final bytes = await f.readAsBytes();
-          final b64 = base64Encode(_downscaleBanner(bytes));
-          if (b64.length <= _maxFileChars) {
+          final fitted = _fitForUpload(bytes, _bannerMaxSize);
+          if (fitted != null) {
             final name =
                 bannerPath.split(Platform.pathSeparator).last;
-            files['banner'] = {'name': name, 'data': b64};
+            files['banner'] = {'name': name, 'data': base64Encode(fitted)};
           }
         } catch (_) {}
       }
@@ -494,19 +512,7 @@ class SyncService with WidgetsBindingObserver {
     return null;
   }
 
-  /// 头像压缩到最长边 ≤ [_avatarMaxSize]，输出 JPEG。无法解码时原样返回。
-  Uint8List _downscaleAvatar(Uint8List bytes) {
-    return _downscale(bytes, _avatarMaxSize);
-  }
-
-  /// 横幅压缩到最长边 ≤ [_bannerMaxSize]，输出 JPEG。无法解码时原样返回。
-  Uint8List _downscaleBanner(Uint8List bytes) {
-    return _downscale(bytes, _bannerMaxSize);
-  }
-
-  /// 横幅压缩后最长边像素。
-  static const int _bannerMaxSize = 800;
-
+  /// 压缩图片到最长边 ≤ [maxSize]，输出 JPEG。无法解码时原样返回。
   Uint8List _downscale(Uint8List bytes, int maxSize) {
     try {
       final decoded = img.decodeImage(bytes);

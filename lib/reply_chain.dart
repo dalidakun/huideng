@@ -41,8 +41,11 @@ class ReplyChain extends StatelessWidget {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今日${t.hour}时';
+    }
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
@@ -86,7 +89,7 @@ class ReplyChain extends StatelessWidget {
     );
   }
 
-  /// 置顶回复的头部：`回复@账户 · 时间 + 已置顶标签 + 三点菜单`。
+  /// 置顶回复的头部：`回复@账户 + 已置顶标签 + 三点菜单`（时间戳在内容下方）。
   Widget _pinnedHeader(
       BuildContext context, PlazaNote note, String parentAccount) {
     return Row(
@@ -109,21 +112,6 @@ class ReplyChain extends StatelessWidget {
                           color: Color(0xFF8B6B5A)),
                     ),
                   ],
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Text('·',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
-              const SizedBox(width: 2),
-              PostTimeLink(
-                text: _time(note.createdAt),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => NoteDetailPage(
-                            noteId: note.id,
-                            scrollToReplyId: note.id,
-                          )),
                 ),
               ),
             ],
@@ -210,32 +198,18 @@ class ReplyChain extends StatelessWidget {
                           },
                         ),
                       ),
-                      // 阅藏进度百分比：灰色（时间戳同色）。
+                      // 阅藏进度百分比：灰色（与账户名同色系）。
                       const SizedBox(width: 3),
                       Text('·',
                           style: TextStyle(
                               fontSize: 12, color: Color(0xFF8C8C8C))),
                       const SizedBox(width: 2),
                       Text(postPct,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF8C8C8C))),
-                      const SizedBox(width: 3),
-                      Text('·',
-                          style: TextStyle(
-                              fontSize: 12, color: Color(0xFF8C8C8C))),
-                      const SizedBox(width: 2),
                     ],
-                    PostTimeLink(
-                      text: _time(note.createdAt),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => NoteDetailPage(
-                                  noteId: note.id,
-                                  scrollToReplyId: note.id,
-                                )),
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -260,6 +234,19 @@ class ReplyChain extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
         ],
+        // 发布时间：内容与指标行之间。
+        const SizedBox(height: 6),
+        PostTimeLink(
+          text: _time(note.createdAt),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => NoteDetailPage(
+                      noteId: note.id,
+                      scrollToReplyId: note.id,
+                    )),
+          ),
+        ),
         const SizedBox(height: 8),
         _metrics(note),
         // 头像连线上下帖子之间留出更大间距。

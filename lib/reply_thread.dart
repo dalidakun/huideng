@@ -83,8 +83,11 @@ class _ReplyThreadState extends State<ReplyThread> {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final now = DateTime.now();
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今日${t.hour}时';
+    }
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
@@ -143,31 +146,17 @@ class _ReplyThreadState extends State<ReplyThread> {
               },
             ),
           ),
-          // 阅藏进度百分比：灰色（时间戳同色）。
+          // 阅藏进度百分比：灰色（与账户名同色系）。
           const SizedBox(width: 3),
           Text('·',
               style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
           const SizedBox(width: 2),
           Text(postPct,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                   fontSize: 12, color: Color(0xFF8C8C8C))),
-          const SizedBox(width: 3),
-          Text('·',
-              style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
-          const SizedBox(width: 2),
         ],
-        PostTimeLink(
-          text: _time(note.createdAt),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => NoteDetailPage(
-                      noteId: note.id,
-                      // 评论贴打开时定位到评论贴位置。
-                      scrollToReplyId: showMenu ? note.id : null,
-                    )),
-          ),
-        ),
         if (showMenu && widget.onMore != null) ...[
           const SizedBox(width: 4),
           GestureDetector(
@@ -183,7 +172,7 @@ class _ReplyThreadState extends State<ReplyThread> {
     );
   }
 
-  /// 置顶回复的头部：`回复@原帖作者账户 · 时间 + 已置顶标签 + 三点菜单`。
+  /// 置顶回复的头部：`回复@原帖作者账户 + 已置顶标签 + 三点菜单`（时间戳在内容下方）。
   Widget _pinnedHeader(PlazaNote note) {
     final parentAccount = _original?.authorAccount ?? '';
     return Row(
@@ -206,21 +195,6 @@ class _ReplyThreadState extends State<ReplyThread> {
                           color: _textSec),
                     ),
                   ],
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Text('·',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
-              const SizedBox(width: 2),
-              PostTimeLink(
-                text: _time(note.createdAt),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => NoteDetailPage(
-                            noteId: note.id,
-                            scrollToReplyId: note.id,
-                          )),
                 ),
               ),
             ],
@@ -326,6 +300,20 @@ class _ReplyThreadState extends State<ReplyThread> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
         ],
+        // 发布时间：内容与指标行之间。
+        const SizedBox(height: 6),
+        PostTimeLink(
+          text: _time(note.createdAt),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => NoteDetailPage(
+                      noteId: note.id,
+                      // 评论贴打开时定位到评论贴位置。
+                      scrollToReplyId: showMenu ? note.id : null,
+                    )),
+          ),
+        ),
         const SizedBox(height: 8),
         _metrics(note),
       ],

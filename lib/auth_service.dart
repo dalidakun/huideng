@@ -555,6 +555,9 @@ class AuthService {
   Future<void> _ensureDefaultNickname(User user) async {
     final meta = user.userMetadata;
     if (meta?.nickName != null && meta!.nickName!.isNotEmpty) return;
+    // 重读本地昵称：重装/清数据后云同步可能已把用户设置过的昵称恢复到 prefs，
+    // 避免把它误判为空而用「同修+尾号」覆盖云端昵称。
+    await _loadLocalNickname();
     // 本地已保存自定义昵称（云端同步可能未完成/失败）时不覆盖默认昵称。
     if (_localNickname != null && _localNickname!.isNotEmpty) return;
     final tail = AuthUser(
@@ -580,6 +583,30 @@ class AuthService {
   Future<void> _loadLocalNickname() async {
     final prefs = await SharedPreferences.getInstance();
     _localNickname = prefs.getString('user_nickname');
+  }
+
+  /// 云同步把本地资料（昵称/签名）恢复到 prefs 后调用：重新读取本地昵称/
+  /// 签名并刷新当前登录态，让界面立即显示恢复后的资料，而不是启动时读到的默认值。
+  ///
+  /// 背景：启动时 [restoreSession] 先于云同步读取 prefs，此时重装/清数据后的
+  /// prefs 为空，昵称/签名会被读成默认值；云同步完成恢复 prefs 后若不刷新，
+  /// 界面会一直显示默认签名，直到重新登录。
+  Future<void> reloadLocalProfile() async {
+    await _loadLocalTagline();
+    await _loadLocalNickname();
+    final current = currentUser.value;
+    if (current == null) return;
+    final nick = (_localNickname != null && _localNickname!.isNotEmpty)
+        ? _localNickname
+        : current.nickname;
+    final tag = _localTagline;
+    if (nick == current.nickname && tag == current.tagline) return;
+    currentUser.value = AuthUser(
+      id: current.id,
+      mobilePhoneNumber: current.mobilePhoneNumber,
+      nickname: nick,
+      tagline: tag,
+    );
   }
 
   Future<AuthUser?> _loadCachedLogin() async {

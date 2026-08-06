@@ -844,27 +844,18 @@ class _NotificationCardState extends State<_NotificationCard>
                             child: _buildTitle(g, style, p),
                           ),
                           const SizedBox(width: 8),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                _formatNotifTime(g.latestAt),
-                                style: TextStyle(
-                                    fontSize: 11, color: p.textHint),
-                              ),
-                              if (unread) ...[
-                                const SizedBox(height: 4),
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFF71867A),
-                                    shape: BoxShape.circle,
-                                  ),
+                          if (unread)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF71867A),
+                                  shape: BoxShape.circle,
                                 ),
-                              ],
-                            ],
-                          ),
+                              ),
+                            ),
                         ],
                       ),
                       if (g.noteContent.isNotEmpty) ...[
@@ -882,6 +873,12 @@ class _NotificationCardState extends State<_NotificationCard>
                           ),
                         ),
                       ],
+                      // 时间戳：内容下方（与帖子/回复卡一致）。
+                      const SizedBox(height: 6),
+                      Text(
+                        _formatNotifTime(g.latestAt),
+                        style: TextStyle(fontSize: 11, color: p.textHint),
+                      ),
                     ],
                   ),
                 ),
@@ -1055,6 +1052,12 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
                           ),
                         ),
                       ],
+                      // 时间戳：内容下方（与帖子/回复卡一致）。
+                      const SizedBox(height: 6),
+                      Text(
+                        _formatLikeTime(g.latestAt),
+                        style: TextStyle(fontSize: 11, color: p.textHint),
+                      ),
                     ],
                   ),
                 ),
@@ -1066,7 +1069,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
     );
   }
 
-  /// 第二行：昵称（多人时取第一个）+ 认证标志 + 动作文案 + 时间戳。
+  /// 第二行：昵称（多人时取第一个）+ 认证标志 + 动作文案（时间戳在内容下方）。
   Widget _buildActionLine(
       NotificationGroup g, _Palette p, bool unread, bool isReply) {
     final actors = g.actors;
@@ -1107,26 +1110,18 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
           ),
         ),
         const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              _formatLikeTime(g.latestAt),
-              style: TextStyle(fontSize: 11, color: p.textHint),
-            ),
-            if (unread) ...[
-              const SizedBox(height: 4),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF71867A),
-                  shape: BoxShape.circle,
-                ),
+        if (unread)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: Color(0xFF71867A),
+                shape: BoxShape.circle,
               ),
-            ],
-          ],
-        ),
+            ),
+          ),
       ],
     );
   }
@@ -1144,8 +1139,8 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
     final dayDiff = today.difference(day).inDays;
     if (dayDiff == 1) return '昨天';
     if (dayDiff == 2) return '前天';
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
+    if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+    return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
 }
 
@@ -1466,7 +1461,7 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 第一行：昵称 + 认证 + @账号 + 时间 + 三点菜单。
+                      // 第一行：昵称 + 认证 + @账号 + 三点菜单（时间在内容下方）。
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
@@ -1501,22 +1496,7 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
                                           : () => _openUser(actor),
                                     ),
                                   ),
-                                  const SizedBox(width: 3),
-                                  Text('·',
-                                      style: TextStyle(
-                                          fontSize: 12, color: p.textHint)),
-                                  const SizedBox(width: 2),
                                 ],
-                                const SizedBox(width: 2),
-                                Flexible(
-                                  child: Text(
-                                    _formatMonthDay(g.latestAt),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        fontSize: 12, color: p.textHint),
-                                  ),
-                                ),
                               ],
                             ),
                           ),
@@ -1549,6 +1529,12 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
                             height: 1.6,
                           ),
                         ),
+                      ],
+                      // 回复时间：内容与指标行之间。
+                      if (g.latestAt > 0) ...[
+                        const SizedBox(height: 6),
+                        Text(_formatMonthDay(g.latestAt),
+                            style: TextStyle(fontSize: 12, color: p.textHint)),
                       ],
                       // 底部 6 个指标（与详情页同款：评论/转发/点赞/阅读/收藏/分享）。
                       const SizedBox(height: 10),
@@ -1871,16 +1857,19 @@ class _ReplyToMeLineState extends State<_ReplyToMeLine> {
   }
 }
 
-/// 回复时间戳：今年显示「x月x日」，往年显示「x年x月x日」。
+/// 回复时间戳：今天「今日x时」，今年「x月x日x时」，往年「x年x月x日x时」。
 String _formatMonthDay(int ms) {
   if (ms <= 0) return '';
   final t = DateTime.fromMillisecondsSinceEpoch(ms);
   final now = DateTime.now();
-  if (t.year == now.year) return '${t.month}月${t.day}日';
-  return '${t.year}年${t.month}月${t.day}日';
+  if (t.year == now.year && t.month == now.month && t.day == now.day) {
+    return '今日${t.hour}时';
+  }
+  if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+  return '${t.year}年${t.month}月${t.day}日${t.hour}时';
 }
 
-/// 关注/通知时间戳：刚刚 / x分钟前 / x小时前 / 昨天 / 前天 / x月x日 / x年x月x日。
+/// 关注/通知时间戳：刚刚 / x分钟前 / x小时前 / 昨天 / 前天 / x月x日x时 / x年x月x日x时。
 String _formatNotifTime(int ms) {
   if (ms <= 0) return '';
   final t = DateTime.fromMillisecondsSinceEpoch(ms);
@@ -1894,8 +1883,8 @@ String _formatNotifTime(int ms) {
   final dayDiff = today.difference(day).inDays;
   if (dayDiff == 1) return '昨天';
   if (dayDiff == 2) return '前天';
-  if (t.year == now.year) return '${t.month}月${t.day}日';
-  return '${t.year}年${t.month}月${t.day}日';
+  if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
+  return '${t.year}年${t.month}月${t.day}日${t.hour}时';
 }
 
 /// 点击通知卡片里的某个头像进入该用户个人主页。

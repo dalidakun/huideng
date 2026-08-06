@@ -58,14 +58,13 @@ class _AccountLinkState extends State<AccountLink> {
       onTapCancel: () => setState(() => _pressed = false),
       onTap: widget.onTap,
       child: Text(
+        // 账号名过长时省略显示，避免把昵称/百分比挤到换行。
         '@${widget.account}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 12,
-          color: _pressed
-              ? const Color(0xFF4C6E60)
-              : const Color(0xFF70867A),
+          color: _pressed ? const Color(0xFF6E6E6E) : const Color(0xFF8C8C8C),
         ),
       ),
     );

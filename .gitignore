@@ -27,6 +27,8 @@ assets/大正藏经简体txt/
 # Generated / temp files
 *.log
 *.png
+*.apk
+*.zip
 missing_sutras.txt
 sutras.json
 temp_methods.txt
