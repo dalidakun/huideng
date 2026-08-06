@@ -8,6 +8,7 @@ import 'login_page.dart';
 import 'note_stats_center.dart';
 import 'note_sutra_links.dart';
 import 'quote_box.dart';
+import 'reading_badges.dart';
 import 'reading_page.dart';
 import 'reply_thread.dart';
 import 'text_input_sheet.dart';
@@ -1004,10 +1005,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  /// 昵称行（不含头像）：昵称 + 认证 + @账户名 + 时间 + 三点菜单。
+  /// 昵称行（不含头像）：昵称 + 认证 + @账户名 + 阅藏进度 + 时间 + 三点菜单。
   Widget _buildUserNameRow(PlazaNote note) {
     final me = AuthService.instance.currentUser.value;
     final isSelf = me != null && note.ownerUserId == me.id;
+    // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
+    final postPct = postCanonPercent(
+      isSelf: isSelf,
+      cloudRead: note.canonRead,
+      cloudTotal: note.canonTotal,
+    );
     return Row(
       children: [
         Expanded(
@@ -1044,6 +1051,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     },
                   ),
                 ),
+                // 阅藏进度百分比：灰色（时间戳同色）。
+                const SizedBox(width: 3),
+                Text('·',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF8C8C8C))),
+                const SizedBox(width: 2),
+                Text(postPct,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF8C8C8C))),
                 const SizedBox(width: 3),
                 Text('·',
                     style: const TextStyle(

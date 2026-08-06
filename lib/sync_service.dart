@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'reading_badges.dart';
+import 'reading_time_service.dart';
 
 /// 全量本地数据云同步：
 ///  - 收集所有 SharedPreferences 键 + 头像文件 + sutras_list.json，
@@ -52,6 +54,12 @@ class SyncService with WidgetsBindingObserver {
     'apk_last_update_time',
     'downloaded_sutra_ids',
     'user_avatar_path',
+    'user_banner_path',
+    // 下载镜像轮换索引：纯本机下载源缓存，跨设备无意义。
+    'sutra_downloader_mirror_index',
+    // 读经会话开始时间戳：本机「阅读进行中」临时标记。同步到新设备会被
+    // start() 当作未结束会话，凭空补记最长 6 小时假时长，故不上传。
+    'reading_time_session_start_ms',
     // 本地登录身份缓存（设备本地兜底用），不随数据同步上传。
     'user_login_uid',
     'user_login_phone',
@@ -98,7 +106,31 @@ class SyncService with WidgetsBindingObserver {
     } else {
       await push();
     }
+    // 上报「阅藏进度」（标记完成册数），供主页头部展示百分比。
+    await _reportCanonProgress();
+    // 上报读经时长增量，供他人主页展示点亮的修学徽章。
+    await ReadingTimeService.instance.reportToCloud();
   }
+
+  /// 上报经藏页「阅藏进度」的原始数据：已完成册数 + 全藏总册数。
+  /// 服务端保存原始数值（canonRead/canonTotal），百分比由客户端计算；
+  /// 只有数据变化时才上报。
+  Future<void> _reportCanonProgress() async {
+    if (!AuthService.instance.isLoggedIn) return;
+    await LocalCanonProgress.refresh();
+    final read = LocalCanonProgress.read;
+    final total = LocalCanonProgress.total;
+    if (total <= 0 || read == _lastReportedCanonRead) return;
+    _lastReportedCanonRead = read;
+    try {
+      await CloudNotesService.instance
+          .reportCanonProgress(readCount: read, totalCount: total);
+    } catch (_) {
+      // 失败静默，下次周期重试。
+    }
+  }
+
+  int _lastReportedCanonRead = -1;
 
   /// 登录/恢复会话后：拉取云端 → 合并到本地 → 推回（含本地新增）。
   Future<void> _fullSync() async {
@@ -118,6 +150,9 @@ class SyncService with WidgetsBindingObserver {
       _busy = false;
     }
     await push();
+    // 登录/恢复会话后立即上报阅藏进度与读经时长，主页尽快有数据。
+    await _reportCanonProgress();
+    await ReadingTimeService.instance.reportToCloud();
   }
 
   /// 拉取云端并合并到本地。
@@ -498,6 +533,8 @@ class SyncService with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused && AuthService.instance.isLoggedIn) {
       unawaited(push());
+      unawaited(_reportCanonProgress());
+      unawaited(ReadingTimeService.instance.reportToCloud());
     }
   }
 }

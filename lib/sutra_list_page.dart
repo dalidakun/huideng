@@ -1648,7 +1648,7 @@ class SutraListPageState extends State<SutraListPage>
               const Text('阅藏进度', style: TextStyle(color: Color(0xFF4E342E), fontSize: 13, fontWeight: FontWeight.w600)),
               const Spacer(),
               Text(
-                '${pct.toStringAsFixed(1)}%',
+                '${pct.toStringAsFixed(2)}%',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 24,

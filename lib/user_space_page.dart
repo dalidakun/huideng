@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +10,8 @@ import 'cloud_notes_service.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
+import 'reading_badges.dart';
+import 'reading_time_service.dart';
 import 'reply_chain.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
@@ -52,6 +55,24 @@ class _UserSpacePageState extends State<UserSpacePage> {
   int _profileJoinTime = 0;
   String _profileAccount = '';
   bool _profileVerified = false;
+
+  /// 对方昵称：优先用资料接口返回的昵称（未拉取到时回退构造函数传参）。
+  String _profileName = '';
+
+  /// 对方头像/横幅 base64（由 getUserProfiles 返回，未设置时为空字符串）。
+  String _profileAvatar = '';
+  String _profileBanner = '';
+
+  /// 展示用昵称：资料接口拉取到昵称后用真实昵称，否则用进入页面时传入的名称。
+  String get _displayName =>
+      _profileName.isNotEmpty ? _profileName : widget.userName;
+
+  /// 对方「阅藏进度」原始数据（完成册数/总册数）：头部展示用。
+  int _profileCanonRead = 0;
+  int _profileCanonTotal = 0;
+
+  /// 对方累计读经时长（秒）：头部展示其点亮的修学徽章用。
+  int _profileReadingSeconds = 0;
   late bool _following =
       CloudNotesService.instance.followingUserIds.contains(widget.userId);
 
@@ -113,7 +134,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text(widget.userName,
+              child: Text(_displayName,
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
@@ -207,6 +228,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
       int joinTime = 0;
       String account = '';
       bool verified = false;
+      String name = '';
+      String avatar = '';
+      String banner = '';
       try {
         final profiles =
             await CloudNotesService.instance.getUserProfiles([widget.userId]);
@@ -215,6 +239,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
           joinTime = profiles.first.joinTime;
           account = profiles.first.account;
           verified = profiles.first.verified;
+          name = profiles.first.name;
+          avatar = profiles.first.avatar;
+          banner = profiles.first.banner;
         }
       } catch (_) {}
       // getUserProfiles 未取到 @账户 时，从对方公开笔记的 authorAccount 兜底补齐。
@@ -232,10 +259,13 @@ class _UserSpacePageState extends State<UserSpacePage> {
         setState(() {
           _loading = false;
           _notes.clear();
+          _profileName = name;
           _profileTagline = tagline;
           _profileJoinTime = joinTime;
           _profileAccount = account;
           _profileVerified = verified;
+          _profileAvatar = avatar;
+          _profileBanner = banner;
           _homeData = null;
           _homeLoaded = false;
           _homeError = false;
@@ -256,6 +286,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
       int joinTime = 0;
       String account = '';
       bool verified = false;
+      // 昵称/头像/横幅：自己用本地 prefs（头像由 UserAvatar 按 userId 读取路径）；
+      // 他人用 getUserProfiles 返回的 name/avatar/banner。
+      String name = '';
+      String avatar = '';
+      String banner = '';
+      // 阅藏进度：自己用本地实时统计，他人用云端 canonRead/canonTotal。
+      int canonRead = 0;
+      int canonTotal = 0;
+      // 读经时长（徽章点亮依据）：自己用本地实时数据，他人用云端 readingSeconds。
+      int readingSeconds = 0;
       final me = AuthService.instance.currentUser.value;
       if (me != null && me.id == widget.userId) {
         try {
@@ -264,7 +304,21 @@ class _UserSpacePageState extends State<UserSpacePage> {
           joinTime = prefs.getInt('user_created_at') ?? 0;
           account = prefs.getString('user_account_name') ?? '';
           verified = prefs.getBool('user_verified') ?? false;
+          name = prefs.getString('user_nickname') ?? '';
+          final bannerPath = prefs.getString('user_banner_path');
+          if (bannerPath != null &&
+              bannerPath.isNotEmpty &&
+              File(bannerPath).existsSync()) {
+            try {
+              banner = base64Encode(await File(bannerPath).readAsBytes());
+            } catch (_) {}
+          }
         } catch (_) {}
+        await LocalCanonProgress.refresh();
+        canonRead = LocalCanonProgress.read;
+        canonTotal = LocalCanonProgress.total;
+        await ReadingTimeService.instance.ensureLoaded();
+        readingSeconds = ReadingTimeService.instance.totalSeconds.value;
       } else {
         try {
           final profiles =
@@ -274,6 +328,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
             joinTime = profiles.first.joinTime;
             account = profiles.first.account;
             verified = profiles.first.verified;
+            canonRead = profiles.first.canonRead;
+            canonTotal = profiles.first.canonTotal;
+            readingSeconds = profiles.first.readingSeconds;
+            name = profiles.first.name;
+            avatar = profiles.first.avatar;
+            banner = profiles.first.banner;
           }
         } catch (_) {}
       }
@@ -282,10 +342,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
         _notes
           ..clear()
           ..addAll(list);
+        _profileName = name;
         _profileTagline = tagline;
         _profileJoinTime = joinTime;
         _profileAccount = account;
         _profileVerified = verified;
+        _profileAvatar = avatar;
+        _profileBanner = banner;
+        _profileCanonRead = canonRead;
+        _profileCanonTotal = canonTotal;
+        _profileReadingSeconds = readingSeconds;
         _page = 1;
         _hasMore = hasMore;
         _loading = false;
@@ -361,6 +427,36 @@ class _UserSpacePageState extends State<UserSpacePage> {
     );
   }
 
+  /// 顶部横幅：有横幅 base64 时展示横幅图，否则显示默认渐变占位。
+  Widget _buildBanner() {
+    if (_profileBanner.isNotEmpty) {
+      try {
+        return Image.memory(
+          base64Decode(_profileBanner),
+          width: double.infinity,
+          height: 150,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _defaultBanner(),
+        );
+      } catch (_) {}
+    }
+    return _defaultBanner();
+  }
+
+  Widget _defaultBanner() {
+    return Container(
+      width: double.infinity,
+      height: 150,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFD2C5B3), Color(0xFFC6B79E)],
+        ),
+      ),
+    );
+  }
+
   /// 与「我的菜单页」同款头部：横幅 + 大头像 + 昵称/认证/@账户。
   /// 自己主页没有关注按钮与编辑资料；他人主页有关注按钮（70867A）。
   Widget _buildHeader() {
@@ -375,23 +471,13 @@ class _UserSpacePageState extends State<UserSpacePage> {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              // 顶部横幅（他人无本地横幅，用默认渐变占位）。
+              // 顶部横幅：他人/自己均优先展示云端（或本地）横幅，未设置时用默认渐变占位。
               Positioned(
                 left: 0,
                 right: 0,
                 top: 0,
                 height: 150,
-                child: Container(
-                  width: double.infinity,
-                  height: 150,
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Color(0xFFD2C5B3), Color(0xFFC6B79E)],
-                    ),
-                  ),
-                ),
+                child: _buildBanner(),
               ),
               // 返回按钮。
               Positioned(
@@ -424,7 +510,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
                     ],
                   ),
                   child: ClipOval(
-                    child: UserAvatar(userId: widget.userId, radius: 38),
+                    child: UserAvatar(
+                      userId: widget.userId,
+                      radius: 38,
+                      imageBase64: _profileAvatar,
+                    ),
                   ),
                 ),
               ),
@@ -447,7 +537,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Flexible(
-                            child: Text(widget.userName,
+                            child: Text(_displayName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -463,6 +553,15 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         ],
                       ),
                     ),
+                    // 已点亮的修学徽章：只显示点亮的（无点亮不展示），位于三点左侧。
+                    if (_profileReadingSeconds > 0) ...[
+                      const SizedBox(width: 8),
+                      ReadingBadgesRow(
+                        seconds: _profileReadingSeconds,
+                        size: 20,
+                        showLocked: false,
+                      ),
+                    ],
                     // 三个点点：中性灰圆圈包裹，直径与关注按钮高度一致（屏蔽菜单）。
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -491,14 +590,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             color: following
-                                ? const Color(0xFFBDB6AC)
+                                ? const Color(0xFFECE9E4)
                                 : const Color(0xFF70867A),
                             borderRadius: BorderRadius.circular(_rowBtnSize / 2),
                           ),
                           child: Text(following ? '已关注' : '关注',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.white,
+                                  color: following
+                                      ? const Color(0xFF8C8C8C)
+                                      : Colors.white,
                                   fontWeight: FontWeight.w600)),
                         ),
                       ),
@@ -507,16 +608,33 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 ),
                 if (_account.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  Text('@$_account',
-                      style: const TextStyle(fontSize: 13, color: _textHint)),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('@$_account',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 13, color: _textHint)),
+                      ),
+                      // 阅藏进度：完成册数 ÷ 总册数（0% 也显示，与经藏页同源算法）。
+                      ReadingProgressChip(
+                        text: canonPercentText(
+                            _profileCanonRead, _profileCanonTotal),
+                      ),
+                    ],
+                  ),
                 ],
                 // 签名：未设置时默认展示固定法语（用户可自行修改）。
-                const SizedBox(height: 6),
-                Text(
-                  _displayTagline,
-                  style: const TextStyle(
-                      fontSize: 14, color: _textSec, height: 1.4),
-                ),
+                // 初始加载完成前不展示，避免「默认法语 → 用户签名」的闪变。
+                if (!_loading) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _displayTagline,
+                    style: const TextStyle(
+                        fontSize: 14, color: _textSec, height: 1.4),
+                  ),
+                ],
                 // 注册加入时间。
                 if (_profileJoinTime > 0) ...[
                   const SizedBox(height: 4),
@@ -560,7 +678,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                           fontWeight: FontWeight.w600,
                           color: _text)),
                   const SizedBox(height: 6),
-                  Text('${widget.userName} 暂未公开发布笔记',
+                  Text('$_displayName 暂未公开发布笔记',
                       style: const TextStyle(fontSize: 13, color: _textSec)),
                 ],
               ),
@@ -664,7 +782,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       return _tabPlaceholder(
         Icons.auto_stories_outlined,
         '还没有精读记录',
-        '${widget.userName} 暂无精读经文',
+        '$_displayName 暂无精读经文',
       );
     }
     return RefreshIndicator(
@@ -810,7 +928,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       return _tabPlaceholder(
         Icons.event_note_outlined,
         '对方还没有设置功课',
-        '${widget.userName} 暂未设置打卡功课与目标',
+        '$_displayName 暂未设置打卡功课与目标',
       );
     }
     return RefreshIndicator(

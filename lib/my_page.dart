@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -29,6 +30,8 @@ import 'reply_thread.dart';
 import 'reply_chain.dart';
 import 'certification_page.dart';
 import 'note_stats_center.dart';
+import 'reading_badges.dart';
+import 'reading_time_service.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -74,6 +77,9 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   String _tagline = '燃一盏灯，看见自己，照亮别人。';
   String _accountName = '';
   bool _verified = false;
+
+  /// 累计读经时长（秒）：驱动昵称行右侧的五枚修学徽章点亮。
+  int _readingSeconds = 0;
   String _joinedDate =
       '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
 
@@ -98,14 +104,21 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
     _loadData();
     _loadCounts();
     AuthService.instance.currentUser.addListener(_onAuthChanged);
+    ReadingTimeService.instance.totalSeconds.addListener(_onReadingSeconds);
   }
 
   @override
   void dispose() {
     _reloadNotifier.dispose();
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    ReadingTimeService.instance.totalSeconds.removeListener(_onReadingSeconds);
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _onReadingSeconds() {
+    if (!mounted) return;
+    setState(() => _readingSeconds = ReadingTimeService.instance.totalSeconds.value);
   }
 
   void _onAuthChanged() {
@@ -147,6 +160,21 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
     });
     _loadAccountName();
     _loadVerification();
+    unawaited(_loadReadingBadge());
+  }
+
+  /// 读经徽章：读取本地累计时长驱动徽章点亮；首次点亮新徽章时弹恭喜。
+  Future<void> _loadReadingBadge() async {
+    await ReadingTimeService.instance.ensureLoaded();
+    if (!mounted) return;
+    final s = ReadingTimeService.instance.totalSeconds.value;
+    setState(() => _readingSeconds = s);
+    if (_isLoggedIn && s > 0) {
+      await maybeCelebrateNewBadge(context, s);
+    }
+    // 刷新本地阅藏进度统计（主页 @账户 行右侧的「阅藏x%」）。
+    await LocalCanonProgress.refresh();
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadAccountName() async {
@@ -504,31 +532,59 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(_nickname,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                color: _text)),
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Flexible(
+                              child: Text(_nickname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w700,
+                                      color: _text)),
+                            ),
+                            if (_verified) ...[
+                              const SizedBox(width: 4),
+                              _buildVerifiedBadge(),
+                            ] else ...[
+                              const SizedBox(width: 12),
+                              _buildCertifyButton(),
+                            ],
+                          ],
+                        ),
                       ),
-                      if (_verified) ...[
-                        const SizedBox(width: 4),
-                        _buildVerifiedBadge(),
-                      ] else ...[
-                        const SizedBox(width: 12),
-                        _buildCertifyButton(),
-                      ],
+                      // 修学徽章：依累计读经时长点亮，点击查看五品详情。
+                      const SizedBox(width: 8),
+                      ReadingBadgesRow(
+                        seconds: _readingSeconds,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) =>
+                                  BadgeDetailPage(seconds: _readingSeconds)),
+                        ),
+                      ),
                     ],
                   ),
                   if (_isLoggedIn && _accountName.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Text('@$_accountName',
-                            style: const TextStyle(
-                                fontSize: 13, color: _textHint)),
+                        Expanded(
+                          child: Text('@$_accountName',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 13, color: _textHint)),
+                        ),
+                        // 阅藏进度：完成册数 ÷ 总册数（0% 也显示），点击看徽章详情。
+                        ReadingProgressChip(
+                          text: canonPercentText(
+                              LocalCanonProgress.read,
+                              LocalCanonProgress.total),
+                        ),
                       ],
                     ),
                   ],
@@ -789,6 +845,10 @@ class PostBlock extends StatefulWidget {
   final String nickname;
   final String account;
   final bool authorVerified;
+
+  /// 作者「阅藏进度」原始数据（完成册数/总册数）：帖子行百分比展示用。
+  final int canonRead;
+  final int canonTotal;
   final int timeMs;
   final String content;
   final Widget? stats;
@@ -813,6 +873,8 @@ class PostBlock extends StatefulWidget {
     required this.nickname,
     this.account = '',
     this.authorVerified = false,
+    this.canonRead = 0,
+    this.canonTotal = 0,
     required this.timeMs,
     required this.content,
     this.stats,
@@ -873,6 +935,18 @@ class _PostBlockState extends State<PostBlock> {
       _commentCount = n.commentCount;
       _viewCount = n.viewCount;
     });
+  }
+
+  /// 点击头像/昵称进入该用户个人主页空间。
+  void _openUserSpace() {
+    final uid = widget.ownerUserId;
+    if (uid == null || uid.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) =>
+              UserSpacePage(userId: uid, userName: widget.nickname)),
+    );
   }
 
   /// 关注/取消关注帖子作者（已关注的同修在首页「关注」栏目展示其新帖）。
@@ -1082,6 +1156,12 @@ class _PostBlockState extends State<PostBlock> {
     // 测量用的纯文本：剥离 [@账号](user:ID) / [@经名](路径) 标记，渲染仍用原文。
     final measureContent =
         content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
+    // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
+    final postPct = postCanonPercent(
+      isSelf: me != null && widget.ownerUserId == me.id,
+      cloudRead: widget.canonRead,
+      cloudTotal: widget.canonTotal,
+    );
     return InkWell(
       onTap: widget.onTap ?? () => setState(() => _expanded = !_expanded),
       child: Padding(
@@ -1089,7 +1169,11 @@ class _PostBlockState extends State<PostBlock> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            UserAvatar(userId: widget.ownerUserId, radius: 22),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _openUserSpace,
+              child: UserAvatar(userId: widget.ownerUserId, radius: 22),
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -1104,13 +1188,18 @@ class _PostBlockState extends State<PostBlock> {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Flexible(
-                              child: Text(widget.nickname,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: _text)),
+                              // 点击昵称进入该用户个人主页空间。
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: _openUserSpace,
+                                child: Text(widget.nickname,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: _text)),
+                              ),
                             ),
                             if (widget.authorVerified) ...[
                               const SizedBox(width: 3),
@@ -1136,6 +1225,16 @@ class _PostBlockState extends State<PostBlock> {
                                   },
                                 ),
                               ),
+                              // 阅藏进度百分比：灰色（时间戳同色），前后各一个圆点分隔。
+                              const SizedBox(width: 3),
+                              Text('·',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
+                              const SizedBox(width: 2),
+                              Text(postPct,
+                                  maxLines: 1,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
                               const SizedBox(width: 3),
                               Text('·',
                                   style: const TextStyle(
@@ -1705,6 +1804,8 @@ class PostFeedRow extends StatelessWidget {
       nickname: isMine ? me.displayName : note.authorName,
       account: note.authorAccount,
       authorVerified: note.authorVerified,
+      canonRead: note.canonRead,
+      canonTotal: note.canonTotal,
       timeMs: note.createdAt,
       content: note.content,
       noteId: note.id,

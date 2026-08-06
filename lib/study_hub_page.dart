@@ -1361,63 +1361,57 @@ class StudyHubPageState extends State<StudyHubPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _currentTitle != null ? _openSutra : null,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-              child: Row(
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                        color: _primary.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8)),
-                    child: Icon(Icons.menu_book_rounded,
-                        size: 16, color: const Color(0xFF71867A)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+            child: Row(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                      color: _primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Icon(Icons.menu_book_rounded,
+                      size: 16, color: const Color(0xFF71867A)),
+                ),
+                const SizedBox(width: 10),
+                const Text('精读经文',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+                const Spacer(),
+                if (_currentTitle != null) ...[
+                  GestureDetector(
+                    onTap: _toggleLock,
+                    child: Icon(
+                      _lockedTitle != null ? Icons.lock : Icons.lock_open,
+                      size: 17,
+                      color: const Color(0xFF71867A),
+                    ),
                   ),
-                  const SizedBox(width: 10),
-                  const Text('精读经文',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: _text)),
-                  const Spacer(),
-                  if (_currentTitle != null) ...[
-                    GestureDetector(
-                      onTap: _toggleLock,
-                      child: Icon(
-                        _lockedTitle != null ? Icons.lock : Icons.lock_open,
-                        size: 17,
-                        color: _lockedTitle != null ? _gold : _textSec,
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _toggleReadingShare(!_allowReadingShare),
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFCDB292),
+                        borderRadius: BorderRadius.circular(11),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => _toggleReadingShare(!_allowReadingShare),
-                      child: Container(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _allowReadingShare
-                              ? const Color(0xFF71867A)
-                              : const Color(0xFFBDB6AC),
-                          borderRadius: BorderRadius.circular(11),
-                        ),
-                        child: Text(
-                          _allowReadingShare ? '已允许' : '未允许',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w500,
-                          ),
+                      child: Text(
+                        _allowReadingShare ? '已允许' : '未允许',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
-                  ],
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
           if (_currentTitle != null) ...[
@@ -1592,24 +1586,14 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 读经时长格式化：不足 60 秒显示秒，否则按 分钟/小时/天/年 递进。
+  /// 读经时长格式化：不足 1 分钟显示秒，否则按 小时/分钟 计算（每 60 分钟进位 1 小时，不计天/月/周/年）。
   String _formatReadTime(int seconds) {
     if (seconds < 60) return '$seconds秒';
     final minutes = seconds ~/ 60;
-    if (minutes < 60) return '$minutes分钟';
     final hours = minutes ~/ 60;
-    if (hours < 24) {
-      final rem = minutes % 60;
-      return rem > 0 ? '$hours小时$rem分钟' : '$hours小时';
-    }
-    final days = hours ~/ 24;
-    if (days < 365) {
-      final rem = hours % 24;
-      return rem > 0 ? '$days天$rem小时' : '$days天';
-    }
-    final years = days ~/ 365;
-    final remDays = days % 365;
-    return remDays > 0 ? '$years年$remDays天' : '$years年';
+    final rem = minutes % 60;
+    if (hours == 0) return '$minutes分钟';
+    return rem > 0 ? '$hours小时$rem分钟' : '$hours小时';
   }
 
   Widget _buildCheckInCard() {

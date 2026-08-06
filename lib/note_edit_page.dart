@@ -49,6 +49,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
   int _triggerIndex = -1;
   Timer? _debounce;
 
+  static final RegExp _mentionRe =
+      RegExp(r'\[@([^\]]+)\]\(user:([^)]+)\)');
+  static final RegExp _plainMentionRe =
+      RegExp(r'@([\u4e00-\u9fa5a-zA-Z0-9_]{1,20})');
+  final Map<String, String> _mentionUids = {};
+
   /// 从广场笔记中提取的系统话题缓存（首次搜索时拉取一次）。
   List<String> _fetchedTopics = const [];
   bool _fetchedTopicsLoaded = false;
@@ -70,6 +76,10 @@ class _NoteEditPageState extends State<NoteEditPage> {
     if (widget.note == null && preset != null && preset.isNotEmpty) {
       raw = preset;
     }
+    for (final m in _mentionRe.allMatches(raw.toString())) {
+      _mentionUids[m.group(1)!] = m.group(2)!;
+    }
+    raw = raw.toString().replaceAllMapped(_mentionRe, (m) => '@${m.group(1)}');
     final topic = widget.fixedTopic;
     if (topic != null && topic.isNotEmpty) {
       final prefix = '#$topic';
@@ -85,7 +95,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
   /// 保存的完整正文：固定话题置于最前。
   String _fullContent() {
-    final body = _contentController.text.trim();
+    var body = _contentController.text.trim();
+    if (_mentionUids.isNotEmpty) {
+      body = body.replaceAllMapped(_plainMentionRe, (m) {
+        final uid = _mentionUids[m.group(1)!];
+        return uid == null ? m.group(0)! : '[@${m.group(1)}](user:$uid)';
+      });
+    }
     final topic = widget.fixedTopic;
     if (topic != null && topic.isNotEmpty) {
       final prefix = '#$topic';
@@ -312,7 +328,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
   void _insertUser(UserProfile p) {
     final account = p.account.isNotEmpty ? p.account : p.name;
-    _insertTrigger('[@$account](user:${p.id})');
+    _mentionUids[account] = p.id;
+    _insertTrigger('@$account');
   }
 
   void _insertSutra(NoteSutraLink link) {

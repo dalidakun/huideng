@@ -56,6 +56,18 @@ class _QuoteBoxState extends State<QuoteBox> {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
+  /// 点击头像/昵称进入该用户个人主页空间。
+  void _openOriginalUser(BuildContext context) {
+    final uid = _original?.ownerUserId ?? widget.note.repostSourceUserId;
+    final name = _original?.authorName ?? widget.note.repostSourceAuthor;
+    if (uid.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => UserSpacePage(userId: uid, userName: name)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_originalAuthorBlocked) {
@@ -121,20 +133,32 @@ class _QuoteBoxState extends State<QuoteBox> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                UserAvatar(userId: src?.ownerUserId ?? widget.note.ownerUserId, radius: 14),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _openOriginalUser(context),
+                  child: UserAvatar(
+                      userId:
+                          src?.ownerUserId ?? widget.note.ownerUserId,
+                      radius: 14),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Flexible(
-                        child: Text(name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: _text)),
+                        // 点击昵称进入该用户个人主页空间。
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _openOriginalUser(context),
+                          child: Text(name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: _text)),
+                        ),
                       ),
                       if (account.isNotEmpty) ...[
                         const SizedBox(width: 3),

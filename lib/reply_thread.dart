@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_stats_center.dart';
 import 'note_sutra_links.dart';
 import 'post_time_link.dart';
+import 'reading_badges.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
@@ -85,16 +87,39 @@ class _ReplyThreadState extends State<ReplyThread> {
     return '${t.year}年${t.month}月${t.day}日';
   }
 
+  /// 点击头像/昵称进入该用户个人主页空间。
+  void _openUser(PlazaNote note) {
+    if (note.ownerUserId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => UserSpacePage(
+              userId: note.ownerUserId, userName: note.authorName)),
+    );
+  }
+
   Widget _header(PlazaNote note, {required bool showMenu}) {
+    final me = AuthService.instance.currentUser.value;
+    // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
+    final postPct = postCanonPercent(
+      isSelf: me != null && note.ownerUserId == me.id,
+      cloudRead: note.canonRead,
+      cloudTotal: note.canonTotal,
+    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Flexible(
-          child: Text(note.authorName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+          // 点击昵称进入该用户个人主页空间。
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openUser(note),
+            child: Text(note.authorName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+          ),
         ),
         if (note.authorVerified) ...[
           const SizedBox(width: 3),
@@ -118,8 +143,16 @@ class _ReplyThreadState extends State<ReplyThread> {
               },
             ),
           ),
+          // 阅藏进度百分比：灰色（时间戳同色）。
           const SizedBox(width: 3),
-          const Text('·',
+          Text('·',
+              style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
+          const SizedBox(width: 2),
+          Text(postPct,
+              style: const TextStyle(
+                  fontSize: 12, color: Color(0xFF8C8C8C))),
+          const SizedBox(width: 3),
+          Text('·',
               style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
           const SizedBox(width: 2),
         ],
@@ -308,7 +341,11 @@ class _ReplyThreadState extends State<ReplyThread> {
         children: [
           Column(
             children: [
-              UserAvatar(userId: note.ownerUserId, radius: 22),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _openUser(note),
+                child: UserAvatar(userId: note.ownerUserId, radius: 22),
+              ),
               if (connectDown)
                 Expanded(
                   child: Container(width: 2, color: _border),

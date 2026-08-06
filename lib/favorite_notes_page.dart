@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'reading_badges.dart';
 
 const Color _gold = Color(0xFFD4A06A);
 const Color _bg = Color(0xFFF5EDE3);
@@ -139,6 +141,13 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
     final preview = content.length > 60
         ? '${content.substring(0, 60)}...'
         : content;
+    // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
+    final me = AuthService.instance.currentUser.value;
+    final postPct = postCanonPercent(
+      isSelf: me != null && note.ownerUserId == me.id,
+      cloudRead: note.canonRead,
+      cloudTotal: note.canonTotal,
+    );
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -193,6 +202,15 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                                     fontSize: 12, color: Color(0xFF8C8C8C))),
                           ),
                         ],
+                        // 阅藏进度百分比：灰色（与账户名同色系）。
+                        const SizedBox(width: 3),
+                        Text('·',
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF8C8C8C))),
+                        const SizedBox(width: 2),
+                        Text(postPct,
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF8C8C8C))),
                       ],
                     ),
                   ),

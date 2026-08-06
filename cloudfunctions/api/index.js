@@ -276,6 +276,32 @@ exports.main = async (event, context) => {
     }
   }
 
+  // 给笔记列表附加作者「阅藏进度」原始数据（canonRead/canonTotal），
+  // 客户端按经藏页同源算法（完成册数 ÷ 全藏总册数）自行计算百分比展示。
+  async function attachAuthorCanonProgress(noteList) {
+    if (!noteList || noteList.length === 0) return;
+    const ids = [...new Set(noteList.map((n) => n.ownerUserId).filter(Boolean))];
+    if (ids.length === 0) return;
+    const reads = {};
+    const totals = {};
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      try {
+        const { data } = await userAccounts
+          .where({ uid: _.in(chunk) })
+          .get();
+        for (const a of data || []) {
+          reads[a.uid] = Math.max(0, Number(a.canonRead) || 0);
+          totals[a.uid] = Math.max(0, Number(a.canonTotal) || 0);
+        }
+      } catch (e) {}
+    }
+    for (const n of noteList) {
+      n.canonRead = reads[n.ownerUserId] || 0;
+      n.canonTotal = totals[n.ownerUserId] || 0;
+    }
+  }
+
   const action = event.action;
   console.log(`[api] action=${action} uid=${uid} tokenPresent=${!!(event.__accessToken)}`);
 
@@ -402,6 +428,7 @@ exports.main = async (event, context) => {
         const { total } = await base.count();
         await attachAuthorAccounts(res.data);
         await attachAuthorVerified(res.data);
+        await attachAuthorCanonProgress(res.data);
         return ok({
           notes: res.data,
           total,
@@ -430,6 +457,7 @@ exports.main = async (event, context) => {
         const { total } = await base.count();
         await attachAuthorAccounts(res.data);
         await attachAuthorVerified(res.data);
+        await attachAuthorCanonProgress(res.data);
         return ok({
           notes: res.data,
           total,
@@ -493,8 +521,9 @@ exports.main = async (event, context) => {
           const pageNotes = scored.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
           const notesOut = pageNotes.map(({ _hotScore, ...rest }) => rest);
           await attachAuthorAccounts(notesOut);
-          await attachAuthorVerified(notesOut);
-          return ok({
+        await attachAuthorVerified(notesOut);
+        await attachAuthorCanonProgress(notesOut);
+        return ok({
             notes: notesOut,
             total,
             hasMore: (page - 1) * pageSize + pageNotes.length < total,
@@ -510,6 +539,7 @@ exports.main = async (event, context) => {
         const { total } = await base.count();
         await attachAuthorAccounts(filtered);
         await attachAuthorVerified(filtered);
+        await attachAuthorCanonProgress(filtered);
         return ok({
           notes: filtered,
           total,
@@ -530,6 +560,7 @@ exports.main = async (event, context) => {
         }
         await attachAuthorAccounts([note]);
         await attachAuthorVerified([note]);
+        await attachAuthorCanonProgress([note]);
         return ok({ note });
       }
 
@@ -611,7 +642,8 @@ exports.main = async (event, context) => {
           viewed: false,
           createdAt: now(),
         });
-        if (src.ownerUserId && src.ownerUserId !== uid) {
+        // 回复帖（kind='reply'）：作者已在 createComment 中收到「回复」通知，不再重复发「转发」通知。
+        if (src.ownerUserId && src.ownerUserId !== uid && repostKind !== "reply") {
           await activities.add({
             userId: src.ownerUserId,
             type: "repost_me",
@@ -695,6 +727,7 @@ exports.main = async (event, context) => {
         }
         await attachAuthorAccounts(list);
         await attachAuthorVerified(list);
+        await attachAuthorCanonProgress(list);
         return ok({ notes: list });
       }
 
@@ -732,8 +765,12 @@ exports.main = async (event, context) => {
             for (const v of data || []) verified[v.uid] = true;
           } catch (e) {}
         }
-        // 账号名称：userAccounts 中登记的 username。
+        // 账号名称：userAccounts 中登记的 username；阅藏进度：同表 canonRead/canonTotal；
+        // 读经时长：同表 readingSeconds（他人主页徽章点亮依据）。
         const accounts = {};
+        const canonRead = {};
+        const canonTotal = {};
+        const readingSeconds = {};
         if (ids.length > 0) {
           try {
             await ensureUserAccounts();
@@ -741,11 +778,17 @@ exports.main = async (event, context) => {
               const { data } = await userAccounts
                 .where({ uid: _.in(ids.slice(i, i + 100)) })
                 .get();
-              for (const a of data || []) accounts[a.uid] = a.username || "";
+              for (const a of data || []) {
+                accounts[a.uid] = a.username || "";
+                canonRead[a.uid] = Math.max(0, Number(a.canonRead) || 0);
+                canonTotal[a.uid] = Math.max(0, Number(a.canonTotal) || 0);
+                readingSeconds[a.uid] = Math.max(0, Number(a.readingSeconds) || 0);
+              }
             }
           } catch (e) {}
         }
-        // 签名/加入时间：从 userData.payload.prefs 取（由 SyncService 定期推送）。
+        // 昵称/签名/加入时间/头像/横幅：从 userData.payload 取（由 SyncService 定期推送）。
+        // 头像横幅为 base64，存于 payload.files.avatar / payload.files.banner。
         const profiles = {};
         if (ids.length > 0) {
           try {
@@ -754,28 +797,43 @@ exports.main = async (event, context) => {
               .limit(1000)
               .get();
             for (const row of ud || []) {
-              const prefs = row && row.payload && row.payload.prefs;
-              if (!prefs) continue;
+              const payload = (row && row.payload) || {};
+              const prefs = payload.prefs || {};
+              const files = payload.files || {};
+              const avatar = files.avatar;
+              const banner = files.banner;
               profiles[row.uid] = {
+                nickname: String(prefs.user_nickname || "").slice(0, 30),
                 tagline: String(prefs.user_tagline || "").slice(0, 60),
                 joinTime: Number(prefs.user_created_at) || 0,
+                avatar:
+                  avatar && typeof avatar.data === "string" && avatar.data
+                    ? avatar.data
+                    : "",
+                banner:
+                  banner && typeof banner.data === "string" && banner.data
+                    ? banner.data
+                    : "",
               };
             }
           } catch (e) {}
         }
         const users = [];
         for (const id of ids) {
-          let name = "同修";
-          try {
-            const { data: ndata } = await notes
-              .where({ ownerUserId: id, visibility: "public", status: "normal" })
-              .orderBy("createdAt", "desc")
-              .limit(1)
-              .get();
-            const n = ndata && ndata[0];
-            if (n && n.authorName) name = String(n.authorName);
-          } catch (e) {}
+          // 昵称优先取云同步的 user_nickname；未设置时回退到最近公开笔记的 authorName。
           const p = profiles[id] || {};
+          let name = p.nickname || "同修";
+          if (!name || name === "同修") {
+            try {
+              const { data: ndata } = await notes
+                .where({ ownerUserId: id, visibility: "public", status: "normal" })
+                .orderBy("createdAt", "desc")
+                .limit(1)
+                .get();
+              const n = ndata && ndata[0];
+              if (n && n.authorName) name = String(n.authorName);
+            } catch (e) {}
+          }
           users.push({
             id,
             name,
@@ -783,6 +841,11 @@ exports.main = async (event, context) => {
             verified: !!verified[id],
             tagline: p.tagline || "",
             joinTime: p.joinTime || 0,
+            canonRead: canonRead[id] || 0,
+            canonTotal: canonTotal[id] || 0,
+            readingSeconds: readingSeconds[id] || 0,
+            avatar: p.avatar || "",
+            banner: p.banner || "",
           });
         }
         return ok({ users });
@@ -970,6 +1033,7 @@ exports.main = async (event, context) => {
         }
         await attachAuthorAccounts(list);
         await attachAuthorVerified(list);
+        await attachAuthorCanonProgress(list);
         return ok({ notes: list });
       }
 
@@ -1728,6 +1792,50 @@ exports.main = async (event, context) => {
           realNameMasked: v ? v.realNameMasked || "" : "",
           verifiedAt: v ? v.verifiedAt || 0 : 0,
         });
+      }
+
+      // ==================== 阅藏进度上报（广场帖子百分比） ====================
+
+      // 上报「阅藏进度」原始数据：标记完成阅读的经书册数 + 全藏总册数。
+      // 存到 userAccounts.canonRead/canonTotal；广场帖子头部据此展示百分比
+      // （百分比由客户端按经藏页同源算法计算，服务端不再取整，保证精度）。
+      case "reportCanonProgress": {
+        if (!uid) return fail("unauthorized");
+        const read = Math.min(Math.max(Math.floor(Number(event.read)) || 0, 0), 100000);
+        const total = Math.min(Math.max(Math.floor(Number(event.total)) || 0, 0), 100000);
+        if (total <= 0) return ok({ canonRead: 0, canonTotal: 0 });
+        await ensureUserAccounts();
+        const { data } = await userAccounts.where({ uid }).limit(1).get();
+        const row = data && data[0];
+        if (!row) return ok({ canonRead: 0, canonTotal: 0 });
+        await userAccounts.doc(row._id).update({
+          canonRead: read,
+          canonTotal: total,
+          canonUpdatedAt: now(),
+        });
+        return ok({ canonRead: read, canonTotal: total });
+      }
+
+      // ==================== 读经时长上报（他人主页徽章） ====================
+
+      // 上报读经时长增量（秒）：累加到 userAccounts.readingSeconds，
+      // 他人主页据此展示该用户点亮的修学徽章。
+      // 单次增量上限 24 小时（一天），防止异常/恶意数据刷爆；幂等由客户端游标保证。
+      case "reportReadingTime": {
+        if (!uid) return fail("unauthorized");
+        const raw = Number(event.delta);
+        if (!isFinite(raw) || raw <= 0) return ok({ accepted: 0 });
+        const delta = Math.min(Math.floor(raw), 24 * 60 * 60);
+        await ensureUserAccounts();
+        const { data } = await userAccounts.where({ uid }).limit(1).get();
+        const row = data && data[0];
+        if (!row) return ok({ accepted: 0 });
+        const total = Math.max(0, Number(row.readingSeconds) || 0) + delta;
+        await userAccounts.doc(row._id).update({
+          readingSeconds: total,
+          readingUpdatedAt: now(),
+        });
+        return ok({ accepted: delta, readingSeconds: total });
       }
 
       // ==================== 管理 ====================

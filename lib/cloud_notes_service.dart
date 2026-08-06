@@ -22,6 +22,10 @@ class PlazaNote {
   final String authorName;
   final String authorAccount;
   final bool authorVerified;
+
+  /// 作者「阅藏进度」原始数据：完成册数/总册数（帖子行百分比展示用）。
+  final int canonRead;
+  final int canonTotal;
   final String visibility;
   final String status;
   final int likeCount;
@@ -52,6 +56,8 @@ class PlazaNote {
     required this.authorName,
     this.authorAccount = '',
     this.authorVerified = false,
+    this.canonRead = 0,
+    this.canonTotal = 0,
     required this.visibility,
     required this.status,
     required this.likeCount,
@@ -77,6 +83,8 @@ class PlazaNote {
         authorName: json['authorName']?.toString() ?? '同修',
         authorAccount: json['authorAccount']?.toString() ?? '',
         authorVerified: json['authorVerified'] == true,
+        canonRead: (json['canonRead'] as num?)?.toInt() ?? 0,
+        canonTotal: (json['canonTotal'] as num?)?.toInt() ?? 0,
         visibility: json['visibility']?.toString() ?? 'public',
         status: json['status']?.toString() ?? 'normal',
         likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
@@ -339,6 +347,19 @@ class UserProfile {
   final int joinTime;
   final String account;
 
+  /// 头像 base64（存于云端 userData.payload.files.avatar，未设置时为空）。
+  final String avatar;
+
+  /// 横幅 base64（存于云端 userData.payload.files.banner，未设置时为空）。
+  final String banner;
+
+  /// 「阅藏进度」原始数据：完成册数/总册数（主页头部展示用）。
+  final int canonRead;
+  final int canonTotal;
+
+  /// 累计读经时长（秒）：他人主页展示其点亮的修学徽章用。
+  final int readingSeconds;
+
   const UserProfile({
     required this.id,
     required this.name,
@@ -346,6 +367,11 @@ class UserProfile {
     this.tagline = '',
     this.joinTime = 0,
     this.account = '',
+    this.avatar = '',
+    this.banner = '',
+    this.canonRead = 0,
+    this.canonTotal = 0,
+    this.readingSeconds = 0,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> e) => UserProfile(
@@ -357,6 +383,11 @@ class UserProfile {
             (e['createdAt'] as num?)?.toInt() ??
             0,
         account: e['account']?.toString() ?? e['username']?.toString() ?? '',
+        avatar: e['avatar']?.toString() ?? '',
+        banner: e['banner']?.toString() ?? '',
+        canonRead: (e['canonRead'] as num?)?.toInt() ?? 0,
+        canonTotal: (e['canonTotal'] as num?)?.toInt() ?? 0,
+        readingSeconds: (e['readingSeconds'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -469,6 +500,9 @@ class CloudNotesService {
     String action, {
     Map<String, dynamic>? params,
   }) async {
+    // 等待启动会话恢复完成（含 token 刷新）：避免热重启/冷启动后会话未就绪，
+    // 请求被云函数判定为未授权，导致通知等页面首次打开直接「加载失败」。
+    await AuthService.instance.restoreDone;
     final app = await AuthService.instance.ensureApp();
     if (app == null) {
       throw const CloudApiException('尚未配置云环境');
@@ -821,6 +855,7 @@ class CloudNotesService {
     }
     final res = await _call('toggleFollow', params: {
       'targetUserId': targetUserId,
+      'authorName': _authorName,
     });
     final following = res['following'] == true;
     if (following) {
@@ -1109,6 +1144,24 @@ class CloudNotesService {
     Map<String, dynamic>? params,
   }) {
     return _call(action, params: params);
+  }
+
+  /// 上报读经时长增量（秒）到云端：服务端累加到 userAccounts.readingSeconds，
+  /// 供他人主页展示该用户点亮的修学徽章。返回 { accepted }（实际接受的增量）。
+  Future<Map<String, dynamic>> reportReadingTime(int deltaSeconds) async {
+    return _call('reportReadingTime', params: {'delta': deltaSeconds});
+  }
+
+  /// 上报「阅藏进度」：标记完成阅读的经书册数与全藏总册数（经藏页同源算法），
+  /// 服务端计算百分比存到 userAccounts.canonPercent，供广场帖子头部展示。
+  Future<Map<String, dynamic>> reportCanonProgress({
+    required int readCount,
+    required int totalCount,
+  }) async {
+    return _call('reportCanonProgress', params: {
+      'read': readCount,
+      'total': totalCount,
+    });
   }
 
   /// 提交实名认证（真实姓名 + 身份证号）。
