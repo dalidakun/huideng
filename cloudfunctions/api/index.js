@@ -46,6 +46,9 @@ function buildInitOptions() {
 
 const app = cloudbase.init(buildInitOptions());
 
+// 热门讨论聚合结果缓存（内存级，仅热实例间共享）：15 分钟内不重复全表扫描。
+let hotDiscussionsCache = null;
+
 async function resolveUid(event, context) {
   // 1) 新架构：context.environment（JSON 字符串）里的 TCB_UUID
   try {
@@ -126,6 +129,7 @@ exports.main = async (event, context) => {
   const db = app.database();
   const notes = db.collection("notes");
   const likes = db.collection("noteLikes");
+  const commentLikes = db.collection("noteCommentLikes");
   const comments = db.collection("noteComments");
   const reports = db.collection("noteReports");
   const favorites = db.collection("noteFavorites");
@@ -137,6 +141,8 @@ exports.main = async (event, context) => {
   const feedbacks = db.collection("feedbacks");
   const admins = db.collection("admins");
   const verifications = db.collection("userVerifications");
+  const sutraDiscussions = db.collection("sutraDiscussions");
+  const topicBans = db.collection("topicBans");
 
   // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
   async function ensureUserAccounts() {
@@ -202,6 +208,33 @@ exports.main = async (event, context) => {
       await db.createCollection("userVerifications");
     } catch (e) {
       // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
+    }
+  }
+
+  // 确保 sutraDiscussions 集合存在。
+  async function ensureSutraDiscussions() {
+    try {
+      await db.createCollection("sutraDiscussions");
+    } catch (e) {
+      // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
+    }
+  }
+
+  // 确保 topicBans 集合存在（管理员删除的话题记录，用于全端隐藏与回收站恢复）。
+  async function ensureTopicBans() {
+    try {
+      await db.createCollection("topicBans");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 确保 noteCommentLikes 集合存在（评论点赞记录，首次使用自动创建）。
+  async function ensureCommentLikes() {
+    try {
+      await db.createCollection("noteCommentLikes");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
     }
   }
 
@@ -495,7 +528,13 @@ exports.main = async (event, context) => {
               )
             : arr;
 
-        // 热门排序：阅读量 + 点赞×3 + 评论×5 + 转发×8，依次排列。
+        // 热门排序：阅读量 + 点赞×3 + 评论×5 + 转发×8 除以时间衰减因子
+        // （ageHours + 2 的 1.3 次方），得分随帖子变老而衰减。
+        // 效果：新帖子有机会冲到顶部，老帖子需要持续互动才能保持高位，
+        // 避免热门榜永远被同一批帖子占满。
+        // 另加规则：我或我关注的用户评论（回复帖）过的帖子获得置顶加权，
+        // 加权值同样随该评论的新鲜程度衰减，不会长期霸榜；
+        // 这些回复帖本身也小幅加权，保证与父帖出现在同一页，头像连线得以展示。
         if (sort === "hot") {
           const all = [];
           let skip = 0;
@@ -506,14 +545,69 @@ exports.main = async (event, context) => {
             if (batch.length < 1000) break;
             skip += 1000;
           }
-          const scored = filterBlocked(all).map((n) => ({
-            ...n,
-            _hotScore:
+          const nowMs = Date.now();
+          // 我本人 + 我关注的用户发出的回复帖：{父帖id: 最新回复时间} 用于父帖置顶。
+          const parentBoostTime = new Map();
+          const myReplyIds = new Set();
+          if (uid) {
+            try {
+              const fr = await follows
+                .where({ followerId: uid })
+                .limit(1000)
+                .get();
+              const authors = fr.data
+                .map((r) => r.followeeId)
+                .filter(Boolean);
+              authors.push(uid); // 自己的评论同样置顶
+              for (let i = 0; i < authors.length; i += 100) {
+                const chunk = authors.slice(i, i + 100);
+                const rr = await notes
+                  .where({
+                    ownerUserId: _.in(chunk),
+                    repostOf: _.neq(""),
+                    visibility: "public",
+                    status: "normal",
+                  })
+                  .limit(1000)
+                  .get();
+                for (const rp of rr.data || []) {
+                  if (!rp.repostOf || !rp._id) continue;
+                  myReplyIds.add(rp._id);
+                  const t = rp.createdAt || 0;
+                  if (t > (parentBoostTime.get(rp.repostOf) || 0)) {
+                    parentBoostTime.set(rp.repostOf, t);
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+          // 置顶加权随评论时间衰减：刚评论时大幅置顶，约一天后基本消失。
+          const boostVal = (t) =>
+            t
+              ? 45 /
+                Math.pow(
+                  Math.max(0, (nowMs - t) / 3600000) + 2,
+                  1.3
+                )
+              : 0;
+          const scored = filterBlocked(all).map((n) => {
+            const ageHours =
+              Math.max(0, (nowMs - (n.createdAt || nowMs)) / 3600000);
+            const engagement =
               (n.viewCount || 0) +
               (n.likeCount || 0) * 3 +
               (n.commentCount || 0) * 5 +
-              (n.repostCount || 0) * 8,
-          }));
+              (n.repostCount || 0) * 8;
+            const base = (1 + engagement) / Math.pow(ageHours + 2, 1.3);
+            // 回复帖取半额加权，保证排在父帖下方；父帖取全额加权。
+            const boost = myReplyIds.has(n.id)
+              ? boostVal(n.createdAt || 0) * 0.5
+              : boostVal(parentBoostTime.get(n.id) || 0);
+            return {
+              ...n,
+              _hotScore: base + boost,
+            };
+          });
           scored.sort(
             (a, b) => b._hotScore - a._hotScore || (b.createdAt || 0) - (a.createdAt || 0)
           );
@@ -545,6 +639,163 @@ exports.main = async (event, context) => {
           total,
           hasMore: (page - 1) * pageSize + res.data.length < total,
         });
+      }
+
+      // ==================== 话题管理（管理员） ====================
+
+      // 删除话题：加入封禁表，客户端全端隐藏含该话题的帖子；可从回收站恢复。
+      case "deleteTopic": {
+        if (!uid || !(await isAdminUser(uid))) return fail("forbidden");
+        await ensureTopicBans();
+        const name = String(event.name || "").trim().slice(0, 30);
+        if (!name) return fail("bad_request");
+        const exists = await topicBans.where({ name }).limit(1).get();
+        if (!(exists.data && exists.data.length > 0)) {
+          await topicBans.add({ name, adminId: uid, createdAt: now() });
+        }
+        // 热门榜缓存立即失效：被删除的话题不能继续出现在热门榜。
+        hotDiscussionsCache = null;
+        return ok({ name });
+      }
+
+      // 恢复话题：从封禁表中移除，相关帖子自动重新可见。
+      case "restoreTopic": {
+        if (!uid || !(await isAdminUser(uid))) return fail("forbidden");
+        await ensureTopicBans();
+        const name = String(event.name || "").trim().slice(0, 30);
+        if (!name) return fail("bad_request");
+        const res = await topicBans.where({ name }).get();
+        for (const r of res.data || []) {
+          if (r._id) await topicBans.doc(r._id).remove();
+        }
+        // 热门榜缓存同步失效：恢复的话题重新参与热度统计。
+        hotDiscussionsCache = null;
+        return ok({ name });
+      }
+
+      // 获取全部被封禁的话题（含删除时间），供客户端隐藏与回收站展示。
+      case "getBannedTopics": {
+        await ensureTopicBans();
+        const res = await topicBans.orderBy("createdAt", "desc").limit(1000).get();
+        return ok({
+          topics: (res.data || []).map((r) => ({
+            name: String(r.name || ""),
+            createdAt: r.createdAt || 0,
+          })),
+        });
+      }
+
+      // 讨论页热门榜：聚合公开帖子中的 #话题 与 $经名 引用热度，
+      // 返回 top50 话题 + top50 经文（客户端卡片取前 3 + 当日轮换，「更多」页展示全榜）。
+      case "getHotDiscussions": {
+        const nowMs = Date.now();
+        // 15 分钟 TTL 缓存：避免每次请求都全表扫描。
+        if (hotDiscussionsCache && nowMs - hotDiscussionsCache.at < 15 * 60 * 1000) {
+          return ok({ ...hotDiscussionsCache.data, cached: true });
+        }
+        const topicRe = /#([^\s#，。！？,;:!?（）()]+)/g;
+        const sutraRe = /\$([^\s#$，。！？,;:!?（）()@]+)/g;
+        // 含数字的话题（如 #20240808、#第3天、#abc123）不入榜，避免污染榜单。
+        const noiseTopicRe = /\d/;
+        const topics = new Map();
+        const sutras = new Map();
+        // 管理员删除的话题不再进入热门榜。
+        let bannedTopics = new Set();
+        try {
+          await ensureTopicBans();
+          const br = await topicBans.limit(1000).get();
+          bannedTopics = new Set((br.data || []).map((r) => String(r.name || "")));
+        } catch (e) {}
+        // 滚动窗口只统计最近 14 天的公开帖子（更早的帖子完全不进入榜单），
+        // 避免热门话题/经文靠历史存量霸顶——必须持续有近期讨论才能保持上榜。
+        // 按最新在前扫描；因按 createdAt 倒序，一旦出现早于窗口的帖子即停止，
+        // 并设置扫描上限控制冷启动耗时。
+        const window = nowMs - 14 * 24 * 3600000;
+        const hotBase = notes.where({
+          visibility: "public",
+          status: "normal",
+          kind: _.neq("announcement"),
+        });
+        const cap = 3000;
+        let scanned = 0;
+        let done = false;
+        let skip = 0;
+        while (scanned < cap && !done) {
+          const r = await hotBase
+            .orderBy("createdAt", "desc")
+            .skip(skip)
+            .limit(1000)
+            .get();
+          const batch = r.data || [];
+          if (batch.length === 0) break;
+          for (const n of batch) {
+            if ((n.createdAt || 0) < window) {
+              done = true;
+              break;
+            }
+            if (++scanned > cap) break;
+            const ageHours = Math.max(0, (nowMs - (n.createdAt || nowMs)) / 3600000);
+            const engagement =
+              (n.viewCount || 0) +
+              (n.likeCount || 0) * 3 +
+              (n.commentCount || 0) * 5 +
+              (n.repostCount || 0) * 8;
+            const score = (1 + engagement) / Math.pow(ageHours + 2, 1.3);
+            const text = `${n.title || ""}\n${n.content || ""}`;
+            topicRe.lastIndex = 0;
+            const seenT = new Set();
+            let m;
+            while ((m = topicRe.exec(text)) !== null) {
+              const t = m[1];
+              if (t.length > 24 ||
+                  seenT.has(t) ||
+                  bannedTopics.has(t) ||
+                  noiseTopicRe.test(t)) {
+                continue;
+              }
+              seenT.add(t);
+              const cur = topics.get(t) || { score: 0, posts: 0, last: 0 };
+              cur.score += score;
+              cur.posts += 1;
+              if ((n.createdAt || 0) > cur.last) cur.last = n.createdAt || 0;
+              topics.set(t, cur);
+            }
+            sutraRe.lastIndex = 0;
+            const seenS = new Set();
+            while ((m = sutraRe.exec(text)) !== null) {
+              const s = m[1];
+              if (s.length > 24 || seenS.has(s)) continue;
+              seenS.add(s);
+              const cur = sutras.get(s) || { score: 0, posts: 0, last: 0 };
+              cur.score += score;
+              cur.posts += 1;
+              if ((n.createdAt || 0) > cur.last) cur.last = n.createdAt || 0;
+              sutras.set(s, cur);
+            }
+          }
+          if (batch.length < 1000 || scanned >= cap) break;
+          skip += 1000;
+        }
+        const sortBy = (a, b) => b[1].score - a[1].score || b[1].last - a[1].last;
+        const topTopics = [...topics.entries()]
+          .sort(sortBy)
+          .slice(0, 50)
+          .map(([name, v]) => ({
+            name,
+            posts: v.posts,
+            score: Math.round(v.score * 10) / 10,
+          }));
+        const topSutras = [...sutras.entries()]
+          .sort(sortBy)
+          .slice(0, 50)
+          .map(([name, v]) => ({
+            name,
+            posts: v.posts,
+            score: Math.round(v.score * 10) / 10,
+          }));
+        const data = { topics: topTopics, sutras: topSutras, updatedAt: nowMs };
+        hotDiscussionsCache = { at: nowMs, data };
+        return ok(data);
       }
 
       case "getNoteById": {
@@ -1093,6 +1344,7 @@ exports.main = async (event, context) => {
           authorId: uid,
           authorName: String(event.authorName || "同修").slice(0, 30),
           content,
+          likeCount: 0,
           createdAt: now(),
         });
         await notes.doc(noteId).update({
@@ -1163,7 +1415,7 @@ exports.main = async (event, context) => {
             createdAt: now(),
           });
         }
-        return ok({ comment: { _id: res.id, noteId, authorId: uid, authorName: actorName, content, createdAt: now() } });
+        return ok({ comment: { _id: res.id, noteId, authorId: uid, authorName: actorName, content, likeCount: 0, createdAt: now() } });
       }
 
       // ==================== 菩提空间：我的互动动态 ====================
@@ -1224,7 +1476,112 @@ exports.main = async (event, context) => {
           .skip((page - 1) * pageSize)
           .limit(pageSize)
           .get();
-        return ok({ comments: res.data });
+        const list = res.data || [];
+        // 附加当前用户对每条评论的点赞状态，供详情页恢复点亮状态。
+        if (uid && list.length > 0) {
+          try {
+            await ensureCommentLikes();
+            const ids = list.map((c) => c._id);
+            const { data: cl } = await commentLikes
+              .where({ userId: uid, commentId: _.in(ids) })
+              .limit(100)
+              .get();
+            const likedSet = new Set((cl || []).map((l) => l.commentId));
+            for (const c of list) c.liked = likedSet.has(c._id);
+          } catch (e) {}
+        }
+        return ok({ comments: list });
+      }
+
+      // 某帖子的回复帖列表（含所有层级的回复，最早在前）。
+      // 广场列表只展示自己/关注用户的回复，他人回复统一在本接口按帖聚合，供详情页成链展示。
+      case "getNoteReplies": {
+        const noteId = String(event.noteId || "");
+        if (!noteId) return fail("not_found");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 50, 100);
+        // 递归收集所有后代回复（含对回复的回复），按时间正序。
+        const collected = [];
+        const seen = new Set([noteId]);
+        let frontier = [noteId];
+        let level = 0;
+        while (frontier.length > 0 && level < 12) {
+          const next = [];
+          for (let i = 0; i < frontier.length; i += 10) {
+            const chunk = frontier.slice(i, i + 10);
+            const r = await notes
+              .where({
+                repostOf: _.in(chunk),
+                visibility: "public",
+                status: "normal",
+              })
+              .limit(1000)
+              .get();
+            for (const n of r.data || []) {
+              if (n._id && !seen.has(n._id)) {
+                seen.add(n._id);
+                collected.push(n);
+                next.push(n._id);
+              }
+            }
+          }
+          frontier = next;
+          level++;
+        }
+        collected.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        let blocked = [];
+        if (uid) {
+          const br = await blocks.where({ blockerId: uid }).limit(1000).get();
+          blocked = br.data.map((r) => r.blockedId);
+        }
+        const filterBlocked = (arr) =>
+          blocked.length
+            ? arr.filter(
+                (n) =>
+                  n.ownerUserId === uid ||
+                  (!blocked.includes(n.ownerUserId) &&
+                    !(
+                      n.repostSourceUserId &&
+                      blocked.includes(n.repostSourceUserId)
+                    ))
+              )
+            : arr;
+        const filtered = filterBlocked(collected);
+        const total = filtered.length;
+        const pageNotes = filtered.slice(
+          (page - 1) * pageSize,
+          (page - 1) * pageSize + pageSize
+        );
+        await attachAuthorAccounts(pageNotes);
+        await attachAuthorVerified(pageNotes);
+        await attachAuthorCanonProgress(pageNotes);
+        return ok({
+          notes: pageNotes,
+          total,
+          hasMore: (page - 1) * pageSize + pageNotes.length < total,
+        });
+      }
+
+      case "toggleCommentLike": {
+        if (!uid) return fail("unauthorized");
+        await ensureCommentLikes();
+        const commentId = String(event.commentId || "");
+        const { data } = await comments.doc(commentId).get();
+        const comment = data && data[0];
+        if (!comment) return fail("not_found");
+        const existing = await commentLikes
+          .where({ commentId, userId: uid })
+          .get();
+        let likeCount;
+        if (existing.data.length > 0) {
+          await commentLikes.doc(existing.data[0]._id).remove();
+          likeCount = Math.max(0, (comment.likeCount || 0) - 1);
+        } else {
+          await commentLikes.add({ commentId, userId: uid, createdAt: now() });
+          likeCount = (comment.likeCount || 0) + 1;
+        }
+        await comments.doc(commentId).update({ likeCount });
+        return ok({ likeCount, liked: existing.data.length === 0 });
       }
 
       // ==================== 消息中心 ====================
@@ -1362,6 +1719,66 @@ exports.main = async (event, context) => {
             commentCount: Math.max(0, (note.commentCount || 0) - 1),
           });
         }
+        return ok({});
+      }
+
+      // ==================== 经书讨论（跨用户共享） ====================
+
+      // 拉取某本经书的讨论（公开可读，最新在前）。
+      case "getSutraDiscussions": {
+        const sutraTitle = String(event.sutraTitle || "").trim().slice(0, 200);
+        if (!sutraTitle) return fail("bad_request");
+        await ensureSutraDiscussions();
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 50, 100);
+        const base = sutraDiscussions.where({ sutraTitle });
+        const res = await base
+          .orderBy("createdAt", "desc")
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        const { total } = await base.count();
+        await attachAuthorAccounts(res.data);
+        await attachAuthorVerified(res.data);
+        await attachAuthorCanonProgress(res.data);
+        return ok({
+          discussions: res.data,
+          total,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
+      }
+
+      // 发表经书讨论（需登录）。
+      case "createSutraDiscussion": {
+        if (!uid) return fail("unauthorized");
+        await ensureSutraDiscussions();
+        const sutraTitle = String(event.sutraTitle || "").trim().slice(0, 200);
+        const content = String(event.content || "").trim().slice(0, 500);
+        if (!sutraTitle) return fail("bad_request");
+        if (!content) return fail("empty_comment");
+        const createdAt = now();
+        const res = await sutraDiscussions.add({
+          sutraTitle,
+          ownerUserId: uid,
+          authorName: String(event.authorName || "同修").slice(0, 30),
+          content,
+          likeCount: 0,
+          createdAt,
+          updatedAt: createdAt,
+        });
+        return ok({ id: res.id, createdAt });
+      }
+
+      // 删除自己的经书讨论。
+      case "deleteSutraDiscussion": {
+        if (!uid) return fail("unauthorized");
+        const discussionId = String(event.discussionId || "");
+        if (!discussionId) return fail("bad_request");
+        const doc = sutraDiscussions.doc(discussionId);
+        const existing = await doc.get();
+        if (!existing.data || !existing.data._id) return fail("not_found");
+        if (existing.data.ownerUserId !== uid) return fail("forbidden");
+        await doc.remove();
         return ok({});
       }
 

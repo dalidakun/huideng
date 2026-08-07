@@ -253,7 +253,11 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
   /// 搜索话题：本地已创建话题 + 从广场笔记中提取的系统话题，按关键字过滤。
   /// 与 `$` 经文搜索同款逻辑：优先前缀匹配，其次包含匹配，最多返回 30 个。
+  /// 被管理员删除的话题、以及含数字的话题（如 #20240808、#第3天）不参与联想。
   Future<List<String>> _loadTopics(String query) async {
+    await CloudNotesService.instance.refreshBannedTopics();
+    final bans = CloudNotesService.instance.bannedTopicNames;
+    final noiseRe = RegExp(r'\d');
     final prefs = await SharedPreferences.getInstance();
     final topics = <String>{
       ...(prefs.getStringList('note_topics') ?? const <String>[]),
@@ -267,7 +271,9 @@ class _NoteEditPageState extends State<NoteEditPage> {
         for (final n in list) {
           for (final m in re.allMatches(n.content)) {
             final t = m.group(1)!.trim();
-            if (t.isNotEmpty) fetched.add(t);
+            if (t.isNotEmpty && !bans.contains(t) && !noiseRe.hasMatch(t)) {
+              fetched.add(t);
+            }
           }
         }
         _fetchedTopics = fetched.toList();
@@ -281,6 +287,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
     final prefix = <String>[];
     final contains = <String>[];
     for (final t in topics) {
+      if (bans.contains(t) || noiseRe.hasMatch(t)) continue;
       final lower = t.toLowerCase();
       if (q.isEmpty || lower.startsWith(q)) {
         prefix.add(t);

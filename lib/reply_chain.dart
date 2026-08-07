@@ -26,6 +26,10 @@ class ReplyChain extends StatelessWidget {
   final void Function(PlazaNote note)? onMore;
   final Set<String> pinnedIds;
   final Map<String, String> parentAccounts;
+
+  /// 点击回复节点时进入的原贴详情页 id：直接打开该帖笔记详情页，并把
+  /// 这条回复排到评论列表第一条。为空时保持原行为：打开该回复自己的详情页。
+  final String? detailNoteId;
   const ReplyChain({
     super.key,
     required this.replies,
@@ -35,6 +39,7 @@ class ReplyChain extends StatelessWidget {
     this.onMore,
     this.pinnedIds = const {},
     this.parentAccounts = const {},
+    this.detailNoteId,
   });
 
   String _time(int ms) {
@@ -139,6 +144,20 @@ class ReplyChain extends StatelessWidget {
     );
   }
 
+  /// 点击回复节点进入笔记详情：
+  /// 进入该帖（detailNoteId 指定）的笔记详情页，该回复排到评论列表第一条。
+  void _openDetail(BuildContext context, PlazaNote note) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NoteDetailPage(
+          noteId: detailNoteId ?? note.id,
+          scrollToReplyId: note.id,
+        ),
+      ),
+    );
+  }
+
   Widget _body(BuildContext context, PlazaNote note) {
     final content = NoteSutraLinks.plainText(note.content);
     final pinned = pinnedIds.contains(note.id);
@@ -229,23 +248,21 @@ class ReplyChain extends StatelessWidget {
           ),
         if (content.isNotEmpty) ...[
           const SizedBox(height: 4),
-          Text(content,
-              maxLines: 8,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
+          // 点击回复内容进入笔记详情：定位到该回复，上方为原贴。
+          InkWell(
+            onTap: () => _openDetail(context, note),
+            child: Text(content,
+                maxLines: 8,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 15, color: _text, height: 1.6)),
+          ),
         ],
         // 发布时间：内容与指标行之间。
         const SizedBox(height: 6),
         PostTimeLink(
           text: _time(note.createdAt),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => NoteDetailPage(
-                      noteId: note.id,
-                      scrollToReplyId: note.id,
-                    )),
-          ),
+          onTap: () => _openDetail(context, note),
         ),
         const SizedBox(height: 8),
         _metrics(note),

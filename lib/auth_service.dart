@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloudbase_flutter/cloudbase_flutter.dart';
@@ -127,6 +128,7 @@ class AuthService {
     final app = await _ensureApp();
     if (app == null) return null;
     try {
+      await ensureFreshSession();
       final res = await app.auth.getSession();
       if (!res.isSuccess) return null;
       final token = res.data?.session?.accessToken;
@@ -134,6 +136,50 @@ class AuthService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// 确保当前 access token 未过期：临近过期（<10 分钟）或无法确认时主动刷新。
+  ///
+  /// 背景：服务端登录/刷新响应只带 `expires_in`、不带 `expires_at`，
+  /// SDK 的 `_isTokenExpired` 在 `expiresAt == null` 时永远返回 false，
+  /// 因此 SDK 永远不会自动刷新；access token 2 小时过期后，任何请求都会
+  /// 收到 401 `unauthenticated`，SDK 会把会话直接从本地存储删除——
+  /// 这就是「第二天打开就需要重新登录」的根因。这里在 App 侧补上主动刷新。
+  ///
+  /// 返回是否持有可用会话。
+  Future<bool> ensureFreshSession() async {
+    final app = await _ensureApp();
+    if (app == null) return false;
+    try {
+      final res = await app.auth.getSession();
+      if (!res.isSuccess || res.data?.session == null) return false;
+      final session = res.data!.session!;
+      final exp = _tokenExpiry(session.accessToken);
+      if (exp != null && exp.difference(DateTime.now()).inSeconds > 600) {
+        return true;
+      }
+      // 已过期 / 无法解析过期时间：主动刷新一次（刷新令牌 31 天有效）。
+      final rr = await app.auth.refreshSession();
+      return rr.isSuccess;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 解析 access token（JWT）的 exp 过期时间；解析失败返回 null。
+  DateTime? _tokenExpiry(String? token) {
+    if (token == null || token.isEmpty) return null;
+    try {
+      final parts = token.split('.');
+      if (parts.length < 2) return null;
+      final payload =
+          jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
+      final exp = payload['exp'];
+      if (exp is int) {
+        return DateTime.fromMillisecondsSinceEpoch(exp * 1000);
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// 初始化并确保已配置环境，否则抛出用户可读错误。
@@ -190,6 +236,11 @@ class AuthService {
     await _loadLocalNickname();
     _cachedLogin = await _loadCachedLogin();
     try {
+      // 先主动刷新：SDK 不会自动刷新，若拿着昨天过期（2h）的 access token
+      // 直接调 getUser，服务端会回 401 unauthenticated 并被 SDK 清掉会话。
+      if (!await ensureFreshSession()) {
+        throw AuthException('session_expired', '会话失效');
+      }
       final res = await app.auth.getSession();
       if (!res.isSuccess) {
         throw AuthException(
@@ -235,7 +286,7 @@ class AuthService {
     await Future.delayed(const Duration(seconds: 4));
     try {
       final app = await _ensureApp();
-      if (app != null) {
+      if (app != null && await ensureFreshSession()) {
         final res = await app.auth.getSession();
         if (res.isSuccess && res.data?.user != null) {
           final user = res.data!.user!;
@@ -270,13 +321,13 @@ class AuthService {
   ///  - 已有会话（含匿名）：复用
   ///  - 否则：匿名登录，仅用于浏览公开内容（广场），不会改变 [currentUser]。
   Future<void> ensureAnonymousForBrowse() async {
-    if (isLoggedIn) return;
     // 启动时的会话恢复还在进行：等它结束再决定是否需要匿名会话，
     // 避免抢先匿名登录把本地已持久化的真实会话覆盖掉；
     // 也避免在真实会话恢复完成前就带着过期/无效 token 发请求。
+    // 注意：不按 [isLoggedIn] 提前返回——缓存身份兜底但真实会话已失效时，
+    // 也必须能建匿名会话，否则重新登录等云函数调用会因无 token 全部失败。
     if (!_restoreCompleted) {
       await restoreDone;
-      if (isLoggedIn) return;
     }
     final app = await _ensureApp();
     if (app == null) return;
@@ -295,6 +346,9 @@ class AuthService {
   /// 新手机号验证通过后会自动注册。
   Future<void> requestSmsCode(String phone) async {
     final app = await _requireApp();
+    // 尽力刷新：已登录但 access token 过期时，直接用旧 token 发验证码会 401
+    // 并把会话清掉。
+    await ensureFreshSession();
     final res = await app.auth.signInWithOtp(SignInWithOtpReq(phone: phone));
     _throwIfFailed(res);
     _pendingVerifyOtp = res.data?.verifyOtp;
@@ -310,6 +364,7 @@ class AuthService {
     }
     _pendingVerifyOtp = null;
     _pendingPhone = null;
+    await ensureFreshSession();
     final res = await verify(VerifyOtpParams(token: smsCode.trim()));
     _throwIfFailed(res);
     final user = res.data?.user;
@@ -332,6 +387,7 @@ class AuthService {
       await prefs.setString('user_tagline', tagline);
     }
     if (nickname != null && nickname.isNotEmpty && app != null) {
+      await ensureFreshSession();
       _localNickname = nickname;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_nickname', nickname);
@@ -519,6 +575,7 @@ class AuthService {
   /// 注意：换绑前后是同一个账号，云端笔记等数据自动保留，无需迁移。
   Future<void> requestPhoneChange(String newPhone) async {
     final app = await _requireApp();
+    await ensureFreshSession();
     final res = await app.auth.updateUser(UpdateUserReq(phone: newPhone));
     if (!res.isSuccess) {
       throw AuthException(
@@ -540,6 +597,7 @@ class AuthService {
       throw AuthException('no_pending_otp', '请先获取验证码');
     }
     _pendingPhoneChangeVerify = null;
+    await ensureFreshSession();
     final res = await verify(UpdateUserVerifyParams(token: smsCode.trim()));
     if (!res.isSuccess) {
       throw AuthException(
@@ -568,6 +626,7 @@ class AuthService {
     final app = _app;
     if (app == null) return;
     try {
+      await ensureFreshSession();
       final res = await app.auth.updateUser(UpdateUserReq(nickname: '同修$tail'));
       if (!res.isSuccess) return;
       final u = res.data?.user;

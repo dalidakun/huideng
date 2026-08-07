@@ -24,6 +24,8 @@ import 'user_space_page.dart';
 import 'text_input_sheet.dart';
 import 'note_edit_page.dart';
 import 'note_sutra_links.dart';
+import 'hot_discussion_list_page.dart';
+import 'post_rich_content.dart';
 import 'reading_time_service.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -38,8 +40,8 @@ const Color _border = Color(0xFFEBE1D6);
 const Color _overlay = Color(0xFFFFF5EC);
 
 const Map<String, String> _plazaTabMeta = {
-  'latest': '最新',
-  'hot': '推荐',
+  'hot': '发现',
+  'discuss': '讨论',
   'follow': '关注',
   'announce': '公告',
 };
@@ -117,7 +119,7 @@ class StudyHubPageState extends State<StudyHubPage>
   List<Map<String, dynamic>> _checkInTypesList = [];
   bool _loaded = false;
   int _tabIndex = 0;
-  List<String> _plazaTabs = ['latest', 'hot', 'follow', 'announce'];
+  List<String> _plazaTabs = ['hot', 'discuss', 'follow', 'announce'];
   final Map<String, _PlazaFeedCache> _tabCaches = {};
   final List<PlazaNote> _feedNotes = [];
   final Set<String> _followedIds = {};
@@ -135,11 +137,20 @@ class StudyHubPageState extends State<StudyHubPage>
   bool _feedInitial = true;
   bool _feedLoading = false;
   bool _feedError = false;
+  /// 点击「显示X条新帖子」后当前栏目切到「最新优先」视图：新帖从列表第一条开始展示。
+  /// 推荐栏默认按热度排序，切到最新视图后新帖不会被旧热帖压住；切走栏目或下拉刷新后恢复默认。
+  bool _feedNewestFirst = false;
   List<AnnouncementItem> _announcements = [];
   bool _announceLoading = false;
   bool _announceError = false;
   static const int _feedPageSize = 20;
-  /// 「最新/最热」新帖提醒：后台静默统计新帖数量，只更新「X条新帖子」提醒条，
+  /// 讨论栏目顶部的热门话题 / 热门经文（云端聚合，客户端取 3 个做当日轮换）。
+  List<HotDiscussionItem> _hotTopics = [];
+  List<HotDiscussionItem> _hotSutras = [];
+  /// 全量热门榜（top50）：供「更多」页展示完整的经文/话题热度排行。
+  List<HotDiscussionItem> _hotTopicAll = [];
+  List<HotDiscussionItem> _hotSutraAll = [];
+  /// 「发现/关注」新帖提醒：后台静默统计新帖数量，只更新「X条新帖子」提醒条，
   /// 不自动刷新列表，点击提醒或下拉才手动刷出，避免浏览时被打断。
   Timer? _newPostTimer;
   bool _newPostChecking = false;
@@ -160,6 +171,31 @@ class StudyHubPageState extends State<StudyHubPage>
 
   static const _commentIcon = AssetImage('assets/images/ic_comment.png');
   static const _viewIcon = AssetImage('assets/images/ic_view.png');
+
+  /// 「讨论」栏目的判定：正文含 #话题 或 $经名 的帖子即视为讨论。
+  static final RegExp _discussTopicRe = RegExp(r'#([^\s#，。！？,;:!?（）()]+)');
+  static final RegExp _discussSutraRe =
+      RegExp(r'\$([^\s#$，。！？,;:!?（）()@]+)');
+
+  static bool _isDiscussionNote(PlazaNote n) {
+    final text = '${n.title}\n${n.content}';
+    return _discussTopicRe.hasMatch(text) || _discussSutraRe.hasMatch(text);
+  }
+
+  /// 正文是否包含被管理员删除的话题（#话题 精确到词边界，避免「#打坐」误伤「#打坐中」）。
+  static bool _isBannedNote(PlazaNote n) {
+    final bans = CloudNotesService.instance.bannedTopicNames;
+    if (bans.isEmpty) return false;
+    final text = '${n.title}\n${n.content}';
+    for (final b in bans) {
+      if (b.isEmpty) continue;
+      if (RegExp('#${RegExp.escape(b)}(?=[\\s#，。！？,;:!?（）()]|\$)')
+          .hasMatch(text)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   @override
   void initState() {
@@ -268,7 +304,7 @@ class StudyHubPageState extends State<StudyHubPage>
     final read = await _isCurrentRead(title);
     final mvBases = await _loadMultiVolumeBases();
 
-    var plazaTabs = <String>['latest', 'hot', 'follow', 'announce'];
+    var plazaTabs = <String>['hot', 'discuss', 'follow', 'announce'];
     final tabOrderRaw = prefs.getString('plaza_tab_order');
     if (tabOrderRaw != null && tabOrderRaw.isNotEmpty) {
       try {
@@ -276,8 +312,7 @@ class StudyHubPageState extends State<StudyHubPage>
         final valid = <String>[];
         for (final k in saved) {
           if (k == 'discover') {
-            // 旧“发现”栏目拆分为“最新 / 最热”。
-            if (!valid.contains('latest')) valid.add('latest');
+            // 旧“发现”栏目并入「发现」，历史保存里残留的 latest 一律不再展示。
             if (!valid.contains('hot')) valid.add('hot');
           } else if (_plazaTabMeta.containsKey(k) && !valid.contains(k)) {
             valid.add(k);
@@ -288,6 +323,30 @@ class StudyHubPageState extends State<StudyHubPage>
         }
         plazaTabs = valid;
       } catch (_) {}
+    }
+    // v2 一次性迁移：把「关注」移到「发现」之后紧挨着（老用户已有排序时生效，
+    // 迁移完成后持久化新顺序，之后尊重用户手动排序）。
+    if (!(prefs.getBool('plaza_tab_order_v2') ?? false)) {
+      final order = List<String>.from(plazaTabs);
+      final hotIdx = order.indexOf('hot');
+      final followIdx = order.indexOf('follow');
+      if (hotIdx >= 0 && followIdx >= 0) {
+        order.removeAt(followIdx);
+        order.insert(order.indexOf('hot') + 1, 'follow');
+        plazaTabs = order;
+      }
+      await prefs.setBool('plaza_tab_order_v2', true);
+      await prefs.setString('plaza_tab_order', jsonEncode(plazaTabs));
+    }
+    // 新栏目「讨论」：老用户保存的排序里没有它，统一插到「推荐」之后（在 v2 迁移后执行，
+    // 避免被关注栏目的挪位覆盖）。
+    if (!plazaTabs.contains('discuss')) {
+      final hotIdx = plazaTabs.indexOf('hot');
+      if (hotIdx >= 0) {
+        plazaTabs.insert(hotIdx + 1, 'discuss');
+      } else {
+        plazaTabs.add('discuss');
+      }
     }
 
     setState(() {
@@ -685,11 +744,17 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 拉取一页广场笔记并过滤掉被屏蔽用户的帖子；若整页均被屏蔽且还有更多，自动续取下一页（最多 4 页）。
+  /// [filter] 非空时只保留满足条件的笔记（讨论栏目：含 #话题 或 $经名），
+  /// [maxPages] 限制最多翻页数，避免内容稀疏时请求过多。
   /// 返回（可见笔记, 下一页页码, 是否还有更多）。
   Future<(List<PlazaNote>, int, bool)> _fetchFilteredFeed(
-      int page, String sort) async {
+    int page,
+    String sort, {
+    bool Function(PlazaNote)? filter,
+    int maxPages = 4,
+  }) async {
     final blocked = CloudNotesService.instance.blockedUserIds;
-    if (blocked.isEmpty) {
+    if (blocked.isEmpty && filter == null) {
       final (list, more) = await CloudNotesService.instance
           .getPlazaNotes(page: page, pageSize: _feedPageSize, sort: sort);
       return (list, page + 1, more);
@@ -697,11 +762,13 @@ class StudyHubPageState extends State<StudyHubPage>
     final collected = <PlazaNote>[];
     var cur = page;
     var hasMore = true;
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < maxPages; i++) {
       final (list, more) = await CloudNotesService.instance
           .getPlazaNotes(page: cur, pageSize: _feedPageSize, sort: sort);
       for (final n in list) {
-        if (!_isBlockedContent(n)) collected.add(n);
+        if (filter != null && !filter(n)) continue;
+        if (_isBannedNote(n)) continue;
+        if (blocked.isEmpty || !_isBlockedContent(n)) collected.add(n);
       }
       hasMore = more;
       cur++;
@@ -710,12 +777,15 @@ class StudyHubPageState extends State<StudyHubPage>
     return (collected, cur, hasMore);
   }
 
-  /// 加载当前 tab 的笔记流。最新：按发布时间倒序（最新分享的在前）。
-  /// 最热：按自定义热门规则（阅读/点赞/评论/转发）倒序。关注：仅展示已关注同修的笔记。
-  /// 公告：暂为占位 UI。
-  Future<void> _loadFeed() async {
+  /// 加载当前 tab 的笔记流。发现：热度 + 时间衰减排序。
+  /// [newestFirst] 为 true 时（点击「显示X条新帖子」），推荐栏也切到最新优先，
+  /// 让新帖直接排在列表顶部，而不是被旧热帖压住。
+  /// 关注：仅展示已关注同修的笔记。
+  /// 公告：展示公告列表。
+  Future<void> _loadFeed({bool newestFirst = false}) async {
     await CloudNotesService.instance.refreshLikedNoteIds();
     await CloudNotesService.instance.refreshFollowStates();
+    await CloudNotesService.instance.refreshBannedTopics();
     await NoteSutraCatalog.load(); // 确保经书目录已缓存，提取 @经书 时可用
     _timeCache.clear();
     _plainTextCache.clear();
@@ -730,13 +800,28 @@ class StudyHubPageState extends State<StudyHubPage>
       _feedPage = 1;
       _feedHasMore = true;
       _feedLoading = false;
+      _feedNewestFirst = newestFirst;
       _setNewPostCount(0);
     });
     _updateNewPostPill();
     try {
       if (tab == 'latest' || tab == 'hot') {
-        final sort = tab == 'hot' ? 'hot' : 'latest';
+        final sort = (tab == 'hot' && !newestFirst) ? 'hot' : 'latest';
         final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+        if (mounted) {
+          setState(() {
+            _feedNotes.addAll(list);
+            _feedVersion++;
+            _feedPage = nextPage;
+            _feedHasMore = hasMore;
+            _feedInitial = false;
+          });
+        }
+      } else if (tab == 'discuss') {
+        // 讨论：最新的「带 #话题 或 $经名」帖子 + 顶部热门榜（并行加载）。
+        unawaited(_loadHotDiscussions());
+        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
+            filter: _isDiscussionNote, maxPages: 8);
         if (mounted) {
           setState(() {
             _feedNotes.addAll(list);
@@ -795,6 +880,54 @@ class StudyHubPageState extends State<StudyHubPage>
   _PlazaFeedCache _cacheFor(String tab) =>
       _tabCaches.putIfAbsent(tab, _PlazaFeedCache.new);
 
+  /// 拉取讨论栏目的热门话题 / 热门经文（云端聚合 top50，卡片各取 3 个做当日轮换）。
+  /// 轮换规则：前 3 名按当天日期确定性取 2 个 + 第 4~10 名取 1 个，
+  /// 当天内稳定、跨天变化，避免永远同一批。经文名需命中经书目录才展示。
+  Future<void> _loadHotDiscussions() async {
+    try {
+      await NoteSutraCatalog.load(); // 确保经书目录就绪，过滤有效经名
+      final (topics, sutras) =
+          await CloudNotesService.instance.getHotDiscussions();
+      final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
+      final now = DateTime.now();
+      final daySeed = now.year * 10000 + now.month * 100 + now.day;
+      final validSutras =
+          sutras.where((s) => titleMap.containsKey(s.name)).toList();
+      // 已被管理员删除的话题直接剔除，确保热门卡片/「更多」榜都不再展示。
+      final bans = CloudNotesService.instance.bannedTopicNames;
+      final validTopics = bans.isEmpty
+          ? topics
+          : topics.where((t) => !bans.contains(t.name)).toList();
+      if (!mounted) return;
+      setState(() {
+        // 卡片只在前 10 名里做当日轮换，全量榜留给「更多」页。
+        _hotTopics = _pickHotThree(validTopics.take(10).toList(), daySeed);
+        _hotSutras = _pickHotThree(validSutras.take(10).toList(), daySeed);
+        _hotTopicAll = validTopics;
+        _hotSutraAll = validSutras;
+      });
+    } catch (_) {
+      // 热门榜失败静默降级：只展示最新讨论列表。
+    }
+  }
+
+  /// 当日确定性轮换：前 3 名取 2 个（按 seed 决定少展示哪个）+ 第 4~10 名取 1 个；
+  /// 总量不足 3 个时全部展示，避免「有 1 个却显示没有」。
+  static List<T> _pickHotThree<T>(List<T> list, int daySeed) {
+    if (list.isEmpty) return const [];
+    if (list.length <= 3) return List.of(list);
+    final first = list.sublist(0, 3);
+    final rest = list.sublist(3);
+    final picked = <T>[];
+    final skipIdx = daySeed % first.length;
+    for (var i = 0; i < first.length; i++) {
+      if (i == skipIdx) continue;
+      picked.add(first[i]);
+    }
+    picked.add(rest[daySeed % rest.length]);
+    return picked;
+  }
+
   /// 把当前正在展示的栏目内容快照进缓存，供切换栏目后恢复。
   void _saveFeedToCache(String tab) {
     final c = _cacheFor(tab);
@@ -808,12 +941,9 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 把某栏目的缓存内容恢复到当前展示状态（不触发网络请求）。
   void _restoreFeedFromCache(String tab) {
     final c = _cacheFor(tab);
-    final blocked = CloudNotesService.instance.blockedUserIds;
     _feedNotes
       ..clear()
-      ..addAll(blocked.isEmpty
-          ? c.notes
-          : c.notes.where((n) => !_isBlockedContent(n)));
+      ..addAll(c.notes.where((n) => !_isBlockedContent(n) && !_isBannedNote(n)));
     _feedPage = c.page;
     _feedHasMore = c.hasMore;
     _feedInitial = c.initial;
@@ -832,15 +962,30 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 后台静默统计当前栏目新帖数量：只更新「X条新帖子」提醒，不刷新列表。
+  /// 发现：按热度规则倒序；讨论：最新的带 #话题 或 $经名 帖子；关注：仅统计已关注同修的新帖。
   Future<void> _checkNewPosts() async {
     if (!mounted || !_appActive || _newPostChecking) return;
     final tab = _plazaTabs[_tabIndex];
-    if (tab != 'latest' && tab != 'hot') return;
+    if (tab == 'announce') return;
     if (_feedNotes.isEmpty || _feedInitial || _feedLoading) return;
     _newPostChecking = true;
     try {
-      final sort = tab == 'hot' ? 'hot' : 'latest';
-      final (list, _, _) = await _fetchFilteredFeed(1, sort);
+      final List<PlazaNote> list;
+      if (tab == 'latest' || tab == 'hot') {
+        // 最新优先视图下按最新统计新帖，与列表顶部的排序一致。
+        final sort = (tab == 'hot' && !_feedNewestFirst) ? 'hot' : 'latest';
+        final (first, _, _) = await _fetchFilteredFeed(1, sort);
+        list = first;
+      } else if (tab == 'discuss') {
+        // 讨论：只需看最近 1~2 页（最新排序）里新增的讨论帖。
+        final (first, _, _) = await _fetchFilteredFeed(1, 'latest',
+            filter: _isDiscussionNote, maxPages: 2);
+        list = first;
+      } else if (tab == 'follow') {
+        list = await _fetchFollowFeedPreview();
+      } else {
+        return;
+      }
       if (!mounted) return;
       final known = _feedNotes.map((n) => n.id).toSet();
       final count = list.where((n) => !known.contains(n.id)).length;
@@ -855,6 +1000,35 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
+  /// 关注栏目前瞻拉取：分页拉取公开笔记并筛选出已关注同修的作品，用于统计新帖。
+  /// 与 _loadFollowingNotes 相同口径（最多 10 页凑够一屏），但不改动界面数据。
+  Future<List<PlazaNote>> _fetchFollowFeedPreview() async {
+    final ids = CloudNotesService.instance.followingUserIds;
+    if (ids.isEmpty) return const [];
+    final all = <PlazaNote>[];
+    final seen = <String>{};
+    var page = 1;
+    var hasMore = true;
+    const maxPages = 10;
+    const minCollect = _feedPageSize;
+    while (hasMore && page <= maxPages && all.length < minCollect) {
+      final (list, more) = await CloudNotesService.instance
+          .getPlazaNotes(page: page, pageSize: _feedPageSize);
+      for (final n in list) {
+        if (ids.contains(n.ownerUserId) &&
+            !_isBlockedContent(n) &&
+            !_isBannedNote(n) &&
+            seen.add(n.id)) {
+          all.add(n);
+        }
+      }
+      hasMore = more;
+      page++;
+      if (all.length >= minCollect) break;
+    }
+    return all;
+  }
+
   /// 计算悬浮「显示X帖子」按钮是否可见：有新帖且已滚动到顶部提醒条被隐藏。
   void _updateNewPostPill() {
     final show = _newPostCount > 0 &&
@@ -866,13 +1040,13 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 点击悬浮按钮：回到帖子顶部，同时刷新出新帖。
+  /// 点击悬浮按钮：回到帖子顶部，同时以最新优先刷出新帖（新帖直接排在顶部）。
   Future<void> _refreshFromPill() async {
     if (_feedScroll.hasClients) {
       await _feedScroll.animateTo(0,
           duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
     }
-    _loadFeed();
+    _loadFeed(newestFirst: true);
   }
 
   /// 后台预取指定栏目的最新数据，直接写入缓存；若用户正好在该栏目则同步到界面。
@@ -881,7 +1055,11 @@ class StudyHubPageState extends State<StudyHubPage>
     final c = _cacheFor(tab);
     try {
       if (tab == 'latest' || tab == 'hot') {
-        final sort = tab == 'hot' ? 'hot' : 'latest';
+        // 用户正停留在最新优先视图时，后台刷新也保持最新排序，避免新帖被旧热帖顶掉。
+        final keepNewest = tab == 'hot' &&
+            _feedNewestFirst &&
+            _plazaTabs[_tabIndex] == tab;
+        final sort = (tab == 'hot' && !keepNewest) ? 'hot' : 'latest';
         final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
         if (!mounted) return;
         c.notes = list;
@@ -889,12 +1067,18 @@ class StudyHubPageState extends State<StudyHubPage>
         c.hasMore = hasMore;
         c.initial = false;
         c.error = false;
+      } else if (tab == 'discuss') {
+        unawaited(_loadHotDiscussions());
+        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
+            filter: _isDiscussionNote, maxPages: 8);
+        if (!mounted) return;
+        c.notes = list;
+        c.page = nextPage;
+        c.hasMore = hasMore;
+        c.initial = false;
+        c.error = false;
       } else {
-        final prefs = await SharedPreferences.getInstance();
-        final raw = prefs.getString('followed_user_ids') ?? '';
-        final ids = raw.isEmpty
-            ? <String>{}
-            : raw.split(',').where((s) => s.isNotEmpty).toSet();
+        final ids = CloudNotesService.instance.followingUserIds;
         final all = <PlazaNote>[];
         final seen = <String>{};
         var page = 1;
@@ -905,6 +1089,7 @@ class StudyHubPageState extends State<StudyHubPage>
           for (final n in list) {
             if (ids.contains(n.ownerUserId) &&
                 !_isBlockedContent(n) &&
+                !_isBannedNote(n) &&
                 seen.add(n.id)) {
               all.add(n);
             }
@@ -937,15 +1122,10 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Future<void> _loadFollowedIds() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('followed_user_ids') ?? '';
-    final ids = raw.isEmpty
-        ? <String>{}
-        : raw.split(',').where((s) => s.isNotEmpty).toSet();
     if (!mounted) return;
     setState(() => _followedIds
       ..clear()
-      ..addAll(ids));
+      ..addAll(CloudNotesService.instance.followingUserIds));
   }
 
   /// 关注 tab：拉取公开笔记并筛选出关注同修的作品。
@@ -965,6 +1145,7 @@ class StudyHubPageState extends State<StudyHubPage>
         for (final n in list) {
           if (_followedIds.contains(n.ownerUserId) &&
               !_isBlockedContent(n) &&
+              !_isBannedNote(n) &&
               seen.add(n.id)) {
             all.add(n);
           }
@@ -993,7 +1174,7 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Future<void> _loadMoreFeed() async {
     final tab = _plazaTabs[_tabIndex];
-    if ((tab != 'latest' && tab != 'hot') ||
+    if ((tab != 'latest' && tab != 'hot' && tab != 'discuss') ||
         _feedLoading ||
         !_feedHasMore ||
         _feedInitial) {
@@ -1001,9 +1182,14 @@ class StudyHubPageState extends State<StudyHubPage>
     }
     setState(() => _feedLoading = true);
     try {
-      final sort = tab == 'hot' ? 'hot' : 'latest';
-      final (list, nextPage, hasMore) =
-          await _fetchFilteredFeed(_feedPage, sort);
+      // 最新优先视图下继续按最新拉取，与顶部新帖保持一致排序。
+      final sort = (tab == 'hot' && !_feedNewestFirst) ? 'hot' : 'latest';
+      final (list, nextPage, hasMore) = await _fetchFilteredFeed(
+        _feedPage,
+        sort,
+        filter: tab == 'discuss' ? _isDiscussionNote : null,
+        maxPages: tab == 'discuss' ? 8 : 4,
+      );
       if (!mounted) return;
       setState(() {
         _feedNotes.addAll(list);
@@ -1024,6 +1210,7 @@ class StudyHubPageState extends State<StudyHubPage>
     _saveFeedToCache(prevTab);
     setState(() {
       _tabIndex = i;
+      _feedNewestFirst = false;
       _setNewPostCount(0);
       _restoreFeedFromCache(_plazaTabs[i]);
     });
@@ -1476,12 +1663,15 @@ class StudyHubPageState extends State<StudyHubPage>
                       size: 16, color: const Color(0xFF71867A)),
                 ),
                 const SizedBox(width: 10),
-                const Text('精读经文',
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: _text)),
-                const Spacer(),
+                const Expanded(
+                  child: Text('精读经文',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: _text)),
+                ),
                 if (_currentTitle != null) ...[
                   GestureDetector(
                     onTap: _toggleLock,
@@ -1568,34 +1758,49 @@ class StudyHubPageState extends State<StudyHubPage>
             ),
             const SizedBox(height: 4),
             Padding(
+              // 左内边距 10 + 徽章内边距 10 = 时钟图标正好落在 x=20，
+              // 与上方进度条/卡片左侧图标起始位置对齐。
               padding: const EdgeInsets.fromLTRB(10, 0, 20, 0),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  // 读经时长徽章：今日读经靠左（时钟图标与进度条起点对齐），
+                  // 累积读经向右移动但保留固定间距，不贴卡片右缘，
+                  // 时间文字始终完整显示；空间不足时自动换行。
+                  Wrap(
+                    alignment: WrapAlignment.start,
+                    spacing: 30,
+                    runSpacing: 8,
                     children: [
                       ValueListenableBuilder<int>(
-                        valueListenable: ReadingTimeService.instance.todaySeconds,
+                        valueListenable:
+                            ReadingTimeService.instance.todaySeconds,
                         builder: (context, sec, _) => _buildTimeBadge(
-                            Icons.timer_outlined, '今日读经${_formatReadTime(sec)}'),
+                            Icons.timer_outlined,
+                            '今日读经${_formatReadTime(sec)}'),
                       ),
-                      const SizedBox(width: 45),
                       ValueListenableBuilder<int>(
-                        valueListenable: ReadingTimeService.instance.totalSeconds,
+                        valueListenable:
+                            ReadingTimeService.instance.totalSeconds,
                         builder: (context, sec, _) => _buildTimeBadge(
                             Icons.history, '累积读经${_formatReadTime(sec)}'),
                       ),
                     ],
                   ),
-                  TextButton(
-                    onPressed: _showRecentSutras,
-                    style: TextButton.styleFrom(
-                        foregroundColor: _textSec,
-                        padding: const EdgeInsets.only(
-                            left: 4, right: 4, top: 0, bottom: 0),
-                        minimumSize: const Size(0, 26),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                    child: const Text('最近阅读 ›', style: TextStyle(fontSize: 13)),
+                  // 「最近阅读」入口：换行显示在右下角。
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: _showRecentSutras,
+                      style: TextButton.styleFrom(
+                          foregroundColor: _textSec,
+                          padding: const EdgeInsets.only(
+                              left: 4, right: 4, top: 0, bottom: 0),
+                          minimumSize: const Size(0, 26),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      child: const Text('最近阅读 ›',
+                          style: TextStyle(fontSize: 13)),
+                    ),
                   ),
                 ],
               ),
@@ -1687,14 +1892,13 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 读经时长格式化：不足 1 分钟显示秒，否则按 小时/分钟 计算（每 60 分钟进位 1 小时，不计天/月/周/年）。
+  /// 读经时长格式化：不足 1 分钟显示秒，否则统一「x时x分」短格式
+  /// （如 0时5分、2时15分），让今日/累积两枚徽章与「最近阅读」同行展示不换行。
   String _formatReadTime(int seconds) {
     if (seconds < 60) return '$seconds秒';
-    final minutes = seconds ~/ 60;
-    final hours = minutes ~/ 60;
-    final rem = minutes % 60;
-    if (hours == 0) return '$minutes分钟';
-    return rem > 0 ? '$hours小时$rem分钟' : '$hours小时';
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    return '$hours时$minutes分';
   }
 
   Widget _buildCheckInCard() {
@@ -1800,7 +2004,8 @@ class StudyHubPageState extends State<StudyHubPage>
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          // 与精读经文卡「累积读经」一行到「最近阅读」的间距一致（紧贴）。
+          const SizedBox(height: 0),
           Padding(
             padding: const EdgeInsets.only(left: 20),
             child: Row(
@@ -1851,6 +2056,8 @@ class StudyHubPageState extends State<StudyHubPage>
     if (tab == 'announce') {
       return _buildAnnounceSlivers(viewportH);
     }
+    // 讨论栏目的顶部热门卡片：置于笔记流最上方。
+    final hotCard = tab == 'discuss' ? _buildHotCardSliver() : null;
     final feedGroups = _feedGroups;
     final hasNotes = feedGroups.isNotEmpty;
     final minFeed = math.max(0.0, viewportH - _headerHeight());
@@ -1858,6 +2065,7 @@ class StudyHubPageState extends State<StudyHubPage>
     if (!hasNotes) {
       if (_feedInitial || _feedLoading) {
         return [
+          if (hotCard != null) hotCard,
           SliverFillRemaining(
             hasScrollBody: false,
             child: Center(
@@ -1873,6 +2081,7 @@ class StudyHubPageState extends State<StudyHubPage>
       }
       if (_feedError) {
         return [
+          if (hotCard != null) hotCard,
           SliverFillRemaining(
             hasScrollBody: false,
             child: Center(
@@ -1885,6 +2094,7 @@ class StudyHubPageState extends State<StudyHubPage>
         ];
       }
       return [
+        if (hotCard != null) hotCard,
         SliverFillRemaining(
           hasScrollBody: false,
           child: Center(
@@ -1903,6 +2113,7 @@ class StudyHubPageState extends State<StudyHubPage>
     final feedEstimate = feedLen * 110.0 + (showFooter ? 70.0 : 0.0);
     final spacerH = math.max(0.0, minFeed - feedEstimate);
     return [
+      if (hotCard != null) hotCard,
       if (_newPostCount > 0)
         SliverToBoxAdapter(child: _buildNewPostBanner()),
       SliverPadding(
@@ -1942,12 +2153,12 @@ class StudyHubPageState extends State<StudyHubPage>
     ];
   }
 
-  /// 「最新/最热」栏目顶部的新帖提醒：仅一行文字，点击立即刷新出这些新帖。
+  /// 「发现/关注/讨论」栏目顶部的新帖提醒：仅一行文字，点击立即以最新优先刷出新帖。
   Widget _buildNewPostBanner() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
       child: InkWell(
-        onTap: _loadFeed,
+        onTap: () => _loadFeed(newestFirst: true),
         child: Text(
           '显示$_newPostCount帖子',
           textAlign: TextAlign.center,
@@ -2028,20 +2239,28 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Widget _buildFeedEmpty() {
     final isFollowing = _plazaTabs[_tabIndex] == 'follow';
+    final isDiscuss = _plazaTabs[_tabIndex] == 'discuss';
     final notLoggedIn = !AuthService.instance.isLoggedIn;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.auto_awesome_outlined, size: 52, color: _textHint),
+        Icon(isDiscuss ? Icons.forum_outlined : Icons.auto_awesome_outlined,
+            size: 52, color: _textHint),
         const SizedBox(height: 14),
         Text(
-          isFollowing ? (notLoggedIn ? '登录后关注同修' : '还没有关注同修') : '菩提空间还没有笔记',
+          isDiscuss
+              ? '还没有讨论'
+              : (isFollowing
+                  ? (notLoggedIn ? '登录后关注同修' : '还没有关注同修')
+                  : '菩提空间还没有笔记'),
           style: const TextStyle(
               fontSize: 16, fontWeight: FontWeight.w600, color: _text),
         ),
         const SizedBox(height: 6),
         Text(
-          isFollowing ? '关注同修后，这里会显示他们的新笔记' : '分享你的修学心得，让大家一起受益',
+          isDiscuss
+              ? '发布带 #话题 或 \$经名 的帖子，就会出现在这里'
+              : (isFollowing ? '关注同修后，这里会显示他们的新笔记' : '分享你的修学心得，让大家一起受益'),
           style: const TextStyle(fontSize: 13, color: _textSec),
         ),
         const SizedBox(height: 18),
@@ -2121,6 +2340,188 @@ class StudyHubPageState extends State<StudyHubPage>
         ),
       ),
     ];
+  }
+
+  /// 讨论栏目顶部的热门卡片：热门经文 / 热门话题两区，各 4 个可点击胶囊 + 更多入口。
+  /// 数据未就绪（加载中/失败）时返回 null 不渲染，避免占位闪烁。
+  Widget? _buildHotCardSliver() {
+    if (_hotTopics.isEmpty && _hotSutras.isEmpty) return null;
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _overlay,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _border),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 热门经文：绿色系（与「经书讨论」入口同色调），一行横滑 + 末尾更多入口。
+              _hotSectionLabel(
+                Icons.menu_book_rounded,
+                const Color(0xFF71867A),
+                '热门经文',
+                count: _hotSutraAll.isEmpty ? '' : '${_hotSutraAll.length} 部',
+              ),
+              const SizedBox(height: 9),
+              _buildHotChips(
+                _hotSutras,
+                isSutra: true,
+                onMore: _hotSutraAll.isEmpty
+                    ? null
+                    : () => _openHotListPage(
+                        isSutra: true, title: '热门经文讨论'),
+              ),
+              const SizedBox(height: 16),
+              // 热门话题：金色系（与 #话题 链接同色调）。
+              _hotSectionLabel(
+                Icons.local_fire_department_outlined,
+                const Color(0xFF9A6B3F),
+                '热门话题',
+                count: _hotTopicAll.isEmpty ? '' : '${_hotTopicAll.length} 个',
+              ),
+              const SizedBox(height: 9),
+              _buildHotChips(
+                _hotTopics,
+                isSutra: false,
+                onMore: _hotTopicAll.isEmpty
+                    ? null
+                    : () => _openHotListPage(
+                        isSutra: false, title: '热门话题讨论'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 热门区小节标题：小图标 + 标题 + 右侧总数角标，色系与胶囊一致。
+  Widget _hotSectionLabel(IconData icon, Color color, String label,
+      {String count = ''}) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 5),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
+        const Spacer(),
+        if (count.isNotEmpty)
+          Text(count,
+              style: const TextStyle(fontSize: 11, color: _textHint)),
+      ],
+    );
+  }
+
+  /// 打开「更多」全量热门榜页面：按讨论帖子数从多到少排列。
+  /// 返回后刷新热门榜与当前栏目（管理员可能删除了话题）。
+  void _openHotListPage({required bool isSutra, required String title}) {
+    final items = isSutra ? _hotSutraAll : _hotTopicAll;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HotDiscussionListPage(
+          isSutra: isSutra,
+          title: title,
+          items: items,
+        ),
+      ),
+    ).then((_) {
+      if (!mounted) return;
+      _loadHotDiscussions();
+      _refreshCurrentSmooth();
+    });
+  }
+
+  /// 热门胶囊：一行横滑展示（3 个胶囊 + 更多入口），字数较多时左右滑动查看，
+  /// 不换行截断、不撑高卡片。
+  Widget _buildHotChips(List<HotDiscussionItem> items,
+      {required bool isSutra, VoidCallback? onMore}) {
+    if (items.isEmpty) {
+      return Text(isSutra ? '还没有热门经文' : '还没有热门话题',
+          style: const TextStyle(fontSize: 13, color: _textSec));
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final it in items)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _buildHotChip(it, isSutra: isSutra),
+            ),
+          if (onMore != null) _buildHotMoreChip(onMore),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHotChip(HotDiscussionItem it, {required bool isSutra}) {
+    final color = isSutra ? const Color(0xFF71867A) : const Color(0xFF9A6B3F);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openHotDiscussion(it, isSutra: isSutra),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Text(isSutra ? '\$${it.name}' : '#${it.name}',
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+      ),
+    );
+  }
+
+  /// 「更多 ›」胶囊：置灰细描边，与热门胶囊同一圆角规格。
+  Widget _buildHotMoreChip(VoidCallback onMore) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onMore,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _border),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('更多',
+                style: TextStyle(fontSize: 12, color: _textSec)),
+            Icon(Icons.chevron_right, size: 14, color: _textSec),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 点击热门话题 / 经文胶囊：进入对应的话题页 / 经书讨论页。
+  void _openHotDiscussion(HotDiscussionItem it, {required bool isSutra}) {
+    if (isSutra) {
+      final entry = NoteSutraCatalog.cachedTitleMap?[it.name];
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SutraDiscussionPage(
+            title: it.name,
+            filePath: entry?.filePath ?? '',
+          ),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => TopicPage(topic: it.name)),
+      );
+    }
   }
 
   Widget _buildAnnouncementCard(AnnouncementItem item) {
@@ -2265,18 +2666,34 @@ class StudyHubPageState extends State<StudyHubPage>
 
   /// 分组：非回复为根，回复（含回复的回复）递归挂到对应父帖下面，根只显示一次。
   /// 与「我的 → 回复」页一致，原贴一次展示、下面用头像连线串起所有评论。
+  /// 广场列表只保留自己发出的回复以及自己关注的用户发出的回复：头像连线挂到原帖下；
+  /// 其余他人回复一律不展示，统一在笔记详情页按帖查看，
+  /// 避免热门帖上百条回复的头像连线刷屏。
   List<(PlazaNote, List<PlazaNote>)> get _feedGroups {
+    final me = AuthService.instance.currentUser.value;
+    final followed = CloudNotesService.instance.followingUserIds;
     final byId = {for (final n in _feedNotes) n.id: n};
     final children = <String, List<PlazaNote>>{};
     final roots = <PlazaNote>[];
     for (final n in _feedNotes) {
-      // 被屏蔽用户的内容（含原贴与被转发来源）一律不展示，避免缓存中残留数据仍可见。
-      if (_isBlockedContent(n)) continue;
-      // 只有真正的回复帖（repostKind=='reply'）才归入原贴的回复链；
-      // 转发/引用转发（repostOf 非空但非 reply）作为独立帖子展示。
-      if (n.repostKind == 'reply' && byId.containsKey(n.repostOf)) {
-        children.putIfAbsent(n.repostOf, () => []).add(n);
-      } else if (n.repostKind == 'reply' && _repostSourceBlocked(n)) {
+      // 被屏蔽用户的内容（含原贴与被转发来源）一律不展示，避免缓存中残留数据仍可见；
+      // 含被管理员删除话题的帖子同样隐藏。
+      if (_isBlockedContent(n) || _isBannedNote(n)) continue;
+      if (n.repostKind != 'reply') {
+        roots.add(n);
+        continue;
+      }
+      // 只展示自己发出的回复、以及自己关注的用户发出的回复；他人回复折叠在详情页。
+      final isMine = n.ownerUserId == me?.id;
+      final isFollowed = me != null &&
+          n.ownerUserId.isNotEmpty &&
+          followed.contains(n.ownerUserId);
+      if (!isMine && !isFollowed) continue;
+      final parentId =
+          _visibleReplyParent(n, byId, me?.id, followed);
+      if (parentId != null) {
+        children.putIfAbsent(parentId, () => []).add(n);
+      } else if (_repostSourceBlocked(n)) {
         // 评论的原帖作者已被屏蔽：生成「已屏蔽用户」占位根帖，保留自己这条评论。
         final id = n.repostOf;
         if (!children.containsKey(id)) {
@@ -2310,6 +2727,26 @@ class StudyHubPageState extends State<StudyHubPage>
     return [
       for (final r in roots) (r, collect(r)),
     ];
+  }
+
+  /// 回复帖往上找在列表内可见的最近祖先（根帖、自己的回复或关注用户的回复）：
+  /// 中间经过的他人回复不可见时继续向上，最终挂到可见祖先下。
+  String? _visibleReplyParent(
+      PlazaNote n, Map<String, PlazaNote> byId, String? meId,
+      Set<String> followed) {
+    var cur = n;
+    final visited = <String>{};
+    while (cur.repostOf.isNotEmpty && visited.add(cur.repostOf)) {
+      final parent = byId[cur.repostOf];
+      if (parent == null) return null;
+      if (parent.repostKind != 'reply' ||
+          parent.ownerUserId == meId ||
+          followed.contains(parent.ownerUserId)) {
+        return parent.id;
+      }
+      cur = parent;
+    }
+    return null;
   }
 
   /// 分组卡片：根帖用「帖子」页同款样式（头像+昵称+指标+三点菜单），
@@ -2361,6 +2798,8 @@ class StudyHubPageState extends State<StudyHubPage>
               root.id: root.authorAccount,
               for (final r in replies) r.id: r.authorAccount,
             },
+            // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
+            detailNoteId: root.id,
             onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
             onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
             onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
@@ -2996,6 +3435,10 @@ class _CheckInButtonState extends State<_CheckInButton>
   @override
   Widget build(BuildContext context) {
     final checked = widget.checked;
+    final labelChars = widget.label.characters;
+    final label = labelChars.length > 2
+        ? '${labelChars.take(2)}…'
+        : widget.label;
     return GestureDetector(
       onTapDown: _onTapDown,
       onTapUp: _onTapUp,
@@ -3021,7 +3464,9 @@ class _CheckInButtonState extends State<_CheckInButton>
               else
                 Text(widget.emoji ?? '', style: TextStyle(fontSize: 20)),
               const SizedBox(height: 4),
-              Text(widget.label,
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     color: checked ? _primary : _textSec,

@@ -22,8 +22,11 @@ class ReadingTimeService {
   /// 已成功上报到云端的累计秒数（本地增量上报游标）。
   static const _kSentTotal = 'reading_time_sent_total';
 
-  /// 单次会话最大计入时长（秒），防止异常数据刷爆统计。
-  static const int _maxSessionSeconds = 6 * 60 * 60;
+  /// 单次间隔计入上限（秒）：正常会话每秒 tick 都会同步一次起点，
+  /// 间隔超过该值说明进程曾被挂起/休眠/杀掉，中间的「空闲时间」不是
+  /// 读经时间，一律不计入，避免把上次阅读到下次打开之间数小时的
+  /// 空白误算进今日/累积读经时长。
+  static const int _maxSessionGapSeconds = 60;
 
   /// 单次云端上报最大增量（秒）：一天 24 小时，防止异常/恶意数据刷爆服务端。
   static const int _maxReportDelta = 24 * 60 * 60;
@@ -64,11 +67,13 @@ class ReadingTimeService {
     await _load();
     if (_running) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    // 上次会话异常未结束（进程被杀/闪退）：补记后清空。
+    // 上次会话异常未结束（进程被杀/闪退）：残留起点（最后一次 tick 时间）
+    // 距现在很近才补记那不到 1 秒的差额；间隔超过上限说明进程早已被杀，
+    // 中间整段空闲不是读经时间，直接丢弃不补记。
     final lastStart = _prefs!.getInt(_kSessionStart) ?? 0;
     if (lastStart > 0) {
       final elapsedSec = ((now - lastStart) / 1000).round();
-      if (elapsedSec > 0 && elapsedSec <= _maxSessionSeconds) {
+      if (elapsedSec > 0 && elapsedSec <= _maxSessionGapSeconds) {
         _add(elapsedSec);
       }
       await _prefs!.remove(_kSessionStart);
@@ -88,7 +93,8 @@ class ReadingTimeService {
     _timer = null;
     final now = DateTime.now().millisecondsSinceEpoch;
     final elapsedSec = ((now - _sessionStartMs) / 1000).round();
-    if (elapsedSec > 0 && elapsedSec <= _maxSessionSeconds) {
+    // 挂起/休眠期间未收到后台事件时的长间隔同样不算读经，直接丢弃。
+    if (elapsedSec > 0 && elapsedSec <= _maxSessionGapSeconds) {
       _add(elapsedSec);
     }
     _sessionStartMs = 0;
@@ -101,8 +107,20 @@ class ReadingTimeService {
     final now = DateTime.now().millisecondsSinceEpoch;
     final elapsedSec = ((now - _sessionStartMs) / 1000).round();
     if (elapsedSec <= 0) return;
+    if (elapsedSec > _maxSessionGapSeconds) {
+      // 间隔超限（系统休眠/进程挂起）：这段不算读经，只把起点推进到
+      // 当前并同步本地，避免把整段休眠时长累入今日/累积读经。
+      _sessionStartMs = now;
+      _prefs?.setInt(_kSessionStart, now);
+      return;
+    }
     _add(elapsedSec);
     _sessionStartMs = now;
+    // 把最新会话起点同步到本地：进程被杀/闪退后，下次 start() 按
+    // 「最后一次 tick」补记，最多补 1 秒；若只持久化原始起点，
+    // 会把上次阅读到下次打开之间的整段空闲时间（可能数小时）
+    // 都误计入今日/累积读经时长。
+    _prefs?.setInt(_kSessionStart, now);
   }
 
   void _add(int seconds) {

@@ -107,6 +107,26 @@ class PlazaNote {
       v is num ? v.toInt() : int.tryParse('$v') ?? 0;
 }
 
+/// 热门讨论中的单个话题 / 经文条目（由云端聚合热度后返回）。
+class HotDiscussionItem {
+  final String name;
+  final int posts;
+  final double score;
+
+  const HotDiscussionItem({
+    required this.name,
+    required this.posts,
+    this.score = 0,
+  });
+
+  factory HotDiscussionItem.fromJson(Map<String, dynamic> e) =>
+      HotDiscussionItem(
+        name: e['name']?.toString() ?? '',
+        posts: (e['posts'] as num?)?.toInt() ?? 0,
+        score: (e['score'] as num?)?.toDouble() ?? 0,
+      );
+}
+
 /// 广场评论。
 class PlazaComment {
   final String id;
@@ -116,6 +136,10 @@ class PlazaComment {
   final String authorAccount;
   final bool authorVerified;
   final String content;
+  final int likeCount;
+
+  /// 当前登录用户是否已赞这条评论（服务端返回，用于恢复点亮状态）。
+  final bool likedByMe;
   final int createdAt;
 
   const PlazaComment({
@@ -126,6 +150,8 @@ class PlazaComment {
     this.authorAccount = '',
     this.authorVerified = false,
     required this.content,
+    this.likeCount = 0,
+    this.likedByMe = false,
     required this.createdAt,
   });
 
@@ -137,7 +163,22 @@ class PlazaComment {
         authorAccount: json['authorAccount']?.toString() ?? '',
         authorVerified: json['authorVerified'] == true,
         content: json['content']?.toString() ?? '',
+        likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
+        likedByMe: json['liked'] == true,
         createdAt: (json['createdAt'] as num?)?.toInt() ?? 0,
+      );
+
+  PlazaComment copyWith({int? likeCount, bool? likedByMe}) => PlazaComment(
+        id: id,
+        noteId: noteId,
+        authorId: authorId,
+        authorName: authorName,
+        authorAccount: authorAccount,
+        authorVerified: authorVerified,
+        content: content,
+        likeCount: likeCount ?? this.likeCount,
+        likedByMe: likedByMe ?? this.likedByMe,
+        createdAt: createdAt,
       );
 }
 
@@ -482,6 +523,48 @@ class CloudNotesService {
   /// 已登录用户屏蔽的 userId 集合（预取）。
   final Set<String> blockedUserIds = {};
 
+  /// 管理员删除的话题名集合（预取）：全端隐藏含这些话题的帖子，
+  /// `#` 输入联想也不展示。删除时间戳仅回收站展示用。
+  final Set<String> bannedTopicNames = {};
+  final Map<String, int> bannedTopicAt = {};
+
+  /// 拉取被管理员删除的话题（未登录也返回，用于内容隐藏）。
+  Future<void> refreshBannedTopics() async {
+    try {
+      final res = await _call('getBannedTopics');
+      final list = res['topics'];
+      if (list is List) {
+        bannedTopicNames.clear();
+        bannedTopicAt.clear();
+        for (final e in list) {
+          if (e is Map) {
+            final name = e['name']?.toString() ?? '';
+            if (name.isNotEmpty) {
+              bannedTopicNames.add(name);
+              bannedTopicAt[name] = (e['createdAt'] as num?)?.toInt() ?? 0;
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // 静默失败：保留旧缓存，下一轮刷新。
+    }
+  }
+
+  /// 管理员删除话题：加入封禁表，含该话题的帖子全端隐藏。
+  Future<void> deleteTopic(String name) async {
+    await _call('deleteTopic', params: {'name': name});
+    bannedTopicNames.add(name);
+    bannedTopicAt[name] = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// 管理员恢复话题：从封禁表移除，相关帖子自动重新可见。
+  Future<void> restoreTopic(String name) async {
+    await _call('restoreTopic', params: {'name': name});
+    bannedTopicNames.remove(name);
+    bannedTopicAt.remove(name);
+  }
+
   String get _authorName =>
       AuthService.instance.currentUser.value?.displayName ?? '同修';
 
@@ -622,6 +705,37 @@ class CloudNotesService {
         .toList();
     final hasMore = res['hasMore'] == true;
     return (list, hasMore);
+  }
+
+  /// 拉取热门讨论：返回（top 话题, top 经文），每类最多 10 条。
+  /// 热度由云端按互动量 + 时间衰减聚合；客户端负责取前 3 并做当日轮换。
+  Future<(List<HotDiscussionItem>, List<HotDiscussionItem>)>
+      getHotDiscussions() async {
+    final res = await _call('getHotDiscussions');
+    List<HotDiscussionItem> parse(String key) => (res[key] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(HotDiscussionItem.fromJson)
+        .toList();
+    return (parse('topics'), parse('sutras'));
+  }
+
+  /// 拉取某帖子的回复帖列表（repostOf == noteId，最早在前），供详情页折叠展示。
+  Future<(List<PlazaNote>, int total)> getNoteReplies(
+    String noteId, {
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final res = await _call('getNoteReplies', params: {
+      'noteId': noteId,
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+    final total = (res['total'] as num?)?.toInt() ?? list.length;
+    return (list, total);
   }
 
   /// 广场笔记详情（公开或本人可见）。
@@ -900,6 +1014,18 @@ class CloudNotesService {
     return (liked, count);
   }
 
+  /// 点赞/取消点赞评论。返回 (是否已赞, 最新点赞数)。
+  Future<(bool, int)> toggleCommentLike(String commentId) async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    final res = await _call('toggleCommentLike',
+        params: {'commentId': commentId});
+    final liked = res['liked'] == true;
+    final count = (res['likeCount'] as num?)?.toInt() ?? 0;
+    return (liked, count);
+  }
+
   /// 发表评论。
   Future<PlazaComment> createComment(String noteId, String content) async {
     if (!AuthService.instance.isLoggedIn) {
@@ -924,6 +1050,65 @@ class CloudNotesService {
         .whereType<Map<String, dynamic>>()
         .map(PlazaComment.fromJson)
         .toList();
+  }
+
+  /// 拉取某本经书的讨论（公开共享，最新在前）。
+  /// 返回（讨论列表, 是否还有更多）；每条为 {id, content, name, userId,
+  /// account, verified, likeCount, at} 结构，供经书讨论页直接渲染。
+  Future<(List<Map<String, dynamic>>, bool hasMore)> getSutraDiscussions({
+    required String sutraTitle,
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final res = await _call('getSutraDiscussions', params: {
+      'sutraTitle': sutraTitle,
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = (res['discussions'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(_sutraDiscussionFromJson)
+        .toList();
+    final hasMore = res['hasMore'] == true;
+    return (list, hasMore);
+  }
+
+  /// 发表经书讨论（需登录）。返回云端讨论 id。
+  Future<String> createSutraDiscussion({
+    required String sutraTitle,
+    required String content,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    final res = await _call('createSutraDiscussion', params: {
+      'sutraTitle': sutraTitle,
+      'content': content,
+      'authorName': _authorName,
+    });
+    return res['id']?.toString() ?? '';
+  }
+
+  /// 云端经书讨论记录 → 页面渲染用的字典结构。
+  static Map<String, dynamic> _sutraDiscussionFromJson(
+      Map<String, dynamic> json) {
+    return {
+      'id': json['_id']?.toString() ?? json['id']?.toString() ?? '',
+      'content': json['content']?.toString() ?? '',
+      'name': json['authorName']?.toString() ?? '同修',
+      'userId': json['ownerUserId']?.toString() ?? '',
+      'account': json['authorAccount']?.toString() ?? '',
+      'verified': json['authorVerified'] == true,
+      'likeCount': (json['likeCount'] as num?)?.toInt() ?? 0,
+      'at': (json['createdAt'] as num?)?.toInt() ?? 0,
+      'canonRead': (json['canonRead'] as num?)?.toInt() ?? 0,
+      'canonTotal': (json['canonTotal'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+  /// 删除自己发表的经书讨论。
+  Future<void> deleteSutraDiscussion(String discussionId) async {
+    await _call('deleteSutraDiscussion', params: {'discussionId': discussionId});
   }
 
   /// 删除评论（仅评论作者或笔记作者）。

@@ -140,6 +140,29 @@ class NoteSutraLinks {
     return results;
   }
 
+  /// 判断正文是否引用了指定经书。
+  ///
+  /// 支持三种写法：`$经名`（编辑器插入的新格式）、`@经名`（旧式）、
+  /// `[@经名](路径)`（更旧式）。`@账号` 用户提及（含 `[@账号](user:id)`）不算引用经书。
+  static bool referencesSutra(String text, String title) {
+    if (title.isEmpty) return false;
+    final t = RegExp.escape(title);
+    // 更旧式 [@经名](路径)：排除 user: 用户提及。
+    if (RegExp(r'\[@' + t + r'\]\((?![^)]*user:)[^)]+\)').hasMatch(text)) {
+      return true;
+    }
+    // $经名 / @经名：标记前不是汉字/字母/数字，避免长经名子串误报；
+    // 若 `@经名` 后面紧跟 `](user:` 则是用户提及，跳过。
+    final re = RegExp(r'[@$]' + t);
+    for (final m in re.allMatches(text)) {
+      final before = m.start > 0 ? text[m.start - 1] : '';
+      if (RegExp(r'[0-9A-Za-z\u4e00-\u9fa5]').hasMatch(before)) continue;
+      if (text.startsWith('](user:', m.start + m.group(0)!.length)) continue;
+      return true;
+    }
+    return false;
+  }
+
   /// 渲染正文，@经书名 标记显示为金色可点击链接。
   ///
   /// [library] 为「经书名 -> 经书」的映射，来自 [NoteSutraCatalog.titleMap]。

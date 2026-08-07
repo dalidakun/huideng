@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'my_page.dart';
 import 'note_stats_center.dart';
 import 'note_sutra_links.dart';
 import 'quote_box.dart';
@@ -50,17 +51,30 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   final TextEditingController _commentController = TextEditingController();
   bool _sendingComment = false;
 
-  /// 每条评论独立的本地点赞状态（评论无云端点赞，仅视觉独立）。
+  /// 每条评论独立的点赞点亮状态（云端持久化，_load 时用服务端状态恢复）。
   final Set<String> _likedCommentIds = {};
 
-  /// 定位到被点击评论贴的节点 Key。
-  final GlobalKey _replyNodeKey = GlobalKey();
-  bool _scrolledToReply = false;
+  /// 正在提交点赞的评论 id（防止连点重复请求）。
+  final Set<String> _commentLiking = {};
 
   /// 评论作者资料缓存（authorId → 账号/认证，服务端缺失时用于补齐显示）。
   final Map<String, UserProfile> _commentAuthorProfiles = {};
   String _myAccount = '';
   bool _myVerified = false;
+
+  /// 本帖的回复帖列表（评论与回复作为同一类消息统一展示）。
+  List<PlazaNote> _replies = [];
+  bool _repliesLoading = false;
+
+  /// 评论/回复统一列表是否展开全部（默认只显示前两条评论，可「显示更多」展开）。
+  bool _commentsShowAll = false;
+
+  /// 去重映射：回复流程会同时生成「评论 + 回复帖」两条记录，展示时保留回复帖；
+  /// 此映射把被合并的评论 id 指向对应的回复帖 id（用于从评论进入时排到第一条）。
+  final Map<String, String> _commentToReplyId = {};
+
+  /// 条目 id -> 对它的回复数（嵌套回复折叠进评论，只显示「N条回复」入口）。
+  final Map<String, int> _entryChildCount = {};
 
   @override
   void initState() {
@@ -140,10 +154,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           updatedAt: note.updatedAt,
         );
         _comments = comments;
+        // 用服务端返回的点赞状态恢复每条评论的点亮。
+        _likedCommentIds
+          ..clear()
+          ..addAll(comments.where((c) => c.likedByMe).map((c) => c.id));
         _loading = false;
       });
       // 阅读量等指标广播给 Feed，返回后列表数字立即更新。
       NoteStatsCenter.instance.report(_note!);
+      // 回复帖列表：详情页折叠展示，拉取失败不影响页面。
+      _loadReplies();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -401,20 +421,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   void _promptLogin() {
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => const LoginPage()));
-  }
-
-  /// 定位到评论/回复贴节点：对齐到视口偏上（6%），上方原帖内容可上拉查看。
-  void _scrollToReply() {
-    if (_scrolledToReply) return;
-    final ctx = _replyNodeKey.currentContext;
-    if (ctx == null) return;
-    _scrolledToReply = true;
-    Scrollable.ensureVisible(
-      ctx,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOut,
-      alignment: 0.06,
-    );
   }
 
   Future<void> _toggleFavorite() async {
@@ -695,17 +701,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
     final note = _note!;
     final liked = CloudNotesService.instance.likedNoteIds.contains(note.id);
-    // 评论/回复贴定位：回复连贴等原帖异步加载完成后再滚动（onReadyToScroll），
-    // 保证定位后往上拉还能看到上方原帖内容；普通评论定位首帧即可完成。
-    if (widget.scrollToReplyId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _scrolledToReply) return;
-        if (_note?.repostKind == 'reply' && widget.scrollToReplyId == _note?.id) {
-          return; // 回复连贴由 ReplyThread.onReadyToScroll 触发。
-        }
-        _scrollToReply();
-      });
-    }
+    // 评论与回复统一列表（回复流程双写时按同作者/同内容/时间相近去重）。
+    final entries = _buildDetailEntries();
+    final showAll = _commentsShowAll || entries.length <= 2;
+    final visibleEntries =
+        showAll ? entries : entries.sublist(0, 2);
     return Column(
       children: [
         Expanded(
@@ -716,12 +716,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 // 回复帖：原帖在上 + 回复在下 + 头像竖线连接。
                 ReplyThread(
                   replyNote: note,
-                  replyNodeKey: (widget.scrollToReplyId == note.id)
-                      ? _replyNodeKey
-                      : null,
-                  onReadyToScroll: (widget.scrollToReplyId == note.id)
-                      ? _scrollToReply
-                      : null,
                 ),
               ] else ...[
                 // 头像在左，昵称/角标/内容/引用框都在头像右侧，与首页帖子对齐。
@@ -808,9 +802,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               const SizedBox(height: 12),
               const Divider(height: 1, color: _border),
               const SizedBox(height: 14),
+              // 评论与回复是同一类消息：统一在帖子下方展示。
               Row(
                 children: [
-                  Text('评论 ${_comments.length}',
+                  Text('评论 ${entries.length}',
                       style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -818,7 +813,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ],
               ),
               const SizedBox(height: 10),
-              if (_comments.isEmpty)
+              if (visibleEntries.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 20),
                   child: Center(
@@ -827,14 +822,23 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   ),
                 )
               else
-                for (final c in _comments)
-                  _buildCommentRow(
-                    c,
-                    nodeKey: (widget.scrollToReplyId != null &&
-                            c.id == widget.scrollToReplyId)
-                        ? _replyNodeKey
-                        : null,
+                for (final e in visibleEntries)
+                  _buildDetailRow(e),
+              if (!showAll)
+                InkWell(
+                  onTap: () => setState(() => _commentsShowAll = true),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Center(
+                      child: Text('显示更多评论（${entries.length - 2}）',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF70867A))),
+                    ),
                   ),
+                ),
             ],
           ),
         ),
@@ -842,139 +846,437 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  Widget _buildCommentRow(PlazaComment c, {GlobalKey? nodeKey}) {
-    final me = AuthService.instance.currentUser.value;
-    final canDelete =
-        me != null && (c.authorId == me.id || _note?.ownerUserId == me.id);
-    // 补齐评论作者账号/认证（服务端缺失时用预取资料 / 自己的本地数据）。
-    final profile = _commentAuthorProfiles[c.authorId];
-    final isOwnComment = me != null && c.authorId == me.id;
-    final verified = c.authorVerified ||
-        (profile?.verified ?? false) ||
-        (isOwnComment && _myVerified);
-    final account = c.authorAccount.isNotEmpty
-        ? c.authorAccount
-        : ((profile?.account.isNotEmpty ?? false)
-            ? profile!.account
-            : (isOwnComment ? _myAccount : ''));
-    return InkWell(
-      onLongPress: canDelete ? () => _deleteComment(c) : null,
-      child: Padding(
-        key: nodeKey,
-        padding: const EdgeInsets.only(bottom: 20),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 与帖子同款真实头像。
-            UserAvatar(userId: c.authorId, radius: 22),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 昵称行：昵称 + 认证 + @账户名（时间戳在评论内容下方，与帖子头部一致）。
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(c.authorName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: _text)),
-                      ),
-                      if (verified) ...[
-                        const SizedBox(width: 3),
-                        const Icon(Icons.verified,
-                            size: 14, color: Color(0xFF70867A)),
-                      ],
-                      if (account.isNotEmpty) ...[
-                        const SizedBox(width: 3),
-                        Flexible(
-                          // 点击 @账户名 进入该用户个人主页（按下时变暗）。
-                          child: AccountLink(
-                            account: account,
-                            onTap: () {
-                              if (c.authorId.isNotEmpty) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) =>
-                                          UserSpacePage(userId: c.authorId)),
-                                );
-                              }
-                            },
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(c.content,
-                      style: const TextStyle(
-                          fontSize: 15, color: _text, height: 1.6)),
-                  // 评论时间戳可点击（进入该评论所在的笔记详情）。
-                  const SizedBox(height: 6),
-                  PostTimeLink(
-                    text: _feedTime(c.createdAt),
-                    onTap: () {
-                      final nid = _note?.id;
-                      if (nid != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => NoteDetailPage(noteId: nid)),
-                        );
-                      }
-                    },
-                  ),
-                  // 与帖子同款的六个操作图标（评论/转发/点赞/阅读/收藏/分享）。
-                  const SizedBox(height: 10),
-                  _buildCommentActionsRow(c),
-                ],
-              ),
-            ),
-            if (canDelete)
-              GestureDetector(
-                onTap: () => _deleteComment(c),
-                child: const Padding(
-                  padding: EdgeInsets.all(4),
-                  child: Icon(Icons.delete_outline, size: 15, color: _textHint),
-                ),
-              ),
-          ],
+  /// 拉取本帖的回复帖列表（与评论合并统一展示）。
+  Future<void> _loadReplies() async {
+    if (_repliesLoading) return;
+    setState(() => _repliesLoading = true);
+    try {
+      final (list, _) = await CloudNotesService.instance
+          .getNoteReplies(widget.noteId, pageSize: 100);
+      if (!mounted) return;
+      setState(() {
+        _replies = list;
+        _repliesLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _repliesLoading = false);
+    }
+  }
+
+  /// 评论与回复合并为统一列表（默认按热门度排序，热门的排最前）：
+  /// 回复流程会同时生成「评论 + 回复帖」两条记录，保留信息更全的回复帖、合并掉重复评论。
+  /// 对评论的评论（嵌套回复）不在此展开，折叠进父评论里：父评论显示「N条回复」入口，
+  /// 点击进入该评论自己的详情页查看全部。
+  List<_DetailEntry> _buildDetailEntries() {
+    _commentToReplyId.clear();
+    // 后代映射：repostOf -> 子回复（用于「N条回复」计数）。
+    final children = <String, List<PlazaNote>>{};
+    for (final r in _replies) {
+      children.putIfAbsent(r.repostOf, () => []).add(r);
+    }
+    _entryChildCount.clear();
+    for (final e in children.entries) {
+      _entryChildCount[e.key] = e.value.length;
+    }
+    // 去重：评论与同作者/同内容/3 秒内的直接回复视为同一条消息。
+    final direct = children[widget.noteId] ?? const <PlazaNote>[];
+    final dupedComments = <String>{};
+    for (final c in _comments) {
+      for (final r in direct) {
+        if (r.ownerUserId == c.authorId &&
+            r.content == c.content &&
+            (r.createdAt - c.createdAt).abs() <= 3000) {
+          dupedComments.add(c.id);
+          _commentToReplyId[c.id] = r.id;
+          break;
+        }
+      }
+    }
+    final entries = <_DetailEntry>[
+      for (final c in _comments)
+        if (!dupedComments.contains(c.id)) _DetailEntry.fromComment(c),
+      for (final r in direct) _DetailEntry.fromReply(r),
+    ];
+    // 热门度排序：得分高的排最前；同分时按时间正序保持稳定。
+    entries.sort((a, b) {
+      final diff = _hotScore(b) - _hotScore(a);
+      if (diff != 0) return diff;
+      return a.createdAt.compareTo(b.createdAt);
+    });
+    // 从评论进入（首页点击评论贴 / 通知）：把目标评论排到列表第一条，不再滚动定位。
+    final target = widget.scrollToReplyId;
+    if (target != null) {
+      final idx = entries.indexWhere(
+          (e) => e.id == target || _commentToReplyId[target] == e.id);
+      if (idx > 0) {
+        final e = entries.removeAt(idx);
+        entries.insert(0, e);
+      }
+    }
+    return entries;
+  }
+
+  /// 评论/回复的热门度打分：互动越多分数越高。
+  /// 子回复数权重最高（讨论热度），点赞与转发次之，阅读量影响力弱只按比例计分；
+  /// 普通评论无转发/阅读数据，仅计点赞与子回复。
+  int _hotScore(_DetailEntry e) {
+    final likes = e.comment?.likeCount ?? e.reply?.likeCount ?? 0;
+    var score = likes * 2 + (_entryChildCount[e.id] ?? 0) * 3;
+    final reply = e.reply;
+    if (reply != null) {
+      score += reply.repostCount * 2 + reply.viewCount ~/ 10;
+    }
+    return score;
+  }
+
+  /// 点击评论/回复行：进入这条评论自己的详情页。
+  /// 回复帖有自己的连贴详情页（原贴在上 + 回复在下）；普通评论进入原贴详情并定位到它。
+  void _openEntryDetail(_DetailEntry e) {
+    final replyNote = e.reply;
+    final noteId = replyNote != null ? replyNote.id : _note?.id;
+    if (noteId == null || noteId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NoteDetailPage(
+          noteId: noteId,
+          scrollToReplyId: replyNote != null ? null : e.id,
         ),
       ),
     );
   }
 
-  /// 评论的操作行：与原贴同款六个图标；点赞为每条评论独立。
+  /// 评论节点三点菜单：自己的（或帖主）可删除，他人的可关注/屏蔽。
+  Future<void> _showCommentMenu(PlazaComment c) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null || c.authorId.isEmpty) return;
+    final canDelete =
+        c.authorId == me.id || _note?.ownerUserId == me.id;
+    if (!canDelete) {
+      await showMoreMenu(context, c.authorId, c.authorName);
+      return;
+    }
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(c.authorName,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            postMenuItem(ctx, 'delete', Icons.delete_outline, '删除评论'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == 'delete' && mounted) {
+      await _deleteComment(c);
+    }
+  }
+
+  /// 回复节点三点菜单：自己的可编辑/删除，他人的可关注/屏蔽。
+  Future<void> _showReplyNodeMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    if (me == null || note.ownerUserId != me.id) {
+      if (me != null && note.ownerUserId.isNotEmpty) {
+        await showMoreMenu(context, note.ownerUserId, note.authorName);
+        if (mounted) _loadReplies();
+      }
+      return;
+    }
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(note.authorName,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+            postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'edit') {
+      await _editReplyNote(note);
+    } else if (choice == 'delete') {
+      await _deleteReplyNote(note);
+    }
+  }
+
+  /// 编辑自己发布的回复内容。
+  Future<void> _editReplyNote(PlazaNote note) async {
+    final saved = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '编辑回复',
+        hint: '写下新的内容…',
+        initialText: note.content,
+        maxLength: 2000,
+        minLines: 3,
+        maxLines: 6,
+        confirmText: '保存',
+      ),
+    );
+    if (saved == null || saved.trim().isEmpty || !mounted) return;
+    try {
+      await CloudNotesService.instance
+          .updateSharedNote(cloudId: note.id, content: saved.trim());
+      if (!mounted) return;
+      _showToast('已更新');
+      await _loadReplies();
+    } catch (e) {
+      if (mounted) _showToast(e.toString());
+    }
+  }
+
+  /// 删除自己发布的回复。
+  Future<void> _deleteReplyNote(PlazaNote note) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除回复',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后回复将从菩提空间移除，且无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteCloudNote(note.id);
+      if (!mounted) return;
+      _showToast('已删除');
+      await _loadReplies();
+    } catch (e) {
+      if (mounted) _showToast(e.toString());
+    }
+  }
+
+  /// 评论与回复统一行：头像 + 昵称/认证/@账户/阅藏进度 + 内容 + 时间 + 六个指标 + 三点菜单。
+  /// 对评论的评论（嵌套回复）折叠进评论里，只显示「N条回复」入口。
+  Widget _buildDetailRow(_DetailEntry e) {
+    final me = AuthService.instance.currentUser.value;
+    final comment = e.comment;
+    final reply = e.reply;
+    // 补齐评论作者账号/认证/阅藏进度（服务端缺失时用预取资料 / 自己的本地数据）。
+    final profile =
+        comment != null ? _commentAuthorProfiles[comment.authorId] : null;
+    final isOwn = me != null && e.authorId == me.id;
+    final verified = e.verified ||
+        (profile?.verified ?? false) ||
+        (isOwn && _myVerified);
+    final account = e.account.isNotEmpty
+        ? e.account
+        : ((profile?.account.isNotEmpty ?? false)
+            ? profile!.account
+            : (isOwn ? _myAccount : ''));
+    // 阅藏进度百分比：自己的用本地实时统计，他人的用云端数据（评论取预取资料）。
+    final pct = postCanonPercent(
+      isSelf: isOwn,
+      cloudRead: reply != null
+          ? reply.canonRead
+          : (profile?.canonRead ?? 0),
+      cloudTotal: reply != null
+          ? reply.canonTotal
+          : (profile?.canonTotal ?? 0),
+    );
+    final childCount = _entryChildCount[e.id] ?? 0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          UserAvatar(userId: e.authorId, radius: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 昵称行：昵称 + 认证 + @账户名 + 阅藏进度（时间戳在内容下方）。
+                Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(e.authorName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: _text)),
+                          ),
+                          if (verified) ...[
+                            const SizedBox(width: 3),
+                            const Icon(Icons.verified,
+                                size: 14, color: Color(0xFF70867A)),
+                          ],
+                          if (account.isNotEmpty) ...[
+                            const SizedBox(width: 3),
+                            Flexible(
+                              // 点击 @账户名 进入该用户个人主页（按下时变暗）。
+                              child: AccountLink(
+                                account: account,
+                                onTap: () {
+                                  if (e.authorId.isNotEmpty) {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                          builder: (_) => UserSpacePage(
+                                              userId: e.authorId)),
+                                    );
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                          if (pct.isNotEmpty) ...[
+                            const SizedBox(width: 3),
+                            const Text('·',
+                                style: TextStyle(
+                                    fontSize: 12, color: Color(0xFF8C8C8C))),
+                            const SizedBox(width: 2),
+                            Flexible(
+                              child: Text(pct,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    // 每条评论/回复统一三点菜单（与上方帖子右侧对齐）。
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => reply != null
+                          ? _showReplyNodeMenu(reply)
+                          : _showCommentMenu(comment!),
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.more_horiz,
+                            size: 22, color: Color(0xFF8C8C8C)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // 点击评论内容进入该评论自己的详情页（回复帖为连贴详情页）。
+                InkWell(
+                  onTap: () => _openEntryDetail(e),
+                  child: Text(e.content,
+                      style: const TextStyle(
+                          fontSize: 15, color: _text, height: 1.6)),
+                ),
+                // 时间戳：点击同样进入该评论自己的详情页。
+                const SizedBox(height: 6),
+                PostTimeLink(
+                  text: _feedTime(e.createdAt),
+                  onTap: () => _openEntryDetail(e),
+                ),
+                // 对评论的评论折叠进评论里：只显示「N条回复」入口。
+                if (childCount > 0) ...[
+                  const SizedBox(height: 4),
+                  InkWell(
+                    onTap: () => _openEntryDetail(e),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Text('查看$childCount条回复 ›',
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF70867A))),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                reply != null
+                    ? _buildReplyActionsRow(reply)
+                    : _buildCommentActionsRow(comment!),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 评论的操作行：六个指标（评论/转发/点赞/阅读/收藏/分享，收藏与分享作用于原贴）。
   Widget _buildCommentActionsRow(PlazaComment c) {
     final liked = _likedCommentIds.contains(c.id);
     final favorited = _note != null &&
         CloudNotesService.instance.favoriteNoteIds.contains(_note!.id);
+    const numStyle = TextStyle(fontSize: 13, color: _textSec);
     return Row(
       children: [
         _commentActionCell(
-          Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
+          Image.asset('assets/images/ic_comment.png', width: 14, height: 14),
           _openCommentSheet,
+          label: '0',
+          labelStyle: numStyle,
         ),
         const SizedBox(width: 28),
         _commentActionCell(
           Icon(Icons.repeat_rounded, size: 16, color: _textSec),
           _reposting ? null : _repost,
+          label: '0',
+          labelStyle: numStyle,
         ),
         const SizedBox(width: 28),
         _commentActionCell(
           Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
               size: 16, color: liked ? _gold : _textSec),
-          () => setState(() {
-            if (!_likedCommentIds.remove(c.id)) _likedCommentIds.add(c.id);
-          }),
+          _commentLiking.contains(c.id) ? null : () => _toggleCommentLike(c),
+          label: '${c.likeCount}',
+          labelStyle: TextStyle(fontSize: 13, color: liked ? _gold : _textSec),
         ),
         const SizedBox(width: 28),
         Image.asset('assets/images/ic_view.png', width: 16, height: 16),
+        const SizedBox(width: 3),
+        const Text('0', style: numStyle),
         const Spacer(),
         _commentActionCell(
           Icon(
@@ -994,15 +1296,194 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  Widget _commentActionCell(Widget icon, VoidCallback? onTap) {
+  /// 回复帖的操作行：六个指标（评论/转发/点赞/阅读/收藏/分享，作用于这条回复，
+  /// 实时监听指标广播，操作后数字立即刷新）。
+  Widget _buildReplyActionsRow(PlazaNote reply) {
+    return ListenableBuilder(
+      listenable: NoteStatsCenter.instance,
+      builder: (context, _) {
+        final n = NoteStatsCenter.instance.latest(reply.id) ?? reply;
+        final liked = CloudNotesService.instance.likedNoteIds.contains(n.id);
+        final favorited =
+            CloudNotesService.instance.favoriteNoteIds.contains(n.id);
+        const numStyle = TextStyle(fontSize: 13, color: _textSec);
+        return Row(
+          children: [
+            _commentActionCell(
+              Image.asset('assets/images/ic_comment.png',
+                  width: 14, height: 14),
+              () => replyToNote(context, n, _loadReplies),
+              label: '${n.commentCount}',
+              labelStyle: numStyle,
+            ),
+            const SizedBox(width: 28),
+            _commentActionCell(
+              const Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+              () => forwardNote(context, n, _loadReplies),
+              label: '${n.repostCount}',
+              labelStyle: numStyle,
+            ),
+            const SizedBox(width: 28),
+            _commentActionCell(
+              Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  size: 16, color: liked ? _gold : _textSec),
+              () => _toggleReplyLike(n),
+              label: '${n.likeCount}',
+              labelStyle:
+                  TextStyle(fontSize: 13, color: liked ? _gold : _textSec),
+            ),
+            const SizedBox(width: 28),
+            Image.asset('assets/images/ic_view.png', width: 16, height: 16),
+            const SizedBox(width: 3),
+            Text('${n.viewCount}', style: numStyle),
+            const Spacer(),
+            _commentActionCell(
+              Icon(
+                  favorited
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  size: 16,
+                  color: favorited ? _gold : _textSec),
+              () => _toggleReplyFavorite(n),
+            ),
+            const SizedBox(width: 20),
+            _commentActionCell(
+              Icon(Icons.share_rounded, size: 16, color: _textSec),
+              () => _shareReply(n),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 收藏/取消收藏回复帖：云端持久化，点亮状态随收藏列表刷新。
+  Future<void> _toggleReplyFavorite(PlazaNote reply) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    try {
+      await CloudNotesService.instance.toggleNoteFavorite(reply.id);
+      await CloudNotesService.instance.refreshFavoriteNoteIds();
+      if (!mounted) return;
+      setState(() {});
+    } catch (_) {}
+  }
+
+  /// 分享回复帖内容。
+  Future<void> _shareReply(PlazaNote reply) async {
+    final plain = NoteSutraLinks.plainText(reply.content);
+    final text =
+        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
+        '———来自【燃灯】App · ${reply.authorName} 的评论\n'
+        '燃一盏灯，看见自己，照亮别人\n'
+        '点击进入八千大藏经世界\n'
+        '下载链接：';
+    try {
+      await SharePlus.instance.share(ShareParams(text: text));
+    } catch (e) {
+      if (!mounted) return;
+      _showToast('分享失败：$e');
+    }
+  }
+
+  /// 点赞/取消点赞回复帖：云端持久化，点亮状态与数字随服务端返回更新。
+  Future<void> _toggleReplyLike(PlazaNote reply) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    try {
+      final (liked, count) =
+          await CloudNotesService.instance.toggleLike(reply.id);
+      if (!mounted) return;
+      final updated = _copyNote(reply, likeCount: count);
+      setState(() {
+        final idx = _replies.indexWhere((x) => x.id == reply.id);
+        if (idx >= 0) _replies[idx] = updated;
+      });
+      NoteStatsCenter.instance.report(updated);
+    } catch (e) {
+      if (mounted) _showToast(e.toString());
+    }
+  }
+
+  PlazaNote _copyNote(PlazaNote n, {int? likeCount}) => PlazaNote(
+        id: n.id,
+        ownerUserId: n.ownerUserId,
+        title: n.title,
+        content: n.content,
+        authorName: n.authorName,
+        authorAccount: n.authorAccount,
+        authorVerified: n.authorVerified,
+        visibility: n.visibility,
+        status: n.status,
+        likeCount: likeCount ?? n.likeCount,
+        commentCount: n.commentCount,
+        viewCount: n.viewCount,
+        repostCount: n.repostCount,
+        repostOf: n.repostOf,
+        repostSourceAuthor: n.repostSourceAuthor,
+        repostSourceUserId: n.repostSourceUserId,
+        repostKind: n.repostKind,
+        quoteContent: n.quoteContent,
+        quoteOfTitle: n.quoteOfTitle,
+        quoteOfContent: n.quoteOfContent,
+        createdAt: n.createdAt,
+        updatedAt: n.updatedAt,
+      );
+
+  Widget _commentActionCell(
+      Widget icon, VoidCallback? onTap, {String label = '', TextStyle? labelStyle}) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-        child: SizedBox(width: 18, height: 18, child: icon),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(width: 18, height: 18, child: icon),
+            if (label.isNotEmpty) ...[
+              const SizedBox(width: 3),
+              Text(label, style: labelStyle),
+            ],
+          ],
+        ),
       ),
     );
+  }
+
+  /// 点赞/取消点赞评论：云端持久化，点赞数与点亮状态随服务端返回更新。
+  Future<void> _toggleCommentLike(PlazaComment c) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    if (_commentLiking.contains(c.id)) return;
+    setState(() => _commentLiking.add(c.id));
+    try {
+      final (liked, count) =
+          await CloudNotesService.instance.toggleCommentLike(c.id);
+      if (!mounted) return;
+      setState(() {
+        _commentLiking.remove(c.id);
+        final idx = _comments.indexWhere((x) => x.id == c.id);
+        if (idx >= 0) {
+          _comments[idx] = c.copyWith(likeCount: count, likedByMe: liked);
+        }
+        if (liked) {
+          _likedCommentIds.add(c.id);
+        } else {
+          _likedCommentIds.remove(c.id);
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _commentLiking.remove(c.id));
+      _showToast(e.toString());
+    }
   }
 
   /// 昵称行（不含头像）：昵称 + 认证 + @账户名 + 阅藏进度 + 三点菜单
@@ -1067,15 +1548,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             ],
           ),
         ),
-        if (!isSelf)
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _showUserMenu(note),
-            child: const Padding(
-              padding: EdgeInsets.all(4),
-              child: Icon(Icons.more_horiz, size: 22, color: _textSec),
-            ),
+        // 每个帖子都有三点菜单：自己的可编辑/删除，他人的可关注/屏蔽。
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _showUserMenu(note),
+          child: const Padding(
+            padding: EdgeInsets.all(4),
+            child: Icon(Icons.more_horiz, size: 22, color: _textSec),
           ),
+        ),
       ],
     );
   }
@@ -1086,7 +1567,55 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       _promptLogin();
       return;
     }
-    if (me.id == note.ownerUserId) return;
+    if (me.id == note.ownerUserId) {
+      // 自己的帖子：可编辑/删除。
+      final choice = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: _card,
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(note.authorName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: _text)),
+                    ),
+                    if (note.authorVerified) ...[
+                      const SizedBox(width: 4),
+                      const Icon(Icons.verified,
+                          size: 15, color: Color(0xFF70867A)),
+                    ],
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: _border),
+              _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
+              _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+      if (choice == null || !mounted) return;
+      if (choice == 'edit') {
+        await _editRootNote(note);
+      } else if (choice == 'delete') {
+        await _deleteRootNote(note);
+      }
+      return;
+    }
     final following =
         CloudNotesService.instance.followingUserIds.contains(note.ownerUserId);
     final blocked =
@@ -1167,6 +1696,73 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
+  /// 编辑自己发布的帖子内容。
+  Future<void> _editRootNote(PlazaNote note) async {
+    final saved = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '编辑帖子',
+        hint: '写下新的内容…',
+        initialText: note.content,
+        maxLength: 2000,
+        minLines: 3,
+        maxLines: 6,
+        confirmText: '保存',
+      ),
+    );
+    if (saved == null || saved.trim().isEmpty || !mounted) return;
+    try {
+      await CloudNotesService.instance
+          .updateSharedNote(cloudId: note.id, content: saved.trim());
+      if (!mounted) return;
+      _showToast('已更新');
+      _load();
+    } catch (e) {
+      if (mounted) _showToast(e.toString());
+    }
+  }
+
+  /// 删除自己发布的帖子。
+  Future<void> _deleteRootNote(PlazaNote note) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除帖子',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteCloudNote(note.id);
+      if (!mounted) return;
+      _showToast('已删除');
+      Navigator.pop(context);
+    } catch (e) {
+      if (mounted) _showToast(e.toString());
+    }
+  }
+
   Widget _menuItem(
       BuildContext ctx, String value, IconData icon, String label) {
     return InkWell(
@@ -1197,12 +1793,12 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               children: [
                 _buildActionCell(
                     Image.asset('assets/images/ic_comment.png',
-                        width: 18, height: 18),
+                        width: 14, height: 14),
                     _textSec,
                     '${_comments.length}',
                     _openCommentSheet),
                 _buildActionCell(
-                    Icon(Icons.repeat_rounded, size: 18, color: _textSec),
+                    Icon(Icons.repeat_rounded, size: 16, color: _textSec),
                     _textSec,
                     '${note.repostCount}',
                     _reposting ? null : _repost),
@@ -1211,14 +1807,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                         liked
                             ? Icons.favorite_rounded
                             : Icons.favorite_border_rounded,
-                        size: 18,
+                        size: 16,
                         color: liked ? _gold : _textSec),
                     liked ? _gold : _textSec,
                     '${note.likeCount}',
                     _liking ? null : _toggleLike),
                 _buildActionCell(
                     Image.asset('assets/images/ic_view.png',
-                        width: 18, height: 18),
+                        width: 16, height: 16),
                     _textSec,
                     '${note.viewCount}',
                     null),
@@ -1231,13 +1827,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   favorited
                       ? Icons.bookmark_rounded
                       : Icons.bookmark_border_rounded,
-                  size: 18,
+                  size: 16,
                   color: favorited ? _gold : _textSec),
               favorited ? _gold : _textSec,
               '',
               _favoriting ? null : _toggleFavorite),
           const SizedBox(width: 6),
-          _buildActionCell(Icon(Icons.share_rounded, size: 18, color: _textSec),
+          _buildActionCell(Icon(Icons.share_rounded, size: 16, color: _textSec),
               _textSec, '', _share),
         ],
       ),
@@ -1258,7 +1854,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             if (text.isNotEmpty) ...[
               const SizedBox(width: 3),
               Text(text,
-                  style: TextStyle(fontSize: 15, height: 1, color: color)),
+                  style: TextStyle(fontSize: 13, height: 1, color: color)),
             ],
           ],
         ),
@@ -1277,4 +1873,51 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (t.year == now.year) return '${t.month}月${t.day}日${t.hour}时';
     return '${t.year}年${t.month}月${t.day}日${t.hour}时';
   }
+}
+
+/// 详情页评论/回复统一条目：评论与回复作为同一类消息统一展示。
+class _DetailEntry {
+  final String id;
+  final String authorId;
+  final String authorName;
+  final bool verified;
+  final String account;
+  final String content;
+  final int createdAt;
+  final PlazaComment? comment;
+  final PlazaNote? reply;
+
+  const _DetailEntry({
+    required this.id,
+    required this.authorId,
+    required this.authorName,
+    this.verified = false,
+    this.account = '',
+    required this.content,
+    required this.createdAt,
+    this.comment,
+    this.reply,
+  });
+
+  factory _DetailEntry.fromComment(PlazaComment c) => _DetailEntry(
+        id: c.id,
+        authorId: c.authorId,
+        authorName: c.authorName,
+        verified: c.authorVerified,
+        account: c.authorAccount,
+        content: c.content,
+        createdAt: c.createdAt,
+        comment: c,
+      );
+
+  factory _DetailEntry.fromReply(PlazaNote n) => _DetailEntry(
+        id: n.id,
+        authorId: n.ownerUserId,
+        authorName: n.authorName,
+        verified: n.authorVerified,
+        account: n.authorAccount,
+        content: n.content,
+        createdAt: n.createdAt,
+        reply: n,
+      );
 }
