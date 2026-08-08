@@ -62,6 +62,14 @@ class ReadingTimeService {
   /// 读取当前统计值（仅初始化，不开启会话）。
   Future<void> ensureLoaded() => _load();
 
+  /// 重新从本地读取统计并广播给 UI：登录/云同步恢复数据后调用。
+  /// 进程内首次读取可能早于云端数据恢复（清数据/换机后重新登录），
+  /// 若不重读，首页「今日读经/累积读经」会一直显示 0，直到重启应用。
+  Future<void> reload() async {
+    _loaded = false;
+    await _load();
+  }
+
   /// 打开经书阅读页（且处于前台、为当前路由）时调用：开始累计。
   Future<void> start() async {
     await _load();

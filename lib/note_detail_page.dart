@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,6 +30,77 @@ const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 
+/// 发表成功后的底部常驻提示：「已发表，点击查看」。
+/// 不会自动消失；点击「点击查看」关闭并进入所发帖子的详情页，点 X 仅关闭。
+void showPostPublishedToast(BuildContext context, String noteId) {
+  final overlay = Overlay.of(context);
+  late OverlayEntry entry;
+  void dismiss() {
+    if (entry.mounted) entry.remove();
+  }
+
+  entry = OverlayEntry(
+    builder: (ctx) {
+      final bottomInset = MediaQuery.of(ctx).padding.bottom;
+      return Positioned(
+        left: 16,
+        right: 16,
+        bottom: bottomInset + 84,
+        child: Material(
+          color: _primary,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () {
+              dismiss();
+              Navigator.of(ctx).push(
+                MaterialPageRoute(
+                    builder: (_) => NoteDetailPage(noteId: noteId)),
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        text: '已发表，',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13),
+                        children: [
+                          TextSpan(
+                            text: '点击查看',
+                            style: const TextStyle(
+                              color: Color(0xFF70867A),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: dismiss,
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(Icons.close,
+                          size: 16, color: Colors.white70),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+  overlay.insert(entry);
+}
+
 class NoteDetailPage extends StatefulWidget {
   final String noteId;
 
@@ -48,7 +121,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   bool _liking = false;
   bool _favoriting = false;
   bool _reposting = false;
-  final TextEditingController _commentController = TextEditingController();
   bool _sendingComment = false;
 
   /// 每条评论独立的点赞点亮状态（云端持久化，_load 时用服务端状态恢复）。
@@ -73,8 +145,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   /// 此映射把被合并的评论 id 指向对应的回复帖 id（用于从评论进入时排到第一条）。
   final Map<String, String> _commentToReplyId = {};
 
-  /// 条目 id -> 对它的回复数（嵌套回复折叠进评论，只显示「N条回复」入口）。
+  /// 条目 id -> 对它的全部后代回复数（用于评论热度排序权重）。
   final Map<String, int> _entryChildCount = {};
+
+  /// 已展开全文（长内容点「显示更多」）的评论/回复条目 id。
+  final Set<String> _expandedContentIds = {};
+
+  /// 根帖长内容是否已展开全文。
+  bool _noteContentExpanded = false;
 
   @override
   void initState() {
@@ -84,7 +162,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
 
   @override
   void dispose() {
-    _commentController.dispose();
     super.dispose();
   }
 
@@ -225,93 +302,45 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       _promptLogin();
       return;
     }
-    _commentController.clear();
-    showModalBottomSheet<void>(
+    // 统一使用大弹层输入（minLines 3 / maxLines 10），长内容编辑体验更好。
+    showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: _border,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        height: 44,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: BoxDecoration(
-                          color: _bg,
-                          borderRadius: BorderRadius.circular(22),
-                        ),
-                        child: TextField(
-                          controller: _commentController,
-                          autofocus: true,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => _submitComment(sheetCtx),
-                          style: const TextStyle(fontSize: 14, color: _text),
-                          decoration: const InputDecoration(
-                            hintText: '说点什么…',
-                            hintStyle: TextStyle(color: _textHint),
-                            border: InputBorder.none,
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      onPressed: _sendingComment
-                          ? null
-                          : () => _submitComment(sheetCtx),
-                      icon: _sendingComment
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: _gold))
-                          : const Icon(Icons.send_rounded,
-                              color: _primary, size: 22),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
+      builder: (_) => const SheetTextInput(
+        title: '评论',
+        hint: '说点什么…',
+        maxLength: 500,
+        minLines: 3,
+        maxLines: 10,
+        confirmText: '发表',
       ),
-    );
+    ).then((content) {
+      if (content != null && content.isNotEmpty) _submitComment(content);
+    });
   }
 
-  Future<void> _submitComment(BuildContext sheetContext) async {
-    final content = _commentController.text.trim();
-    if (content.isEmpty || _sendingComment) return;
+  Future<void> _submitComment(String content) async {
+    final trimmed = content.trim();
+    if (trimmed.isEmpty || _sendingComment) return;
     setState(() => _sendingComment = true);
     try {
       final comment = await CloudNotesService.instance
-          .createComment(widget.noteId, content);
+          .createComment(widget.noteId, trimmed);
+      // 与「帖子下方评论按钮」一致：同时生成回复帖（评论=回复帖），
+      // 供「点击查看」跳转到这条回复自己的详情页。
+      var replyId = '';
+      try {
+        replyId = await CloudNotesService.instance
+            .repostNote(widget.noteId, quote: trimmed, kind: 'reply');
+      } catch (_) {
+        // 回复帖创建失败不影响评论本身展示。
+      }
       if (!mounted) return;
       setState(() {
         _comments.add(comment);
-        _commentController.clear();
         _sendingComment = false;
         _note = _note == null
             ? null
@@ -340,8 +369,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               );
       });
       NoteStatsCenter.instance.report(_note!);
-      if (mounted && sheetContext.mounted) {
-        Navigator.of(sheetContext).pop();
+      // 重新拉取回复帖，让新回复出现在回复树里（与评论去重合并展示）。
+      unawaited(_loadReplies());
+      if (replyId.isNotEmpty) {
+        showPostPublishedToast(context, replyId);
       }
     } catch (e) {
       if (!mounted) return;
@@ -713,9 +744,25 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             children: [
               if (note.repostKind == 'reply') ...[
-                // 回复帖：原帖在上 + 回复在下 + 头像竖线连接。
+                // 回复帖：原贴在上 + 回复在下 + 头像竖线连接。
+                // 连贴内部不渲染指标（下方统一渲染一排完整操作行，避免两排指标）；
+                // 原贴与回复都带三点菜单。
                 ReplyThread(
                   replyNote: note,
+                  showMetrics: false,
+                  onMore: (n) =>
+                      n.id == note.id ? _showReplyNodeMenu(n) : _showUserMenu(n),
+                  // 连贴里的帖子内容可点击：父帖（a）点击进入 a 的详情页；
+                  // 当前帖（b）本身就是本页，不再重复进入。
+                  onOpenDetail: (n) {
+                    if (n.id != note.id) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => NoteDetailPage(noteId: n.id)),
+                      );
+                    }
+                  },
                 ),
               ] else ...[
                 // 头像在左，昵称/角标/内容/引用框都在头像右侧，与首页帖子对齐。
@@ -744,34 +791,95 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                           ],
                           if (note.content.isNotEmpty) ...[
                             const SizedBox(height: 4),
-                            buildPostRichText(
-                              note.content,
-                              style: const TextStyle(
-                                  fontSize: 16, color: _text, height: 1.75),
-                              library: _sutraLib,
-                              onUserTap: (uid) {
-                                if (uid.isNotEmpty) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                        builder: (_) =>
-                                            UserSpacePage(userId: uid)),
-                                  );
-                                }
-                              },
-                              onSutraTap: (title, filePath) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => SutraDiscussionPage(
-                                          title: title, filePath: filePath)),
-                                );
-                              },
-                              onTopicTap: (topic) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => TopicPage(topic: topic)),
+                            // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final noteExpanded = _noteContentExpanded;
+                                final tp = TextPainter(
+                                  text: TextSpan(
+                                    text: note.content,
+                                    style: const TextStyle(
+                                        fontSize: 16,
+                                        color: _text,
+                                        height: 1.75),
+                                  ),
+                                  maxLines: 8,
+                                  ellipsis: '…',
+                                  textDirection: TextDirection.ltr,
+                                )..layout(maxWidth: constraints.maxWidth);
+                                final overflow = tp.didExceedMaxLines;
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    buildPostRichText(
+                                      note.content,
+                                      style: const TextStyle(
+                                          fontSize: 16,
+                                          color: _text,
+                                          height: 1.75),
+                                      library: _sutraLib,
+                                      onUserTap: (uid) {
+                                        if (uid.isNotEmpty) {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                                builder: (_) =>
+                                                    UserSpacePage(
+                                                        userId: uid)),
+                                          );
+                                        }
+                                      },
+                                      onSutraTap: (title, filePath) {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  SutraDiscussionPage(
+                                                      title: title,
+                                                      filePath: filePath)),
+                                        );
+                                      },
+                                      onTopicTap: (topic) {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  TopicPage(topic: topic)),
+                                        );
+                                      },
+                                      maxLines: noteExpanded ? null : 8,
+                                      overflow: noteExpanded
+                                          ? null
+                                          : TextOverflow.ellipsis,
+                                    ),
+                                    if (overflow && !noteExpanded)
+                                      GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: _toggleNoteContent,
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(top: 4),
+                                          child: Text('显示更多',
+                                              style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Color(0xFF70867A))),
+                                        ),
+                                      ),
+                                    if (noteExpanded)
+                                      GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: _toggleNoteContent,
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(top: 4),
+                                          child: Text('收起',
+                                              style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Color(0xFF70867A))),
+                                        ),
+                                      ),
+                                  ],
                                 );
                               },
                             ),
@@ -870,14 +978,23 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   /// 点击进入该评论自己的详情页查看全部。
   List<_DetailEntry> _buildDetailEntries() {
     _commentToReplyId.clear();
-    // 后代映射：repostOf -> 子回复（用于「N条回复」计数）。
+    // 后代映射：repostOf -> 子回复（用于「N条回复」计数与内嵌展开）。
     final children = <String, List<PlazaNote>>{};
     for (final r in _replies) {
       children.putIfAbsent(r.repostOf, () => []).add(r);
     }
+    // 「N条回复」统计全部后代（含多级），仅用于评论热度排序权重。
     _entryChildCount.clear();
+    int countDesc(String id) {
+      final subs = children[id] ?? const <PlazaNote>[];
+      var total = 0;
+      for (final c in subs) {
+        total += 1 + countDesc(c.id);
+      }
+      return total;
+    }
     for (final e in children.entries) {
-      _entryChildCount[e.key] = e.value.length;
+      _entryChildCount[e.key] = countDesc(e.key);
     }
     // 去重：评论与同作者/同内容/3 秒内的直接回复视为同一条消息。
     final direct = children[widget.noteId] ?? const <PlazaNote>[];
@@ -944,6 +1061,69 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           scrollToReplyId: replyNote != null ? null : e.id,
         ),
       ),
+    );
+  }
+
+  /// 展开/收起某条评论/回复的长内容全文。
+  void _toggleContent(String entryId) {
+    setState(() {
+      if (!_expandedContentIds.remove(entryId)) {
+        _expandedContentIds.add(entryId);
+      }
+    });
+  }
+
+  /// 展开/收起根帖长内容全文。
+  void _toggleNoteContent() {
+    setState(() => _noteContentExpanded = !_noteContentExpanded);
+  }
+
+  /// 评论/回复内容行：默认折叠为 5 行，超长时出现「显示更多」。
+  /// [maxWidth] 为内容区实际宽度（调用处 LayoutBuilder 提供），用于测溢出。
+  Widget _buildCommentContent(String content, _DetailEntry e,
+      TextStyle contentStyle, double maxWidth) {
+    final expanded = _expandedContentIds.contains(e.id);
+    final tp = TextPainter(
+      text: TextSpan(text: content, style: contentStyle),
+      maxLines: 5,
+      ellipsis: '…',
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth);
+    final overflow = tp.didExceedMaxLines;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(content,
+            maxLines: expanded ? null : 5,
+            overflow: expanded ? null : TextOverflow.ellipsis,
+            style: contentStyle),
+        if (overflow && !expanded)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _toggleContent(e.id),
+            child: const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text('显示更多',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF70867A))),
+            ),
+          ),
+        if (expanded)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _toggleContent(e.id),
+            child: const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text('收起',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF70867A))),
+            ),
+          ),
+      ],
     );
   }
 
@@ -1093,7 +1273,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   }
 
   /// 评论与回复统一行：头像 + 昵称/认证/@账户/阅藏进度 + 内容 + 时间 + 六个指标 + 三点菜单。
-  /// 对评论的评论（嵌套回复）折叠进评论里，只显示「N条回复」入口。
+  /// 嵌套回复不在此展示：点击评论内容进入该评论自己的详情页查看其子回复。
   Widget _buildDetailRow(_DetailEntry e) {
     final me = AuthService.instance.currentUser.value;
     final comment = e.comment;
@@ -1120,7 +1300,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           ? reply.canonTotal
           : (profile?.canonTotal ?? 0),
     );
-    final childCount = _entryChildCount[e.id] ?? 0;
+    const contentStyle = TextStyle(fontSize: 15, color: _text, height: 1.6);
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Row(
@@ -1203,35 +1383,32 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                // 点击评论内容进入该评论自己的详情页（回复帖为连贴详情页）。
-                InkWell(
-                  onTap: () => _openEntryDetail(e),
-                  child: Text(e.content,
-                      style: const TextStyle(
-                          fontSize: 15, color: _text, height: 1.6)),
-                ),
-                // 时间戳：点击同样进入该评论自己的详情页。
-                const SizedBox(height: 6),
-                PostTimeLink(
-                  text: _feedTime(e.createdAt),
-                  onTap: () => _openEntryDetail(e),
-                ),
-                // 对评论的评论折叠进评论里：只显示「N条回复」入口。
-                if (childCount > 0) ...[
-                  const SizedBox(height: 4),
-                  InkWell(
+                // 内容 + 时间戳整块（昵称行下方到指标行上方）可点击，
+                // 进入该评论自己的详情页；指标行有各自按钮，不在此区域内。
+                // SizedBox 撑满整行，评论字数少时点击留白同样可进入。
+                SizedBox(
+                  width: double.infinity,
+                  child: InkWell(
                     onTap: () => _openEntryDetail(e),
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text('查看$childCount条回复 ›',
-                          style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF70867A))),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 长内容折叠 + 「显示更多」展开（内容区宽度由 LayoutBuilder 提供）。
+                        LayoutBuilder(
+                          builder: (context, constraints) =>
+                              _buildCommentContent(e.content, e, contentStyle,
+                                  constraints.maxWidth),
+                        ),
+                        // 时间戳：点击同样进入该评论自己的详情页。
+                        const SizedBox(height: 6),
+                        PostTimeLink(
+                          text: _feedTime(e.createdAt),
+                          onTap: () => _openEntryDetail(e),
+                        ),
+                      ],
                     ),
                   ),
-                ],
+                ),
                 const SizedBox(height: 10),
                 reply != null
                     ? _buildReplyActionsRow(reply)

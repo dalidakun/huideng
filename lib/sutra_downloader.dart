@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'sutra_asset_path.dart';
 
 /// 从 GitHub 仓库按需下载经书正文到应用文档目录。
 ///
@@ -91,6 +94,51 @@ class SutraDownloader {
         '${rel.replaceAll('/', Platform.pathSeparator)}');
     if (await f.exists()) return f;
     return null;
+  }
+
+  /// 同一部经书可能以多种路径形式被记录（打包资产路径 / 本机绝对路径），
+  /// 返回所有候选形式，供 `progress_` / `scroll_` 等按路径命名的键做兼容查找。
+  /// 旧版本曾用本机绝对路径命名进度键（如 `progress_/data/user/0/...`），
+  /// 换机/重装后按规范资产路径查不到，阅读进度会显示成 0。
+  static Future<List<String>> pathKeyVariants(String keyPath,
+      {String? title}) async {
+    final out = <String>[keyPath];
+    if (!keyPath.startsWith('assets/')) {
+      final resolved =
+          SutraAssetPath.resolve(title: title ?? '', filePath: keyPath);
+      if (resolved.startsWith('assets/') && !out.contains(resolved)) {
+        out.add(resolved);
+      }
+    } else if (keyPath.startsWith('assets/sutras_ascii/')) {
+      final f = await localFileForAssetPath(keyPath);
+      if (f != null && !out.contains(f.path)) out.add(f.path);
+    }
+    return out;
+  }
+
+  /// 从 `daily_sutra_history`（每日阅读历史，随账号同步）中取某部经书
+  /// 最近一次有进度的记录。重装/换机后 `progress_` 键可能缺失，此时用它
+  /// 兜底恢复阅读进度，避免进度显示清零。
+  static double progressFromDailyHistory(
+      SharedPreferences prefs, String? title) {
+    if (title == null || title.isEmpty) return 0.0;
+    try {
+      final raw = prefs.getString('daily_sutra_history') ?? '{}';
+      final history = jsonDecode(raw);
+      if (history is! Map) return 0.0;
+      final dates = history.keys.toList()..sort((a, b) => b.compareTo(a));
+      for (final d in dates) {
+        final list = history[d];
+        if (list is! List) continue;
+        for (final item in list) {
+          if (item is Map && item['title'] == title) {
+            final p = (item['progress'] as num?)?.toDouble() ?? 0.0;
+            if (p > 0) return p;
+          }
+        }
+      }
+    } catch (_) {}
+    return 0.0;
   }
 
   /// 下载源顺序：优先使用上次成功的镜像，避免每次都从超时的源重新开始。

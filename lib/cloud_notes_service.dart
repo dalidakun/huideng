@@ -593,6 +593,11 @@ class CloudNotesService {
     // 未登录时先确保有一个匿名会话，否则网关会拒绝调用（如浏览广场）。
     await AuthService.instance.ensureAnonymousForBrowse();
     final token = await AuthService.instance.getAccessToken();
+    if (token == null && AuthService.instance.isLoggedIn) {
+      // 已登录但取不到 access token：说明会话刷新失败（网络/令牌失效）。
+      // 打印现场便于排查「登录后掉线」问题，但不中断调用（云函数侧会判未授权）。
+      debugPrint('[cloud] 已登录但 access token 为空，云调用可能被判定未授权');
+    }
     final FunctionResponse res;
     try {
       res = await app.callFunction(
@@ -865,7 +870,18 @@ class CloudNotesService {
 
   /// 预取当前登录用户的关注/屏蔽记录。未登录时清空。
   /// 先拉取成功再整体替换，避免网络抖动时清空本地集合导致屏蔽失效。
-  Future<void> refreshFollowStates() async {
+  /// 并发调用去重：主页多个栏目同时预取时共享同一次请求。
+  Future<void>? _followStatesInFlight;
+  Future<void> refreshFollowStates() {
+    final existing = _followStatesInFlight;
+    if (existing != null) return existing;
+    final f = _refreshFollowStates();
+    _followStatesInFlight = f;
+    f.whenComplete(() => _followStatesInFlight = null);
+    return f;
+  }
+
+  Future<void> _refreshFollowStates() async {
     if (!AuthService.instance.isLoggedIn) {
       followingUserIds.clear();
       blockedUserIds.clear();

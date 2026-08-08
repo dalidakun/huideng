@@ -82,8 +82,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
   bool _homeError = false;
 
   /// 对方账号（优先用资料接口返回的账号，未拉取到则从已加载的笔记中取）。
-  String get _account =>
-      _profileAccount.isNotEmpty ? _profileAccount : (_notes.isNotEmpty ? _notes.first.authorAccount : '');
+  String get _account => _profileAccount.isNotEmpty
+      ? _profileAccount
+      : (_notes.isNotEmpty ? _notes.first.authorAccount : '');
 
   /// 对方是否已实名认证（优先用资料接口返回的认证状态）。
   bool get _verified =>
@@ -94,7 +95,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
       CloudNotesService.instance.blockedUserIds.contains(widget.userId);
 
   /// 是否查看的是自己的主页。
-  bool get _isSelf => AuthService.instance.currentUser.value?.id == widget.userId;
+  bool get _isSelf =>
+      AuthService.instance.currentUser.value?.id == widget.userId;
 
   /// 关注/取消关注对方（已关注的同修在首页「关注」栏目展示其新帖）。
   Future<void> _toggleFollow() async {
@@ -467,7 +469,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          height: 200,
+          height: 226,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -479,22 +481,96 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 height: 150,
                 child: _buildBanner(),
               ),
-              // 返回按钮。
+              // 返回按钮：半透明深色圆底 + 白色箭头，深色横幅上也清晰可见。
               Positioned(
-                left: 4,
+                left: 8,
                 top: 0,
                 child: SafeArea(
-                  child: IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.arrow_back_ios_new,
-                        color: _text, size: 20),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.arrow_back_ios_new,
+                          size: 18, color: Colors.white),
+                    ),
                   ),
                 ),
               ),
-              // 大头像（重叠在横幅下缘）。
+              // 三个点点 + 关注按钮：位于横幅右下角之外（横幅下边缘与昵称行之间，
+              // 与横幅下边缘保持距离，不重叠在横幅图上）。
+              Positioned(
+                right: 16,
+                top: 168,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _showBlockSheet,
+                      child: Container(
+                        width: _rowBtnSize,
+                        height: _rowBtnSize,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFECE9E4),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 4,
+                                offset: const Offset(0, 1)),
+                          ],
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(Icons.more_horiz,
+                            size: 18, color: Color(0xFF8C8C8C)),
+                      ),
+                    ),
+                    // 关注按钮：位于三个点点右侧（他人主页才显示）。
+                    if (!isSelf) ...[
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _toggleFollow,
+                        child: Container(
+                          height: _rowBtnSize,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: following
+                                ? const Color(0xFFECE9E4)
+                                : const Color(0xFF70867A),
+                            borderRadius:
+                                BorderRadius.circular(_rowBtnSize / 2),
+                            boxShadow: [
+                              BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.12),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 1)),
+                            ],
+                          ),
+                          child: Text(following ? '已关注' : '关注',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: following
+                                      ? const Color(0xFF8C8C8C)
+                                      : Colors.white,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              // 大头像（重叠在横幅下缘，下移贴紧昵称行）。
               Positioned(
                 left: 20,
-                top: 106,
+                top: 130,
                 child: Container(
                   width: 76,
                   height: 76,
@@ -553,7 +629,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         ],
                       ),
                     ),
-                    // 已点亮的修学徽章：只显示点亮的（无点亮不展示），位于三点左侧。
+                    // 已点亮的修学徽章：位于昵称行右侧（与「累积读经」时长分开显示），
+                    // 只显示点亮的（无点亮不展示），右缘与阅藏百分比对齐。
                     if (_profileReadingSeconds > 0) ...[
                       const SizedBox(width: 8),
                       ReadingBadgesRow(
@@ -562,52 +639,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         showLocked: false,
                       ),
                     ],
-                    // 三个点点：中性灰圆圈包裹，直径与关注按钮高度一致（屏蔽菜单）。
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _showBlockSheet,
-                      child: Container(
-                        width: _rowBtnSize,
-                        height: _rowBtnSize,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFECE9E4),
-                          shape: BoxShape.circle,
-                        ),
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.more_horiz,
-                            size: 18, color: Color(0xFF8C8C8C)),
-                      ),
-                    ),
-                    // 关注按钮：与三个点点同一行，位于其右侧（他人主页才显示）。
-                    if (!isSelf) ...[
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _toggleFollow,
-                        child: Container(
-                          height: _rowBtnSize,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: following
-                                ? const Color(0xFFECE9E4)
-                                : const Color(0xFF70867A),
-                            borderRadius: BorderRadius.circular(_rowBtnSize / 2),
-                          ),
-                          child: Text(following ? '已关注' : '关注',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: following
-                                      ? const Color(0xFF8C8C8C)
-                                      : Colors.white,
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
                 if (_account.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   Row(
                     children: [
                       Expanded(
@@ -627,18 +662,46 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 // 签名：未设置时默认展示固定法语（用户可自行修改）。
                 // 初始加载完成前不展示，避免「默认法语 → 用户签名」的闪变。
                 if (!_loading) ...[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 10),
                   Text(
                     _displayTagline,
                     style: const TextStyle(
                         fontSize: 14, color: _textSec, height: 1.4),
                   ),
                 ],
-                // 注册加入时间。
-                if (_profileJoinTime > 0) ...[
-                  const SizedBox(height: 4),
-                  Text('${_joinDateText(_profileJoinTime)}加入',
-                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                // 注册加入时间 + 累积读经（右侧，右缘与阅藏百分比对齐，距屏幕右缘20px；
+                // 时长块不裁剪、字符多时自动向左扩展，左侧加入时间被压缩省略）。
+                if (_profileJoinTime > 0 || _profileReadingSeconds > 0) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      // 单个 Expanded 吸收全部剩余空间：保证右侧时长块贴行最右，
+                      // 时长过长时自动往左扩展，加入时间省略。
+                      Expanded(
+                        child: Text(
+                          _profileJoinTime > 0
+                              ? '${_joinDateText(_profileJoinTime)}加入'
+                              : '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              const TextStyle(fontSize: 12, color: _textHint),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(Icons.history,
+                          size: 12, color: Color(0xFF70867A)),
+                      const SizedBox(width: 2),
+                      Text(
+                        '累积读经${_formatReadingTime(_profileReadingSeconds)}',
+                        maxLines: 1,
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF70867A),
+                            fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
                 ],
               ],
             ),
@@ -983,7 +1046,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
     }
     for (final e in _decodeCustomTypes(checkin['custom_checkin_types'])) {
       if (e.label.isNotEmpty) {
-        lines.add('${e.label} ${e.count.trim().isEmpty ? '0' : e.count.trim()}${e.unit}');
+        lines.add(
+            '${e.label} ${e.count.trim().isEmpty ? '0' : e.count.trim()}${e.unit}');
       }
     }
     return lines;
@@ -1024,7 +1088,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
   }
 
   /// 历史统计条目：各类型自使用以来累计的总量（与目标无关）。
-  List<CheckInStatEntry> _buildHistoryStatEntries(Map<String, dynamic>? checkin) {
+  List<CheckInStatEntry> _buildHistoryStatEntries(
+      Map<String, dynamic>? checkin) {
     if (checkin == null) return [];
     final totals = <String, double>{};
     for (final r in _decodeMapList(checkin['checkin_records'])) {
@@ -1075,8 +1140,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
               size: 16, color: Color(0xFF71867A)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(line,
-                style: const TextStyle(fontSize: 14, color: _text)),
+            child:
+                Text(line, style: const TextStyle(fontSize: 14, color: _text)),
           ),
         ],
       ),
@@ -1100,9 +1165,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
             children: [
               Text(g.label,
                   style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
+                      fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
               if (g.goal > 0)
                 Container(
@@ -1118,8 +1181,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                           fontWeight: FontWeight.w600)),
                 )
               else
-                Text('未设置目标',
-                    style: TextStyle(fontSize: 12, color: _textHint)),
+                Text('未设置目标', style: TextStyle(fontSize: 12, color: _textHint)),
             ],
           ),
           const SizedBox(height: 10),
@@ -1237,7 +1299,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
   /// 对方同步来的 prefs 值解析：JSON 字符串或数组 → Map 列表。
   List<Map<String, dynamic>> _decodeMapList(Object? v) {
     if (v is List) {
-      return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      return v
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
     }
     if (v is String) {
       try {
@@ -1498,6 +1563,13 @@ class _UserSpacePageState extends State<UserSpacePage> {
   String _joinDateText(int ms) {
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     return '${t.year}年${t.month}月${t.day}日';
+  }
+
+  /// 读经时长格式化：统一「x时x分」短格式（0 显示 0时0分，与修学主页精读卡同款）。
+  String _formatReadingTime(int seconds) {
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    return '$hours时$minutes分';
   }
 
   /// 展示的签名：未设置签名时，他人主页默认显示固定法语。

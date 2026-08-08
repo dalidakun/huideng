@@ -27,6 +27,7 @@ import 'note_sutra_links.dart';
 import 'hot_discussion_list_page.dart';
 import 'post_rich_content.dart';
 import 'reading_time_service.dart';
+import 'sutra_downloader.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -208,8 +209,11 @@ class StudyHubPageState extends State<StudyHubPage>
     _pulseController.repeat(reverse: true);
     _feedScroll.addListener(_onFeedScroll);
     ReadingTimeService.instance.ensureLoaded();
-    _loadData();
+    final loadDataFuture = _loadData();
     _loadFeed();
+    // 等栏目顺序就绪后，并行预取其余栏目：发现加载的同时，
+    // 讨论/关注/公告也在后台刷新，之后切换栏目数据已就绪，不再转圈。
+    loadDataFuture.then((_) => _prefetchOtherTabs());
     // 后台静默统计新帖数量，只更新「X条新帖子」提醒，不自动刷新列表。
     WidgetsBinding.instance.addObserver(this);
     _newPostTimer =
@@ -225,10 +229,16 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 登录态变化时刷新广场：屏蔽列表/关注列表就绪后，被屏蔽内容立即隐藏。
+  /// 登录/登出会改变关注口径，同时失效「关注」栏目缓存并重新预取，
+  /// 避免切换过去时还展示匿名期的空数据或转圈。
   void _onAuthChanged() {
     final u = AuthService.instance.currentUser.value;
+    final followCache = _cacheFor('follow');
+    followCache.initial = true;
+    followCache.notes.clear();
     if (u != null) {
       _loadFeed();
+      _refreshFeedInBackground('follow');
     } else {
       _refreshCurrentSmooth();
     }
@@ -304,6 +314,23 @@ class StudyHubPageState extends State<StudyHubPage>
     final read = await _isCurrentRead(title);
     final mvBases = await _loadMultiVolumeBases();
 
+    // 精读卡进度：兼容旧版本用本机绝对路径命名的 progress_ 键（换机/重装后
+    // 云端同步回来的可能是这类键，按规范路径查会显示 0）；progress_ 键缺失时
+    // 再从每日阅读历史（随账号同步）兜底恢复，避免进度清零。
+    var lastReadProgress = 0.0;
+    if (path != null) {
+      final variants =
+          await SutraDownloader.pathKeyVariants(path, title: title);
+      for (final v in variants) {
+        final p = prefs.getDouble('progress_$v') ?? 0.0;
+        if (p > lastReadProgress) lastReadProgress = p;
+      }
+    }
+    if (lastReadProgress <= 0) {
+      lastReadProgress =
+          SutraDownloader.progressFromDailyHistory(prefs, title);
+    }
+
     var plazaTabs = <String>['hot', 'discuss', 'follow', 'announce'];
     final tabOrderRaw = prefs.getString('plaza_tab_order');
     if (tabOrderRaw != null && tabOrderRaw.isNotEmpty) {
@@ -356,9 +383,7 @@ class StudyHubPageState extends State<StudyHubPage>
       _multiVolumeBases = mvBases;
       _lockedTitle = lockT;
       _lockedFilePath = lockP;
-      if (_currentFilePath != null) {
-        _progress = prefs.getDouble('progress_$_currentFilePath') ?? 0.0;
-      }
+      _progress = lastReadProgress;
       _currentFavorite = fav;
       _currentRead = read;
       _allowReadingShare = prefs.getBool('privacy_show_reading') ?? false;
@@ -1049,10 +1074,28 @@ class StudyHubPageState extends State<StudyHubPage>
     _loadFeed(newestFirst: true);
   }
 
+  /// 打开主页时并行预取其余栏目：发现加载的同时，讨论/关注/公告在后台刷新，
+  /// 之后切换到任一栏目，数据都已就绪，不再出现加载转圈。
+  void _prefetchOtherTabs() {
+    if (!mounted) return;
+    final current = _plazaTabs[_tabIndex];
+    for (final tab in _plazaTabs) {
+      if (tab == current || !_cacheFor(tab).initial) continue;
+      _refreshFeedInBackground(tab);
+    }
+  }
+
   /// 后台预取指定栏目的最新数据，直接写入缓存；若用户正好在该栏目则同步到界面。
   Future<void> _refreshFeedInBackground(String tab) async {
-    if (tab == 'announce') return;
     final c = _cacheFor(tab);
+    if (tab == 'announce') {
+      // 公告：后台预取列表；当前正好停在公告栏目时同步到界面。
+      await _loadAnnouncements();
+      if (!mounted) return;
+      c.initial = false;
+      c.error = _announceError;
+      return;
+    }
     try {
       if (tab == 'latest' || tab == 'hot') {
         // 用户正停留在最新优先视图时，后台刷新也保持最新排序，避免新帖被旧热帖顶掉。
@@ -1078,6 +1121,8 @@ class StudyHubPageState extends State<StudyHubPage>
         c.initial = false;
         c.error = false;
       } else {
+        // 关注：先确保关注/屏蔽列表就绪，再筛选关注同修的笔记。
+        await CloudNotesService.instance.refreshFollowStates();
         final ids = CloudNotesService.instance.followingUserIds;
         final all = <PlazaNote>[];
         final seen = <String>{};
@@ -1345,6 +1390,21 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   void _openPlazaNote(PlazaNote note) {
+    // 点击回复帖（b 类）进入其原贴（a 类）的详情页并定位到该回复，
+    // 与发现流里回复链节点的跳转行为保持一致（父帖不在列表里时回复帖
+    // 会独立成根帖展示，点击同样回到原贴详情页）。
+    if (note.repostKind == 'reply' && note.repostOf.isNotEmpty) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NoteDetailPage(
+            noteId: note.repostOf,
+            scrollToReplyId: note.id,
+          ),
+        ),
+      );
+      return;
+    }
     Navigator.push(context,
         MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)));
   }
@@ -1367,6 +1427,23 @@ class StudyHubPageState extends State<StudyHubPage>
     final List<dynamic> sutras = history[latestDate] as List<dynamic>;
 
     if (!mounted || sutras.isEmpty) return;
+
+    // 用实时进度（progress_ 键，兼容规范/绝对路径形式）替换历史快照进度，
+    // 保证与精读卡/继续阅读卡一致，不随打开次数显示陈旧数值。
+    final liveProgress = <String, double>{};
+    for (final s in sutras) {
+      final title = s['title']?.toString() ?? '';
+      final fp = s['filePath']?.toString();
+      if (title.isEmpty || fp == null || fp.isEmpty) continue;
+      final variants =
+          await SutraDownloader.pathKeyVariants(fp, title: title);
+      var p = 0.0;
+      for (final v in variants) {
+        final cur = prefs.getDouble('progress_$v') ?? 0.0;
+        if (cur > p) p = cur;
+      }
+      liveProgress[title] = p;
+    }
 
     showModalBottomSheet(
       context: context,
@@ -1401,7 +1478,9 @@ class StudyHubPageState extends State<StudyHubPage>
                   children: sutras.map((s) {
                     final title = s['title'] as String? ?? '';
                     final fp = s['filePath'] as String?;
-                    final progress = (s['progress'] as num?)?.toDouble() ?? 0.0;
+                    final snap = (s['progress'] as num?)?.toDouble() ?? 0.0;
+                    final progress =
+                        liveProgress[title] ?? snap;
                     return InkWell(
                       onTap: () {
                         Navigator.pop(ctx);
@@ -2767,6 +2846,8 @@ class StudyHubPageState extends State<StudyHubPage>
       onMore: (n) => _showFeedReplyMenu(n),
       // 广场以浏览为主：他人帖子不显示关注按钮，关注/屏蔽收进三点菜单。
       showFollowButton: false,
+      // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
+      onOpenSelf: widget.onOpenMyPage,
     );
     if (replies.isEmpty) {
       return Padding(
@@ -2804,6 +2885,8 @@ class StudyHubPageState extends State<StudyHubPage>
             onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
             onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
             onMore: (n) => _showFeedReplyMenu(n),
+            // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
+            onOpenSelf: widget.onOpenMyPage,
           ),
         ),
       ],
@@ -2886,10 +2969,14 @@ class StudyHubPageState extends State<StudyHubPage>
                 root.id: root.authorAccount,
                 for (final r in replies) r.id: r.authorAccount,
               },
+              // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
+              detailNoteId: root.id,
               onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
               onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
               onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
               onMore: (n) => _showFeedReplyMenu(n),
+              // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
+              onOpenSelf: widget.onOpenMyPage,
             ),
           ),
       ],
@@ -3451,8 +3538,15 @@ class _CheckInButtonState extends State<_CheckInButton>
           width: 60,
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-            color: checked ? _gold : _overlay,
+            color: checked ? _gold : _card,
             borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: checked ? 0.10 : 0.07),
+                blurRadius: checked ? 4 : 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,

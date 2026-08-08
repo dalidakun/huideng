@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'reading_page.dart';
+import 'sutra_downloader.dart';
 
 class StudyTrackerPage extends StatefulWidget {
   const StudyTrackerPage({super.key});
@@ -23,12 +24,24 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _currentTitle = prefs.getString('current_sutra_title');
-      _currentFilePath = prefs.getString('current_sutra_file_path');
-      if (_currentFilePath != null) {
-        _progress = prefs.getDouble('progress_$_currentFilePath') ?? 0.0;
+    var progress = 0.0;
+    final fp = prefs.getString('current_sutra_file_path');
+    final title = prefs.getString('current_sutra_title');
+    if (fp != null) {
+      final variants = await SutraDownloader.pathKeyVariants(fp, title: title);
+      for (final v in variants) {
+        final p = prefs.getDouble('progress_$v') ?? 0.0;
+        if (p > progress) progress = p;
       }
+    }
+    // progress_ 键缺失时从每日阅读历史兜底，避免重装/换机后进度清零。
+    if (progress <= 0) {
+      progress = SutraDownloader.progressFromDailyHistory(prefs, title);
+    }
+    setState(() {
+      _currentTitle = title;
+      _currentFilePath = fp;
+      _progress = progress;
       _recentSutras = _loadRecentSutras(prefs);
     });
   }
@@ -45,10 +58,17 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('current_sutra_title', title);
     await prefs.setString('current_sutra_file_path', filePath);
+    var progress = 0.0;
+    final variants =
+        await SutraDownloader.pathKeyVariants(filePath, title: title);
+    for (final v in variants) {
+      final p = prefs.getDouble('progress_$v') ?? 0.0;
+      if (p > progress) progress = p;
+    }
     setState(() {
       _currentTitle = title;
       _currentFilePath = filePath;
-      _progress = prefs.getDouble('progress_$filePath') ?? 0.0;
+      _progress = progress;
     });
   }
 

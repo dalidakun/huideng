@@ -34,6 +34,18 @@ class ReplyThread extends StatefulWidget {
 
   /// 原帖加载完成（布局就绪）后回调，详情页在此之后滚动定位。
   final VoidCallback? onReadyToScroll;
+
+  /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
+  final VoidCallback? onOpenSelf;
+
+  /// 是否渲染指标行（评论/转发/点赞/阅读）。详情页回复帖下方会统一渲染
+  /// 一排更完整的操作行（含收藏/分享），此时传 false 避免出现两排指标。
+  final bool showMetrics;
+
+  /// 点击帖子内容时的回调（如跳转到该帖自己的详情页）。为空时内容不可点
+  /// （保持外层手势处理，避免与 feed 的整卡点击冲突）。
+  final void Function(PlazaNote note)? onOpenDetail;
+
   const ReplyThread({
     super.key,
     required this.replyNote,
@@ -44,6 +56,9 @@ class ReplyThread extends StatefulWidget {
     this.pinned = false,
     this.replyNodeKey,
     this.onReadyToScroll,
+    this.onOpenSelf,
+    this.showMetrics = true,
+    this.onOpenDetail,
   });
 
   @override
@@ -52,6 +67,9 @@ class ReplyThread extends StatefulWidget {
 
 class _ReplyThreadState extends State<ReplyThread> {
   PlazaNote? _original;
+
+  /// 已点「显示更多」展开全文的节点 id 集合。
+  final Set<String> _expandedIds = {};
 
   /// 原帖作者是否已被当前用户屏蔽。
   bool get _originalBlocked =>
@@ -91,8 +109,17 @@ class _ReplyThreadState extends State<ReplyThread> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
+  /// 自己的头像且提供了 [onOpenSelf] 回调时走回调（与主页头像入口保持一致）。
   void _openUser(PlazaNote note) {
     if (note.ownerUserId.isEmpty) return;
+    final me = AuthService.instance.currentUser.value;
+    if (me != null && me.id == note.ownerUserId) {
+      final cb = widget.onOpenSelf;
+      if (cb != null) {
+        cb();
+        return;
+      }
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -101,7 +128,7 @@ class _ReplyThreadState extends State<ReplyThread> {
     );
   }
 
-  Widget _header(PlazaNote note, {required bool showMenu}) {
+  Widget _header(PlazaNote note) {
     final me = AuthService.instance.currentUser.value;
     // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
     final postPct = postCanonPercent(
@@ -112,59 +139,70 @@ class _ReplyThreadState extends State<ReplyThread> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Flexible(
-          // 点击昵称进入该用户个人主页空间。
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _openUser(note),
-            child: Text(note.authorName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+        // 昵称区用 Expanded 撑满，三点菜单推到右缘，与下方评论行对齐。
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                // 点击昵称进入该用户个人主页空间。
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _openUser(note),
+                  child: Text(note.authorName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: _text)),
+                ),
+              ),
+              if (note.authorVerified) ...[
+                const SizedBox(width: 3),
+                const Icon(Icons.verified, size: 15, color: Color(0xFF70867A)),
+              ],
+              if (note.authorAccount.isNotEmpty) ...[
+                const SizedBox(width: 3),
+                Flexible(
+                  // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
+                  child: AccountLink(
+                    account: note.authorAccount,
+                    onTap: () {
+                      if (note.ownerUserId.isNotEmpty) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) =>
+                                  UserSpacePage(userId: note.ownerUserId)),
+                        );
+                      }
+                    },
+                  ),
+                ),
+                // 阅藏进度百分比：灰色（与账户名同色系）。
+                const SizedBox(width: 3),
+                Text('·',
+                    style: TextStyle(
+                        fontSize: 12, color: Color(0xFF8C8C8C))),
+                const SizedBox(width: 2),
+                Text(postPct,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF8C8C8C))),
+              ],
+            ],
           ),
         ),
-        if (note.authorVerified) ...[
-          const SizedBox(width: 3),
-          const Icon(Icons.verified, size: 15, color: Color(0xFF70867A)),
-        ],
-        if (note.authorAccount.isNotEmpty) ...[
-          const SizedBox(width: 3),
-          Flexible(
-            // 点击 @账户名 进入该用户个人主页（按下时变 70867A）。
-            child: AccountLink(
-              account: note.authorAccount,
-              onTap: () {
-                if (note.ownerUserId.isNotEmpty) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) =>
-                            UserSpacePage(userId: note.ownerUserId)),
-                  );
-                }
-              },
-            ),
-          ),
-          // 阅藏进度百分比：灰色（与账户名同色系）。
-          const SizedBox(width: 3),
-          Text('·',
-              style: TextStyle(fontSize: 12, color: Color(0xFF8C8C8C))),
-          const SizedBox(width: 2),
-          Text(postPct,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 12, color: Color(0xFF8C8C8C))),
-        ],
-        if (showMenu && widget.onMore != null) ...[
+        // 原贴与回复都带三点菜单（提供 onMore 时），尺寸与下方评论行一致。
+        if (widget.onMore != null) ...[
           const SizedBox(width: 4),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => widget.onMore!(note),
             child: const Padding(
-              padding: EdgeInsets.all(2),
-              child: Icon(Icons.more_horiz, size: 18, color: Color(0xFF8C8C8C)),
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.more_horiz, size: 22, color: Color(0xFF8C8C8C)),
             ),
           ),
         ],
@@ -213,8 +251,8 @@ class _ReplyThreadState extends State<ReplyThread> {
             behavior: HitTestBehavior.opaque,
             onTap: () => widget.onMore!(note),
             child: const Padding(
-              padding: EdgeInsets.all(2),
-              child: Icon(Icons.more_horiz, size: 18, color: Color(0xFF8C8C8C)),
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.more_horiz, size: 22, color: Color(0xFF8C8C8C)),
             ),
           ),
         ],
@@ -284,45 +322,126 @@ class _ReplyThreadState extends State<ReplyThread> {
     );
   }
 
-  Widget _body(PlazaNote note, {required bool showMenu}) {
+  Widget _body(PlazaNote note,
+      {required bool showMenu, required double textMaxWidth}) {
     final content = NoteSutraLinks.plainText(note.content);
+    // 内容 + 时间戳整块（昵称行下方到指标行上方）：提供 onOpenDetail 时整块
+    // 可点击进入该帖详情页；指标行有各自按钮，不在此区域内。
+    final openArea = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (content.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          // 内容默认折叠为 8 行，超长时出现「显示更多」。
+          // 注意：不能用 LayoutBuilder 测宽——节点外层是 IntrinsicHeight，
+          // LayoutBuilder 不支持返回固有尺寸，会导致布局异常。宽度由 build
+          // 顶层 LayoutBuilder 算好传入（见 [build]）。
+          ..._expandedContent(content, note, textMaxWidth),
+        ],
+        // 发布时间：内容与指标行之间。
+        const SizedBox(height: 6),
+        PostTimeLink(
+          text: _time(note.createdAt),
+          onTap: () => _openPost(note, showMenu: showMenu),
+        ),
+      ],
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showMenu && widget.pinned)
           _pinnedHeader(note)
         else
-          _header(note, showMenu: showMenu),
-        if (content.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(content,
-              maxLines: 8,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
-        ],
-        // 发布时间：内容与指标行之间。
-        const SizedBox(height: 6),
-        PostTimeLink(
-          text: _time(note.createdAt),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => NoteDetailPage(
-                      noteId: note.id,
-                      // 评论贴打开时定位到评论贴位置。
-                      scrollToReplyId: showMenu ? note.id : null,
-                    )),
-          ),
-        ),
+          _header(note),
+        if (widget.onOpenDetail != null)
+          // SizedBox 撑满整行，帖子字数少时点击留白同样可进入。
+          SizedBox(
+            width: double.infinity,
+            child: InkWell(
+              onTap: () => widget.onOpenDetail!(note),
+              child: openArea,
+            ),
+          )
+        else
+          openArea,
         const SizedBox(height: 8),
-        _metrics(note),
+        if (widget.showMetrics) _metrics(note),
       ],
     );
   }
 
+  /// 点击帖子内容/时间：有 [onOpenDetail] 时走回调；否则直接打开该帖详情页。
+  void _openPost(PlazaNote note, {required bool showMenu}) {
+    final cb = widget.onOpenDetail;
+    if (cb != null) {
+      cb(note);
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => NoteDetailPage(
+                noteId: note.id,
+                // 评论贴打开时定位到评论贴位置。
+                scrollToReplyId: showMenu ? note.id : null,
+              )),
+    );
+  }
+
+  /// 折叠/展开的节点内容 + 「显示更多/收起」按钮。
+  /// [textMaxWidth] 为内容区实际可用宽度（build 顶层算好传入），用于测溢出。
+  List<Widget> _expandedContent(
+      String content, PlazaNote note, double textMaxWidth) {
+    final expanded = _expandedIds.contains(note.id);
+    final tp = TextPainter(
+      text: TextSpan(
+        text: content,
+        style: const TextStyle(fontSize: 15, color: _text, height: 1.6),
+      ),
+      maxLines: 8,
+      ellipsis: '…',
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: textMaxWidth);
+    final overflow = tp.didExceedMaxLines;
+    return [
+      Text(content,
+          maxLines: expanded ? null : 8,
+          overflow: expanded ? null : TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
+      if (overflow && !expanded)
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _expandedIds.add(note.id)),
+          child: const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text('显示更多',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF70867A))),
+          ),
+        ),
+      if (expanded)
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _expandedIds.remove(note.id)),
+          child: const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text('收起',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF70867A))),
+          ),
+        ),
+    ];
+  }
+
   /// 一个节点：左侧头像 + 竖线（非最后节点向下延伸），右侧内容。
   Widget _nodeRow(PlazaNote note,
-      {required bool connectDown, required bool showMenu}) {
+      {required bool connectDown,
+      required bool showMenu,
+      required double textMaxWidth}) {
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -341,7 +460,8 @@ class _ReplyThreadState extends State<ReplyThread> {
             ],
           ),
           const SizedBox(width: 10),
-          Expanded(child: _body(note, showMenu: showMenu)),
+          Expanded(
+              child: _body(note, showMenu: showMenu, textMaxWidth: textMaxWidth)),
         ],
       ),
     );
@@ -411,20 +531,32 @@ class _ReplyThreadState extends State<ReplyThread> {
   @override
   Widget build(BuildContext context) {
     final original = _original;
-    final replyNode =
-        _nodeRow(widget.replyNote, connectDown: false, showMenu: true);
-    final replyKey = widget.replyNodeKey;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (original != null)
-          _originalBlocked
-              ? _blockedOriginalNode(original)
-              : _nodeRow(original, connectDown: true, showMenu: false),
-        replyKey == null
-            ? replyNode
-            : KeyedSubtree(key: replyKey, child: replyNode),
-      ],
+    // 顶层 LayoutBuilder 获取本组件可用宽度：节点内头像列宽 44 + 间距 10 = 54，
+    // 其余为内容区宽度，用于折叠文本的溢出检测。LayoutBuilder 不能放进
+    // IntrinsicHeight（不支持返回固有尺寸），故在此统一测宽再下传。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final textMaxWidth = w.isFinite ? (w < 54 ? 0.0 : w - 54) : 0.0;
+        final replyNode = _nodeRow(widget.replyNote,
+            connectDown: false, showMenu: true, textMaxWidth: textMaxWidth);
+        final replyKey = widget.replyNodeKey;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (original != null)
+              _originalBlocked
+                  ? _blockedOriginalNode(original)
+                  : _nodeRow(original,
+                      connectDown: true, showMenu: false, textMaxWidth: textMaxWidth),
+            // 原贴与回复之间拉开间距，避免两帖贴得太紧。
+            if (original != null) const SizedBox(height: 16),
+            replyKey == null
+                ? replyNode
+                : KeyedSubtree(key: replyKey, child: replyNode),
+          ],
+        );
+      },
     );
   }
 }

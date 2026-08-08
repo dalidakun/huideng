@@ -82,6 +82,13 @@ class AuthService {
   /// 会话恢复失败后是否已安排过后台重试（每个进程只重试一次）。
   bool _restoreRetried = false;
 
+  /// 串行化并发刷新：避免多个调用同时用同一个 refresh token 刷新，
+  /// 轮换竞争导致其中一个拿到 invalid_grant 被误判为会话失效。
+  Future<bool>? _refreshLock;
+
+  /// 当前 [currentUser] 是否为本地缓存兜底身份（真实会话恢复成功前）。
+  bool _currentUserIsCached = false;
+
   /// 本地登录身份缓存（uid/手机号/昵称）：会话恢复失败时兜底保持登录态。
   AuthUser? _cachedLogin;
 
@@ -143,11 +150,18 @@ class AuthService {
   /// 背景：服务端登录/刷新响应只带 `expires_in`、不带 `expires_at`，
   /// SDK 的 `_isTokenExpired` 在 `expiresAt == null` 时永远返回 false，
   /// 因此 SDK 永远不会自动刷新；access token 2 小时过期后，任何请求都会
-  /// 收到 401 `unauthenticated`，SDK 会把会话直接从本地存储删除——
-  /// 这就是「第二天打开就需要重新登录」的根因。这里在 App 侧补上主动刷新。
+  /// 收到 401，SDK 会把会话直接从本地存储删除——
+  /// 这就是「重新打开就需要重新登录」的根因。这里在 App 侧补上主动刷新，
+  /// 并用互斥锁串行化并发刷新，避免同刷新令牌轮换竞争被误判失效。
   ///
   /// 返回是否持有可用会话。
-  Future<bool> ensureFreshSession() async {
+  Future<bool> ensureFreshSession() {
+    final lock = _refreshLock ??= _ensureFreshSession();
+    // 并发调用复用同一次刷新结果；完成后释放锁。
+    return lock.whenComplete(() => _refreshLock = null);
+  }
+
+  Future<bool> _ensureFreshSession() async {
     final app = await _ensureApp();
     if (app == null) return false;
     try {
@@ -156,14 +170,44 @@ class AuthService {
       final session = res.data!.session!;
       final exp = _tokenExpiry(session.accessToken);
       if (exp != null && exp.difference(DateTime.now()).inSeconds > 600) {
+        _syncUserFromSession(session);
         return true;
       }
-      // 已过期 / 无法解析过期时间：主动刷新一次（刷新令牌 31 天有效）。
+      // 已过期 / 无法解析过期时间：主动刷新（刷新令牌 7/31 天有效）。
+      // 刷新令牌是单次轮换制：与 SDK 自动刷新并发时可能拿到 invalid_grant
+      // （服务端返回「may has been refreshed by other process」），此时
+      // currentSession 可能已持有对方换出的新令牌——等一拍重试即可自愈。
       final rr = await app.auth.refreshSession();
-      return rr.isSuccess;
-    } catch (_) {
+      if (rr.isSuccess) {
+        _syncUserFromSession(rr.data?.session);
+        return true;
+      }
+      debugPrint('[auth] refresh failed: '
+          '${rr.error?.code}/${rr.error?.message}');
+      await Future.delayed(const Duration(milliseconds: 1200));
+      final rr2 = await app.auth.refreshSession();
+      if (rr2.isSuccess) {
+        _syncUserFromSession(rr2.data?.session);
+        return true;
+      }
+      debugPrint('[auth] refresh retry failed: '
+          '${rr2.error?.code}/${rr2.error?.message}');
+      return false;
+    } catch (e) {
+      debugPrint('[auth] ensureFreshSession error: $e');
       return false;
     }
+  }
+
+  /// 会话健康时把真实用户同步到 [currentUser]：启动恢复被瞬时失败跳过
+  /// （当前是缓存兜底身份或未登录）时，一旦会话恢复成功立即补齐真实登录态，
+  /// 避免「会话明明有效却一直显示未登录」。
+  void _syncUserFromSession(Session? session) {
+    final user = session?.user;
+    if (user == null || user.isAnonymous == true) return;
+    if (currentUser.value != null && !_currentUserIsCached) return;
+    _currentUserIsCached = false;
+    unawaited(_applyUser(user));
   }
 
   /// 解析 access token（JWT）的 exp 过期时间；解析失败返回 null。
@@ -267,6 +311,7 @@ class AuthService {
       debugPrint('[auth] restoreSession failed: $e');
       final cached = _cachedLogin;
       if (cached != null) {
+        _currentUserIsCached = true;
         currentUser.value = cached;
         if (!_restoreRetried) {
           _restoreRetried = true;
@@ -280,30 +325,33 @@ class AuthService {
     }
   }
 
-  /// 后台重试一次会话恢复：成功则用真实用户覆盖缓存身份。
-  /// 仍失败则清掉缓存兜底身份并回到未登录，避免"假登录 + 云端数据全空"。
+  /// 后台重试一次会话恢复：成功则自愈为真实用户。
+  /// 失败时保留缓存兜底身份、绝不主动登出——瞬时网络失败不等于会话失效，
+  /// 之后任意一次成功刷新都会通过 [_syncUserFromSession] 自动补齐真实登录态；
+  /// 仅当会话已彻底不存在（被 SDK 清除）或只剩匿名会话时才回退未登录。
   Future<void> _retryRestoreSession() async {
     await Future.delayed(const Duration(seconds: 4));
     try {
       final app = await _ensureApp();
-      if (app != null && await ensureFreshSession()) {
-        final res = await app.auth.getSession();
-        if (res.isSuccess && res.data?.user != null) {
-          final user = res.data!.user!;
-          if (user.isAnonymous != true) {
-            await _applyUser(user);
-            unawaited(_ensureDefaultAccount(user.phone ?? ''));
-            return;
-          }
-        }
+      if (app == null) return;
+      final res = await app.auth.getSession();
+      final user = res.data?.user;
+      final realUser = user != null && user.isAnonymous != true;
+      if (!res.isSuccess || res.data?.session == null || !realUser) {
+        // 会话不存在或仅剩匿名会话：清掉缓存身份回到未登录，重新登录即恢复。
+        debugPrint('[auth] retry restore: 会话丢失/仅剩匿名会话，强制登出 '
+            '(cached=${_cachedLogin?.id})');
+        _cachedLogin = null;
+        await _clearCachedLogin();
+        _currentUserIsCached = false;
+        currentUser.value = null;
+        return;
       }
+      // 会话仍在：刷新并自愈（成功时 _syncUserFromSession 已补齐真实登录态）。
+      await ensureFreshSession();
     } catch (_) {
-      // 仍失败：继续走下面的登出兜底。
+      // 网络等瞬时异常：保持缓存身份，之后的调用会通过 ensureFreshSession 自愈。
     }
-    // 会话确实不可用：清掉缓存身份，回到未登录，数据不会丢，重新登录即恢复。
-    _cachedLogin = null;
-    await _clearCachedLogin();
-    currentUser.value = null;
   }
 
   /// 把一次真实登录会话应用到当前状态：写缓存身份、广播登录态、补默认昵称。
@@ -311,6 +359,7 @@ class AuthService {
     final authUser = _toAuthUser(user);
     _cachedLogin = authUser;
     await _saveCachedLogin(authUser);
+    _currentUserIsCached = false;
     currentUser.value = authUser;
     await _ensureDefaultNickname(user);
     await _recordFirstJoin();
@@ -331,6 +380,24 @@ class AuthService {
     }
     final app = await _ensureApp();
     if (app == null) return;
+    // 已有真实登录身份（含缓存兜底）时绝不建匿名会话：匿名登录会覆盖本地
+    // 存储的真实会话（credentials_<envId>），真实 refresh token 一旦被换掉，
+    // 下次启动会话恢复就会被判定为「仅剩匿名会话」而清掉缓存身份强制登出、
+    // 需要重新登录——这正是「登录后几小时/第二天再打开就掉线」的根因。
+    // 会话短暂失效时保持缓存身份，由后续 ensureFreshSession 自愈；
+    // 云调用走 publishable key 匿名级即可到达云函数，登录相关接口不受影响。
+    if (isLoggedIn) {
+      await ensureFreshSession();
+      return;
+    }
+    try {
+      final res = await app.auth.getSession();
+      if (res.isSuccess && res.data?.session != null) return;
+    } catch (_) {
+      // 无会话（SDK getSession 抛 no_session）→ 走到下面的匿名登录兜底。
+    }
+    // 兜底建匿名会话前再查一次：防止与登录流程竞态——登录刚把真实会话
+    // 写入存储/内存时，这里的匿名登录把它覆盖掉，导致登录态与真实会话脱节。
     try {
       final res = await app.auth.getSession();
       if (res.isSuccess && res.data?.session != null) return;
@@ -426,6 +493,7 @@ class AuthService {
     _cachedLogin = null;
     await _clearCachedLogin();
     _restoreRetried = false;
+    _currentUserIsCached = false;
     _restoreCompleted = true;
     currentUser.value = null;
   }

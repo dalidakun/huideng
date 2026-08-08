@@ -155,8 +155,11 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
       return;
     }
     if (await SutraDownloader.isDownloaded(id)) {
-      final local = await SutraDownloader.localFile(id);
-      _openReading(sutra, local.path);
+      // 传规范资产路径（assets/sutras_ascii/...）而不是本地绝对路径：
+      // 绝对路径会被写进 current_sutra_file_path 等 prefs 并同步到云端，
+      // 换机/重新登录后会被误判为「未下载」。
+      _openReading(sutra,
+          SutraAssetPath.resolve(title: sutra.title, filePath: sutra.filePath));
       return;
     }
     final assetPath = SutraAssetPath.resolve(title: sutra.title, filePath: sutra.filePath);
@@ -186,8 +189,8 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
     try {
       await SutraDownloader.download(id);
       if (!mounted) return;
-      final local = await SutraDownloader.localFile(id);
-      _openReading(sutra, local.path);
+      _openReading(sutra,
+          SutraAssetPath.resolve(title: sutra.title, filePath: sutra.filePath));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('下载失败：$e')));

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -1311,7 +1310,7 @@ class _ActorAvatar extends StatelessWidget {
           ),
           child: ClipOval(
             child: Image.memory(
-              base64Decode(avatarB64),
+              decodeAvatarBase64(avatarB64),
               width: radius * 2,
               height: radius * 2,
               fit: BoxFit.cover,

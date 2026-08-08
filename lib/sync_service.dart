@@ -12,6 +12,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'reading_badges.dart';
 import 'reading_time_service.dart';
+import 'sutra_asset_path.dart';
 
 /// 全量本地数据云同步：
 ///  - 收集所有 SharedPreferences 键 + 头像文件 + sutras_list.json，
@@ -108,6 +109,9 @@ class SyncService with WidgetsBindingObserver {
 
   void _onAuthChanged() {
     if (AuthService.instance.isLoggedIn) {
+      // 登录后立即重读本地读经统计（云端数据恢复完成后再读一次），
+      // 避免早先读到的 0 一直显示到重启应用。
+      unawaited(ReadingTimeService.instance.reload());
       unawaited(_fullSync());
     } else {
       _lastPushedJson = null;
@@ -168,6 +172,9 @@ class SyncService with WidgetsBindingObserver {
     // 云端恢复的昵称/签名立即刷新到登录态展示（重装/清数据后启动时读到的是默认值）。
     await AuthService.instance.reloadLocalProfile();
     await push();
+    // 云端恢复的读经时长可能晚于进程内首次读取：重新读取本地统计并广播，
+    // 首页「今日读经/累积读经」立即显示正确值，无需重启应用。
+    await ReadingTimeService.instance.reload();
     // 登录/恢复会话后立即上报阅藏进度与读经时长，主页尽快有数据。
     await _reportCanonProgress();
     await ReadingTimeService.instance.reportToCloud();
@@ -188,7 +195,13 @@ class SyncService with WidgetsBindingObserver {
         final cv = e.value;
         final lv = _readPref(prefs, key);
         if (lv == null && cv != null) {
-          _writePref(prefs, key, cv);
+          // 经书路径类键先规范化再写入，避免旧版本遗留的本机绝对路径
+          // 被恢复后误判为「未下载」。
+          _writePref(
+              prefs,
+              key,
+              _normalizeSutraPaths(
+                  key, cv, prefs, cPrefs['current_sutra_title']?.toString()));
           changed = true;
         } else if (cv is String &&
             lv is String &&
@@ -202,10 +215,13 @@ class SyncService with WidgetsBindingObserver {
         } else if (key.startsWith('progress_')) {
           // 阅读进度取较大值（读得更远的一边为准），
           // 避免换机后同步完成前先读了书导致云端进度被覆盖回退。
-          final ld = _toDouble(lv);
+          // 键名先按规范路径归一：旧版本曾用本机绝对路径命名进度键，
+          // 不归一的话换机/重装后按规范路径查不到，进度会显示成 0。
+          final canonKey = _canonicalProgressKey(key, prefs, cPrefs);
+          final ld = _toDouble(_readPref(prefs, canonKey));
           final cd = _toDouble(cv);
-          if (ld != null && cd != null && cd > ld) {
-            prefs.setDouble(key, cd);
+          if (cd != null && (ld == null || cd > ld)) {
+            prefs.setDouble(canonKey, cd);
             changed = true;
           }
         }
@@ -286,7 +302,22 @@ class SyncService with WidgetsBindingObserver {
       // scroll_*/read_* 只在本机使用，不上传云端。
       if (_isLocalOnlyRedundantKey(key)) continue;
       final v = _readPref(prefs, key);
-      if (v != null) prefsData[key] = v;
+      if (v != null) {
+        if (key.startsWith('progress_')) {
+          // 进度键按规范路径归一后再上传：旧版本曾用本机绝对路径命名，
+          // 随账号流转到其他设备后按规范路径查不到，进度会显示成 0。
+          final canonKey = _canonicalProgressKey(key, prefs, null);
+          final existing = _toDouble(prefsData[canonKey]);
+          final nv = _toDouble(v);
+          if (nv != null && (existing == null || nv > existing)) {
+            prefsData[canonKey] = v;
+          }
+        } else {
+          // 经书路径类键规范化后再上传：本机绝对路径随账号流转到其他设备
+          // 会让已下载的经书被误判为「未下载」。
+          prefsData[key] = _normalizeSutraPaths(key, v, prefs);
+        }
+      }
     }
 
     final files = <String, dynamic>{};
@@ -429,7 +460,8 @@ class SyncService with WidgetsBindingObserver {
     return null;
   }
 
-  void _writePref(SharedPreferences prefs, String key, Object v) {
+  void _writePref(SharedPreferences prefs, String key, Object? v) {
+    if (v == null) return;
     if (v is String) {
       prefs.setString(key, v);
     } else if (v is bool) {
@@ -440,6 +472,99 @@ class SyncService with WidgetsBindingObserver {
       prefs.setDouble(key, v);
     } else if (v is List) {
       prefs.setStringList(key, v.map((e) => e.toString()).toList());
+    }
+  }
+
+  /// prefs 中记录经书文件路径的键。旧版本可能把本机绝对路径存进这些键并
+  /// 上传云端，换机/重新登录恢复后会把已下载的经书误判为「未下载」。
+  static const Set<String> _sutraPathKeys = {
+    'current_sutra_file_path',
+    'locked_sutra_file_path',
+    'last_read_filePath',
+    'recent_sutras',
+    'daily_sutra_history',
+  };
+
+  /// 把单条经书路径规范化为打包资产路径（assets/sutras_ascii/...）。
+  /// 无法识别（如用户自选本地文件）时原样返回。
+  String? _canonicalSutraPath(String? path, String? title) {
+    if (path == null || path.isEmpty) return path;
+    final resolved =
+        SutraAssetPath.resolve(title: title ?? '', filePath: path);
+    return resolved.startsWith('assets/') ? resolved : path;
+  }
+
+  /// 最近阅读条目格式 `经名|||路径`，只规范化路径部分。
+  String _canonicalRecentEntry(String entry) {
+    final sep = entry.indexOf('|||');
+    if (sep <= 0) return entry;
+    final title = entry.substring(0, sep);
+    final path = entry.substring(sep + 3);
+    final canon = _canonicalSutraPath(path, title);
+    return canon == path ? entry : '$title|||$canon';
+  }
+
+  /// 每日阅读历史 JSON（`{日期: [{title, filePath, progress}]}`），
+  /// 规范化其中的 filePath；解析失败或无需修改时原样返回。
+  String _canonicalDailyHistory(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return raw;
+      var changed = false;
+      for (final list in decoded.values) {
+        if (list is! List) continue;
+        for (final item in list) {
+          if (item is! Map) continue;
+          final title = item['title']?.toString() ?? '';
+          final fp = item['filePath']?.toString();
+          final canon = fp == null ? null : _canonicalSutraPath(fp, title);
+          if (canon != null && canon != fp) {
+            item['filePath'] = canon;
+            changed = true;
+          }
+        }
+      }
+      return changed ? jsonEncode(decoded) : raw;
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  /// 把 `progress_<路径>` 键的路径部分归一为规范资产路径。
+  /// 旧版本曾用本机绝对路径命名进度键（如 `progress_/data/user/0/...`），
+  /// 换机/重装后按规范资产路径查不到，阅读进度会显示成 0。
+  /// [cloudPrefs] 为云端 prefs 映射（可能含 current_sutra_title），供解析路径。
+  String _canonicalProgressKey(
+      String key, SharedPreferences prefs, Object? cloudPrefs) {
+    final p = key.substring('progress_'.length);
+    final title = (cloudPrefs is Map)
+        ? cloudPrefs['current_sutra_title']?.toString()
+        : null;
+    final t = title ?? prefs.getString('current_sutra_title') ?? '';
+    final canon = _canonicalSutraPath(p, t);
+    return canon == p ? key : 'progress_$canon';
+  }
+
+  /// 同步前（收集）与同步后（拉取写入）对含经书路径的 prefs 值做规范化，
+  /// 其他键原样返回。[title] 用于解析无 ID 的路径，优先取云端标题。
+  Object? _normalizeSutraPaths(
+      String key, Object? v, SharedPreferences prefs, [String? title]) {
+    if (!_sutraPathKeys.contains(key)) return v;
+    final t = title ?? prefs.getString('current_sutra_title') ?? '';
+    switch (key) {
+      case 'current_sutra_file_path':
+      case 'locked_sutra_file_path':
+      case 'last_read_filePath':
+        return _canonicalSutraPath(v?.toString(), t);
+      case 'recent_sutras':
+        if (v is List) {
+          return v.map((e) => _canonicalRecentEntry(e.toString())).toList();
+        }
+        return v;
+      case 'daily_sutra_history':
+        return v is String ? _canonicalDailyHistory(v) : v;
+      default:
+        return v;
     }
   }
 

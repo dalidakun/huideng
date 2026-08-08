@@ -1321,7 +1321,13 @@ class SutraListPageState extends State<SutraListPage>
     final fp = prefs.getString('last_read_filePath');
     var progress = 0.0;
     if (fp != null) {
-      progress = prefs.getDouble('progress_$fp') ?? 0.0;
+      // 兼容旧版本用本机绝对路径命名的 progress_ 键，取所有形式的最大值。
+      final variants =
+          await SutraDownloader.pathKeyVariants(fp, title: t);
+      for (final v in variants) {
+        final p = prefs.getDouble('progress_$v') ?? 0.0;
+        if (p > progress) progress = p;
+      }
     }
     if (!mounted) return;
     setState(() {

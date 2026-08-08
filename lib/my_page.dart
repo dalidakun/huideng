@@ -870,6 +870,9 @@ class PostBlock extends StatefulWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final bool showFollowButton;
+
+  /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
+  final VoidCallback? onOpenSelf;
   const PostBlock({
     required this.ownerUserId,
     required this.nickname,
@@ -896,6 +899,7 @@ class PostBlock extends StatefulWidget {
     this.onEdit,
     this.onDelete,
     this.showFollowButton = true,
+    this.onOpenSelf,
   });
 
   @override
@@ -940,9 +944,18 @@ class _PostBlockState extends State<PostBlock> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
+  /// 自己的头像且提供了 [onOpenSelf] 回调时走回调（与主页头像入口保持一致）。
   void _openUserSpace() {
     final uid = widget.ownerUserId;
     if (uid == null || uid.isEmpty) return;
+    final me = AuthService.instance.currentUser.value;
+    if (me != null && me.id == uid) {
+      final cb = widget.onOpenSelf;
+      if (cb != null) {
+        cb();
+        return;
+      }
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -996,31 +1009,40 @@ class _PostBlockState extends State<PostBlock> {
     final noteId = widget.noteId;
     if (noteId == null) return;
     if (!AuthService.instance.isLoggedIn) return;
-    await showModalBottomSheet<void>(
+    // 统一使用大弹层输入（minLines 3 / maxLines 10），长内容编辑体验更好。
+    final content = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => ReplyInputSheet(
-        onSubmit: (content) => _submitReply(sheetCtx, content),
+      builder: (_) => const SheetTextInput(
+        title: '回复',
+        hint: '写下你的回复…',
+        maxLength: 500,
+        minLines: 3,
+        maxLines: 10,
+        confirmText: '发表',
       ),
     );
+    if (content == null || content.isEmpty) return;
+    await _submitReply(content);
   }
 
-  Future<void> _submitReply(BuildContext sheetCtx, String content) async {
+  Future<void> _submitReply(String content) async {
     final noteId = widget.noteId;
     if (noteId == null || content.isEmpty) return;
     try {
       // 1) 评论原帖：只增加评论量，不在帖子下方内嵌显示。
       await CloudNotesService.instance.createComment(noteId, content);
       // 2) 生成新帖子（引用转发样式：回复内容在上、被回复的帖子在下）。
-      await CloudNotesService.instance
+      final replyId = await CloudNotesService.instance
           .repostNote(noteId, quote: content, kind: 'reply');
       if (!mounted) return;
       setState(() => _commentCount++);
-      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-      if (mounted) showPostToast(context, '已回复');
+      if (mounted && replyId.isNotEmpty) {
+        showPostPublishedToast(context, replyId);
+      }
       if (widget.onReplyPosted != null) {
         try {
           final dynamic cb = widget.onReplyPosted!;
@@ -1552,110 +1574,43 @@ void showPostToast(BuildContext context, String text) {
   });
 }
 
-/// 回复输入弹窗：独立拥有 TextEditingController，随弹窗生命周期释放，
-/// 避免在弹窗退出动画期间 dispose 控制器触发 dependents.isEmpty 断言。
-class ReplyInputSheet extends StatefulWidget {
-  final void Function(String content) onSubmit;
-  const ReplyInputSheet({required this.onSubmit});
-
-  @override
-  State<ReplyInputSheet> createState() => ReplyInputSheetState();
-}
-
-class ReplyInputSheetState extends State<ReplyInputSheet> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _send() {
-    final content = _controller.text.trim();
-    if (content.isEmpty) return;
-    widget.onSubmit(content);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: Container(
-                  height: 44,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.circular(22),
-                  ),
-                  child: TextField(
-                    controller: _controller,
-                    autofocus: true,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _send(),
-                    style: const TextStyle(fontSize: 14, color: _text),
-                    decoration: const InputDecoration(
-                      hintText: '写下你的回复…',
-                      hintStyle: TextStyle(color: _textHint),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                onPressed: _send,
-                icon: const Icon(Icons.send_rounded, color: _primary, size: 22),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 回复某帖：打开回复输入弹窗，发表后生成连贴回复帖并回调刷新列表。
 Future<void> replyToNote(
     BuildContext context, PlazaNote target, dynamic onPosted) async {
   if (!AuthService.instance.isLoggedIn) return;
-  await showModalBottomSheet<void>(
+  // 统一使用大弹层输入（minLines 3 / maxLines 10），长内容编辑体验更好。
+  final content = await showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     backgroundColor: _card,
     shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-    builder: (sheetCtx) => ReplyInputSheet(
-      onSubmit: (content) =>
-          submitReplyPost(sheetCtx, context, target, content, onPosted),
+    builder: (_) => const SheetTextInput(
+      title: '回复',
+      hint: '写下你的回复…',
+      maxLength: 500,
+      minLines: 3,
+      maxLines: 10,
+      confirmText: '发表',
     ),
   );
+  if (content == null || content.isEmpty) return;
+  await submitReplyPost(context, target, content, onPosted);
 }
 
-Future<void> submitReplyPost(BuildContext sheetCtx, BuildContext parentCtx,
-    PlazaNote target, String content, dynamic onPosted) async {
+Future<void> submitReplyPost(BuildContext parentCtx, PlazaNote target,
+    String content, dynamic onPosted) async {
   if (content.isEmpty) return;
   try {
     await CloudNotesService.instance.createComment(target.id, content);
-    await CloudNotesService.instance
+    final replyId = await CloudNotesService.instance
         .repostNote(target.id, quote: content, kind: 'reply');
-    if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-    if (parentCtx.mounted) showPostToast(parentCtx, '已回复');
-    if (onPosted != null) {
-      final dynamic cb = onPosted;
-      final r = cb();
-      if (r is Future) await r.catchError((_) {});
+    if (parentCtx.mounted && replyId.isNotEmpty) {
+      showPostPublishedToast(parentCtx, replyId);
     }
+    final dynamic cb = onPosted;
+    final r = cb();
+    if (r is Future) await r.catchError((_) {});
   } catch (e) {
     if (parentCtx.mounted) showPostToast(parentCtx, e.toString());
   }
@@ -1751,6 +1706,9 @@ class PostFeedRow extends StatelessWidget {
   final VoidCallback? onDelete;
   final void Function(PlazaNote note)? onMore;
   final bool showFollowButton;
+
+  /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
+  final VoidCallback? onOpenSelf;
   const PostFeedRow({
     required this.note,
     this.onReplyPosted,
@@ -1761,6 +1719,7 @@ class PostFeedRow extends StatelessWidget {
     this.onDelete,
     this.onMore,
     this.showFollowButton = true,
+    this.onOpenSelf,
   });
 
   static String plainContent(PlazaNote note) =>
@@ -1792,6 +1751,7 @@ class PostFeedRow extends StatelessWidget {
             onLike: (n) => likeTargetNote(context, n, onReplyPosted),
             onRepost: (n) => forwardNote(context, n, onReplyPosted),
             onMore: onMore,
+            onOpenSelf: onOpenSelf,
           ),
         ),
       );
@@ -1821,6 +1781,7 @@ class PostFeedRow extends StatelessWidget {
       quoteBox: note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
       isRepost: note.repostOf.isNotEmpty && note.repostKind != 'reply',
       isQuoteRepost: note.quoteContent.isNotEmpty,
+      onOpenSelf: onOpenSelf,
       stats: buildStatsRow(
         commentCount: note.commentCount,
         repostCount: note.repostCount,

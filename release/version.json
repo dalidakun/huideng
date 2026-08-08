@@ -1,7 +1,7 @@
 {
-  "version": "1.0.6",
-  "versionCode": 7,
+  "version": "1.0.7",
+  "versionCode": 8,
   "downloadPage": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/download.html",
-  "downloadUrl": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/huideng_v1.0.6.apk",
-  "notes": "1.0.6：帖子时间戳移出昵称行（放内容与指标之间，含回复链/连贴/引用框/详情页/通知卡），昵称优先完整显示、@账户名过长省略、百分比不省略不换行；时间戳带小时（今日x时/x月x日x时）；广场有新帖未查看时底部「修学」菜单图标显示 70867A 小圆点；修复头像/横幅重复图片：换图时清理旧文件、启动时兜底清理，系统相册不再出现多份重复图片。"
+  "downloadUrl": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/huideng_v1.0.7.apk",
+  "notes": "1.0.7：修复登录状态异常掉线——access token 过期后自动静默刷新（此前 SDK 不会自动刷新，2 小时后会话被服务端清除，重新打开 App 就需要重新登录）；会话恢复失败不再误登出，网络恢复后自动补回登录态；并修复并发刷新导致的会话失效竞争。"
 }

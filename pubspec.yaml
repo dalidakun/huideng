@@ -1,8 +1,8 @@
-name: my_flutter_app
+﻿name: my_flutter_app
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.6+7
+version: 1.0.7+8
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -71,7 +71,7 @@ flutter_native_splash:
   ios: true
   ios_content_mode: scaleAspectFill
 
-  # Android 12+ 的系统 Splash 只能显示"居中的方形图标"，无法全屏铺满。
-  # 这里先不强行塞入 1080x2340 的长图（会被挤压/裁成一块），默认回退为 app icon。
+  # Android 12+ 鐨勭郴缁?Splash 鍙兘鏄剧ず"灞呬腑鐨勬柟褰㈠浘鏍?锛屾棤娉曞叏灞忛摵婊°€?
+  # 杩欓噷鍏堜笉寮鸿濉炲叆 1080x2340 鐨勯暱鍥撅紙浼氳鎸ゅ帇/瑁佹垚涓€鍧楋級锛岄粯璁ゅ洖閫€涓?app icon銆?
   android_12:
     color: "#EDEDED"

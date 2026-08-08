@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -77,11 +78,8 @@ class _ReadingPageState extends State<ReadingPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     ReadingTimeService.instance.start();
-    _resolvedFilePath = widget.filePath == null
-        ? null
-        : (widget.filePath!.startsWith('assets/')
-            ? SutraAssetPath.resolve(title: widget.title, filePath: widget.filePath)
-            : widget.filePath);
+    _resolvedFilePath =
+        widget.filePath == null ? null : _canonicalFilePath(widget.filePath!);
     _scrollController = ScrollController();
     _scrollController.addListener(_scrollListener);
     _pageController = PageController();
@@ -92,14 +90,29 @@ class _ReadingPageState extends State<ReadingPage>
     _loadFavoriteState();
   }
 
+  /// 把任意形式的经书路径规范化为打包资产路径（assets/sutras_ascii/...）：
+  ///  - 打包资产路径（含旧版中文路径）按经书 ID 重新定位；
+  ///  - 本机真实存在的文件（用户自选导入等）保持原样直接读取；
+  ///  - 其余（如换机/重新登录后从云端同步回来的旧设备绝对路径）按经书 ID
+  ///    归一到本地下载目录对应的资产路径，保证本地副本检查能命中。
+  String _canonicalFilePath(String p) {
+    if (p.startsWith('assets/')) {
+      return SutraAssetPath.resolve(title: widget.title, filePath: p);
+    }
+    if (File(p).existsSync()) return p;
+    final resolved = SutraAssetPath.resolve(title: widget.title, filePath: p);
+    return resolved.startsWith('assets/') ? resolved : p;
+  }
+
   void _saveCurrentSutra() {
-    if (widget.filePath == null) return;
+    final savePath = _resolvedFilePath ?? widget.filePath;
+    if (savePath == null) return;
     SharedPreferences.getInstance().then((prefs) async {
       await prefs.setString('current_sutra_title', widget.title);
-      await prefs.setString('current_sutra_file_path', widget.filePath!);
+      await prefs.setString('current_sutra_file_path', savePath);
       final recent = prefs.getStringList('recent_sutras') ?? [];
       recent.removeWhere((e) => e.startsWith('${widget.title}|||'));
-      recent.insert(0, '${widget.title}|||${widget.filePath}');
+      recent.insert(0, '${widget.title}|||$savePath');
       if (recent.length > 20) recent.removeRange(20, recent.length);
       await prefs.setStringList('recent_sutras', recent);
 
@@ -108,9 +121,9 @@ class _ReadingPageState extends State<ReadingPage>
       final raw = prefs.getString('daily_sutra_history') ?? '{}';
       final Map<String, dynamic> history = jsonDecode(raw);
       final List<dynamic> dayList = (history[today] as List<dynamic>?) ?? [];
-      dayList.removeWhere((e) => e['filePath'] == widget.filePath);
-      final progress = prefs.getDouble('progress_${widget.filePath}') ?? 0.0;
-      dayList.insert(0, {'title': widget.title, 'filePath': widget.filePath, 'progress': progress});
+      dayList.removeWhere((e) => e['filePath'] == savePath);
+      final progress = prefs.getDouble('progress_$savePath') ?? 0.0;
+      dayList.insert(0, {'title': widget.title, 'filePath': savePath, 'progress': progress});
       history[today] = dayList;
       await prefs.setString('daily_sutra_history', jsonEncode(history));
     });
@@ -120,8 +133,25 @@ class _ReadingPageState extends State<ReadingPage>
     final prefs = await SharedPreferences.getInstance();
     final keyPath = _resolvedFilePath ?? widget.filePath;
     if (keyPath == null) return;
-    _savedPosition = prefs.getDouble('scroll_$keyPath');
-    _savedProgress = prefs.getDouble('progress_$keyPath');
+    // 兼容旧版本用本机绝对路径命名的 progress_/scroll_ 键（换机/重装后
+    // 云端同步回来的可能是这类键）：按所有候选路径形式取最大进度/首个位置。
+    final variants =
+        await SutraDownloader.pathKeyVariants(keyPath, title: widget.title);
+    double? savedPos;
+    double? savedProg;
+    for (final v in variants) {
+      final p = prefs.getDouble('progress_$v');
+      if (p != null && (savedProg == null || p > savedProg)) savedProg = p;
+      savedPos ??= prefs.getDouble('scroll_$v');
+    }
+    // progress_ 键缺失时从每日阅读历史兜底恢复，避免重装/换机后进度清零。
+    if (savedProg == null || savedProg <= 0) {
+      final fromHistory =
+          SutraDownloader.progressFromDailyHistory(prefs, widget.title);
+      if (fromHistory > 0) savedProg = fromHistory;
+    }
+    _savedPosition = savedPos;
+    _savedProgress = savedProg;
 
     if (mounted && _savedProgress != null) {
       setState(() {
@@ -260,7 +290,6 @@ class _ReadingPageState extends State<ReadingPage>
     } else if (widget.filePath != null) {
       await prefs.setString('last_read_filePath', widget.filePath!);
     }
-
     final filePath = _resolvedFilePath ?? widget.filePath;
     if (filePath != null) {
       // 1. 优先加载已编辑的副本（如果存在）
@@ -289,6 +318,17 @@ class _ReadingPageState extends State<ReadingPage>
       File? localCopy;
       if (filePath.startsWith('assets/sutras_ascii/')) {
         localCopy = await SutraDownloader.localFileForAssetPath(filePath);
+      }
+      // 兜底：任何形式的路径（如换机/重新登录后从云端同步回来的旧设备
+      // 绝对路径）只要能从标题/路径中识别出经书 ID，就去本地下载目录找副本，
+      // 避免已下载的经书被误判为「未下载」而反复提示重新下载。
+      if (localCopy == null) {
+        final id = SutraDownloader.extractId(widget.title, filePath);
+        if (id != null &&
+            id.isNotEmpty &&
+            await SutraDownloader.isDownloaded(id)) {
+          localCopy = await SutraDownloader.localFile(id);
+        }
       }
       if (localCopy != null) {
         try {
@@ -325,6 +365,9 @@ class _ReadingPageState extends State<ReadingPage>
               _needsDownload = true;
             });
           }
+          // 正文未打包进 APK：能识别出经书 ID 时自动开始下载（文件通常只有
+          // 几十 KB），顶部横幅会显示下载进度，用户无需手动点击「下载」。
+          unawaited(_downloadContent());
         }
       } else {
         try {
@@ -344,6 +387,9 @@ class _ReadingPageState extends State<ReadingPage>
               _isLoadingContent = false;
               _needsDownload = true;
             });
+            // 本机文件缺失（如换机/重新登录后恢复的旧路径）：能识别出经书
+            // ID 时自动重新下载，顶部横幅显示进度。
+            unawaited(_downloadContent());
           }
         } catch (e) {
           if (mounted) {
