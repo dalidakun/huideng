@@ -27,15 +27,12 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
     var progress = 0.0;
     final fp = prefs.getString('current_sutra_file_path');
     final title = prefs.getString('current_sutra_title');
+    // 进度以阅读页实时写入的规范路径键为准；规范键缺失时兼容旧键名，
+    // 并回退每日阅读历史，避免换机/重装后进度清零。
     if (fp != null) {
-      final variants = await SutraDownloader.pathKeyVariants(fp, title: title);
-      for (final v in variants) {
-        final p = prefs.getDouble('progress_$v') ?? 0.0;
-        if (p > progress) progress = p;
-      }
-    }
-    // progress_ 键缺失时从每日阅读历史兜底，避免重装/换机后进度清零。
-    if (progress <= 0) {
+      progress = await SutraDownloader.latestProgressForPath(prefs, fp,
+          title: title);
+    } else {
       progress = SutraDownloader.progressFromDailyHistory(prefs, title);
     }
     setState(() {
@@ -58,13 +55,9 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('current_sutra_title', title);
     await prefs.setString('current_sutra_file_path', filePath);
-    var progress = 0.0;
-    final variants =
-        await SutraDownloader.pathKeyVariants(filePath, title: title);
-    for (final v in variants) {
-      final p = prefs.getDouble('progress_$v') ?? 0.0;
-      if (p > progress) progress = p;
-    }
+    // 进度以规范路径键的最新值为准（缺失时兼容旧键名）。
+    final progress =
+        await SutraDownloader.latestProgressForPath(prefs, filePath, title: title);
     setState(() {
       _currentTitle = title;
       _currentFilePath = filePath;

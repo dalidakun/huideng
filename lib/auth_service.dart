@@ -96,6 +96,9 @@ class AuthService {
   static const String _kCachedPhone = 'user_login_phone';
   static const String _kCachedNickname = 'user_login_nickname';
 
+  /// 会话修复备份：过期 access token 修复时暂存会话 JSON，失败时恢复原会话。
+  static const String _kSessionBackupKey = 'auth_session_backup';
+
   /// 最近一次 [requestSmsCode] 返回的验证码校验回调，用于 [loginWithSmsCode]。
   Future<SignInRes> Function(VerifyOtpParams params)? _pendingVerifyOtp;
   String? _pendingPhone;
@@ -131,11 +134,18 @@ class AuthService {
 
   /// 当前登录会话的 access token，用于云函数侧校验调用者身份。
   /// 未登录或取不到时返回 null。
+  /// 刷新失败时同样返回 null——绝不把过期 token 交给云调用，
+  /// 否则请求会被网关判为 unauthenticated、SDK 直接删除本地真实会话，
+  /// 导致下次启动被强制登出、需要重新登录。
   Future<String?> getAccessToken() async {
     final app = await _ensureApp();
     if (app == null) return null;
     try {
-      await ensureFreshSession();
+      final ok = await ensureFreshSession();
+      if (!ok) {
+        debugPrint('[auth] getAccessToken: 会话刷新失败，返回 null');
+        return null;
+      }
       final res = await app.auth.getSession();
       if (!res.isSuccess) return null;
       final token = res.data?.session?.accessToken;
@@ -165,6 +175,10 @@ class AuthService {
     final app = await _ensureApp();
     if (app == null) return false;
     try {
+      // access token 已过期时先修复：SDK 带过期 token 去刷新会被网关判为
+      // unauthenticated 并删除本地会话（→ 下次启动强制登出）。这里先清空
+      // 会话让后续请求用 publishable key 作合法 header 再刷新，可彻底避免。
+      await _repairExpiredSession(app);
       final res = await app.auth.getSession();
       if (!res.isSuccess || res.data?.session == null) return false;
       final session = res.data!.session!;
@@ -173,30 +187,105 @@ class AuthService {
         _syncUserFromSession(session);
         return true;
       }
-      // 已过期 / 无法解析过期时间：主动刷新（刷新令牌 7/31 天有效）。
-      // 刷新令牌是单次轮换制：与 SDK 自动刷新并发时可能拿到 invalid_grant
-      // （服务端返回「may has been refreshed by other process」），此时
-      // currentSession 可能已持有对方换出的新令牌——等一拍重试即可自愈。
-      final rr = await app.auth.refreshSession();
-      if (rr.isSuccess) {
-        _syncUserFromSession(rr.data?.session);
-        return true;
+      // token 仍有效但临近过期（<10 分钟）：此时 header 合法，可安全刷新。
+      // 如果 token 已过期（exp 在过去），绝不能再调 refreshSession()——
+      // 它会带着过期 header 去刷新，被网关判 unauthenticated 删会话。
+      // _repairExpiredSession 已经尝试过合法 header 刷新，失败就保持现状，
+      // 等下次网络恢复再刷新，绝不冒险删会话。
+      if (exp != null && !DateTime.now().isAfter(exp)) {
+        final rr = await app.auth.refreshSession();
+        if (rr.isSuccess) {
+          _syncUserFromSession(rr.data?.session);
+          return true;
+        }
+        debugPrint('[auth] refresh failed: '
+            '${rr.error?.code}/${rr.error?.message}');
+        await Future.delayed(const Duration(milliseconds: 1200));
+        final rr2 = await app.auth.refreshSession();
+        if (rr2.isSuccess) {
+          _syncUserFromSession(rr2.data?.session);
+          return true;
+        }
+        debugPrint('[auth] refresh retry failed: '
+            '${rr2.error?.code}/${rr2.error?.message}');
       }
-      debugPrint('[auth] refresh failed: '
-          '${rr.error?.code}/${rr.error?.message}');
-      await Future.delayed(const Duration(milliseconds: 1200));
-      final rr2 = await app.auth.refreshSession();
-      if (rr2.isSuccess) {
-        _syncUserFromSession(rr2.data?.session);
-        return true;
-      }
-      debugPrint('[auth] refresh retry failed: '
-          '${rr2.error?.code}/${rr2.error?.message}');
+      debugPrint('[auth] ensureFreshSession: token 已过期且修复失败，保持缓存身份不删会话');
       return false;
     } catch (e) {
       debugPrint('[auth] ensureFreshSession error: $e');
       return false;
     }
+  }
+
+  /// 修复"过期 access token"：服务端刷新接口会校验 Authorization header，
+  /// 冷启动/后台恢复时本地 access token 已过期（2 小时），SDK 用这个过期
+  /// token 作 header 去刷新会被网关判为 `unauthenticated`（实测确认）并删除
+  /// 本地会话，导致下次启动 `_retryRestoreSession` 强制登出、需要重新登录。
+  ///
+  /// 做法：备份会话 JSON → 清空内存会话（下一次请求改用 publishable key 作
+  /// 合法 header）→ 用备份的 refresh token 走 `setSession` 重新建立会话；
+  /// 失败则恢复原会话，绝不让会话凭空丢失。修复中途被杀时，下次启动从
+  /// 备份重建会话再继续刷新。
+  Future<void> _repairExpiredSession(CloudBase app) async {
+    // ignore: invalid_use_of_visible_for_testing_member
+    var session = app.httpClient.currentSession;
+    if (session == null) {
+      // 上次修复中途被杀：从备份重建会话，再走下面的刷新修复。
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final backup = prefs.getString(_kSessionBackupKey);
+        if (backup != null && backup.isNotEmpty) {
+          session = Session.fromJson(jsonDecode(backup));
+          // ignore: invalid_use_of_visible_for_testing_member
+          app.httpClient.currentSession = session;
+        }
+      } catch (_) {}
+      if (session == null) return;
+    }
+    final rt = session.refreshToken;
+    if (rt == null || rt.isEmpty) return;
+    final exp = _tokenExpiry(session.accessToken);
+    final now = DateTime.now();
+    if (exp != null && now.isBefore(exp.subtract(const Duration(minutes: 5)))) {
+      return; // access token 仍有效，无需修复。
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final backup = jsonEncode(session.toJson());
+      await prefs.setString(_kSessionBackupKey, backup);
+      // 清空会话：后续请求（刷新）会用 publishable key 作 Authorization，
+      // 避免带过期 access token 被网关判 unauthenticated 删除会话。
+      // ignore: invalid_use_of_visible_for_testing_member
+      app.httpClient.currentSession = null;
+      final sr = await app.auth.setSession(SetSessionReq(refreshToken: rt));
+      if (sr.isSuccess) {
+        debugPrint('[auth] 过期会话已用合法 header 重新刷新');
+        // 同步备份最新会话，防止修复刚完成后被杀读到旧 refresh token。
+        try {
+          final prefs2 = await SharedPreferences.getInstance();
+          // ignore: invalid_use_of_visible_for_testing_member
+          final ns = app.httpClient.currentSession;
+          if (ns != null) {
+            await prefs2
+                .setString(_kSessionBackupKey, jsonEncode(ns.toJson()));
+          }
+        } catch (_) {}
+        return;
+      }
+      debugPrint(
+          '[auth] setSession 刷新失败：${sr.error?.code}/${sr.error?.message}');
+    } catch (e) {
+      debugPrint('[auth] repair expired session error: $e');
+    }
+    // 失败：恢复原会话，避免会话被误删后彻底丢失。
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final backup = prefs.getString(_kSessionBackupKey);
+      if (backup != null && backup.isNotEmpty) {
+        // ignore: invalid_use_of_visible_for_testing_member
+        app.httpClient.currentSession = Session.fromJson(jsonDecode(backup));
+      }
+    } catch (_) {}
   }
 
   /// 会话健康时把真实用户同步到 [currentUser]：启动恢复被瞬时失败跳过
@@ -326,28 +415,15 @@ class AuthService {
   }
 
   /// 后台重试一次会话恢复：成功则自愈为真实用户。
-  /// 失败时保留缓存兜底身份、绝不主动登出——瞬时网络失败不等于会话失效，
-  /// 之后任意一次成功刷新都会通过 [_syncUserFromSession] 自动补齐真实登录态；
-  /// 仅当会话已彻底不存在（被 SDK 清除）或只剩匿名会话时才回退未登录。
+  /// **绝不因瞬时失败强制登出**：只要本地缓存身份还在，就保持登录态，
+  /// 后续任意一次 ensureFreshSession 成功都会自动补齐真实会话。
+  /// 只有 refresh token 真正失效（7/31 天）才需要用户手动重新登录。
   Future<void> _retryRestoreSession() async {
     await Future.delayed(const Duration(seconds: 4));
     try {
       final app = await _ensureApp();
       if (app == null) return;
-      final res = await app.auth.getSession();
-      final user = res.data?.user;
-      final realUser = user != null && user.isAnonymous != true;
-      if (!res.isSuccess || res.data?.session == null || !realUser) {
-        // 会话不存在或仅剩匿名会话：清掉缓存身份回到未登录，重新登录即恢复。
-        debugPrint('[auth] retry restore: 会话丢失/仅剩匿名会话，强制登出 '
-            '(cached=${_cachedLogin?.id})');
-        _cachedLogin = null;
-        await _clearCachedLogin();
-        _currentUserIsCached = false;
-        currentUser.value = null;
-        return;
-      }
-      // 会话仍在：刷新并自愈（成功时 _syncUserFromSession 已补齐真实登录态）。
+      // 尝试刷新恢复会话：成功时 _syncUserFromSession 已补齐真实登录态。
       await ensureFreshSession();
     } catch (_) {
       // 网络等瞬时异常：保持缓存身份，之后的调用会通过 ensureFreshSession 自愈。
@@ -496,6 +572,10 @@ class AuthService {
     _currentUserIsCached = false;
     _restoreCompleted = true;
     currentUser.value = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kSessionBackupKey);
+    } catch (_) {}
   }
 
   /// 设置/修改账号名称与密码（需已登录）。

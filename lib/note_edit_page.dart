@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -438,7 +439,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
         _hasChanges = false;
         _savingCloud = false;
       });
-      _showSavedToast(sharedNow ? '已保存并分享' : '已保存到草稿');
+      _showSavedToastWithView(sharedNow ? '已发表' : '已保存草稿', newNote);
       // 保存成功后返回上一页（修学主页等）。
       Navigator.pop(context);
     }
@@ -799,42 +800,78 @@ class _NoteEditPageState extends State<NoteEditPage> {
     });
   }
 
-  void _showSavedToast(String message) {
+  /// 保存成功后的底部常驻提示：「已发表/已保存草稿，点击查看」。
+  /// 不会自动消失；点击「点击查看」关闭并进入所发帖子/草稿，点 X 仅关闭。
+  void _showSavedToastWithView(String prefix, Map<String, dynamic> note) {
+    if (!mounted) return;
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
+    void dismiss() {
+      if (entry.mounted) entry.remove();
+    }
+
     entry = OverlayEntry(
       builder: (ctx) {
-        final topInset = MediaQuery.of(ctx).padding.top;
+        final bottomInset = MediaQuery.of(ctx).padding.bottom;
         return Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: Padding(
-            padding: EdgeInsets.only(top: topInset + kToolbarHeight + 10),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: Material(
-                color: _primary,
-                borderRadius: BorderRadius.circular(20),
-                elevation: 0,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.check_circle, size: 14, color: Colors.white),
-                      const SizedBox(width: 5),
-                      Text(message,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            decoration: TextDecoration.none,
-                            decorationColor: Colors.transparent,
-                          )),
-                    ],
-                  ),
+          left: 16,
+          right: 16,
+          bottom: bottomInset + 84,
+          child: Material(
+            color: _primary,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                dismiss();
+                final cloudId = note['cloudId'] as String?;
+                if (cloudId != null && cloudId.isNotEmpty) {
+                  // 已分享到菩提空间：进入帖子详情页。
+                  Navigator.of(ctx).push(
+                    MaterialPageRoute(
+                        builder: (_) => NoteDetailPage(noteId: cloudId)),
+                  );
+                } else {
+                  // 仅本地草稿：进入编辑页查看。
+                  Navigator.of(ctx).push(
+                    MaterialPageRoute(builder: (_) => NoteEditPage(note: note)),
+                  );
+                }
+              },
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          text: '$prefix，',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13),
+                          children: const [
+                            TextSpan(
+                              text: '点击查看',
+                              style: TextStyle(
+                                color: Color(0xFF70867A),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: dismiss,
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.close,
+                            size: 16, color: Colors.white70),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -843,9 +880,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
       },
     );
     overlay.insert(entry);
-    Future.delayed(const Duration(milliseconds: 1600), () {
-      if (entry.mounted) entry.remove();
-    });
   }
 
   Future<bool> _onWillPop() async {

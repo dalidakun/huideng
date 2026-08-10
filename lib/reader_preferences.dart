@@ -13,7 +13,10 @@ class ReaderPreferences {
 
   static Future<double> getFontSize() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(fontSizeKey) ?? 16.0;
+    final v = prefs.get(fontSizeKey);
+    if (v is double) return v;
+    if (v is int) return v.toDouble();
+    return 16.0;
   }
 
   static Future<void> setFontSize(double size) async {
@@ -33,7 +36,10 @@ class ReaderPreferences {
 
   static Future<double> getLineHeight() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(lineHeightKey) ?? 1.8;
+    final v = prefs.get(lineHeightKey);
+    if (v is double) return v;
+    if (v is int) return v.toDouble();
+    return 1.8;
   }
 
   static Future<void> setLineHeight(double height) async {

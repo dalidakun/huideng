@@ -101,6 +101,14 @@ class StudyHubPageState extends State<StudyHubPage>
     _refreshCurrentSmooth();
   }
 
+  /// 双击底部「修学」菜单图标：无新帖时回到页面最顶部。
+  void scrollToTop() {
+    if (_feedScroll.hasClients && _feedScroll.offset > 0) {
+      _feedScroll.animateTo(0,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+  }
+
   String? _currentTitle;
   String? _currentFilePath;
   double _progress = 0.0;
@@ -314,21 +322,17 @@ class StudyHubPageState extends State<StudyHubPage>
     final read = await _isCurrentRead(title);
     final mvBases = await _loadMultiVolumeBases();
 
-    // 精读卡进度：兼容旧版本用本机绝对路径命名的 progress_ 键（换机/重装后
-    // 云端同步回来的可能是这类键，按规范路径查会显示 0）；progress_ 键缺失时
-    // 再从每日阅读历史（随账号同步）兜底恢复，避免进度清零。
+    // 精读卡进度：以阅读页实时写入的最新进度为准（规范路径键存在时，
+    // 即使为 0 也代表最近一次关闭时的进度，不被更早的更高进度覆盖）；
+    // 规范键缺失时兼容旧版本用本机绝对路径命名的 progress_ 键（换机/重装后
+    // 云端同步回来的可能是这类键，按规范路径查会显示 0），progress_ 键全部
+    // 缺失时再从每日阅读历史（随账号同步）兜底恢复，避免进度清零。
     var lastReadProgress = 0.0;
     if (path != null) {
-      final variants =
-          await SutraDownloader.pathKeyVariants(path, title: title);
-      for (final v in variants) {
-        final p = prefs.getDouble('progress_$v') ?? 0.0;
-        if (p > lastReadProgress) lastReadProgress = p;
-      }
-    }
-    if (lastReadProgress <= 0) {
       lastReadProgress =
-          SutraDownloader.progressFromDailyHistory(prefs, title);
+          await SutraDownloader.latestProgressForPath(prefs, path, title: title);
+    } else {
+      lastReadProgress = SutraDownloader.progressFromDailyHistory(prefs, title);
     }
 
     var plazaTabs = <String>['hot', 'discuss', 'follow', 'announce'];
@@ -1422,14 +1426,33 @@ class StudyHubPageState extends State<StudyHubPage>
     final raw = prefs.getString('daily_sutra_history') ?? '{}';
     final Map<String, dynamic> history = jsonDecode(raw);
     if (history.isEmpty) return;
-    final dates = history.keys.toList()..sort((a, b) => b.compareTo(a));
-    final latestDate = dates.first;
-    final List<dynamic> sutras = history[latestDate] as List<dynamic>;
+
+    // 最近三天（今天 + 前两日）阅读的经文：按日期从新到旧、同日内最新在前
+    // 聚合，同一部经书（可能跨天/多路径重复出现）只保留最近一次记录。
+    final now = DateTime.now();
+    final dayKeys = <String>[];
+    for (var i = 0; i < 3; i++) {
+      final d = now.subtract(Duration(days: i));
+      dayKeys.add(
+          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}');
+    }
+    final seenTitles = <String>{};
+    final sutras = <dynamic>[];
+    for (final d in dayKeys) {
+      final list = history[d];
+      if (list is! List) continue;
+      for (final s in list) {
+        final title = s is Map ? (s['title']?.toString() ?? '') : '';
+        if (title.isEmpty || !seenTitles.add(title)) continue;
+        sutras.add(s);
+      }
+    }
 
     if (!mounted || sutras.isEmpty) return;
 
-    // 用实时进度（progress_ 键，兼容规范/绝对路径形式）替换历史快照进度，
-    // 保证与精读卡/继续阅读卡一致，不随打开次数显示陈旧数值。
+    // 用实时进度（progress_ 键，以规范路径键的最新值为准，缺失时才兼容
+    // 绝对路径形式）替换历史快照进度，保证与精读卡/继续阅读卡一致，
+    // 不随打开次数显示陈旧数值。
     final liveProgress = <String, double>{};
     for (final s in sutras) {
       final title = s['title']?.toString() ?? '';
@@ -1437,10 +1460,13 @@ class StudyHubPageState extends State<StudyHubPage>
       if (title.isEmpty || fp == null || fp.isEmpty) continue;
       final variants =
           await SutraDownloader.pathKeyVariants(fp, title: title);
-      var p = 0.0;
-      for (final v in variants) {
-        final cur = prefs.getDouble('progress_$v') ?? 0.0;
-        if (cur > p) p = cur;
+      final canonical = prefs.getDouble('progress_${variants.first}');
+      var p = canonical ?? 0.0;
+      if (canonical == null) {
+        for (final v in variants) {
+          final cur = prefs.getDouble('progress_$v') ?? 0.0;
+          if (cur > p) p = cur;
+        }
       }
       liveProgress[title] = p;
     }
@@ -1459,7 +1485,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
                 child: Row(
                   children: [
-                    Text('$latestDate 阅读',
+                    Text('最近3天阅读',
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,

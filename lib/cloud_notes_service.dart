@@ -594,9 +594,12 @@ class CloudNotesService {
     await AuthService.instance.ensureAnonymousForBrowse();
     final token = await AuthService.instance.getAccessToken();
     if (token == null && AuthService.instance.isLoggedIn) {
-      // 已登录但取不到 access token：说明会话刷新失败（网络/令牌失效）。
-      // 打印现场便于排查「登录后掉线」问题，但不中断调用（云函数侧会判未授权）。
-      debugPrint('[cloud] 已登录但 access token 为空，云调用可能被判定未授权');
+      // 已登录但拿不到 access token（刷新失败）：终止本次调用而不是带着
+      // 过期 token 发请求——否则网关可能返回 unauthenticated，SDK 会删除
+      // 本地真实会话，导致下次启动被强制登出、需要重新登录。
+      // 刷新恢复后（下一跳网络/稍后重试）会自动自愈，会话不会被误删。
+      debugPrint('[cloud] 已登录但 access token 为空，终止云调用以保护会话');
+      throw const CloudApiException('网络不稳定，请稍后重试');
     }
     final FunctionResponse res;
     try {

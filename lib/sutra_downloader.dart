@@ -141,6 +141,28 @@ class SutraDownloader {
     return 0.0;
   }
 
+  /// 取某部经书「最新」的阅读进度（精读卡/当前读经/阅读页恢复共用）。
+  ///
+  /// 阅读页实时把进度写入 `progress_<规范路径>`（即 `current_sutra_file_path`
+  /// 对应的键），因此它一定是最近一次离开阅读页时的进度，即使为 0（读回顶部）
+  /// 也代表最新状态，不能被更早的更高进度覆盖。所以：
+  ///   1. 规范路径键（[pathKeyVariants] 首项）存在时直接以它为准；
+  ///   2. 规范键缺失时才兼容旧键名（旧版本本机绝对路径等）取其中较大值；
+  ///   3. 仍无进度时再从每日阅读历史兜底恢复，避免重装/换机后进度清零。
+  static Future<double> latestProgressForPath(
+      SharedPreferences prefs, String path, {String? title}) async {
+    final variants = await pathKeyVariants(path, title: title);
+    final canonical = prefs.getDouble('progress_${variants.first}');
+    if (canonical != null) return canonical;
+    var p = 0.0;
+    for (final v in variants) {
+      final cur = prefs.getDouble('progress_$v') ?? 0.0;
+      if (cur > p) p = cur;
+    }
+    if (p <= 0) p = progressFromDailyHistory(prefs, title);
+    return p;
+  }
+
   /// 下载源顺序：优先使用上次成功的镜像，避免每次都从超时的源重新开始。
   static Future<List<String>> _orderedSources() async {
     final prefs = await SharedPreferences.getInstance();

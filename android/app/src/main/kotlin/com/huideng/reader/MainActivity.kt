@@ -4,6 +4,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import android.content.Intent
+import android.provider.AlarmClock
 import androidx.core.content.FileProvider
 import java.io.File
 
@@ -41,6 +42,61 @@ class MainActivity : FlutterActivity() {
                         result.success(info.lastUpdateTime)
                     } catch (e: Exception) {
                         result.error("GET_UPDATE_TIME_FAILED", "Failed to get lastUpdateTime", e.message)
+                    }
+                }
+                "setSystemAlarm" -> {
+                    try {
+                        val hour = call.argument<Int>("hour") ?: 21
+                        val minute = call.argument<Int>("minute") ?: 0
+                        val message = call.argument<String>("message") ?: ""
+                        val skipUI = call.argument<Boolean>("skipUI") ?: false
+
+                        // 1. 优先 ACTION_SET_ALARM（打开新建闹钟界面，时间预填）
+                        val setAlarm = Intent(AlarmClock.ACTION_SET_ALARM)
+                        setAlarm.putExtra(AlarmClock.EXTRA_HOUR, hour)
+                        setAlarm.putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                        setAlarm.putExtra(AlarmClock.EXTRA_MESSAGE, message)
+                        if (skipUI) {
+                            setAlarm.putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                        }
+                        setAlarm.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        try {
+                            startActivity(setAlarm)
+                            result.success("opened_set_alarm")
+                            return@setMethodCallHandler
+                        } catch (_: Exception) {
+                        }
+
+                        // 2. 退而打开系统闹钟列表页
+                        try {
+                            val show = Intent(AlarmClock.ACTION_SHOW_ALARMS)
+                            show.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            startActivity(show)
+                            result.success("opened_alarm_list")
+                            return@setMethodCallHandler
+                        } catch (_: Exception) {
+                        }
+
+                        // 3. 最后兜底：按包名直接打开系统时钟 App
+                        for (pkg in listOf(
+                            "com.android.deskclock",
+                            "com.google.android.deskclock",
+                            "com.miui.deskclock"
+                        )) {
+                            try {
+                                val launch = packageManager.getLaunchIntentForPackage(pkg)
+                                if (launch != null) {
+                                    launch.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    startActivity(launch)
+                                    result.success("opened_clock_package")
+                                    return@setMethodCallHandler
+                                }
+                            } catch (_: Exception) {
+                            }
+                        }
+                        result.error("NO_ALARM_APP", "No clock app found", null)
+                    } catch (e: Exception) {
+                        result.error("SET_ALARM_FAILED", "Failed to set system alarm", e.message)
                     }
                 }
                 else -> {

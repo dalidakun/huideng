@@ -55,6 +55,7 @@ flutter:
     - assets/images/app_icon.png
     - assets/images/ic_comment.png
     - assets/images/ic_view.png
+    - assets/images/ic_clock.png
     - assets/images/star_filled.png
     - assets/images/star_outline.png
     - assets/sutras_catalog.json

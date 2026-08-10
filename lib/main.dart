@@ -98,6 +98,10 @@ void main() async {
   SyncService.instance.init();
   // 本地通知（打卡提醒）初始化与调度恢复。
   unawaited(NotificationService.instance.init());
+  // App 回到前台时重新挂起打卡提醒（国产 ROM 常在后台清掉闹钟任务）。
+  AppLifecycleListener(
+    onResume: () => NotificationService.instance.onAppResumed(),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -204,6 +208,8 @@ class _MainPageState extends State<MainPage>
   // 上一帧滚动偏移与最近一次方向判定后的滚动方向（1=向下，-1=向上）。
   double _lastScrollPixels = 0;
   int _scrollDir = 0;
+  // 修学菜单图标最近一次点击时间戳：无新帖时用于判定双击回到顶部。
+  int _lastStudyTabTap = 0;
 
   @override
   void initState() {
@@ -387,6 +393,26 @@ class _MainPageState extends State<MainPage>
       _sutraListKey.currentState?.deactivateSearch();
     }
     final pageIndex = index == 3 ? 3 : (index == 2 ? 1 : 0);
+    // 已停留在修学页再次点击修学菜单图标：
+    // - 有新帖（角标 > 0）：保持原 reload 行为，刷出新帖。
+    // - 无新帖：检测双击，第二次点击则回到页面最顶部。
+    if (pageIndex == 0 && _currentIndex == 0) {
+      if (StudyHubPageState.newPostBadge.value > 0) {
+        _studyHubKey.currentState?.reload();
+      } else {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastStudyTabTap < 350) {
+          _studyHubKey.currentState?.scrollToTop();
+          _lastStudyTabTap = 0;
+        } else {
+          _lastStudyTabTap = now;
+        }
+      }
+      _tabIndex.value = 0;
+      _syncAssistantTab();
+      _revealNavBar();
+      return;
+    }
     _tabIndex.value = pageIndex;
     setState(() {
       _currentIndex = pageIndex;
@@ -888,6 +914,8 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
         builder: (context, child) {
           final t = Curves.easeInOutCubic.transform(_ctrl.value);
           final full = MediaQuery.of(context).size.height - topInset;
+          // 键盘弹出高度：输入框激活时 WebView 底部让出，输入框保持在键盘上方。
+          final keyboard = MediaQuery.viewInsetsOf(context).bottom;
           return Stack(
             children: [
               // 面板：从底部升起，顶部边缘滑到 AppBar 之下。
@@ -896,7 +924,10 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
                 right: 0,
                 top: topInset + full * (1 - t),
                 bottom: 0,
-                child: child!,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: keyboard),
+                  child: child!,
+                ),
               ),
               // 展开时右下角的收起按钮（与阅读页 AI 按钮同位）。
               if (t > 0.5)

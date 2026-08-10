@@ -49,7 +49,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   final _accountCtrl = TextEditingController();
 
   static final RegExp _nameRe =
-      RegExp(r'^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$');
+      RegExp(r'^[\u4e00-\u9fa5a-zA-Z0-9_]{2,10}$');
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
 
@@ -216,7 +216,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final accountChanged = _isLoggedIn && account != _loadedAccount;
     if (accountChanged) {
       if (!_nameRe.hasMatch(account)) {
-        _showToast('账号名称需为 2-20 位中英文、数字或下划线');
+        _showToast('账号名称需为 2-10 位中英文、数字或下划线');
         return;
       }
       final verified = await _verifyPhoneChange();
@@ -539,7 +539,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           const SizedBox(height: 6),
                           TextField(
                             controller: _accountCtrl,
-                            maxLength: 20,
+                            maxLength: 10,
                             style: const TextStyle(
                                 fontSize: 16, color: _text),
                             decoration: const InputDecoration(

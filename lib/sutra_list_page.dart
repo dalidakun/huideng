@@ -3,12 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, ValueListenable;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, ValueListenable, debugPrint;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'reading_page.dart';
+import 'auth_service.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_favorites.dart';
@@ -415,6 +417,11 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   Future<void> _downloadSingle(Sutra sutra, String id) async {
+    // 诊断：本地已有文件却仍触发下载（换机/路径恢复导致误判）时打印现场。
+    if (await SutraDownloader.isDownloaded(id)) {
+      debugPrint('[download] 本地已存在却仍触发下载: id=$id '
+          'filePath=${sutra.filePath} title=${sutra.title}');
+    }
     setState(() {
       _downloadProgress[id] = 0;
     });
@@ -743,6 +750,7 @@ class SutraListPageState extends State<SutraListPage>
     _loadRecentSutras();
     _loadAssetManifest();
     _loadDownloadedIds();
+    AuthService.instance.currentUser.addListener(_onAuthChanged);
     widget.activeTab?.addListener(_onActiveTabChanged);    _searchController.addListener(_filterSutras);
     _drawerController = AnimationController(
       vsync: this,
@@ -775,9 +783,18 @@ class SutraListPageState extends State<SutraListPage>
     _loadLastRead();
   }
 
+  /// 登录/登出后重扫本地下载目录：避免重新登录后下载状态被误判为「未下载」，
+  /// 导致已下载的经文又提示重新下载。
+  void _onAuthChanged() {
+    if (AuthService.instance.isLoggedIn) {
+      syncDownloadedIdsFromDisk();
+    }
+  }
+
   @override
   void dispose() {
     widget.activeTab?.removeListener(_onActiveTabChanged);
+    AuthService.instance.currentUser.removeListener(_onAuthChanged);
     routeObserver.unsubscribe(this);
     _drawerController.dispose();
     _scrollController.dispose();
@@ -1400,13 +1417,15 @@ class SutraListPageState extends State<SutraListPage>
   Future<bool> _canOpenSutra(Sutra sutra) async {
     final fp = sutra.filePath;
     final isAssetLike = fp == null || fp.startsWith('assets/');
-    if (isAssetLike) {
-      final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
-      if (id == null) return false;
+    // 无论路径形式，先按规范 ID 检查本地下载目录：云端同步恢复的路径
+    // 可能是旧设备的本机绝对路径，在本机不存在但文件已在下载目录里，
+    // 此时应直接打开，而不是误判「未下载」提示重新下载。
+    final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
+    if (id != null) {
       if (_downloadedIds.contains(id)) return true;
-      // 以磁盘实际文件为准（prefs 标记可能缺失/过期），避免“已可读却提示下载”。
-      return await SutraDownloader.isDownloaded(id);
+      if (await SutraDownloader.isDownloaded(id)) return true;
     }
+    if (isAssetLike) return false;
     return !_isSutraContentMissing(sutra);
   }
 

@@ -84,4 +84,63 @@ void main() {
       expect(SutraDownloader.progressFromDailyHistory(prefs2, '任何经'), 0.0);
     });
   });
+
+  group('SutraDownloader.latestProgressForPath', () {
+    const localPath =
+        '/data/user/0/com.example/app_flutter/sutras/T13/T13n0412_001.txt';
+    const assetPath = 'assets/sutras_ascii/T13/T13n0412_001.txt';
+    const title = '地藏菩萨本愿经T13n0412_001';
+
+    test('latest canonical progress wins over older higher variant', () async {
+      // 本地路径是最近一次阅读使用的路径（进度 0.07 为最新），
+      // 资产路径下残留更早会话的 0.16，不能覆盖最新进度。
+      SharedPreferences.setMockInitialValues({
+        'progress_$localPath': 0.07,
+        'progress_$assetPath': 0.16,
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final p =
+          await SutraDownloader.latestProgressForPath(prefs, localPath,
+              title: title);
+      expect(p, closeTo(0.07, 1e-9));
+    });
+
+    test('canonical zero is honored as latest (closed at top of book)', () async {
+      SharedPreferences.setMockInitialValues({
+        'progress_$localPath': 0.0,
+        'progress_$assetPath': 0.16,
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final p =
+          await SutraDownloader.latestProgressForPath(prefs, localPath,
+              title: title);
+      expect(p, 0.0);
+    });
+
+    test('falls back to old key variant when canonical key is missing',
+        () async {
+      SharedPreferences.setMockInitialValues({'progress_$assetPath': 0.16});
+      final prefs = await SharedPreferences.getInstance();
+      final p =
+          await SutraDownloader.latestProgressForPath(prefs, localPath,
+              title: title);
+      expect(p, closeTo(0.16, 1e-9));
+    });
+
+    test('falls back to daily history when all progress keys are missing',
+        () async {
+      SharedPreferences.setMockInitialValues({
+        'daily_sutra_history': jsonEncode({
+          '2026-08-07': [
+            {'title': title, 'filePath': assetPath, 'progress': 0.1639151395797945},
+          ],
+        }),
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final p =
+          await SutraDownloader.latestProgressForPath(prefs, localPath,
+              title: title);
+      expect(p, closeTo(0.1639, 0.0001));
+    });
+  });
 }

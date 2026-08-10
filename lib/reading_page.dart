@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -133,25 +132,21 @@ class _ReadingPageState extends State<ReadingPage>
     final prefs = await SharedPreferences.getInstance();
     final keyPath = _resolvedFilePath ?? widget.filePath;
     if (keyPath == null) return;
-    // 兼容旧版本用本机绝对路径命名的 progress_/scroll_ 键（换机/重装后
-    // 云端同步回来的可能是这类键）：按所有候选路径形式取最大进度/首个位置。
+    // 兼容旧版本用本机绝对路径命名的 scroll_ 键（换机/重装后
+    // 云端同步回来的可能是这类键）：取首个候选键的滚动位置。
     final variants =
         await SutraDownloader.pathKeyVariants(keyPath, title: widget.title);
     double? savedPos;
-    double? savedProg;
     for (final v in variants) {
-      final p = prefs.getDouble('progress_$v');
-      if (p != null && (savedProg == null || p > savedProg)) savedProg = p;
       savedPos ??= prefs.getDouble('scroll_$v');
     }
-    // progress_ 键缺失时从每日阅读历史兜底恢复，避免重装/换机后进度清零。
-    if (savedProg == null || savedProg <= 0) {
-      final fromHistory =
-          SutraDownloader.progressFromDailyHistory(prefs, widget.title);
-      if (fromHistory > 0) savedProg = fromHistory;
-    }
+    // 进度以规范路径键的最新值（阅读页实时写入，离开时即保存）为准，
+    // 规范键缺失时兼容旧键名并回退每日阅读历史，避免换机/重装后进度清零。
+    final savedProg = await SutraDownloader.latestProgressForPath(
+        prefs, keyPath,
+        title: widget.title);
     _savedPosition = savedPos;
-    _savedProgress = savedProg;
+    _savedProgress = savedProg > 0 ? savedProg : null;
 
     if (mounted && _savedProgress != null) {
       setState(() {
@@ -365,9 +360,7 @@ class _ReadingPageState extends State<ReadingPage>
               _needsDownload = true;
             });
           }
-          // 正文未打包进 APK：能识别出经书 ID 时自动开始下载（文件通常只有
-          // 几十 KB），顶部横幅会显示下载进度，用户无需手动点击「下载」。
-          unawaited(_downloadContent());
+
         }
       } else {
         try {
@@ -387,9 +380,6 @@ class _ReadingPageState extends State<ReadingPage>
               _isLoadingContent = false;
               _needsDownload = true;
             });
-            // 本机文件缺失（如换机/重新登录后恢复的旧路径）：能识别出经书
-            // ID 时自动重新下载，顶部横幅显示进度。
-            unawaited(_downloadContent());
           }
         } catch (e) {
           if (mounted) {

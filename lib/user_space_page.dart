@@ -607,7 +607,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // 昵称 + 认证（左侧）。
+                    // 昵称 + 认证 + 徽章：三者紧挨、依次排布（左侧）。
                     Expanded(
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
@@ -626,19 +626,26 @@ class _UserSpacePageState extends State<UserSpacePage> {
                             const Icon(Icons.verified,
                                 size: 17, color: Color(0xFF70867A)),
                           ],
+                          // 已点亮的修学徽章：紧挨昵称/认证依次显示，
+                          // 只显示点亮的（无点亮不展示）。
+                          if (_profileReadingSeconds > 0) ...[
+                            const SizedBox(width: 8),
+                            ReadingBadgesRow(
+                              seconds: _profileReadingSeconds,
+                              size: 20,
+                              showLocked: false,
+                            ),
+                          ],
                         ],
                       ),
                     ),
-                    // 已点亮的修学徽章：位于昵称行右侧（与「累积读经」时长分开显示），
-                    // 只显示点亮的（无点亮不展示），右缘与阅藏百分比对齐。
-                    if (_profileReadingSeconds > 0) ...[
-                      const SizedBox(width: 8),
-                      ReadingBadgesRow(
-                        seconds: _profileReadingSeconds,
-                        size: 20,
-                        showLocked: false,
-                      ),
-                    ],
+                    // 阅藏进度：位于原徽章位置（昵称行最右侧），
+                    // 完成册数 ÷ 总册数（0% 也显示，与经藏页同源算法）。
+                    const SizedBox(width: 8),
+                    ReadingProgressChip(
+                      text: canonPercentText(
+                          _profileCanonRead, _profileCanonTotal),
+                    ),
                   ],
                 ),
                 if (_account.isNotEmpty) ...[
@@ -646,51 +653,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   Row(
                     children: [
                       Expanded(
-                        // 账号名完整展示：允许换行，不在任何屏幕宽度下截断。
+                        // 账号名最多 10 字符（编辑资料页限制），单行展示、超长省略。
                         child: Text('@$_account',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 13, color: _textHint)),
                       ),
-                      // 阅藏进度：完成册数 ÷ 总册数（0% 也显示，与经藏页同源算法）。
-                      ReadingProgressChip(
-                        text: canonPercentText(
-                            _profileCanonRead, _profileCanonTotal),
-                      ),
-                    ],
-                  ),
-                ],
-                // 签名：未设置时默认展示固定法语（用户可自行修改）。
-                // 初始加载完成前不展示，避免「默认法语 → 用户签名」的闪变。
-                if (!_loading) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    _displayTagline,
-                    style: const TextStyle(
-                        fontSize: 14, color: _textSec, height: 1.4),
-                  ),
-                ],
-                // 注册加入时间 + 累积读经（右侧，右缘与阅藏百分比对齐，距屏幕右缘20px；
-                // 时长块不裁剪、字符多时自动向左扩展，左侧加入时间被压缩省略）。
-                if (_profileJoinTime > 0 || _profileReadingSeconds > 0) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      // 单个 Expanded 吸收全部剩余空间：保证右侧时长块贴行最右，
-                      // 时长过长时自动往左扩展，加入时间省略。
-                      Expanded(
-                        child: Text(
-                          _profileJoinTime > 0
-                              ? '${_joinDateText(_profileJoinTime)}加入'
-                              : '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              const TextStyle(fontSize: 12, color: _textHint),
-                        ),
-                      ),
+                      // 累积读经时长：位于原阅藏百分比位置（@账号行最右侧）。
                       const SizedBox(width: 8),
-                      const Icon(Icons.history,
-                          size: 12, color: Color(0xFF70867A)),
+                      const _ClockIcon(),
                       const SizedBox(width: 2),
                       Text(
                         '累积读经${_formatReadingTime(_profileReadingSeconds)}',
@@ -701,6 +673,26 @@ class _UserSpacePageState extends State<UserSpacePage> {
                             fontWeight: FontWeight.w500),
                       ),
                     ],
+                  ),
+                ],
+                // 签名：未设置时默认展示固定法语（用户可自行修改）。
+                // 初始加载完成前不展示，避免「默认法语 → 用户签名」的闪变。
+                if (!_loading) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _displayTagline,
+                    style: const TextStyle(
+                        fontSize: 14, color: _textSec, height: 1.4),
+                  ),
+                ],
+                // 注册加入时间。
+                if (_profileJoinTime > 0) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '${_joinDateText(_profileJoinTime)}加入',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: _textHint),
                   ),
                 ],
               ],
@@ -1687,4 +1679,19 @@ class _CustomTypeInfo {
     required this.unit,
     required this.count,
   });
+}
+
+/// 纯色填充小钟图标：使用 assets 下的 ic_clock.png 图片。
+class _ClockIcon extends StatelessWidget {
+  const _ClockIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/ic_clock.png',
+      width: 12,
+      height: 12,
+      fit: BoxFit.contain,
+    );
+  }
 }

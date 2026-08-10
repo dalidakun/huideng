@@ -16,6 +16,9 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
   bool _enabled = false;
   String _time = '21:00';
   bool _masterOn = false;
+  bool _osEnabled = true;
+  bool _hasPending = false;
+  bool _systemAlarmOn = false;
   bool _loaded = false;
   bool _busy = false;
 
@@ -29,7 +32,30 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
     _enabled = await NotificationService.instance.isReminderEnabled();
     _time = await NotificationService.instance.getReminderTime();
     _masterOn = await NotificationService.instance.isMasterEnabled();
+    _osEnabled = await NotificationService.instance.areNotificationsEnabled();
+    _hasPending = await NotificationService.instance.hasPendingCheckinReminder();
+    _systemAlarmOn = await NotificationService.instance.isSystemAlarmEnabled();
     if (mounted) setState(() => _loaded = true);
+  }
+
+  Future<void> _toggleSystemAlarm(bool value) async {
+    setState(() => _busy = true);
+    try {
+      if (value) {
+        var res = await NotificationService.instance.armSystemAlarm(skipUI: true);
+        if (res == null) {
+          await NotificationService.instance.armSystemAlarm(skipUI: false);
+        }
+      } else {
+        _showToast('已关闭自动设置闹钟；如需删除已设闹钟，请在手机「闹钟」里手动删除');
+      }
+      await NotificationService.instance.setSystemAlarmEnabled(value);
+      if (mounted) setState(() => _systemAlarmOn = value);
+    } catch (e) {
+      if (mounted) _showToast('操作失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _pickTime() async {
@@ -42,6 +68,8 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
     final mm = picked.minute.toString().padLeft(2, '0');
     setState(() => _time = '$hh:$mm');
     await NotificationService.instance.setReminderTime('$hh:$mm');
+    _hasPending = await NotificationService.instance.hasPendingCheckinReminder();
+    if (mounted) setState(() {});
   }
 
   Future<void> _toggle(bool value) async {
@@ -59,6 +87,12 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
       }
       await NotificationService.instance.setReminderEnabled(value);
       if (mounted) setState(() => _enabled = value);
+      _osEnabled = await NotificationService.instance.areNotificationsEnabled();
+      _hasPending = await NotificationService.instance.hasPendingCheckinReminder();
+      if (mounted && value && !_osEnabled) {
+        _showToast('系统通知权限未开启，提醒无法弹出，请到系统设置中开启');
+        setState(() {});
+      }
     } catch (e) {
       if (mounted) _showToast('操作失败：$e');
     } finally {
@@ -177,7 +211,109 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
             ],
           ),
 
+          const SizedBox(height: 16),
+
+          SettingsCard(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: sGold.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.alarm_on, size: 20, color: sGold),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('手机闹钟提醒',
+                              style: TextStyle(fontSize: 16, color: sText, fontWeight: FontWeight.w500)),
+                          SizedBox(height: 2),
+                          Text('直接调用手机自带闹钟，必定响铃（推荐）',
+                              style: TextStyle(fontSize: 12, color: sTextHint)),
+                        ],
+                      ),
+                    ),
+                    SwitchTheme(
+                      data: SwitchThemeData(
+                        trackOutlineColor: WidgetStateProperty.resolveWith((_) => Colors.transparent),
+                      ),
+                      child: Switch(
+                        value: _systemAlarmOn,
+                        activeThumbColor: sCard,
+                        activeTrackColor: sGold,
+                        onChanged: _busy ? null : _toggleSystemAlarm,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
           const SizedBox(height: 20),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  _hasPending ? Icons.check_circle_outline : Icons.schedule,
+                  size: 15,
+                  color: _hasPending ? const Color(0xFF2E7D32) : sTextHint,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _hasPending
+                        ? '已预约每日 $_time 的系统提醒（由系统闹钟准点触发）。'
+                        : '当前系统内没有挂起的提醒，请重新打开开关或修改时间后重试。',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: _hasPending ? const Color(0xFF2E7D32) : sTextHint,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          if (_masterOn && !_osEnabled)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFE4E4),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFEE8888), width: 1),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.error_outline, size: 16, color: Color(0xFFCC3333)),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '系统通知权限未开启，提醒将无法弹出。请到 系统设置→应用→燃灯→通知 中开启「通知」开关。',
+                        style: TextStyle(fontSize: 12.5, color: Color(0xFFAA3333), height: 1.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),

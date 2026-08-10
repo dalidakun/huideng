@@ -9,7 +9,6 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'reader_settings_page.dart';
-import 'checkin_reminder_page.dart';
 import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
 import 'forgot_password_page.dart';
@@ -349,6 +348,25 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
 
     return Scaffold(
       backgroundColor: _bg,
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: FloatingActionButton(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NoteEditPage()),
+            ).then((_) => reload()),
+            heroTag: 'my_page_plaza_fab',
+            backgroundColor: const Color(0xFF71867A),
+            elevation: 8,
+            highlightElevation: 12,
+            shape: const CircleBorder(),
+            child: const Icon(Icons.add, color: Colors.white, size: 24),
+          ),
+        ),
+      ),
       body: SafeArea(
         top: true,
         child: NestedScrollView(
@@ -3524,22 +3542,18 @@ class _SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<_SettingsPage> {
-  bool _notifOn = false;
   bool _reminderOn = false;
   String _reminderTime = '21:00';
   bool _loaded = false;
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
 
-  bool get notifOn => _notifOn;
   bool get reminderOn => _reminderOn;
   String get reminderTime => _reminderTime;
 
   void reloadForSettings() => _load();
 
   void requireLogin() => _pushLogin();
-
-  Future<void> toggleNotif(bool v) => _toggleNotif(v);
 
   @override
   void initState() {
@@ -3559,7 +3573,6 @@ class _SettingsPageState extends State<_SettingsPage> {
   }
 
   Future<void> _load() async {
-    _notifOn = await NotificationService.instance.isMasterEnabled();
     _reminderOn = await NotificationService.instance.isReminderEnabled();
     _reminderTime = await NotificationService.instance.getReminderTime();
     if (mounted) setState(() => _loaded = true);
@@ -3569,17 +3582,6 @@ class _SettingsPageState extends State<_SettingsPage> {
     _showToast('请先登录');
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => const LoginPage()));
-  }
-
-  Future<void> _toggleNotif(bool value) async {
-    final ok = await NotificationService.instance.setMasterEnabled(value);
-    if (!mounted) return;
-    if (!ok) {
-      _showToast('未获得通知权限，请在系统设置中开启');
-      return;
-    }
-    setState(() => _notifOn = value);
-    await _load();
   }
 
   void _showToast(String text) {
@@ -3749,8 +3751,6 @@ class _SettingsPageState extends State<_SettingsPage> {
                           _SettingsAccountTile(),
                           const SettingsDivider(),
                           _SettingsPhoneTile(),
-                          const SettingsDivider(),
-                          _SettingsNotifTile(),
                         ],
                       ),
                       _sectionTitle('其他'),
@@ -3845,7 +3845,7 @@ class _SettingsLinkTile extends StatelessWidget {
   }
 }
 
-/// 打卡提醒行：显示开关状态与时间，点击进入设置。
+/// 打卡提醒行：点击跳转到手机自带闹钟页面设置（最可靠，保证响铃）。
 class _SettingsReminderTile extends StatelessWidget {
   const _SettingsReminderTile();
 
@@ -3853,9 +3853,13 @@ class _SettingsReminderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_SettingsPageState>()!;
     return InkWell(
-      onTap: () {
-        Navigator.push(context, slideInFromLeft(const CheckinReminderPage()))
-            .then((_) => state.reloadForSettings());
+      onTap: () async {
+        // 打开系统闹钟 App 的新建闹钟界面，时间按设置的时间预填。
+        final res =
+            await NotificationService.instance.armSystemAlarm(skipUI: false);
+        if (res == null && context.mounted) {
+          state._showToast('无法打开手机闹钟，请手动打开手机「闹钟」应用');
+        }
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
@@ -3882,7 +3886,7 @@ class _SettingsReminderTile extends StatelessWidget {
                           fontWeight: FontWeight.w500)),
                   const SizedBox(height: 2),
                   Text(
-                    state.reminderOn ? '每日 ${state.reminderTime}' : '未开启',
+                    '跳转手机闹钟设置',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: _textHint),
@@ -3992,59 +3996,6 @@ class _SettingsPhoneTile extends StatelessWidget {
             const Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// 消息通知总开关行。
-class _SettingsNotifTile extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final state = context.findAncestorStateOfType<_SettingsPageState>()!;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: _gold.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.notifications_outlined,
-                color: _gold, size: 20),
-          ),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('消息通知',
-                    style: TextStyle(
-                        fontSize: 16,
-                        color: _text,
-                        fontWeight: FontWeight.w500)),
-                SizedBox(height: 2),
-                Text('打卡提醒等系统通知',
-                    style: TextStyle(fontSize: 12, color: _textHint)),
-              ],
-            ),
-          ),
-          SwitchTheme(
-            data: SwitchThemeData(
-              trackOutlineColor:
-                  WidgetStateProperty.resolveWith((_) => Colors.transparent),
-            ),
-            child: Switch(
-              value: state.notifOn,
-              activeThumbColor: _card,
-              activeTrackColor: _gold,
-              onChanged: state.toggleNotif,
-            ),
-          ),
-        ],
       ),
     );
   }

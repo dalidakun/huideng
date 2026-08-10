@@ -536,16 +536,29 @@ exports.main = async (event, context) => {
         // 加权值同样随该评论的新鲜程度衰减，不会长期霸榜；
         // 这些回复帖本身也小幅加权，保证与父帖出现在同一页，头像连线得以展示。
         if (sort === "hot") {
-          const all = [];
-          let skip = 0;
-          while (true) {
-            const r = await base.skip(skip).limit(1000).get();
-            const batch = r.data || [];
-            all.push(...batch);
-            if (batch.length < 1000) break;
-            skip += 1000;
-          }
           const nowMs = Date.now();
+          // 热门扫描只取最近 3 天的帖子（帖子成千上万时不再每次全表扫描，刷新更快）。
+          // 若热门池不足三页（冷清时段），放宽到 7 天、再放宽到 30 天兜底，保证热门榜有内容。
+          const hotPoolMin = 60;
+          let all = [];
+          for (const days of [3, 7, 30]) {
+            const since = nowMs - days * 24 * 3600000;
+            const collected = [];
+            let skip = 0;
+            while (true) {
+              const r = await base
+                .where({ createdAt: _.gte(since) })
+                .skip(skip)
+                .limit(1000)
+                .get();
+              const batch = r.data || [];
+              collected.push(...batch);
+              if (batch.length < 1000) break;
+              skip += 1000;
+            }
+            all = collected;
+            if (collected.length >= hotPoolMin) break;
+          }
           // 我本人 + 我关注的用户发出的回复帖：{父帖id: 最新回复时间} 用于父帖置顶。
           const parentBoostTime = new Map();
           const myReplyIds = new Set();
