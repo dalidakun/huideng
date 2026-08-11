@@ -273,6 +273,32 @@ class SyncService with WidgetsBindingObserver {
 
       final sutraList = cFiles['sutras_list']?.toString();
       if (sutraList != null && sutraList.isNotEmpty) {
+        // 规范化云端 sutras_list.json 中每条经书的 filePath：
+        // 其他设备上传的可能含本机绝对路径（换机后在本机不存在），
+        // 原样写入会导致"已下载却显示未下载"。统一映射回 assets/sutras_ascii/...
+        String normalized = sutraList;
+        try {
+          final list = jsonDecode(sutraList) as List<dynamic>;
+          var modified = false;
+          for (var i = 0; i < list.length; i++) {
+            final entry = list[i];
+            if (entry is! Map<String, dynamic>) continue;
+            final fp = entry['filePath']?.toString();
+            if (fp == null || fp.isEmpty) continue;
+            if (!fp.startsWith('assets/')) {
+              final resolved = SutraAssetPath.resolve(
+                title: entry['title']?.toString() ?? '',
+                filePath: fp,
+              );
+              if (resolved.startsWith('assets/') && resolved != fp) {
+                entry['filePath'] = resolved;
+                modified = true;
+              }
+            }
+          }
+          if (modified) normalized = jsonEncode(list);
+        } catch (_) {}
+
         final docs = await getApplicationDocumentsDirectory();
         final f = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
         String? localText;
@@ -281,9 +307,9 @@ class SyncService with WidgetsBindingObserver {
             localText = await f.readAsString();
           } catch (_) {}
         }
-        if (localText != sutraList) {
+        if (localText != normalized) {
           try {
-            await f.writeAsString(sutraList, flush: true);
+            await f.writeAsString(normalized, flush: true);
             changed = true;
           } catch (_) {}
         }
@@ -360,7 +386,37 @@ class SyncService with WidgetsBindingObserver {
     if (await listFile.exists()) {
       try {
         final text = await listFile.readAsString();
-        if (text.length <= _maxFileChars) files['sutras_list'] = text;
+        if (text.length <= _maxFileChars) {
+          // 上传前同样规范化 filePath，避免本机绝对路径进了云端
+          // 被其他设备拿到后误判为「未下载」。
+          String uploadText = text;
+          try {
+            final list = jsonDecode(text) as List<dynamic>;
+            var modified = false;
+            for (var i = 0; i < list.length; i++) {
+              final entry = list[i];
+              if (entry is! Map<String, dynamic>) continue;
+              final fp = entry['filePath']?.toString();
+              if (fp == null || fp.isEmpty) continue;
+              if (!fp.startsWith('assets/')) {
+                final resolved = SutraAssetPath.resolve(
+                  title: entry['title']?.toString() ?? '',
+                  filePath: fp,
+                );
+                if (resolved.startsWith('assets/') && resolved != fp) {
+                  entry['filePath'] = resolved;
+                  modified = true;
+                }
+              }
+            }
+            if (modified) {
+              uploadText = jsonEncode(list);
+              // 同步把规范化后的版本写回本地
+              await listFile.writeAsString(uploadText, flush: true);
+            }
+          } catch (_) {}
+          files['sutras_list'] = uploadText;
+        }
       } catch (_) {}
     }
 

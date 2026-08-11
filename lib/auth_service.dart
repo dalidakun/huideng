@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:cloudbase_flutter/cloudbase_flutter.dart';
@@ -141,15 +142,21 @@ class AuthService {
     final app = await _ensureApp();
     if (app == null) return null;
     try {
-      final ok = await ensureFreshSession();
-      if (!ok) {
-        debugPrint('[auth] getAccessToken: 会话刷新失败，返回 null');
-        return null;
-      }
+      await ensureFreshSession();
       final res = await app.auth.getSession();
-      if (!res.isSuccess) return null;
-      final token = res.data?.session?.accessToken;
-      return (token == null || token.isEmpty) ? null : token;
+      if (res.isSuccess && res.data?.session != null) {
+        final token = res.data!.session!.accessToken;
+        if (token != null && token.isNotEmpty) return token;
+      }
+      // 刷新失败：返回当前 session 的 token（即使过期也比 null 好——
+      // 云函数网关对过期 token 返回 INVALID_CREDENTIALS 而不是 unauthenticated，
+      // 不会删会话；但不带 token 则返回 MISSING_CREDENTIALS 也不通过。
+      // 所以有过期 token 时至少给云函数一个解析 uid 的机会。）
+      // ignore: invalid_use_of_visible_for_testing_member
+      final session = app.httpClient.currentSession;
+      final token = session?.accessToken;
+      if (token != null && token.isNotEmpty) return token;
+      return null;
     } catch (_) {
       return null;
     }
@@ -183,16 +190,14 @@ class AuthService {
       if (!res.isSuccess || res.data?.session == null) return false;
       final session = res.data!.session!;
       final exp = _tokenExpiry(session.accessToken);
-      if (exp != null && exp.difference(DateTime.now()).inSeconds > 600) {
+      final now = DateTime.now();
+      // token 仍有效且距过期 >10 分钟：直接可用，无需刷新。
+      if (exp != null && exp.difference(now).inSeconds > 600) {
         _syncUserFromSession(session);
         return true;
       }
-      // token 仍有效但临近过期（<10 分钟）：此时 header 合法，可安全刷新。
-      // 如果 token 已过期（exp 在过去），绝不能再调 refreshSession()——
-      // 它会带着过期 header 去刷新，被网关判 unauthenticated 删会话。
-      // _repairExpiredSession 已经尝试过合法 header 刷新，失败就保持现状，
-      // 等下次网络恢复再刷新，绝不冒险删会话。
-      if (exp != null && !DateTime.now().isAfter(exp)) {
+      // token 仍有效但临近过期（<10 分钟）：header 合法，可安全刷新。
+      if (exp != null && now.isBefore(exp)) {
         final rr = await app.auth.refreshSession();
         if (rr.isSuccess) {
           _syncUserFromSession(rr.data?.session);
@@ -208,8 +213,15 @@ class AuthService {
         }
         debugPrint('[auth] refresh retry failed: '
             '${rr2.error?.code}/${rr2.error?.message}');
+        // 刷新失败但 token 本身还可用（没过期），仍返回 true，不让用户掉线。
+        // 临近过期 != 已过期，token 仍然能发请求，只是可能很快会过期。
+        _syncUserFromSession(session);
+        return true;
       }
-      debugPrint('[auth] ensureFreshSession: token 已过期且修复失败，保持缓存身份不删会话');
+      // token 已过期（exp 在过去）：_repairExpiredSession 已尝试合法 header
+      // 刷新，到这里说明修复失败。绝不再调 refreshSession()（会带过期 header
+      // 被网关判 unauthenticated 删会话）。保持缓存身份等下次再试。
+      debugPrint('[auth] ensureFreshSession: token 已过期且修复失败，保持缓存身份');
       return false;
     } catch (e) {
       debugPrint('[auth] ensureFreshSession error: $e');
@@ -222,10 +234,10 @@ class AuthService {
   /// token 作 header 去刷新会被网关判为 `unauthenticated`（实测确认）并删除
   /// 本地会话，导致下次启动 `_retryRestoreSession` 强制登出、需要重新登录。
   ///
-  /// 做法：备份会话 JSON → 清空内存会话（下一次请求改用 publishable key 作
-  /// 合法 header）→ 用备份的 refresh token 走 `setSession` 重新建立会话；
-  /// 失败则恢复原会话，绝不让会话凭空丢失。修复中途被杀时，下次启动从
-  /// 备份重建会话再继续刷新。
+  /// 做法：用原生 HTTP（绕开 SDK 的 header 注入）直接 POST /auth/v1/token，
+  /// Authorization 用 publishable key（合法），body 带 refresh_token；
+  /// 成功后手动构建 Session 写入 SDK currentSession（含 user），这样 SDK 后续
+  /// 请求都用新 access token。不再调 SDK setSession 避免过期 header 路径。
   Future<void> _repairExpiredSession(CloudBase app) async {
     // ignore: invalid_use_of_visible_for_testing_member
     var session = app.httpClient.currentSession;
@@ -249,43 +261,84 @@ class AuthService {
     if (exp != null && now.isBefore(exp.subtract(const Duration(minutes: 5)))) {
       return; // access token 仍有效，无需修复。
     }
+
+    // 保留原始 session 引用：如果修复失败，恢复它（不从 prefs 读，避免 prefs 写入
+    // 和读取的竞态）。
+    final originalSession = session;
+
+    // 备份到 prefs（修复中途被杀时下次冷启动能恢复）。
     try {
       final prefs = await SharedPreferences.getInstance();
-      final backup = jsonEncode(session.toJson());
-      await prefs.setString(_kSessionBackupKey, backup);
-      // 清空会话：后续请求（刷新）会用 publishable key 作 Authorization，
-      // 避免带过期 access token 被网关判 unauthenticated 删除会话。
-      // ignore: invalid_use_of_visible_for_testing_member
-      app.httpClient.currentSession = null;
-      final sr = await app.auth.setSession(SetSessionReq(refreshToken: rt));
-      if (sr.isSuccess) {
-        debugPrint('[auth] 过期会话已用合法 header 重新刷新');
-        // 同步备份最新会话，防止修复刚完成后被杀读到旧 refresh token。
-        try {
-          final prefs2 = await SharedPreferences.getInstance();
-          // ignore: invalid_use_of_visible_for_testing_member
-          final ns = app.httpClient.currentSession;
-          if (ns != null) {
-            await prefs2
-                .setString(_kSessionBackupKey, jsonEncode(ns.toJson()));
-          }
-        } catch (_) {}
+      await prefs.setString(_kSessionBackupKey, jsonEncode(session.toJson()));
+    } catch (_) {}
+
+    try {
+      // 原生 HTTP 刷新：绕开 SDK 的 _onRequest（会注入过期 currentSession.accessToken
+      // 当 Authorization header），直接用 publishable key 作合法 header。
+      final envId = CloudBaseAppConfig.envId;
+      final accessKey = CloudBaseAppConfig.accessKey;
+      final url = Uri.parse(
+          'https://$envId.api.tcloudbasegateway.com/auth/v1/token'
+          '?client_id=$envId');
+      final httpClient = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 15);
+      final req = await httpClient.postUrl(url);
+      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $accessKey');
+      req.headers.set('x-device-id', 'flutter');
+      req.add(utf8.encode(jsonEncode({
+        'client_id': envId,
+        'grant_type': 'refresh_token',
+        'refresh_token': rt,
+      })));
+      final resp = await req.close();
+      final body = await resp.transform(utf8.decoder).join();
+      httpClient.close();
+      if (resp.statusCode != 200) {
+        debugPrint('[auth] 原生刷新失败 ${resp.statusCode}: $body');
+        // 恢复原会话
+        // ignore: invalid_use_of_visible_for_testing_member
+        app.httpClient.currentSession = originalSession;
         return;
       }
-      debugPrint(
-          '[auth] setSession 刷新失败：${sr.error?.code}/${sr.error?.message}');
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      if (json['error'] != null) {
+        debugPrint('[auth] 原生刷新返回错误: ${json['error']}');
+        // ignore: invalid_use_of_visible_for_testing_member
+        app.httpClient.currentSession = originalSession;
+        return;
+      }
+      // 手动构建 Session 并注入 SDK。
+      final expiresIn = json['expires_in'] is int
+          ? json['expires_in'] as int
+          : int.tryParse('${json['expires_in']}') ?? 7200;
+      final newSession = Session(
+        accessToken: json['access_token']?.toString(),
+        refreshToken: json['refresh_token']?.toString(),
+        expiresIn: expiresIn,
+        tokenType: json['token_type']?.toString(),
+        expiresAt: DateTime.now().add(Duration(seconds: expiresIn - 30)).millisecondsSinceEpoch,
+        issuedAt: DateTime.now().millisecondsSinceEpoch,
+        scope: json['scope']?.toString(),
+        user: session.user, // 保留原 user 信息
+      );
+      // 先清空再注入：清空避免 SDK 用旧 token，注入新 session 让 SDK 用新 token。
+      // ignore: invalid_use_of_visible_for_testing_member
+      app.httpClient.currentSession = null;
+      // ignore: invalid_use_of_visible_for_testing_member
+      app.httpClient.currentSession = newSession;
+      debugPrint('[auth] 过期会话已用原生 HTTP 重新刷新');
+      // 同步更新备份。
+      try {
+        final prefs2 = await SharedPreferences.getInstance();
+        await prefs2.setString(_kSessionBackupKey, jsonEncode(newSession.toJson()));
+      } catch (_) {}
     } catch (e) {
       debugPrint('[auth] repair expired session error: $e');
+      // 恢复原会话
+      // ignore: invalid_use_of_visible_for_testing_member
+      app.httpClient.currentSession = originalSession;
     }
-    // 失败：恢复原会话，避免会话被误删后彻底丢失。
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final backup = prefs.getString(_kSessionBackupKey);
-      if (backup != null && backup.isNotEmpty) {
-        // ignore: invalid_use_of_visible_for_testing_member
-        app.httpClient.currentSession = Session.fromJson(jsonDecode(backup));
-      }
-    } catch (_) {}
   }
 
   /// 会话健康时把真实用户同步到 [currentUser]：启动恢复被瞬时失败跳过

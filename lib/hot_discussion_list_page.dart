@@ -33,6 +33,11 @@ class HotDiscussionListPage extends StatefulWidget {
 class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   late List<HotDiscussionItem> _items;
   bool _isAdmin = false;
+  // 每页 50 条，用户点击「查看更多」再展示下一页 50 条，
+  // 直到全部展示完。避免一次性渲染超长榜单。
+  static const int _pageStep = 50;
+  int _visibleCount = _pageStep;
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -49,6 +54,38 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     CloudNotesService.instance.isAdmin().then((ok) {
       if (mounted) setState(() => _isAdmin = ok);
     });
+    // 主动重新拉取热门榜：父页传来的 widget.items 可能是旧快照
+    // （刚发布带新 #话题/$经名的帖子，父页还没刷新），这里拉一次保证
+    // 新发布的话题/经书能立即在被打开的热度榜页里展示。
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      final (topics, sutras) =
+          await CloudNotesService.instance.getHotDiscussions();
+      final all = widget.isSutra ? sutras : topics;
+      // 经文榜要再过一遍经书目录白名单（与 study_hub_page 同款），
+      // 话题榜要剔掉管理员已删除的话题。
+      final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
+      final bans = CloudNotesService.instance.bannedTopicNames;
+      final valid = widget.isSutra
+          ? all.where((s) => titleMap.containsKey(s.name)).toList()
+          : (bans.isEmpty
+              ? all
+              : all.where((t) => !bans.contains(t.name)).toList())
+        ..sort((a, b) => b.score.compareTo(a.score));
+      if (!mounted) return;
+      setState(() {
+        _items = valid;
+        _refreshing = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _refreshing = false);
+    }
   }
 
   /// 按名次取火把数：第 1 名 5 把，依次递减到第 5 名 1 把，第 6 名及之后都是 1 把。
@@ -81,6 +118,9 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
       : const Color(0xFF9A6B3F);
 
   String get _prefix => widget.isSutra ? r'$' : '#';
+
+  /// 顶部摘要文案：总榜单按客户端可见数显示，避免渲染超长数字。
+  String get _totalLabel => '${_items.length}';
 
   void _open(HotDiscussionItem it) {
     if (widget.isSutra) {
@@ -188,7 +228,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                           fontWeight: FontWeight.w700,
                           color: _accent)),
                   const SizedBox(height: 3),
-                  Text('近 14 天 · 互动越多越靠前 · 共 ${_items.length} 个',
+                  Text('近 14 天 · 互动越多越靠前 · 共 $_totalLabel 项',
                       style: const TextStyle(fontSize: 12, color: _textSec)),
                 ],
               ),
@@ -343,6 +383,10 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 当前可见条目数：取总条数与已展开页数中较小者。
+    final visibleCount =
+        _visibleCount < _items.length ? _visibleCount : _items.length;
+    final hasMore = visibleCount < _items.length;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -369,13 +413,39 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
             )
           : ListView.builder(
               padding: const EdgeInsets.only(top: 6, bottom: 24),
-              itemCount: _items.length + 1,
+              // 1 个 header + 可见条目数 + (有更多时)1 个「查看更多」按钮。
+              itemCount: visibleCount + 1 + (hasMore ? 1 : 0),
               itemBuilder: (context, i) {
                 if (i == 0) return _buildHeader();
                 final index = i - 1;
-                final it = _items[index];
-                if (index < 3) return _buildTopCard(it, index);
-                return _buildPlainRow(it, index);
+                if (index < visibleCount) {
+                  final it = _items[index];
+                  if (index < 3) return _buildTopCard(it, index);
+                  return _buildPlainRow(it, index);
+                }
+                // 「查看更多」按钮：展开下一页 50 条。
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _accent,
+                      side: BorderSide(color: _accent.withValues(alpha: 0.4)),
+                      minimumSize: const Size.fromHeight(44),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _visibleCount = visibleCount + _pageStep;
+                      });
+                    },
+                    child: Text(
+                      '查看更多（剩 ${_items.length - visibleCount} 项）',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                );
               },
             ),
     );

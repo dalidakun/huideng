@@ -98,7 +98,12 @@ class StudyHubPageState extends State<StudyHubPage>
 
   void reload() {
     _loadData();
-    _refreshCurrentSmooth();
+    // 有新帖时只把新帖插入到顶部，避免「整页刷新」的体感。
+    if (StudyHubPageState.newPostBadge.value > 0) {
+      _refreshNewPostsOnly();
+    } else {
+      _refreshCurrentSmooth();
+    }
   }
 
   /// 双击底部「修学」菜单图标：无新帖时回到页面最顶部。
@@ -167,6 +172,9 @@ class StudyHubPageState extends State<StudyHubPage>
   int _newPostCount = 0;
   /// 滚动到顶部提醒条被隐藏时，是否显示悬浮的「显示X帖子」按钮。
   bool _showNewPostPill = false;
+  /// _loadFeed 重入闸门：防止点击「显示X帖子」时双击重入，
+  /// 或后台轮询新帖与点击触发的加载同时跑导致请求/状态错乱。
+  bool _feedRefreshing = false;
   /// 全局「有新帖未查看」标记：驱动底部「修学」菜单图标上的 70867A 小圆点。
   static final ValueNotifier<int> newPostBadge = ValueNotifier<int>(0);
   static const Duration _newPostCheckInterval = Duration(seconds: 30);
@@ -812,74 +820,90 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 关注：仅展示已关注同修的笔记。
   /// 公告：展示公告列表。
   Future<void> _loadFeed({bool newestFirst = false}) async {
-    await CloudNotesService.instance.refreshLikedNoteIds();
-    await CloudNotesService.instance.refreshFollowStates();
-    await CloudNotesService.instance.refreshBannedTopics();
-    await NoteSutraCatalog.load(); // 确保经书目录已缓存，提取 @经书 时可用
-    _timeCache.clear();
-    _plainTextCache.clear();
-    _sutraQuoteCache.clear();
-    if (!mounted) return;
+    // 重入保护：点击「显示X帖子」体验卡顿时常被连点两次，
+    // 第二次进入会和当前 setState/网络请求交错，反而拖慢响应。
+    if (_feedRefreshing) return;
+    _feedRefreshing = true;
     final tab = _plazaTabs[_tabIndex];
-    setState(() {
-      _feedInitial = true;
-      _feedError = false;
-      _feedNotes.clear();
-      _feedVersion++;
-      _feedPage = 1;
-      _feedHasMore = true;
-      _feedLoading = false;
-      _feedNewestFirst = newestFirst;
-      _setNewPostCount(0);
-    });
+    // 立刻进入 loading 视觉：原实现把 setState 放在 4 个预热 await 之后，
+    // 用户点击后到看见转圈之间有 1~3 秒「无反应」空窗，是「要连点才有反应」体感根因。
+    if (mounted) {
+      setState(() {
+        _feedInitial = true;
+        _feedError = false;
+        _feedNotes.clear();
+        _feedVersion++;
+        _feedPage = 1;
+        _feedHasMore = true;
+        _feedLoading = false;
+        _feedNewestFirst = newestFirst;
+        _setNewPostCount(0);
+      });
+    }
     _updateNewPostPill();
     try {
-      if (tab == 'latest' || tab == 'hot') {
-        final sort = (tab == 'hot' && !newestFirst) ? 'hot' : 'latest';
-        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+      // 4 个预热操作改为并行执行：原串行 await 累计 1~3 秒延迟，
+      // 这是「点击后列表毫无反应」的根本原因之一。并行后只需等最慢的那个。
+      await Future.wait([
+        CloudNotesService.instance.refreshLikedNoteIds(),
+        CloudNotesService.instance.refreshFollowStates(),
+        CloudNotesService.instance.refreshBannedTopics(),
+        NoteSutraCatalog.load(),
+      ]);
+      _timeCache.clear();
+      _plainTextCache.clear();
+      _sutraQuoteCache.clear();
+      if (!mounted) return;
+      try {
+        if (tab == 'latest' || tab == 'hot') {
+          final sort = (tab == 'hot' && !newestFirst) ? 'hot' : 'latest';
+          final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+          if (mounted) {
+            setState(() {
+              _feedNotes.addAll(list);
+              _feedVersion++;
+              _feedPage = nextPage;
+              _feedHasMore = hasMore;
+              _feedInitial = false;
+            });
+          }
+        } else if (tab == 'discuss') {
+          // 讨论：最新的「带 #话题 或 $经名」帖子 + 顶部热门榜（并行加载）。
+          unawaited(_loadHotDiscussions());
+          final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
+              filter: _isDiscussionNote, maxPages: 8);
+          if (mounted) {
+            setState(() {
+              _feedNotes.addAll(list);
+              _feedVersion++;
+              _feedPage = nextPage;
+              _feedHasMore = hasMore;
+              _feedInitial = false;
+            });
+          }
+        } else if (tab == 'follow') {
+          await _loadFollowedIds();
+          if (mounted) setState(() => _feedInitial = false);
+          if (mounted && _followedIds.isNotEmpty) {
+            await _loadFollowingNotes();
+          }
+        } else if (tab == 'announce') {
+          await _loadAnnouncements();
+        } else {
+          if (mounted) setState(() => _feedInitial = false);
+        }
+      } catch (_) {
         if (mounted) {
           setState(() {
-            _feedNotes.addAll(list);
-            _feedVersion++;
-            _feedPage = nextPage;
-            _feedHasMore = hasMore;
             _feedInitial = false;
+            _feedError = true;
           });
         }
-      } else if (tab == 'discuss') {
-        // 讨论：最新的「带 #话题 或 $经名」帖子 + 顶部热门榜（并行加载）。
-        unawaited(_loadHotDiscussions());
-        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
-            filter: _isDiscussionNote, maxPages: 8);
-        if (mounted) {
-          setState(() {
-            _feedNotes.addAll(list);
-            _feedVersion++;
-            _feedPage = nextPage;
-            _feedHasMore = hasMore;
-            _feedInitial = false;
-          });
-        }
-      } else if (tab == 'follow') {
-        await _loadFollowedIds();
-        if (mounted) setState(() => _feedInitial = false);
-        if (mounted && _followedIds.isNotEmpty) {
-          await _loadFollowingNotes();
-        }
-      } else if (tab == 'announce') {
-        await _loadAnnouncements();
-      } else {
-        if (mounted) setState(() => _feedInitial = false);
       }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _feedInitial = false;
-          _feedError = true;
-        });
-      }
+      _saveFeedToCache(tab);
+    } finally {
+      _feedRefreshing = false;
     }
-    _saveFeedToCache(tab);
   }
 
   /// 拉取公告列表（主页公告栏展示，最新在前）。
@@ -990,6 +1014,69 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
+  /// 「显示X帖子」/ 双击「修学」菜单图标的轻量刷新：
+  /// 仅拉取当前栏目最新一页，把列表中没有的新帖一次性插入到顶部，
+  /// 不清空已加载的帖、不切换排序、不闪整页加载态。这是用户期望的
+  /// 「最新信息立即显示在顶部」效果。
+  /// 与 `_loadFeed(newestFirst: true)` 的区别：原实现清空整列表重新加载，
+  /// 已滚动到的位置和已加载的多页内容都会丢失，体感是「整个页面刷新一遍」。
+  Future<void> _refreshNewPostsOnly() async {
+    if (_feedRefreshing) return;
+    _feedRefreshing = true;
+    try {
+      final tab = _plazaTabs[_tabIndex];
+      if (tab == 'announce') return;
+      final List<PlazaNote> list;
+      if (tab == 'latest' || tab == 'hot') {
+        // 始终按最新排序拿第一页，确保新帖出现在结果最前。
+        final (first, _, _) = await _fetchFilteredFeed(1, 'latest');
+        list = first;
+      } else if (tab == 'discuss') {
+        final (first, _, _) = await _fetchFilteredFeed(1, 'latest',
+            filter: _isDiscussionNote, maxPages: 2);
+        list = first;
+      } else if (tab == 'follow') {
+        list = await _fetchFollowFeedPreview();
+      } else {
+        return;
+      }
+      if (!mounted) return;
+      final known = _feedNotes.map((n) => n.id).toSet();
+      final fresh = list.where((n) => !known.contains(n.id)).toList();
+      if (fresh.isEmpty) {
+        // 实际上没有新内容：直接清零（修复「总是显示 X 帖子」的老问题）。
+        final needClear = _newPostCount != 0 || _showNewPostPill;
+        if (needClear) {
+          setState(() {
+            _setNewPostCount(0);
+            _showNewPostPill = false;
+          });
+        }
+        return;
+      }
+      setState(() {
+        _feedNotes.insertAll(0, fresh);
+        _feedVersion++;
+        _setNewPostCount(0);
+        _showNewPostPill = false;
+      });
+      // 顺手写回缓存，避免下次后台轮询又把刚插入的帖当新帖统计。
+      _saveFeedToCache(tab);
+      _scrollInstantTop();
+    } catch (_) {
+      // 静默失败。
+    } finally {
+      _feedRefreshing = false;
+    }
+  }
+
+  /// 把帖子列表滚动到顶部（无动画、不卡帧），用于点击「显示X帖子」后让新帖立刻可见。
+  void _scrollInstantTop() {
+    if (_feedScroll.hasClients && _feedScroll.offset > 0) {
+      _feedScroll.jumpTo(0);
+    }
+  }
+
   /// 后台静默统计当前栏目新帖数量：只更新「X条新帖子」提醒，不刷新列表。
   /// 发现：按热度规则倒序；讨论：最新的带 #话题 或 $经名 帖子；关注：仅统计已关注同修的新帖。
   Future<void> _checkNewPosts() async {
@@ -1021,6 +1108,13 @@ class StudyHubPageState extends State<StudyHubPage>
       if (count > 0 && count != _newPostCount) {
         setState(() => _setNewPostCount(count));
         _updateNewPostPill();
+      } else if (count == 0 && _newPostCount != 0) {
+        // 后台确认已无新帖：必须显式清零，否则旧计数会一直挂在 UI 上，
+        // 形成「明明没新信息却总显示 X 条」（原实现只有 `count > 0` 分支）。
+        setState(() {
+          _setNewPostCount(0);
+          _showNewPostPill = false;
+        });
       }
     } catch (_) {
       // 静默失败，下一轮再试。
@@ -1069,13 +1163,14 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 点击悬浮按钮：回到帖子顶部，同时以最新优先刷出新帖（新帖直接排在顶部）。
+  /// 点击悬浮按钮：回到帖子顶部，并立即把新帖插入到列表顶部（不清空重载）。
   Future<void> _refreshFromPill() async {
-    if (_feedScroll.hasClients) {
-      await _feedScroll.animateTo(0,
-          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-    }
-    _loadFeed(newestFirst: true);
+    final animFuture = (_feedScroll.hasClients && _feedScroll.offset > 0)
+        ? _feedScroll.animateTo(0,
+            duration: const Duration(milliseconds: 300), curve: Curves.easeOut)
+        : Future<void>.value();
+    await _refreshNewPostsOnly();
+    await animFuture;
   }
 
   /// 打开主页时并行预取其余栏目：发现加载的同时，讨论/关注/公告在后台刷新，
@@ -2258,12 +2353,13 @@ class StudyHubPageState extends State<StudyHubPage>
     ];
   }
 
-  /// 「发现/关注/讨论」栏目顶部的新帖提醒：仅一行文字，点击立即以最新优先刷出新帖。
+  /// 「发现/关注/讨论」栏目顶部的新帖提醒：仅一行文字，点击立即把新帖插入列表顶部，
+  /// 不切换全量重载，避免「整页刷新」的体感。
   Widget _buildNewPostBanner() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
       child: InkWell(
-        onTap: () => _loadFeed(newestFirst: true),
+        onTap: _refreshNewPostsOnly,
         child: Text(
           '显示$_newPostCount帖子',
           textAlign: TextAlign.center,
@@ -2887,19 +2983,24 @@ class StudyHubPageState extends State<StudyHubPage>
         Stack(
           clipBehavior: Clip.none,
           children: [
+            // 连接线：原贴头像底部 → 下面第一个回复头像之间。
+            // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
+            // bottom:12 止于指标行底部（不穿过 PostBlock 下内边距），
+            // 下方 ReplyChain 上移 6px，与链内竖线端点留白一致。
             Positioned(
               left: 21,
               top: 62,
-              bottom: -18,
+              bottom: 12,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             rootWidget,
           ],
         ),
-        Padding(
-          // 上一个帖子的指标行与下面帖子之间留出更大间距，连线保持连续。
-          padding: const EdgeInsets.only(top: 18, bottom: 6),
-          child: ReplyChain(
+        Transform.translate(
+          offset: const Offset(0, -6),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: ReplyChain(
             replies: replies,
             parentAccounts: {
               root.id: root.authorAccount,
@@ -2914,6 +3015,7 @@ class StudyHubPageState extends State<StudyHubPage>
             // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
             onOpenSelf: widget.onOpenMyPage,
           ),
+        ),
         ),
       ],
     );
@@ -2931,7 +3033,7 @@ class StudyHubPageState extends State<StudyHubPage>
             Positioned(
               left: 21,
               top: 52,
-              bottom: -18,
+              bottom: 0,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             Padding(
@@ -2988,7 +3090,7 @@ class StudyHubPageState extends State<StudyHubPage>
         ),
         if (replies.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 18, bottom: 6),
+            padding: const EdgeInsets.only(top: 6, bottom: 6),
             child: ReplyChain(
               replies: replies,
               parentAccounts: {

@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
-    show kIsWeb, ValueListenable, debugPrint;
+    show kIsWeb, ValueListenable;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
@@ -375,15 +375,18 @@ class SutraListPageState extends State<SutraListPage>
     // 兼容历史下载：扫描本地文件补齐，确保已下载的经文也显示「下载完成」对号。
     final diskIds = await SutraDownloader.listDownloadedIds();
     final merged = <String>{...ids, ...diskIds};
+    // 无条件持久化合并结果（之前只在 diskIds 有新增时才写），
+    // 防止内存中临时空集被刷回 prefs 把已有记录写空。
+    if (merged.length != ids.length || !merged.containsAll(ids.toSet())) {
+      await prefs.setStringList(_kDownloadedIdsKey, merged.toList());
+    }
     if (!mounted) return;
     setState(() {
       _downloadedIds
         ..clear()
         ..addAll(merged);
     });
-    if (diskIds.any((id) => !ids.contains(id))) {
-      await prefs.setStringList(_kDownloadedIdsKey, merged.toList());
-    }
+    _sutraDataVersion.value++;
   }
 
   /// 重新扫描本地下载目录，把缺失的状态补齐（阅读页等直接下载的经书也能显示对号）。
@@ -417,10 +420,16 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   Future<void> _downloadSingle(Sutra sutra, String id) async {
-    // 诊断：本地已有文件却仍触发下载（换机/路径恢复导致误判）时打印现场。
+    // 本地已有完整文件时直接标记为已下载并打开，不重新下载。
+    // 这是防止「已下载经文被误判为未下载而反复重下」的关键兜底：
+    // 即使上游 _canOpenSutra / _downloadedIds 因任何原因误判，
+    // 这里也能确保已有文件不被无谓地重新下载。
     if (await SutraDownloader.isDownloaded(id)) {
-      debugPrint('[download] 本地已存在却仍触发下载: id=$id '
-          'filePath=${sutra.filePath} title=${sutra.title}');
+      _markDownloaded(id);
+      await _persistDownloadedIds();
+      if (!mounted) return;
+      _openReading(sutra);
+      return;
     }
     setState(() {
       _downloadProgress[id] = 0;
@@ -475,7 +484,12 @@ class SutraListPageState extends State<SutraListPage>
     final targets = <Sutra>[];
     for (final s in _getAllSutrasInFolder(folderName)) {
       final id = SutraDownloader.extractId(s.title, s.filePath);
-      if (id != null && !_downloadedIds.contains(id)) targets.add(s);
+      // 同时检查内存集合和磁盘文件，避免已下载的经文被重复下载。
+      if (id != null &&
+          !_downloadedIds.contains(id) &&
+          !await SutraDownloader.isDownloaded(id)) {
+        targets.add(s);
+      }
     }
     if (targets.isEmpty) {
       if (!mounted) return;
@@ -491,6 +505,17 @@ class SutraListPageState extends State<SutraListPage>
     for (var i = 0; i < targets.length; i++) {
       final s = targets[i];
       final id = SutraDownloader.extractId(s.title, s.filePath)!;
+      // 再次确认磁盘上没有该文件（可能在批量下载过程中已被其他路径下载）。
+      if (await SutraDownloader.isDownloaded(id)) {
+        _markDownloaded(id);
+        if (mounted) {
+          setState(() {
+            _folderDownloadDone[folderName] = i + 1;
+          });
+          _sutraDataVersion.value++;
+        }
+        continue;
+      }
       setState(() {
         _downloadProgress[id] = 0;
       });
@@ -550,6 +575,7 @@ class SutraListPageState extends State<SutraListPage>
         ),
       );
     }
+    // memory hit → 绿色对勾
     if (_downloadedIds.contains(id)) {
       return const SizedBox(
         width: 34,
@@ -559,16 +585,34 @@ class SutraListPageState extends State<SutraListPage>
         ),
       );
     }
+    // memory miss → 异步查磁盘：文件存在就显示对勾（防止冷启动竞态窗口内
+    // 全显示下载按钮），查到后补进 _downloadedIds 供后续同步命中。
     return SizedBox(
       width: 34,
       height: 30,
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(),
-        iconSize: 17,
-        tooltip: '下载',
-        icon: const Icon(Icons.download, color: Color(0xFF71867A)),
-        onPressed: () => _downloadSingle(sutra, id),
+      child: FutureBuilder<bool>(
+        future: SutraDownloader.isDownloaded(id),
+        builder: (context, snapshot) {
+          if (snapshot.data == true) {
+            // 补进内存集合 + prefs，让后续不再走 FutureBuilder
+            if (_downloadedIds.add(id)) {
+              _persistDownloadedIds();
+              _sutraDataVersion.value++;
+            }
+            return const Center(
+              child: Icon(Icons.check_circle,
+                  size: 15, color: Color(0xFF8FBC8F)),
+            );
+          }
+          return IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            iconSize: 17,
+            tooltip: '下载',
+            icon: const Icon(Icons.download, color: Color(0xFF71867A)),
+            onPressed: () => _downloadSingle(sutra, id),
+          );
+        },
       ),
     );
   }
@@ -783,12 +827,11 @@ class SutraListPageState extends State<SutraListPage>
     _loadLastRead();
   }
 
-  /// 登录/登出后重扫本地下载目录：避免重新登录后下载状态被误判为「未下载」，
-  /// 导致已下载的经文又提示重新下载。
+  /// 登录/登出后会话状态变化时，从 prefs + 磁盘重新合并下载 ID 列表，
+  /// 确保已下载的经文不会因重新登录/掉线恢复而被误判为「未下载」。
   void _onAuthChanged() {
-    if (AuthService.instance.isLoggedIn) {
-      syncDownloadedIdsFromDisk();
-    }
+    // 无论登录还是登出都重新加载：登出不清空状态，登录后从磁盘补齐。
+    _loadDownloadedIds();
   }
 
   @override
@@ -971,6 +1014,9 @@ class SutraListPageState extends State<SutraListPage>
     await _loadLastRead();
     await _loadReadingStats();
     await _loadRecentSutras();
+    // 同步刷新下载标记：reload 之前不调这一步，导致云同步后 _downloadedIds
+    // 反映的还是旧的内存状态，已下载的经文被误显示为未下载。
+    await _loadDownloadedIds();
   }
 
   Future<File> _sutraListFile() async {

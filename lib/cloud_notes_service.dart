@@ -593,13 +593,11 @@ class CloudNotesService {
     // 未登录时先确保有一个匿名会话，否则网关会拒绝调用（如浏览广场）。
     await AuthService.instance.ensureAnonymousForBrowse();
     final token = await AuthService.instance.getAccessToken();
+    // 已登录但拿不到 access token（token 过期且刷新失败）时，不终止调用：
+    // 不带 __accessToken 发请求（用匿名级 publishable key），云函数会返回
+    // 公开数据（如广场帖子），用户至少能看到内容而不是白屏。
     if (token == null && AuthService.instance.isLoggedIn) {
-      // 已登录但拿不到 access token（刷新失败）：终止本次调用而不是带着
-      // 过期 token 发请求——否则网关可能返回 unauthenticated，SDK 会删除
-      // 本地真实会话，导致下次启动被强制登出、需要重新登录。
-      // 刷新恢复后（下一跳网络/稍后重试）会自动自愈，会话不会被误删。
-      debugPrint('[cloud] 已登录但 access token 为空，终止云调用以保护会话');
-      throw const CloudApiException('网络不稳定，请稍后重试');
+      debugPrint('[cloud] 已登录但 access token 为空，以匿名级调用降级');
     }
     final FunctionResponse res;
     try {

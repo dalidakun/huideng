@@ -30,12 +30,14 @@ const Color _textSec = Color(0xFF8B6B5A);
 const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 
-/// 发表成功后的底部常驻提示：「已发表，点击查看」。
-/// 不会自动消失；点击「点击查看」关闭并进入所发帖子的详情页，点 X 仅关闭。
+/// 发表成功后的底部提示：「已发表，点击查看」。
+/// 最长显示 10 秒自动消失；点击「点击查看」立即关闭并进入帖子详情页，点 X 仅关闭。
 void showPostPublishedToast(BuildContext context, String noteId) {
   final overlay = Overlay.of(context);
   late OverlayEntry entry;
+  Timer? autoHide;
   void dismiss() {
+    autoHide?.cancel();
     if (entry.mounted) entry.remove();
   }
 
@@ -99,6 +101,8 @@ void showPostPublishedToast(BuildContext context, String noteId) {
     },
   );
   overlay.insert(entry);
+  // 10 秒后自动消失，避免一直挂着、用户忘记关闭。
+  autoHide = Timer(const Duration(seconds: 10), dismiss);
 }
 
 class NoteDetailPage extends StatefulWidget {
@@ -171,42 +175,51 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       _error = false;
     });
     try {
-      await CloudNotesService.instance.refreshFavoriteNoteIds();
-      await CloudNotesService.instance.refreshFollowStates();
-      final note = await CloudNotesService.instance.getNoteById(widget.noteId);
-      final comments =
-          await CloudNotesService.instance.getComments(widget.noteId);
-      // 预取评论作者资料（账号/认证），补齐评论行显示。
+      // 预热类操作（点赞列表/关注态/经书目录）改为后台并行，
+      // 不阻塞主帖渲染。原实现串行 await 这些操作累计 1~3 秒，
+      // 是「进入详情页长时间转圈」的原因之一。
+      unawaited(CloudNotesService.instance.refreshFavoriteNoteIds());
+      unawaited(CloudNotesService.instance.refreshFollowStates());
+      // 浏览量+1 失败不影响阅读：纯 fire-and-forget，不更新 UI 数字。
+      unawaited(CloudNotesService.instance.incView(widget.noteId).catchError((_) => 0));
+      // 经书目录后台并行加载，得到后立刻刷一次，让 $经名 链接可用。
+      NoteSutraCatalog.titleMap().then((lib) {
+        if (!mounted) return;
+        setState(() => _sutraLib = lib);
+      }).catchError((_) {});
+
+      // 主帖与评论并行拿：原实现串行依次 await，2 倍延迟合并为 1。
+      final results = await Future.wait([
+        CloudNotesService.instance.getNoteById(widget.noteId),
+        CloudNotesService.instance.getComments(widget.noteId),
+      ]);
+      final note = results[0] as PlazaNote;
+      final comments = results[1] as List<PlazaComment>;
+
+      // 评论作者资料后台拉取，先用已有信息渲染，到位后再 setState 一次补齐账号/认证。
       final authorIds = <String>{
         for (final c in comments)
           if (c.authorId.isNotEmpty) c.authorId,
       };
       if (authorIds.isNotEmpty) {
-        try {
-          final profiles = await CloudNotesService.instance
-              .getUserProfiles(authorIds.toList());
-          _commentAuthorProfiles
-            ..clear()
-            ..addAll({for (final p in profiles) p.id: p});
-        } catch (_) {}
+        CloudNotesService.instance
+            .getUserProfiles(authorIds.toList())
+            .then((profiles) {
+          if (!mounted) return;
+          setState(() {
+            _commentAuthorProfiles
+              ..clear()
+              ..addAll({for (final p in profiles) p.id: p});
+          });
+        }).catchError((_) {});
       }
       try {
         final prefs = await SharedPreferences.getInstance();
         _myAccount = prefs.getString('user_account_name') ?? '';
         _myVerified = prefs.getBool('user_verified') ?? false;
       } catch (_) {}
-      int viewCount = note.viewCount;
-      // 阅读量 +1 尽力而为，失败不影响阅读，也不提示用户。
-      try {
-        viewCount = await CloudNotesService.instance.incView(widget.noteId);
-      } catch (_) {}
-      Map<String, NoteSutraLink> lib = const {};
-      try {
-        lib = await NoteSutraCatalog.titleMap();
-      } catch (_) {}
       if (!mounted) return;
       setState(() {
-        _sutraLib = lib;
         _note = PlazaNote(
           id: note.id,
           ownerUserId: note.ownerUserId,
@@ -219,7 +232,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           status: note.status,
           likeCount: note.likeCount,
           commentCount: note.commentCount,
-          viewCount: viewCount,
+          viewCount: note.viewCount,
           repostCount: note.repostCount,
           repostOf: note.repostOf,
           repostSourceAuthor: note.repostSourceAuthor,

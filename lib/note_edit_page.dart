@@ -800,13 +800,15 @@ class _NoteEditPageState extends State<NoteEditPage> {
     });
   }
 
-  /// 保存成功后的底部常驻提示：「已发表/已保存草稿，点击查看」。
-  /// 不会自动消失；点击「点击查看」关闭并进入所发帖子/草稿，点 X 仅关闭。
+  /// 保存成功后的底部提示：「已发表/已保存草稿，点击查看」。
+  /// 最长显示 10 秒自动消失；点击「点击查看」立即关闭并进入帖子/草稿，点 X 仅关闭。
   void _showSavedToastWithView(String prefix, Map<String, dynamic> note) {
     if (!mounted) return;
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
+    Timer? autoHide;
     void dismiss() {
+      autoHide?.cancel();
       if (entry.mounted) entry.remove();
     }
 
@@ -880,6 +882,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
       },
     );
     overlay.insert(entry);
+    // 10 秒后自动消失，避免一直挂着、用户忘记关闭。
+    autoHide = Timer(const Duration(seconds: 10), dismiss);
   }
 
   Future<bool> _onWillPop() async {

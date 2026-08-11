@@ -407,6 +407,9 @@ exports.main = async (event, context) => {
           viewed: false,
           createdAt: now(),
         });
+        // 新发布的笔记可能含尚未上过热门榜的 #话题/$经名，立即失效热门榜缓存，
+        // 让下一次拉取能看到这些新话题/新经书。
+        hotDiscussionsCache = null;
         return ok({ id: res.id });
       }
 
@@ -428,6 +431,10 @@ exports.main = async (event, context) => {
         const note = await getOwnedNote(notes, id, uid);
         if (!note) return fail("not_found");
         await notes.doc(id).update(patch);
+        // 内容/可见性/状态改变会改变 #话题/$经名的贡献，重新聚合热门榜。
+        if (event.content != null || event.visibility != null || event.status != null) {
+          hotDiscussionsCache = null;
+        }
         return ok({ id });
       }
 
@@ -441,6 +448,8 @@ exports.main = async (event, context) => {
         await comments.where({ noteId: id }).remove();
         await reports.where({ noteId: id }).remove();
         await favorites.where({ noteId: id }).remove();
+        // 删除笔记后其 #话题/$经名贡献消失，重新聚合热门榜。
+        hotDiscussionsCache = null;
         return ok({});
       }
 
@@ -724,6 +733,67 @@ exports.main = async (event, context) => {
         // 按最新在前扫描；因按 createdAt 倒序，一旦出现早于窗口的帖子即停止，
         // 并设置扫描上限控制冷启动耗时。
         const window = nowMs - 14 * 24 * 3600000;
+        // 单条记录对热度榜的贡献（话题帖、经书讨论都复用同款聚合逻辑）：
+        // - ageHours 小（新发布）且 engagement 越高，得分越高；
+        // - 经书讨论（sutraDiscussions）的 sutraTitle 字段视作一条 $经名 引用，
+        //   content 中的 #话题 也按话题帖一样计分，确保经书讨论页与话题讨论页
+        //   「在同一份热门榜上」按热度排序展示。
+        const aggregateRecord = (createdAt, likeCount, viewCount, commentCount, repostCount, /* regex content */ text, /* 经书讨论专属 */ sutraTitle) => {
+          const ageHours = Math.max(0, (nowMs - (createdAt || nowMs)) / 3600000);
+          const engagement =
+            (viewCount || 0) +
+            (likeCount || 0) * 3 +
+            (commentCount || 0) * 5 +
+            (repostCount || 0) * 8;
+          // 得分完全由互动量驱动：0 互动 → 0 分（垫底显示，保证新话题/经书仍在总榜但排在后面），
+          // 有互动 → 按互动量除以时间衰减因子，新互动比老互动更值钱。
+          // 不再用 (1 + engagement)：避免 0 互动的新帖凭"新鲜度"白拿 ~0.4 分冲到前三。
+          const score = engagement / Math.pow(ageHours + 2, 1.3);
+          // 经书讨论：直接以 sutraTitle 字段为 $经名 引用计入经文榜。
+          if (sutraTitle) {
+            const s = String(sutraTitle).trim();
+            if (s && s.length <= 24) {
+              const cur = sutras.get(s) || { score: 0, posts: 0, last: 0 };
+              cur.score += score;
+              cur.posts += 1;
+              if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
+              sutras.set(s, cur);
+            }
+          }
+          // 通用：从正文中识别 #话题 / $经名，每个去重后累加。
+          if (text) {
+            topicRe.lastIndex = 0;
+            const seenT = new Set();
+            let m;
+            while ((m = topicRe.exec(text)) !== null) {
+              const t = m[1];
+              if (t.length > 24 ||
+                  seenT.has(t) ||
+                  bannedTopics.has(t) ||
+                  noiseTopicRe.test(t)) {
+                continue;
+              }
+              seenT.add(t);
+              const cur = topics.get(t) || { score: 0, posts: 0, last: 0 };
+              cur.score += score;
+              cur.posts += 1;
+              if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
+              topics.set(t, cur);
+            }
+            sutraRe.lastIndex = 0;
+            const seenS = new Set();
+            while ((m = sutraRe.exec(text)) !== null) {
+              const s = m[1];
+              if (s.length > 24 || seenS.has(s)) continue;
+              seenS.add(s);
+              const cur = sutras.get(s) || { score: 0, posts: 0, last: 0 };
+              cur.score += score;
+              cur.posts += 1;
+              if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
+              sutras.set(s, cur);
+            }
+          }
+        };
         const hotBase = notes.where({
           visibility: "public",
           status: "normal",
@@ -747,52 +817,60 @@ exports.main = async (event, context) => {
               break;
             }
             if (++scanned > cap) break;
-            const ageHours = Math.max(0, (nowMs - (n.createdAt || nowMs)) / 3600000);
-            const engagement =
-              (n.viewCount || 0) +
-              (n.likeCount || 0) * 3 +
-              (n.commentCount || 0) * 5 +
-              (n.repostCount || 0) * 8;
-            const score = (1 + engagement) / Math.pow(ageHours + 2, 1.3);
-            const text = `${n.title || ""}\n${n.content || ""}`;
-            topicRe.lastIndex = 0;
-            const seenT = new Set();
-            let m;
-            while ((m = topicRe.exec(text)) !== null) {
-              const t = m[1];
-              if (t.length > 24 ||
-                  seenT.has(t) ||
-                  bannedTopics.has(t) ||
-                  noiseTopicRe.test(t)) {
-                continue;
-              }
-              seenT.add(t);
-              const cur = topics.get(t) || { score: 0, posts: 0, last: 0 };
-              cur.score += score;
-              cur.posts += 1;
-              if ((n.createdAt || 0) > cur.last) cur.last = n.createdAt || 0;
-              topics.set(t, cur);
-            }
-            sutraRe.lastIndex = 0;
-            const seenS = new Set();
-            while ((m = sutraRe.exec(text)) !== null) {
-              const s = m[1];
-              if (s.length > 24 || seenS.has(s)) continue;
-              seenS.add(s);
-              const cur = sutras.get(s) || { score: 0, posts: 0, last: 0 };
-              cur.score += score;
-              cur.posts += 1;
-              if ((n.createdAt || 0) > cur.last) cur.last = n.createdAt || 0;
-              sutras.set(s, cur);
-            }
+            aggregateRecord(
+              n.createdAt,
+              n.likeCount,
+              n.viewCount,
+              n.commentCount,
+              n.repostCount,
+              `${n.title || ""}\n${n.content || ""}`
+            );
           }
           if (batch.length < 1000 || scanned >= cap) break;
           skip += 1000;
         }
+        // 也聚合「经书讨论」集合：sutraTitle 计入经文榜，content 里若含 #话题
+        // 也计入话题榜，使经书讨论页与话题讨论页在同款热度榜上按热度排序展示。
+        try {
+          await ensureSutraDiscussions();
+          let sdSkip = 0;
+          const sdCap = 2000;
+          let sdScanned = 0;
+          let sdDone = false;
+          while (sdScanned < sdCap && !sdDone) {
+            const sr = await sutraDiscussions
+              .orderBy("createdAt", "desc")
+              .skip(sdSkip)
+              .limit(1000)
+              .get();
+            const sBatch = sr.data || [];
+            if (sBatch.length === 0) break;
+            for (const d of sBatch) {
+              if ((d.createdAt || 0) < window) {
+                sdDone = true;
+                break;
+              }
+              if (++sdScanned > sdCap) break;
+              aggregateRecord(
+                d.createdAt,
+                d.likeCount,
+                0, // 经书讨论没有 viewCount
+                0, // 没有 commentCount
+                0, // 没有 repostCount
+                d.content || "",
+                d.sutraTitle || ""
+              );
+            }
+            if (sBatch.length < 1000 || sdScanned >= sdCap) break;
+            sdSkip += 1000;
+          }
+        } catch (e) {
+          // 经书讨论集合读取失败时静默降级：话题榜不受影响。
+        }
         const sortBy = (a, b) => b[1].score - a[1].score || b[1].last - a[1].last;
         const topTopics = [...topics.entries()]
           .sort(sortBy)
-          .slice(0, 50)
+          .slice(0, 200)
           .map(([name, v]) => ({
             name,
             posts: v.posts,
@@ -800,7 +878,7 @@ exports.main = async (event, context) => {
           }));
         const topSutras = [...sutras.entries()]
           .sort(sortBy)
-          .slice(0, 50)
+          .slice(0, 200)
           .map(([name, v]) => ({
             name,
             posts: v.posts,
@@ -1779,6 +1857,8 @@ exports.main = async (event, context) => {
           createdAt,
           updatedAt: createdAt,
         });
+        // 新经书讨论会按 sutraTitle 计入经文热度榜，立即失效缓存让下次拉取能看到新讨论。
+        hotDiscussionsCache = null;
         return ok({ id: res.id, createdAt });
       }
 
@@ -1792,6 +1872,8 @@ exports.main = async (event, context) => {
         if (!existing.data || !existing.data._id) return fail("not_found");
         if (existing.data.ownerUserId !== uid) return fail("forbidden");
         await doc.remove();
+        // 经书讨论删除会影响经文热度榜，重新聚合。
+        hotDiscussionsCache = null;
         return ok({});
       }
 

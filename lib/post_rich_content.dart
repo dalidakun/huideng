@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
@@ -155,7 +156,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   /// 云端讨论列表（最新在前），每条为 {id, content, name, userId, account,
   /// verified, likeCount, at} 结构，所有用户共享。
   List<Map<String, dynamic>> _comments = [];
-  final TextEditingController _input = TextEditingController();
   bool _loading = true;
   bool _commentsLoading = true;
   bool _downloaded = false;
@@ -212,7 +212,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     _newPostTimer?.cancel();
     _newPostTimer = null;
     _scroll.dispose();
-    _input.dispose();
     super.dispose();
   }
 
@@ -530,7 +529,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
         sutraTitle: widget.title,
         content: content,
       );
-      _input.clear();
       if (!mounted) return;
       await _loadComments();
     } catch (e) {
@@ -779,44 +777,28 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
               ],
             ),
           ),
-          // 讨论输入
+          // 讨论输入：点击打开与笔记详情页同款大输入框（500 字）。
           Container(
             color: _card,
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
             child: SafeArea(
               top: false,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      height: 42,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: _bg,
-                        borderRadius: BorderRadius.circular(21),
-                      ),
-                      child: TextField(
-                        controller: _input,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        style: const TextStyle(fontSize: 14, color: _text),
-                        decoration: const InputDecoration(
-                          hintText: '说说你的体会…',
-                          hintStyle: TextStyle(color: _textHint),
-                          border: InputBorder.none,
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _openComposeSheet,
+                child: Container(
+                  height: 42,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: _bg,
+                    borderRadius: BorderRadius.circular(21),
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    onPressed: _send,
-                    icon: const Icon(Icons.send_rounded,
-                        color: Color(0xFF70867A), size: 22),
+                  alignment: Alignment.centerLeft,
+                  child: const Text(
+                    '说说你的体会…',
+                    style: TextStyle(color: _textHint, fontSize: 14),
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -825,14 +807,29 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     );
   }
 
-  void _send() {
-    final content = _input.text.trim();
-    if (content.isEmpty) return;
+  /// 打开与笔记详情页同款的大输入弹层（SheetTextInput，500 字、多行）。
+  void _openComposeSheet() {
     if (!AuthService.instance.isLoggedIn) {
       _promptLogin();
       return;
     }
-    _postComment(content);
+    showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => const SheetTextInput(
+        title: '讨论',
+        hint: '说说你的体会…',
+        maxLength: 500,
+        minLines: 3,
+        maxLines: 10,
+        confirmText: '发表',
+      ),
+    ).then((content) {
+      if (content != null && content.isNotEmpty) _postComment(content);
+    });
   }
 
   /// 讨论行：与主页帖子同款（头像 + 昵称/认证/@账号，内容下方时间 + 六个指标）。
@@ -940,73 +937,76 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   }
 
   /// 讨论的六个指标：评论/转发/点赞/阅读 + 收藏/分享。
-  /// 与笔记详情页操作行同款「图标+数字」样式；讨论暂无评论/转发/阅读数据，展示 0。
+  /// 与话题讨论页操作行同款：左四个用 spaceBetween 平铺，右两个（收藏/分享）
+  /// 用 SizedBox(width: 36) / SizedBox(width: 6) 收窄间距。
+  /// 讨论暂无评论/转发/阅读数据，展示 0。
   Widget _buildCommentMetricRow(Map<String, dynamic> c) {
     final id = c['id']?.toString() ?? '';
     final liked = id.isNotEmpty && _likedCommentIds.contains(id);
     final favorited = id.isNotEmpty && _favCommentIds.contains(id);
-    const numStyle = TextStyle(fontSize: 13, color: _textSec);
     return Row(
       children: [
-        Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
-        const SizedBox(width: 3),
-        const Text('0', style: numStyle),
-        const SizedBox(width: 28),
-        Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-        const SizedBox(width: 3),
-        const Text('0', style: numStyle),
-        const SizedBox(width: 28),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => setState(() {
-            final likeCount =
-                ((c['likeCount'] as num?)?.toInt() ?? 0) + (liked ? -1 : 1);
-            c['likeCount'] = likeCount < 0 ? 0 : likeCount;
-            if (id.isEmpty) return;
-            if (!_likedCommentIds.remove(id)) _likedCommentIds.add(id);
-          }),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                    liked
-                        ? Icons.favorite_rounded
-                        : Icons.favorite_border_rounded,
-                    size: 16,
-                    color: liked ? _gold : _textSec),
-                const SizedBox(width: 3),
-                Text('${c['likeCount'] ?? 0}',
-                    style: TextStyle(
-                        fontSize: 13, color: liked ? _gold : _textSec)),
-              ],
-            ),
+        Expanded(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildActionCell(
+                  Image.asset('assets/images/ic_comment.png',
+                      width: 16, height: 16),
+                  _textSec,
+                  '0',
+                  null),
+              _buildActionCell(
+                  const Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+                  _textSec,
+                  '0',
+                  null),
+              _buildActionCell(
+                  Icon(
+                      liked
+                          ? Icons.favorite_rounded
+                          : Icons.favorite_border_rounded,
+                      size: 16,
+                      color: liked ? _gold : _textSec),
+                  liked ? _gold : _textSec,
+                  '${c['likeCount'] ?? 0}',
+                  () => setState(() {
+                    final likeCount =
+                        ((c['likeCount'] as num?)?.toInt() ?? 0) +
+                            (liked ? -1 : 1);
+                    c['likeCount'] = likeCount < 0 ? 0 : likeCount;
+                    if (id.isEmpty) return;
+                    if (!_likedCommentIds.remove(id)) _likedCommentIds.add(id);
+                  })),
+              _buildActionCell(
+                  Image.asset('assets/images/ic_view.png',
+                      width: 16, height: 16),
+                  _textSec,
+                  '0',
+                  null),
+            ],
           ),
         ),
-        const SizedBox(width: 28),
-        Image.asset('assets/images/ic_view.png', width: 16, height: 16),
-        const SizedBox(width: 3),
-        const Text('0', style: numStyle),
-        const Spacer(),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => setState(() {
-            if (id.isEmpty) return;
-            if (!_favCommentIds.remove(id)) _favCommentIds.add(id);
-          }),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: Icon(
+        const SizedBox(width: 36),
+        _buildActionCell(
+            Icon(
                 favorited
                     ? Icons.bookmark_rounded
                     : Icons.bookmark_border_rounded,
                 size: 16,
                 color: favorited ? _gold : _textSec),
-          ),
-        ),
-        const SizedBox(width: 20),
-        Icon(Icons.share_rounded, size: 16, color: _textSec),
+            favorited ? _gold : _textSec,
+            '',
+            () => setState(() {
+              if (id.isEmpty) return;
+              if (!_favCommentIds.remove(id)) _favCommentIds.add(id);
+            })),
+        const SizedBox(width: 6),
+        _buildActionCell(
+            const Icon(Icons.share_rounded, size: 16, color: _textSec),
+            _textSec,
+            '',
+            () => _shareComment(c)),
       ],
     );
   }
@@ -1142,47 +1142,48 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       style: const TextStyle(
                           fontSize: 12, color: Color(0xFF8C8C8C))),
                   const SizedBox(height: 10),
-                  // 六个指标：评论/转发/点赞/阅读/收藏/分享（与帖子详情页一致）。
+                  // 六个指标：评论/转发/点赞/阅读/收藏/分享。
+                  // 与话题讨论页操作行同款：左四个 spaceBetween，右两个用 36/6 收窄间距。
                   Row(
                     children: [
-                      Image.asset('assets/images/ic_comment.png',
-                          width: 16, height: 16),
-                      const SizedBox(width: 3),
-                      Text('${n.commentCount}',
-                          style:
-                              const TextStyle(fontSize: 13, color: _textSec)),
-                      const SizedBox(width: 24),
-                      Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-                      const SizedBox(width: 3),
-                      Text('${n.repostCount}',
-                          style:
-                              const TextStyle(fontSize: 13, color: _textSec)),
-                      const SizedBox(width: 24),
-                      Icon(
-                          liked
-                              ? Icons.favorite_rounded
-                              : Icons.favorite_border_rounded,
-                          size: 16,
-                          color: liked ? _gold : _textSec),
-                      const SizedBox(width: 3),
-                      Text('${n.likeCount}',
-                          style: TextStyle(
-                              fontSize: 13, color: liked ? _gold : _textSec)),
-                      const SizedBox(width: 24),
-                      Image.asset('assets/images/ic_view.png',
-                          width: 16, height: 16),
-                      const SizedBox(width: 3),
-                      Text('${n.viewCount}',
-                          style:
-                              const TextStyle(fontSize: 13, color: _textSec)),
-                      const Spacer(),
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => _toggleRelatedFavorite(n),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 4, horizontal: 2),
-                          child: Icon(
+                      Expanded(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _buildActionCell(
+                                Image.asset('assets/images/ic_comment.png',
+                                    width: 16, height: 16),
+                                _textSec,
+                                '${n.commentCount}',
+                                () => _openRelatedDetail(n)),
+                            _buildActionCell(
+                                const Icon(Icons.repeat_rounded,
+                                    size: 16, color: _textSec),
+                                _textSec,
+                                '${n.repostCount}',
+                                () => _openRelatedDetail(n)),
+                            _buildActionCell(
+                                Icon(
+                                    liked
+                                        ? Icons.favorite_rounded
+                                        : Icons.favorite_border_rounded,
+                                    size: 16,
+                                    color: liked ? _gold : _textSec),
+                                liked ? _gold : _textSec,
+                                '${n.likeCount}',
+                                () => _openRelatedDetail(n)),
+                            _buildActionCell(
+                                Image.asset('assets/images/ic_view.png',
+                                    width: 16, height: 16),
+                                _textSec,
+                                '${n.viewCount}',
+                                null),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 36),
+                      _buildActionCell(
+                          Icon(
                               _relatedFavIds.contains(n.id)
                                   ? Icons.bookmark_rounded
                                   : Icons.bookmark_border_rounded,
@@ -1190,10 +1191,16 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                               color: _relatedFavIds.contains(n.id)
                                   ? _gold
                                   : _textSec),
-                        ),
-                      ),
-                      const SizedBox(width: 20),
-                      Icon(Icons.share_rounded, size: 16, color: _textSec),
+                          _relatedFavIds.contains(n.id) ? _gold : _textSec,
+                          '',
+                          () => _toggleRelatedFavorite(n)),
+                      const SizedBox(width: 6),
+                      _buildActionCell(
+                          const Icon(Icons.share_rounded,
+                              size: 16, color: _textSec),
+                          _textSec,
+                          '',
+                          () => _shareNote(n)),
                     ],
                   ),
                 ],
@@ -1540,6 +1547,65 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       ));
   }
 
+  /// 与话题讨论页同款的操作单元格：图标 16 + 数字 13（行高 1）。
+  Widget _buildActionCell(
+      Widget icon, Color color, String text, VoidCallback? onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(width: 16, height: 16, child: icon),
+            if (text.isNotEmpty) ...[
+              const SizedBox(width: 3),
+              Text(text,
+                  style: TextStyle(fontSize: 13, height: 1, color: color)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 分享一条讨论到系统分享面板（与笔记详情页 _share 同款文案模板）。
+  Future<void> _shareComment(Map<String, dynamic> c) async {
+    final content = (c['content']?.toString() ?? '').trim();
+    final name = c['name']?.toString() ?? '同修';
+    final plain = NoteSutraLinks.plainText(content);
+    final text =
+        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
+        '———来自【燃灯】App · $name 的经书讨论分享\n'
+        '燃一盏灯，看见自己，照亮别人\n'
+        '点击进入八千大藏经世界\n'
+        '下载链接：';
+    try {
+      await SharePlus.instance.share(ShareParams(text: text));
+    } catch (e) {
+      if (!mounted) return;
+      _showToast('分享失败：$e');
+    }
+  }
+
+  /// 分享一条广场相关帖子到系统分享面板。
+  Future<void> _shareNote(PlazaNote n) async {
+    final plain = NoteSutraLinks.plainText(n.content);
+    final text =
+        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
+        '———来自【燃灯】App · ${n.authorName} 的笔记分享\n'
+        '燃一盏灯，看见自己，照亮别人\n'
+        '点击进入八千大藏经世界\n'
+        '下载链接：';
+    try {
+      await SharePlus.instance.share(ShareParams(text: text));
+    } catch (e) {
+      if (!mounted) return;
+      _showToast('分享失败：$e');
+    }
+  }
+
   String _fmtTime(int ms) {
     if (ms <= 0) return '';
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
@@ -1564,7 +1630,6 @@ class TopicPage extends StatefulWidget {
 class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
   List<PlazaNote> _notes = [];
   bool _loading = true;
-  final TextEditingController _input = TextEditingController();
 
   /// 话题发起人帖子的 id（置顶展示并标注「发起人」）。
   String _pinnedId = '';
@@ -1605,7 +1670,6 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     _newPostTimer?.cancel();
     _newPostTimer = null;
     _scroll.dispose();
-    _input.dispose();
     super.dispose();
   }
 
@@ -2177,7 +2241,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                         color: _textSec),
                                                     _textSec,
                                                     '',
-                                                    () => _openDetail(n)),
+                                                    () => _shareNote(n)),
                                               ],
                                             ),
                                           ),
@@ -2216,51 +2280,59 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          // 底部输入：与经书讨论页同款，直接发布带 #话题 的帖子。
+          // 底部输入：点击打开与笔记详情页同款大输入框（500 字），直接发布带 #话题 的帖子。
           Container(
             color: _card,
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
             child: SafeArea(
               top: false,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      height: 42,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: _bg,
-                        borderRadius: BorderRadius.circular(21),
-                      ),
-                      child: TextField(
-                        controller: _input,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        style: const TextStyle(fontSize: 14, color: _text),
-                        decoration: InputDecoration(
-                          hintText: '发布带 #${widget.topic} 的帖子…',
-                          hintStyle: const TextStyle(color: _textHint),
-                          border: InputBorder.none,
-                          isDense: true,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _openComposeSheet,
+                child: Container(
+                  height: 42,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: _bg,
+                    borderRadius: BorderRadius.circular(21),
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    onPressed: _send,
-                    icon: const Icon(Icons.send_rounded,
-                        color: Color(0xFF70867A), size: 22),
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '发布带 #${widget.topic} 的帖子…',
+                    style: const TextStyle(color: _textHint, fontSize: 14),
                   ),
-                ],
+                ),
               ),
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// 打开与笔记详情页同款的大输入弹层（SheetTextInput，500 字、多行）。
+  void _openComposeSheet() {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '发布帖子',
+        hint: '发布带 #${widget.topic} 的帖子…',
+        maxLength: 500,
+        minLines: 3,
+        maxLines: 10,
+        confirmText: '发表',
+      ),
+    ).then((content) {
+      if (content != null && content.isNotEmpty) _publish(content);
+    });
   }
 
   /// 与经书讨论页同款的操作单元格：图标 16 + 数字 13（行高 1）。
@@ -2295,20 +2367,28 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     });
   }
 
+  /// 分享一条帖子到系统分享面板（与笔记详情页 _share 同款文案模板）。
+  Future<void> _shareNote(PlazaNote n) async {
+    final plain = NoteSutraLinks.plainText(n.content);
+    final text =
+        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
+        '———来自【燃灯】App · ${n.authorName} 的笔记分享\n'
+        '燃一盏灯，看见自己，照亮别人\n'
+        '点击进入八千大藏经世界\n'
+        '下载链接：';
+    try {
+      await SharePlus.instance.share(ShareParams(text: text));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('分享失败：$e')),
+      );
+    }
+  }
+
   void _promptLogin() {
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => const LoginPage()));
-  }
-
-  void _send() {
-    final content = _input.text.trim();
-    if (content.isEmpty) return;
-    if (!AuthService.instance.isLoggedIn) {
-      _promptLogin();
-      return;
-    }
-    _input.clear();
-    _publish(content);
   }
 
   /// 直接发布一条带 #话题 的帖子到广场。

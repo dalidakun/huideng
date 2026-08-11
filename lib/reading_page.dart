@@ -404,6 +404,16 @@ class _ReadingPageState extends State<ReadingPage>
     if (_isDownloading) return;
     final id = SutraDownloader.extractId(widget.title, _resolvedFilePath ?? widget.filePath);
     if (id == null) return;
+    // 本地已有完整文件时直接重新加载内容，不重新下载。
+    // 防止上游误判 _needsDownload=true（如路径恢复竞态）导致已下载经文被重下。
+    if (await SutraDownloader.isDownloaded(id)) {
+      if (!mounted) return;
+      setState(() {
+        _needsDownload = false;
+      });
+      await _loadContent();
+      return;
+    }
     setState(() {
       _isDownloading = true;
       _downloadProgress = 0;

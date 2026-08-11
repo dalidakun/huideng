@@ -186,11 +186,18 @@ class SutraDownloader {
 
   /// 下载单本经书并保存到本地。成功后返回本地文件，失败抛出异常。
   /// 会依次尝试 [mirrors] 中的所有下载源，某个源成功即返回。
+  ///
+  /// 如果本地已存在完整文件（非空），直接返回，不重新下载——
+  /// 这是防止「已下载经文被误判为未下载而反复重下」的最终兜底。
   static Future<File> download(
     String id, {
     void Function(int received, int total)? onProgress,
   }) async {
     final file = await localFile(id);
+    // 本地已有完整文件时直接返回，避免不必要的重复下载。
+    if (await file.exists() && (await file.length()) > 0) {
+      return file;
+    }
     await file.parent.create(recursive: true);
     final part = File('${file.path}.part');
 

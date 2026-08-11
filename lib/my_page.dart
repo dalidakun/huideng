@@ -13,6 +13,7 @@ import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
 import 'forgot_password_page.dart';
 import 'about_page.dart';
+import 'export_notes_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
@@ -2937,7 +2938,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             Positioned(
               left: 21,
               top: 52,
-              bottom: -18,
+              bottom: 0,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             Padding(
@@ -3751,6 +3752,8 @@ class _SettingsPageState extends State<_SettingsPage> {
                           _SettingsAccountTile(),
                           const SettingsDivider(),
                           _SettingsPhoneTile(),
+                          const SettingsDivider(),
+                          _SettingsExportNotesTile(),
                         ],
                       ),
                       _sectionTitle('其他'),
@@ -3989,6 +3992,58 @@ class _SettingsPhoneTile extends StatelessWidget {
                           fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
                   Text('更换后数据自动保留',
+                      style: TextStyle(fontSize: 12, color: _textHint)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 导出笔记行：点击进入「导出笔记」页面，把自己发的帖子按年份导出为 PDF。
+class _SettingsExportNotesTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_SettingsPageState>()!;
+    return InkWell(
+      onTap: () {
+        if (!AuthService.instance.isLoggedIn) {
+          state.requireLogin();
+          return;
+        }
+        Navigator.push(context, slideInFromLeft(const ExportNotesPage()))
+            .then((_) => state.reloadForSettings());
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _gold.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.picture_as_pdf_outlined,
+                  color: _gold, size: 20),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('导出笔记',
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
+                  SizedBox(height: 2),
+                  Text('按年份把我的帖子导出为 PDF',
                       style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),

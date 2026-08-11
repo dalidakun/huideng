@@ -549,8 +549,14 @@ class _ReplyThreadState extends State<ReplyThread> {
                   ? _blockedOriginalNode(original)
                   : _nodeRow(original,
                       connectDown: true, showMenu: false, textMaxWidth: textMaxWidth),
-            // 原贴与回复之间拉开间距，避免两帖贴得太紧。
-            if (original != null) const SizedBox(height: 16),
+            // 原贴与回复之间拉开间距，避免两帖贴得太紧；
+            // 连线延伸覆盖间距，使下端紧贴回复头像（与上端间距一致）。
+            // 头像列宽 44px、连线宽 2px 居中，故 left = (44 - 2) / 2 = 21。
+            if (original != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 21),
+                child: Container(width: 2, height: 16, color: _border),
+              ),
             replyKey == null
                 ? replyNode
                 : KeyedSubtree(key: replyKey, child: replyNode),
