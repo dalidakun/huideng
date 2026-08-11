@@ -782,7 +782,22 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    UserAvatar(userId: note.ownerUserId, radius: 22),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        final uid = note.ownerUserId;
+                        if (uid.isNotEmpty) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => UserSpacePage(
+                                    userId: uid,
+                                    userName: note.authorName)),
+                          );
+                        }
+                      },
+                      child: UserAvatar(userId: note.ownerUserId, radius: 22),
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -1319,7 +1334,21 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          UserAvatar(userId: e.authorId, radius: 22),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              final uid = e.authorId;
+              if (uid.isNotEmpty) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => UserSpacePage(
+                          userId: uid, userName: e.authorName)),
+                );
+              }
+            },
+            child: UserAvatar(userId: e.authorId, radius: 22),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -1357,7 +1386,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                       context,
                                       MaterialPageRoute(
                                           builder: (_) => UserSpacePage(
-                                              userId: e.authorId)),
+                                              userId: e.authorId,
+                                              userName: e.authorName)),
                                     );
                                   }
                                 },
@@ -1716,8 +1746,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (_) =>
-                                  UserSpacePage(userId: note.ownerUserId)),
+                              builder: (_) => UserSpacePage(
+                                  userId: note.ownerUserId,
+                                  userName: note.authorName)),
                         );
                       }
                     },

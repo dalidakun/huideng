@@ -15,6 +15,7 @@ const Color _text = Color(0xFF3E2723);
 const Color _textSec = Color(0xFF8B6B5A);
 const Color _border = Color(0xFFEBE1D6);
 const Color _primaryLight = Color(0xFF8B6B5A);
+const Color _connector = Color(0xFFC9C9C9);
 
 /// 回复连贴：原帖在上、回复在下，两侧头像用竖线连接。
 /// 原帖与回复均为完整帖子样式：头像、昵称、@账号、时间戳、内容、四个指标。
@@ -109,17 +110,9 @@ class _ReplyThreadState extends State<ReplyThread> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
-  /// 自己的头像且提供了 [onOpenSelf] 回调时走回调（与主页头像入口保持一致）。
+  /// 自己的头像也走 Navigator.push，以便支持侧滑返回手势。
   void _openUser(PlazaNote note) {
     if (note.ownerUserId.isEmpty) return;
-    final me = AuthService.instance.currentUser.value;
-    if (me != null && me.id == note.ownerUserId) {
-      final cb = widget.onOpenSelf;
-      if (cb != null) {
-        cb();
-        return;
-      }
-    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -366,6 +359,8 @@ class _ReplyThreadState extends State<ReplyThread> {
           openArea,
         const SizedBox(height: 8),
         if (widget.showMetrics) _metrics(note),
+        // 头像连线上下帖子之间留出间距，与 ReplyChain 保持一致。
+        const SizedBox(height: 14),
       ],
     );
   }
@@ -437,7 +432,7 @@ class _ReplyThreadState extends State<ReplyThread> {
     ];
   }
 
-  /// 一个节点：左侧头像 + 竖线（非最后节点向下延伸），右侧内容。
+  /// 一个节点：左侧头像 + 竖线（非最后节点向下延伸，两端各留 6px 间距），右侧内容。
   Widget _nodeRow(PlazaNote note,
       {required bool connectDown,
       required bool showMenu,
@@ -453,10 +448,12 @@ class _ReplyThreadState extends State<ReplyThread> {
                 onTap: () => _openUser(note),
                 child: UserAvatar(userId: note.ownerUserId, radius: 22),
               ),
-              if (connectDown)
+              if (connectDown) ...[
+                const SizedBox(height: 6),
                 Expanded(
-                  child: Container(width: 2, color: _border),
+                  child: Container(width: 1, color: _connector),
                 ),
+              ],
             ],
           ),
           const SizedBox(width: 10),
@@ -481,9 +478,10 @@ class _ReplyThreadState extends State<ReplyThread> {
                 backgroundColor: Color(0x1A8B6B5A),
                 child: Icon(Icons.block, size: 22, color: _textSec),
               ),
-              // 连线通到底，与下方回复头像衔接（与正常连贴样式一致）。
+              // 连线通到底，与下方回复头像衔接（线上端距头像 6px）。
+              const SizedBox(height: 6),
               Expanded(
-                child: Container(width: 2, color: _border),
+                child: Container(width: 1, color: _connector),
               ),
             ],
           ),
@@ -549,14 +547,9 @@ class _ReplyThreadState extends State<ReplyThread> {
                   ? _blockedOriginalNode(original)
                   : _nodeRow(original,
                       connectDown: true, showMenu: false, textMaxWidth: textMaxWidth),
-            // 原贴与回复之间拉开间距，避免两帖贴得太紧；
-            // 连线延伸覆盖间距，使下端紧贴回复头像（与上端间距一致）。
-            // 头像列宽 44px、连线宽 2px 居中，故 left = (44 - 2) / 2 = 21。
+            // 原帖与回复节点之间留 6px 间距，作为连线底部到回复头像的间隔。
             if (original != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 21),
-                child: Container(width: 2, height: 16, color: _border),
-              ),
+              const SizedBox(height: 6),
             replyKey == null
                 ? replyNode
                 : KeyedSubtree(key: replyKey, child: replyNode),

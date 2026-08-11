@@ -626,16 +626,20 @@ class CloudNotesService {
 
   /// 预取当前登录用户的点赞记录（用于广场列表/详情展示已赞态）。未登录时清空。
   Future<void> refreshLikedNoteIds() async {
-    likedNoteIds.clear();
-    if (!AuthService.instance.isLoggedIn) return;
+    if (!AuthService.instance.isLoggedIn) {
+      likedNoteIds.clear();
+      return;
+    }
     try {
       final app = await AuthService.instance.ensureApp();
       if (app == null) return;
       final res = await _call('getLikedNoteIds');
       final ids = res['ids'];
-      if (ids is List) {
-        likedNoteIds.addAll(ids.map((e) => e.toString()));
-      }
+      final newLiked = <String>{};
+      if (ids is List) newLiked.addAll(ids.map((e) => e.toString()));
+      likedNoteIds
+        ..clear()
+        ..addAll(newLiked);
     } catch (_) {}
   }
 
@@ -895,10 +899,18 @@ class CloudNotesService {
       final fs = f['ids'];
       final b = await _call('getBlockedUserIds');
       final bs = b['ids'];
-      followingUserIds.clear();
-      blockedUserIds.clear();
-      if (fs is List) followingUserIds.addAll(fs.map((e) => e.toString()));
-      if (bs is List) blockedUserIds.addAll(bs.map((e) => e.toString()));
+      // 先构建新集合，成功后再替换——避免云调用失败时清空本地集合
+      // 导致关注/屏蔽状态丢失（token 过期时的竞态问题）。
+      final newFollowing = <String>{};
+      final newBlocked = <String>{};
+      if (fs is List) newFollowing.addAll(fs.map((e) => e.toString()));
+      if (bs is List) newBlocked.addAll(bs.map((e) => e.toString()));
+      followingUserIds
+        ..clear()
+        ..addAll(newFollowing);
+      blockedUserIds
+        ..clear()
+        ..addAll(newBlocked);
     } catch (_) {}
   }
 

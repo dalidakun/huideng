@@ -344,12 +344,32 @@ class AuthService {
   /// 会话健康时把真实用户同步到 [currentUser]：启动恢复被瞬时失败跳过
   /// （当前是缓存兜底身份或未登录）时，一旦会话恢复成功立即补齐真实登录态，
   /// 避免「会话明明有效却一直显示未登录」。
+  ///
+  /// 智能比较：只有当 user.id / nickname / phone 与当前值不同时才更新，
+  /// 避免 re-entrant 调用导致无限循环（_applyUser → 监听器 → 云调用 → 刷新 → 再进入）。
   void _syncUserFromSession(Session? session) {
     final user = session?.user;
     if (user == null || user.isAnonymous == true) return;
-    if (currentUser.value != null && !_currentUserIsCached) return;
-    _currentUserIsCached = false;
-    unawaited(_applyUser(user));
+    final current = currentUser.value;
+    // 未登录态（缓存兜底或未登录）必须同步：这是修复的核心场景。
+    if (current == null || _currentUserIsCached) {
+      _currentUserIsCached = false;
+      unawaited(_applyUser(user));
+      return;
+    }
+    // 已登录态：只有当关键数据真正变化时才更新，避免不必要的级联重建。
+    final serverNick = user.userMetadata?.nickName;
+    final localNick = _localNickname;
+    final effectiveNick = (serverNick != null && serverNick.isNotEmpty)
+        ? serverNick
+        : (localNick != null && localNick.isNotEmpty ? localNick : null);
+    final dataChanged = current.id != (user.id ?? '') ||
+        current.nickname != effectiveNick ||
+        current.mobilePhoneNumber != user.phone;
+    if (dataChanged) {
+      _currentUserIsCached = false;
+      unawaited(_applyUser(user));
+    }
   }
 
   /// 解析 access token（JWT）的 exp 过期时间；解析失败返回 null。
@@ -706,21 +726,36 @@ class AuthService {
     return res['registered'] == true;
   }
 
-  /// 查询当前登录用户的账号名称；未设置返回空串。失败时回退到本地缓存。
+  /// 查询当前登录用户的账号名称；未设置返回空串。
+  /// 优先从本地 prefs 读取（立即返回，避免 UI 闪烁），
+  /// 云端调用在后台异步刷新并更新本地缓存——但不通过 callApi 走
+  /// ensureAnonymousForBrowse 路径，避免 re-entrant 会话刷新导致死锁。
   Future<String> getAccountName() async {
     if (!isLoggedIn) return '';
-    try {
-      final res = await CloudNotesService.instance.callApi('getMyAccount');
-      final name = res['username']?.toString() ?? '';
-      if (name.isNotEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('user_account_name', name);
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString('user_account_name') ?? '';
+    // 后台异步刷新云端值：使用 app.callFunction 直接调用，
+    // 绕开 _doCall 中的 ensureAnonymousForBrowse，避免重入。
+    unawaited(() async {
+      try {
+        final app = await _ensureApp();
+        if (app == null) return;
+        final res = await app.callFunction(name: 'api', data: {
+          'action': 'getMyAccount',
+        });
+        final result = res.result;
+        if (result is Map<String, dynamic>) {
+          final name = result['username']?.toString() ?? '';
+          if (name.isNotEmpty) {
+            final p = await SharedPreferences.getInstance();
+            await p.setString('user_account_name', name);
+          }
+        }
+      } catch (_) {
+        // 静默失败：保留缓存值，下次再试。
       }
-      return name;
-    } catch (_) {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString('user_account_name') ?? '';
-    }
+    }());
+    return cached;
   }
 
   /// 手机号登录后自动生成默认账号：4 位随机小写字母 + 手机号后四位，并随机生成密码。
@@ -811,6 +846,8 @@ class AuthService {
   }
 
   /// 新用户首次登录时设置默认昵称「同修 + 手机尾号」。
+  /// 注意：此方法在 _applyUser 内被调用，而 _applyUser 已处于有效会话上下文中，
+  /// 因此不需要再次调用 ensureFreshSession（会导致 re-entrant 死锁）。
   Future<void> _ensureDefaultNickname(User user) async {
     final meta = user.userMetadata;
     if (meta?.nickName != null && meta!.nickName!.isNotEmpty) return;
@@ -827,7 +864,7 @@ class AuthService {
     final app = _app;
     if (app == null) return;
     try {
-      await ensureFreshSession();
+      // 注意：此处不再调 ensureFreshSession——调用方 _applyUser 已持有有效会话。
       final res = await app.auth.updateUser(UpdateUserReq(nickname: '同修$tail'));
       if (!res.isSuccess) return;
       final u = res.data?.user;

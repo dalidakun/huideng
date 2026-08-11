@@ -67,17 +67,9 @@ class _ReplyChainState extends State<ReplyChain> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
-  /// 自己的头像且提供了 [onOpenSelf] 回调时走回调（与主页头像入口保持一致）。
+  /// 自己的头像也走 Navigator.push，以便支持侧滑返回手势。
   void _openUser(BuildContext context, PlazaNote note) {
     if (note.ownerUserId.isEmpty) return;
-    final me = AuthService.instance.currentUser.value;
-    if (me != null && me.id == note.ownerUserId) {
-      final cb = widget.onOpenSelf;
-      if (cb != null) {
-        cb();
-        return;
-      }
-    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -100,13 +92,12 @@ class _ReplyChainState extends State<ReplyChain> {
                 onTap: () => _openUser(context, note),
                 child: UserAvatar(userId: note.ownerUserId, radius: 22),
               ),
-              if (connectDown)
+              if (connectDown) ...[
+                const SizedBox(height: 6),
                 Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Container(width: 1, color: _connector),
-                  ),
+                  child: Container(width: 1, color: _connector),
                 ),
+              ],
             ],
           ),
           const SizedBox(width: 10),
@@ -422,10 +413,13 @@ class _ReplyChainState extends State<ReplyChain> {
         final textMaxWidth = w.isFinite ? (w < 54 ? 0.0 : w - 54) : 0.0;
         return Column(
           children: [
-            for (var i = 0; i < widget.replies.length; i++)
+            for (var i = 0; i < widget.replies.length; i++) ...[
               _node(context, widget.replies[i],
                   connectDown: i < widget.replies.length - 1,
                   textMaxWidth: textMaxWidth),
+              if (i < widget.replies.length - 1)
+                const SizedBox(height: 6),
+            ],
           ],
         );
       },

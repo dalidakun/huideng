@@ -137,6 +137,13 @@ class MyApp extends StatelessWidget {
             assistantVisible.value = false;
             return false;
           }
+          // 如有可返回的路由（如从主页打开的个人空间页/详情页），先 pop 回上一页，
+          // 而不是直接最小化 App。只有在最底层（主页）才执行最小化。
+          final nav = Navigator.of(context);
+          if (nav.canPop()) {
+            nav.pop();
+            return false;
+          }
           // 最小化应用到后台，模拟从底部滑动的行为
           if (Platform.isAndroid) {
             const platform = MethodChannel('app_channel');

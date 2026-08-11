@@ -963,18 +963,10 @@ class _PostBlockState extends State<PostBlock> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
-  /// 自己的头像且提供了 [onOpenSelf] 回调时走回调（与主页头像入口保持一致）。
+  /// 自己的头像也走 Navigator.push，以便支持侧滑返回手势。
   void _openUserSpace() {
     final uid = widget.ownerUserId;
     if (uid == null || uid.isEmpty) return;
-    final me = AuthService.instance.currentUser.value;
-    if (me != null && me.id == uid) {
-      final cb = widget.onOpenSelf;
-      if (cb != null) {
-        cb();
-        return;
-      }
-    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1186,8 +1178,13 @@ class _PostBlockState extends State<PostBlock> {
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
-    final showMore =
-        me != null && widget.ownerUserId != null && widget.ownerUserId != me.id;
+    // 双重兜底：即使上层传了错误的 ownerUserId，只要 currentUser 有效，
+    // 就确保自己的帖子永远不显示「关注」按钮。
+    final isSelf = me != null && widget.ownerUserId == me.id;
+    final showMore = !isSelf &&
+        me != null &&
+        widget.ownerUserId != null &&
+        widget.ownerUserId != me.id;
     final canManage = me != null &&
         widget.ownerUserId != null &&
         widget.ownerUserId == me.id &&
@@ -1201,7 +1198,7 @@ class _PostBlockState extends State<PostBlock> {
         content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
     // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
     final postPct = postCanonPercent(
-      isSelf: me != null && widget.ownerUserId == me.id,
+      isSelf: isSelf,
       cloudRead: widget.canonRead,
       cloudTotal: widget.canonTotal,
     );
@@ -1796,7 +1793,7 @@ class PostFeedRow extends StatelessWidget {
       onTogglePin: onTogglePin,
       onEdit: onEdit,
       onDelete: onDelete,
-      showFollowButton: showFollowButton,
+      showFollowButton: showFollowButton && !isMine,
       quoteBox: note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
       isRepost: note.repostOf.isNotEmpty && note.repostKind != 'reply',
       isQuoteRepost: note.quoteContent.isNotEmpty,
@@ -2890,10 +2887,12 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
         Stack(
           clipBehavior: Clip.none,
           children: [
+            // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
+            // bottom:6 = 线下端距 ReplyChain 首个头像 6px（等于链内节点间距）。
             Positioned(
               left: 21,
               top: 62,
-              bottom: 0,
+              bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             PostFeedRow(
@@ -2908,19 +2907,17 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             ),
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 18, bottom: 8),
-          child: ReplyChain(
-            replies: replies,
-            parentAccounts: {
-              root.id: root.authorAccount,
-              for (final r in replies) r.id: r.authorAccount,
-            },
-            onComment: (n) => replyToNote(context, n, _load),
-            onLike: (n) => likeTargetNote(context, n, _load),
-            onRepost: (n) => forwardNote(context, n, _load),
-            onMore: (n) => _showReplyMenu(n),
-          ),
+        // 原帖与回复链之间留 6px 间距，作为连线底部到回复头像的间隔。
+        ReplyChain(
+          replies: replies,
+          parentAccounts: {
+            root.id: root.authorAccount,
+            for (final r in replies) r.id: r.authorAccount,
+          },
+          onComment: (n) => replyToNote(context, n, _load),
+          onLike: (n) => likeTargetNote(context, n, _load),
+          onRepost: (n) => forwardNote(context, n, _load),
+          onMore: (n) => _showReplyMenu(n),
         ),
       ],
     );
@@ -2935,10 +2932,12 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
         Stack(
           clipBehavior: Clip.none,
           children: [
+            // top:58 = 外层顶内边距(6) + 头像上内边距(2) + 头像高(44) + 线上端留白(6)；
+            // bottom:6 = 线下端距 ReplyChain 首个头像 6px（与 _buildGroupCard 一致）。
             Positioned(
               left: 21,
-              top: 52,
-              bottom: 0,
+              top: 58,
+              bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             Padding(
@@ -2993,19 +2992,16 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             ),
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 18, bottom: 8),
-          child: ReplyChain(
-            replies: replies,
-            parentAccounts: {
-              root.id: root.authorAccount,
-              for (final r in replies) r.id: r.authorAccount,
-            },
-            onComment: (n) => replyToNote(context, n, _load),
-            onLike: (n) => likeTargetNote(context, n, _load),
-            onRepost: (n) => forwardNote(context, n, _load),
-            onMore: (n) => _showReplyMenu(n),
-          ),
+        ReplyChain(
+          replies: replies,
+          parentAccounts: {
+            root.id: root.authorAccount,
+            for (final r in replies) r.id: r.authorAccount,
+          },
+          onComment: (n) => replyToNote(context, n, _load),
+          onLike: (n) => likeTargetNote(context, n, _load),
+          onRepost: (n) => forwardNote(context, n, _load),
+          onMore: (n) => _showReplyMenu(n),
         ),
       ],
     );

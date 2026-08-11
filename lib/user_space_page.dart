@@ -787,11 +787,24 @@ class _UserSpacePageState extends State<UserSpacePage> {
       child: _buildScrollListener(
         ListView.builder(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
+          padding: const EdgeInsets.only(top: 4, bottom: 32),
           itemCount: groups.length,
           itemBuilder: (context, index) {
             final g = groups[index];
-            return _buildReplyGroupCard(g.$1, g.$2);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (index > 0)
+                  const Divider(
+                      height: 1,
+                      thickness: 0.6,
+                      color: Color(0xFFD8CCBC)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildReplyGroupCard(g.$1, g.$2),
+                ),
+              ],
+            );
           },
         ),
       ),
@@ -1417,28 +1430,28 @@ class _UserSpacePageState extends State<UserSpacePage> {
         Stack(
           clipBehavior: Clip.none,
           children: [
+            // 连接线：原贴头像底部 → 下面第一个回复头像之间。
+            // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
+            // bottom:6 = 线下端距 ReplyChain 首个头像 6px。
             Positioned(
               left: 21,
               top: 62,
-              bottom: 0,
+              bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             rootWidget,
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 6, bottom: 6),
-          child: ReplyChain(
-            replies: replies,
-            parentAccounts: {
-              root.id: root.authorAccount,
-              for (final r in replies) r.id: r.authorAccount,
-            },
-            onComment: (n) => replyToNote(context, n, _load),
-            onLike: (n) => likeTargetNote(context, n, _load),
-            onRepost: (n) => forwardNote(context, n, _load),
-            onMore: (n) => _showNoteMenu(n),
-          ),
+        ReplyChain(
+          replies: replies,
+          parentAccounts: {
+            root.id: root.authorAccount,
+            for (final r in replies) r.id: r.authorAccount,
+          },
+          onComment: (n) => replyToNote(context, n, _load),
+          onLike: (n) => likeTargetNote(context, n, _load),
+          onRepost: (n) => forwardNote(context, n, _load),
+          onMore: (n) => _showNoteMenu(n),
         ),
       ],
     );

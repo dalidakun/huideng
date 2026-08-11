@@ -1688,7 +1688,17 @@ class StudyHubPageState extends State<StudyHubPage>
           child: Row(
             children: [
               GestureDetector(
-                onTap: widget.onOpenMyPage,
+                onTap: () {
+                  final me = AuthService.instance.currentUser.value;
+                  if (me != null) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => UserSpacePage(
+                              userId: me.id, userName: me.displayName)),
+                    );
+                  }
+                },
                 child: UserAvatar(
                   userId: AuthService.instance.currentUser.value?.id,
                   radius: 16,
@@ -2985,37 +2995,30 @@ class StudyHubPageState extends State<StudyHubPage>
           children: [
             // 连接线：原贴头像底部 → 下面第一个回复头像之间。
             // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
-            // bottom:12 止于指标行底部（不穿过 PostBlock 下内边距），
-            // 下方 ReplyChain 上移 6px，与链内竖线端点留白一致。
+            // bottom:6 = 线下端距 ReplyChain 首个头像 6px。
             Positioned(
               left: 21,
               top: 62,
-              bottom: 12,
+              bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             rootWidget,
           ],
         ),
-        Transform.translate(
-          offset: const Offset(0, -6),
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: ReplyChain(
-            replies: replies,
-            parentAccounts: {
-              root.id: root.authorAccount,
-              for (final r in replies) r.id: r.authorAccount,
-            },
-            // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
-            detailNoteId: root.id,
-            onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
-            onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
-            onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
-            onMore: (n) => _showFeedReplyMenu(n),
-            // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
-            onOpenSelf: widget.onOpenMyPage,
-          ),
-        ),
+        ReplyChain(
+          replies: replies,
+          parentAccounts: {
+            root.id: root.authorAccount,
+            for (final r in replies) r.id: r.authorAccount,
+          },
+          // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
+          detailNoteId: root.id,
+          onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
+          onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
+          onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
+          onMore: (n) => _showFeedReplyMenu(n),
+          // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
+          onOpenSelf: widget.onOpenMyPage,
         ),
       ],
     );
@@ -3030,10 +3033,12 @@ class StudyHubPageState extends State<StudyHubPage>
         Stack(
           clipBehavior: Clip.none,
           children: [
+            // top:58 = 外层顶内边距(6) + 头像上内边距(2) + 头像高(44) + 线上端留白(6)；
+            // bottom:6 = 线下端距 ReplyChain 首个头像 6px（与 _buildFeedGroupCard 一致）。
             Positioned(
               left: 21,
-              top: 52,
-              bottom: 0,
+              top: 58,
+              bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
             Padding(
@@ -3089,23 +3094,20 @@ class StudyHubPageState extends State<StudyHubPage>
           ],
         ),
         if (replies.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 6),
-            child: ReplyChain(
-              replies: replies,
-              parentAccounts: {
-                root.id: root.authorAccount,
-                for (final r in replies) r.id: r.authorAccount,
-              },
-              // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
-              detailNoteId: root.id,
-              onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
-              onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
-              onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
-              onMore: (n) => _showFeedReplyMenu(n),
-              // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
-              onOpenSelf: widget.onOpenMyPage,
-            ),
+          ReplyChain(
+            replies: replies,
+            parentAccounts: {
+              root.id: root.authorAccount,
+              for (final r in replies) r.id: r.authorAccount,
+            },
+            // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
+            detailNoteId: root.id,
+            onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
+            onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
+            onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
+            onMore: (n) => _showFeedReplyMenu(n),
+            // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
+            onOpenSelf: widget.onOpenMyPage,
           ),
       ],
     );
