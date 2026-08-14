@@ -158,9 +158,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   /// 根帖长内容是否已展开全文。
   bool _noteContentExpanded = false;
 
+  /// 置顶帖/回复的 id 集合（与「我的」页共用同一份本地记录）。
+  final Set<String> _pinnedIds = {};
+  static const String _pinnedKey = 'my_pinned_note_ids';
+
   @override
   void initState() {
     super.initState();
+    _loadPinnedIds();
     _load();
   }
 
@@ -202,16 +207,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           if (c.authorId.isNotEmpty) c.authorId,
       };
       if (authorIds.isNotEmpty) {
-        CloudNotesService.instance
-            .getUserProfiles(authorIds.toList())
-            .then((profiles) {
-          if (!mounted) return;
-          setState(() {
-            _commentAuthorProfiles
-              ..clear()
-              ..addAll({for (final p in profiles) p.id: p});
-          });
-        }).catchError((_) {});
+        unawaited(_fetchCommentProfiles(authorIds));
       }
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -485,6 +481,49 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       setState(() => _favoriting = false);
       _showToast(e.toString());
     }
+  }
+
+  /// 是否自己的内容：优先用 currentUser，会话恢复竞态窗口（currentUser 暂为 null）
+  /// 时用本地缓存 uid 兜底，避免自己的帖子误显示「关注/屏蔽」菜单。
+  bool _isOwn(String? ownerUserId) {
+    if (ownerUserId == null || ownerUserId.isEmpty) return false;
+    final me = AuthService.instance.currentUser.value;
+    if (me != null && ownerUserId == me.id) return true;
+    final cachedUid = AuthService.instance.cachedUserId;
+    return cachedUid != null && ownerUserId == cachedUid;
+  }
+
+  /// 从本地读取置顶帖/回复 id 列表（与「我的」页共用同一份记录）。
+  Future<void> _loadPinnedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _pinnedIds
+          ..clear()
+          ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
+      });
+    } catch (_) {}
+  }
+
+  /// 置顶/取消置顶（本地保存，重启后仍生效）。
+  Future<void> _togglePin(PlazaNote note) async {
+    final wasPinned = _pinnedIds.contains(note.id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_pinnedKey) ?? [];
+      if (wasPinned) {
+        list.remove(note.id);
+        _pinnedIds.remove(note.id);
+      } else {
+        list.add(note.id);
+        _pinnedIds.add(note.id);
+      }
+      await prefs.setStringList(_pinnedKey, list);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {});
+    _showToast(wasPinned ? '已取消置顶' : '已置顶');
   }
 
   Future<void> _repost() async {
@@ -928,12 +967,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ],
               const SizedBox(height: 8),
-              // 与首页帖子对齐：操作行评论图标与帖子内容左边缘对齐
-              // （动作单元格内含 6px 水平内边距，外层左缩进减掉该值）。
-              Padding(
-                padding: const EdgeInsets.only(left: 48),
-                child: _buildActionsRow(note, liked),
-              ),
+              _buildActionsRow(note, liked),
               // 原贴（含操作行）与下面的评论用分割线分开。
               const SizedBox(height: 12),
               const Divider(height: 1, color: _border),
@@ -994,9 +1028,48 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         _replies = list;
         _repliesLoading = false;
       });
+      // 回复作者资料后台拉取（账号/认证/阅藏进度），补齐服务端缺失的字段。
+      // 与 _load 中评论作者的拉取逻辑一致，避免回复帖账号不显示。
+      final authorIds = <String>{
+        for (final r in list)
+          if (r.ownerUserId.isNotEmpty) r.ownerUserId,
+      };
+      final newIds = authorIds
+          .where((id) => !_commentAuthorProfiles.containsKey(id))
+          .toList();
+      if (newIds.isNotEmpty) {
+        unawaited(_fetchCommentProfiles(newIds.toSet()));
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _repliesLoading = false);
+    }
+  }
+
+  /// 拉取评论/回复作者资料（账号/认证/阅藏进度），合并进 [_commentAuthorProfiles]。
+  /// 后台预取：不阻塞首屏。服务端 getUserProfiles 要扫 notes 表算加入时间，
+  /// 数据多时可能超过默认 8 秒超时，这里放宽到 25 秒并带一次失败重试，
+  /// 保证最终能补齐账号，避免 @账号 一直不显示。
+  Future<void> _fetchCommentProfiles(Set<String> ids) async {
+    if (ids.isEmpty) return;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final profiles = await CloudNotesService.instance
+            .getUserProfiles(ids.toList(),
+                timeout: const Duration(seconds: 25));
+        if (!mounted) return;
+        setState(() {
+          // 合并而非清空：_loadReplies 也会往此 Map 写入回复作者资料，
+          // clear 会清掉回复作者数据导致回复帖账号再次丢失。
+          _commentAuthorProfiles
+              .addAll({for (final p in profiles) p.id: p});
+        });
+        return;
+      } catch (_) {
+        if (attempt == 0) {
+          await Future.delayed(const Duration(milliseconds: 700));
+        }
+      }
     }
   }
 
@@ -1155,14 +1228,26 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  /// 评论节点三点菜单：自己的（或帖主）可删除，他人的可关注/屏蔽。
+  /// 评论节点三点菜单：收藏笔记/分享笔记（作用于原贴）；自己或帖主可删除，他人可关注/屏蔽。
   Future<void> _showCommentMenu(PlazaComment c) async {
     final me = AuthService.instance.currentUser.value;
     if (me == null || c.authorId.isEmpty) return;
-    final canDelete =
-        c.authorId == me.id || _note?.ownerUserId == me.id;
+    final favorited = _note != null &&
+        CloudNotesService.instance.favoriteNoteIds.contains(_note!.id);
+    final canDelete = _isOwn(c.authorId) || _isOwn(_note?.ownerUserId);
+    // 展示昵称优先用预取资料（存储的 authorName 可能是"同修"或已过期）。
+    final p = _commentAuthorProfiles[c.authorId];
+    final menuName = (c.authorName.isEmpty || c.authorName == '同修')
+        ? ((p?.name.isNotEmpty ?? false) ? p!.name : c.authorName)
+        : c.authorName;
     if (!canDelete) {
-      await showMoreMenu(context, c.authorId, c.authorName);
+      await _showNoteActionsAndUserMenu(
+        userId: c.authorId,
+        nickname: menuName,
+        favorited: favorited,
+        onFavorite: _toggleFavorite,
+        onShare: _share,
+      );
       return;
     }
     final choice = await showModalBottomSheet<String>(
@@ -1176,32 +1261,50 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text(c.authorName,
+              child: Text(menuName,
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
+            postMenuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏笔记'),
+            postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除评论'),
             const SizedBox(height: 8),
           ],
         ),
       ),
     );
-    if (choice == 'delete' && mounted) {
+    if (!mounted) return;
+    if (choice == 'favorite') {
+      await _toggleFavorite();
+    } else if (choice == 'share') {
+      await _share();
+    } else if (choice == 'delete') {
       await _deleteComment(c);
     }
   }
 
-  /// 回复节点三点菜单：自己的可编辑/删除，他人的可关注/屏蔽。
-  Future<void> _showReplyNodeMenu(PlazaNote note) async {
+  /// 他人帖子/评论/回复的三点菜单：收藏笔记 + 分享笔记 + 关注/屏蔽该用户。
+  /// 收藏与分享的目标由调用方通过回调指定（评论作用于原贴，回复作用于该回复帖）。
+  Future<void> _showNoteActionsAndUserMenu({
+    required String userId,
+    required String nickname,
+    required bool favorited,
+    required VoidCallback onFavorite,
+    required VoidCallback onShare,
+  }) async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || note.ownerUserId != me.id) {
-      if (me != null && note.ownerUserId.isNotEmpty) {
-        await showMoreMenu(context, note.ownerUserId, note.authorName);
-        if (mounted) _loadReplies();
-      }
-      return;
-    }
+    if (me == null || userId.isEmpty || _isOwn(userId)) return;
+    final following =
+        CloudNotesService.instance.followingUserIds.contains(userId);
+    final blocked =
+        CloudNotesService.instance.blockedUserIds.contains(userId);
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: _card,
@@ -1213,11 +1316,112 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text(note.authorName,
+              child: Text(nickname,
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
+            postMenuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏笔记'),
+            postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
+            postMenuItem(ctx, following ? 'unfollow' : 'follow',
+                Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
+            postMenuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
+                blocked ? '取消屏蔽' : '屏蔽该用户'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'favorite') {
+      onFavorite();
+      return;
+    }
+    if (choice == 'share') {
+      onShare();
+      return;
+    }
+    try {
+      if (choice == 'follow' || choice == 'unfollow') {
+        final ok = await CloudNotesService.instance.toggleFollow(userId);
+        if (!mounted) return;
+        setState(() {});
+        _showToast(ok ? '已关注' : '已取消关注');
+      } else if (choice == 'block') {
+        final ok = await CloudNotesService.instance.toggleBlockUser(userId);
+        if (!mounted) return;
+        _showToast(ok ? '已屏蔽，该用户笔记不再展示' : '已取消屏蔽');
+        if (ok) Navigator.pop(context);
+      } else if (choice == 'unblock') {
+        final ok = await CloudNotesService.instance.toggleBlockUser(userId);
+        if (!mounted) return;
+        setState(() {});
+        _showToast(ok ? '已屏蔽' : '已取消屏蔽');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(e.toString());
+    }
+  }
+
+  /// 回复节点三点菜单：收藏笔记/分享笔记（作用于该回复）；自己可置顶/编辑/删除，他人可关注/屏蔽。
+  Future<void> _showReplyNodeMenu(PlazaNote note) async {
+    final me = AuthService.instance.currentUser.value;
+    // 展示昵称优先用预取资料（存储的 authorName 可能是"同修"或已过期）。
+    final p = _commentAuthorProfiles[note.ownerUserId];
+    final menuName = (note.authorName.isEmpty || note.authorName == '同修')
+        ? ((p?.name.isNotEmpty ?? false) ? p!.name : note.authorName)
+        : note.authorName;
+    if (!_isOwn(note.ownerUserId)) {
+      if (me != null && note.ownerUserId.isNotEmpty) {
+        final favorited =
+            CloudNotesService.instance.favoriteNoteIds.contains(note.id);
+        await _showNoteActionsAndUserMenu(
+          userId: note.ownerUserId,
+          nickname: menuName,
+          favorited: favorited,
+          onFavorite: () => _toggleReplyFavorite(note),
+          onShare: () => _shareReply(note),
+        );
+        if (mounted) _loadReplies();
+      }
+      return;
+    }
+    final favorited =
+        CloudNotesService.instance.favoriteNoteIds.contains(note.id);
+    final pinned = _pinnedIds.contains(note.id);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(menuName,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            postMenuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏笔记'),
+            postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
+            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
+                pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -1226,7 +1430,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       ),
     );
     if (choice == null || !mounted) return;
-    if (choice == 'edit') {
+    if (choice == 'favorite') {
+      await _toggleReplyFavorite(note);
+    } else if (choice == 'share') {
+      await _shareReply(note);
+    } else if (choice == 'pin') {
+      await _togglePin(note);
+    } else if (choice == 'edit') {
       await _editReplyNote(note);
     } else if (choice == 'delete') {
       await _deleteReplyNote(note);
@@ -1300,15 +1510,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
-  /// 评论与回复统一行：头像 + 昵称/认证/@账户/阅藏进度 + 内容 + 时间 + 六个指标 + 三点菜单。
+  /// 评论与回复统一行：头像 + 昵称/认证/@账户/阅藏进度 + 内容 + 时间 + 四个指标 + 三点菜单
+  /// （收藏/分享已并入三点菜单）。
   /// 嵌套回复不在此展示：点击评论内容进入该评论自己的详情页查看其子回复。
   Widget _buildDetailRow(_DetailEntry e) {
     final me = AuthService.instance.currentUser.value;
     final comment = e.comment;
     final reply = e.reply;
-    // 补齐评论作者账号/认证/阅藏进度（服务端缺失时用预取资料 / 自己的本地数据）。
-    final profile =
-        comment != null ? _commentAuthorProfiles[comment.authorId] : null;
+    // 补齐评论/回复作者账号/认证/阅藏进度（服务端缺失时用预取资料 / 自己的本地数据）。
+    // 评论与回复统一用 authorId 查预取资料，避免回复帖丢失账号兜底。
+    final profile = _commentAuthorProfiles[e.authorId];
     final isOwn = me != null && e.authorId == me.id;
     final verified = e.verified ||
         (profile?.verified ?? false) ||
@@ -1318,6 +1529,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         : ((profile?.account.isNotEmpty ?? false)
             ? profile!.account
             : (isOwn ? _myAccount : ''));
+    // 展示昵称：存储名是"同修"/空占位时，用云端预取资料里的真实昵称纠正
+    // （历史评论存的是默认占位符；真实存储名保持不变）。
+    final displayName = (e.authorName.isEmpty || e.authorName == '同修')
+        ? ((profile?.name.isNotEmpty ?? false) ? profile!.name : e.authorName)
+        : e.authorName;
     // 阅藏进度百分比：自己的用本地实时统计，他人的用云端数据（评论取预取资料）。
     final pct = postCanonPercent(
       isSelf: isOwn,
@@ -1341,9 +1557,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               if (uid.isNotEmpty) {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                      builder: (_) => UserSpacePage(
-                          userId: uid, userName: e.authorName)),
+                    MaterialPageRoute(
+                        builder: (_) => UserSpacePage(
+                            userId: uid, userName: displayName)),
                 );
               }
             },
@@ -1361,7 +1577,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                       child: Row(
                         children: [
                           Flexible(
-                            child: Text(e.authorName,
+                            child: Text(displayName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -1387,7 +1603,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                       MaterialPageRoute(
                                           builder: (_) => UserSpacePage(
                                               userId: e.authorId,
-                                              userName: e.authorName)),
+                                              userName: displayName)),
                                     );
                                   }
                                 },
@@ -1464,114 +1680,39 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  /// 评论的操作行：六个指标（评论/转发/点赞/阅读/收藏/分享，收藏与分享作用于原贴）。
+  /// 评论的操作行：与个人主页帖子同款四个指标（评论/转发/点赞/阅读），
+  /// 第一个指标与内容左对齐，间距固定；收藏与分享已移至评论右上角三点菜单。
   Widget _buildCommentActionsRow(PlazaComment c) {
     final liked = _likedCommentIds.contains(c.id);
-    final favorited = _note != null &&
-        CloudNotesService.instance.favoriteNoteIds.contains(_note!.id);
-    const numStyle = TextStyle(fontSize: 13, color: _textSec);
-    return Row(
-      children: [
-        _commentActionCell(
-          Image.asset('assets/images/ic_comment.png', width: 14, height: 14),
-          _openCommentSheet,
-          label: '0',
-          labelStyle: numStyle,
-        ),
-        const SizedBox(width: 28),
-        _commentActionCell(
-          Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-          _reposting ? null : _repost,
-          label: '0',
-          labelStyle: numStyle,
-        ),
-        const SizedBox(width: 28),
-        _commentActionCell(
-          Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-              size: 16, color: liked ? _gold : _textSec),
-          _commentLiking.contains(c.id) ? null : () => _toggleCommentLike(c),
-          label: '${c.likeCount}',
-          labelStyle: TextStyle(fontSize: 13, color: liked ? _gold : _textSec),
-        ),
-        const SizedBox(width: 28),
-        Image.asset('assets/images/ic_view.png', width: 16, height: 16),
-        const SizedBox(width: 3),
-        const Text('0', style: numStyle),
-        const Spacer(),
-        _commentActionCell(
-          Icon(
-              favorited
-                  ? Icons.bookmark_rounded
-                  : Icons.bookmark_border_rounded,
-              size: 16,
-              color: favorited ? _gold : _textSec),
-          _favoriting ? null : _toggleFavorite,
-        ),
-        const SizedBox(width: 20),
-        _commentActionCell(
-          Icon(Icons.share_rounded, size: 16, color: _textSec),
-          _share,
-        ),
-      ],
+    return buildStatsRow(
+      commentCount: 0,
+      repostCount: 0,
+      likeCount: c.likeCount,
+      viewCount: 0,
+      liked: liked,
+      onComment: _openCommentSheet,
+      onRepost: _reposting ? null : _repost,
+      onLike: _commentLiking.contains(c.id) ? null : () => _toggleCommentLike(c),
     );
   }
 
-  /// 回复帖的操作行：六个指标（评论/转发/点赞/阅读/收藏/分享，作用于这条回复，
-  /// 实时监听指标广播，操作后数字立即刷新）。
+  /// 回复帖的操作行：与个人主页帖子同款四个指标，实时监听指标广播；
+  /// 收藏与分享已移至该回复右上角三点菜单。
   Widget _buildReplyActionsRow(PlazaNote reply) {
     return ListenableBuilder(
       listenable: NoteStatsCenter.instance,
       builder: (context, _) {
         final n = NoteStatsCenter.instance.latest(reply.id) ?? reply;
         final liked = CloudNotesService.instance.likedNoteIds.contains(n.id);
-        final favorited =
-            CloudNotesService.instance.favoriteNoteIds.contains(n.id);
-        const numStyle = TextStyle(fontSize: 13, color: _textSec);
-        return Row(
-          children: [
-            _commentActionCell(
-              Image.asset('assets/images/ic_comment.png',
-                  width: 14, height: 14),
-              () => replyToNote(context, n, _loadReplies),
-              label: '${n.commentCount}',
-              labelStyle: numStyle,
-            ),
-            const SizedBox(width: 28),
-            _commentActionCell(
-              const Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-              () => forwardNote(context, n, _loadReplies),
-              label: '${n.repostCount}',
-              labelStyle: numStyle,
-            ),
-            const SizedBox(width: 28),
-            _commentActionCell(
-              Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                  size: 16, color: liked ? _gold : _textSec),
-              () => _toggleReplyLike(n),
-              label: '${n.likeCount}',
-              labelStyle:
-                  TextStyle(fontSize: 13, color: liked ? _gold : _textSec),
-            ),
-            const SizedBox(width: 28),
-            Image.asset('assets/images/ic_view.png', width: 16, height: 16),
-            const SizedBox(width: 3),
-            Text('${n.viewCount}', style: numStyle),
-            const Spacer(),
-            _commentActionCell(
-              Icon(
-                  favorited
-                      ? Icons.bookmark_rounded
-                      : Icons.bookmark_border_rounded,
-                  size: 16,
-                  color: favorited ? _gold : _textSec),
-              () => _toggleReplyFavorite(n),
-            ),
-            const SizedBox(width: 20),
-            _commentActionCell(
-              Icon(Icons.share_rounded, size: 16, color: _textSec),
-              () => _shareReply(n),
-            ),
-          ],
+        return buildStatsRow(
+          commentCount: n.commentCount,
+          repostCount: n.repostCount,
+          likeCount: n.likeCount,
+          viewCount: n.viewCount,
+          liked: liked,
+          onComment: () => replyToNote(context, n, _loadReplies),
+          onRepost: () => forwardNote(context, n, _loadReplies),
+          onLike: () => _toggleReplyLike(n),
         );
       },
     );
@@ -1653,27 +1794,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         createdAt: n.createdAt,
         updatedAt: n.updatedAt,
       );
-
-  Widget _commentActionCell(
-      Widget icon, VoidCallback? onTap, {String label = '', TextStyle? labelStyle}) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(width: 18, height: 18, child: icon),
-            if (label.isNotEmpty) ...[
-              const SizedBox(width: 3),
-              Text(label, style: labelStyle),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 
   /// 点赞/取消点赞评论：云端持久化，点赞数与点亮状态随服务端返回更新。
   Future<void> _toggleCommentLike(PlazaComment c) async {
@@ -1788,8 +1908,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       _promptLogin();
       return;
     }
-    if (me.id == note.ownerUserId) {
-      // 自己的帖子：可编辑/删除。
+    final favorited =
+        CloudNotesService.instance.favoriteNoteIds.contains(note.id);
+    if (_isOwn(note.ownerUserId)) {
+      // 自己的帖子：收藏/分享 + 置顶/取消置顶 + 编辑/删除（不显示关注/屏蔽）。
+      final pinned = _pinnedIds.contains(note.id);
       final choice = await showModalBottomSheet<String>(
         context: context,
         backgroundColor: _card,
@@ -1822,6 +1945,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ),
               const Divider(height: 1, color: _border),
+              _menuItem(
+                  ctx,
+                  'favorite',
+                  favorited
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  favorited ? '取消收藏' : '收藏笔记'),
+              _menuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
+              _menuItem(ctx, 'pin', Icons.push_pin_outlined,
+                  pinned ? '取消置顶' : '置顶'),
               _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
               _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
               const SizedBox(height: 8),
@@ -1830,7 +1963,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         ),
       );
       if (choice == null || !mounted) return;
-      if (choice == 'edit') {
+      if (choice == 'favorite') {
+        await _toggleFavorite();
+      } else if (choice == 'share') {
+        await _share();
+      } else if (choice == 'pin') {
+        await _togglePin(note);
+      } else if (choice == 'edit') {
         await _editRootNote(note);
       } else if (choice == 'delete') {
         await _deleteRootNote(note);
@@ -1874,6 +2013,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             ),
             const Divider(height: 1, color: _border),
             _menuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏笔记'),
+            _menuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
+            _menuItem(
               ctx,
               following ? 'unfollow' : 'follow',
               Icons.person_add_alt,
@@ -1891,6 +2038,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       ),
     );
     if (choice == null || !mounted) return;
+    if (choice == 'favorite') {
+      await _toggleFavorite();
+      return;
+    }
+    if (choice == 'share') {
+      await _share();
+      return;
+    }
     try {
       if (choice == 'follow' || choice == 'unfollow') {
         final ok =
@@ -2002,83 +2157,19 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   }
 
   Widget _buildActionsRow(PlazaNote note, bool liked) {
-    final favorited =
-        CloudNotesService.instance.favoriteNoteIds.contains(note.id);
+    // 与个人主页帖子同款：第一个指标与内容左对齐，其余按固定间距排布。
+    // 外层左缩进 54 = 头像 44 + 间距 10（与内容左缘一致，兼容单元格 2px 内边距）。
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildActionCell(
-                    Image.asset('assets/images/ic_comment.png',
-                        width: 14, height: 14),
-                    _textSec,
-                    '${_comments.length}',
-                    _openCommentSheet),
-                _buildActionCell(
-                    Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-                    _textSec,
-                    '${note.repostCount}',
-                    _reposting ? null : _repost),
-                _buildActionCell(
-                    Icon(
-                        liked
-                            ? Icons.favorite_rounded
-                            : Icons.favorite_border_rounded,
-                        size: 16,
-                        color: liked ? _gold : _textSec),
-                    liked ? _gold : _textSec,
-                    '${note.likeCount}',
-                    _liking ? null : _toggleLike),
-                _buildActionCell(
-                    Image.asset('assets/images/ic_view.png',
-                        width: 16, height: 16),
-                    _textSec,
-                    '${note.viewCount}',
-                    null),
-              ],
-            ),
-          ),
-          const SizedBox(width: 36),
-          _buildActionCell(
-              Icon(
-                  favorited
-                      ? Icons.bookmark_rounded
-                      : Icons.bookmark_border_rounded,
-                  size: 16,
-                  color: favorited ? _gold : _textSec),
-              favorited ? _gold : _textSec,
-              '',
-              _favoriting ? null : _toggleFavorite),
-          const SizedBox(width: 6),
-          _buildActionCell(Icon(Icons.share_rounded, size: 16, color: _textSec),
-              _textSec, '', _share),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionCell(
-      Widget icon, Color color, String text, VoidCallback? onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(width: 18, height: 18, child: icon),
-            if (text.isNotEmpty) ...[
-              const SizedBox(width: 3),
-              Text(text,
-                  style: TextStyle(fontSize: 13, height: 1, color: color)),
-            ],
-          ],
-        ),
+      padding: const EdgeInsets.only(left: 54),
+      child: buildStatsRow(
+        commentCount: _comments.length,
+        repostCount: note.repostCount,
+        likeCount: note.likeCount,
+        viewCount: note.viewCount,
+        liked: liked,
+        onComment: _openCommentSheet,
+        onRepost: _reposting ? null : _repost,
+        onLike: _liking ? null : _toggleLike,
       ),
     );
   }

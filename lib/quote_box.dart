@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'reading_badges.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
@@ -116,6 +118,18 @@ class _QuoteBoxState extends State<QuoteBox> {
         : (widget.note.quoteOfContent.isNotEmpty
             ? NoteSutraLinks.plainText(widget.note.quoteOfContent)
             : NoteSutraLinks.plainText(widget.note.content));
+    // 原帖作者的认证标记与阅藏进度：与帖子头行一致（自己帖子用本地实时进度，
+    // 且昵称用当前登录昵称；历史转发快照可能没存认证/进度，靠 getNoteById 现查）。
+    final me = AuthService.instance.currentUser.value;
+    final srcUid = src?.ownerUserId ?? widget.note.repostSourceUserId;
+    final isSelf = me != null && me.id == srcUid;
+    final showName = isSelf ? me.displayName : name;
+    final srcVerified = src?.authorVerified ?? false;
+    final srcPct = postCanonPercent(
+      isSelf: isSelf,
+      cloudRead: src?.canonRead ?? 0,
+      cloudTotal: src?.canonTotal ?? 0,
+    );
     return InkWell(
       onTap: () => Navigator.push(
         context,
@@ -139,10 +153,7 @@ class _QuoteBoxState extends State<QuoteBox> {
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () => _openOriginalUser(context),
-                  child: UserAvatar(
-                      userId:
-                          src?.ownerUserId ?? widget.note.ownerUserId,
-                      radius: 14),
+                  child: UserAvatar(userId: srcUid, radius: 14),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -154,7 +165,7 @@ class _QuoteBoxState extends State<QuoteBox> {
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => _openOriginalUser(context),
-                          child: Text(name,
+                          child: Text(showName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -163,6 +174,11 @@ class _QuoteBoxState extends State<QuoteBox> {
                                   color: _text)),
                         ),
                       ),
+                      if (srcVerified) ...[
+                        const SizedBox(width: 3),
+                        const Icon(Icons.verified,
+                            size: 14, color: Color(0xFF70867A)),
+                      ],
                       if (account.isNotEmpty) ...[
                         const SizedBox(width: 3),
                         Flexible(
@@ -174,6 +190,19 @@ class _QuoteBoxState extends State<QuoteBox> {
                                   fontSize: 12, color: Color(0xFF8C8C8C))),
                         ),
                       ],
+                      // 阅藏进度百分比：与帖子头行一致，恒显示（0% 也显示）。
+                      const SizedBox(width: 3),
+                      const Text('·',
+                          style: TextStyle(
+                              fontSize: 12, color: Color(0xFF8C8C8C))),
+                      const SizedBox(width: 2),
+                      Flexible(
+                        child: Text(srcPct,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF8C8C8C))),
+                      ),
                     ],
                   ),
                 ),

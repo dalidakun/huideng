@@ -19,6 +19,9 @@ node_modules/
 # Environment
 .env
 
+# Local database cache
+.freebuff/
+
 # Sutra text assets (large data files, keep local only)
 assets/sutras_ascii/
 assets/sutras/

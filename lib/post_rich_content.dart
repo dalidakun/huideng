@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 import 'post_time_link.dart';
@@ -832,7 +833,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     });
   }
 
-  /// 讨论行：与主页帖子同款（头像 + 昵称/认证/@账号，内容下方时间 + 六个指标）。
+  /// 讨论行：与主页帖子同款（头像 + 昵称/认证/@账号，内容下方时间 + 四个指标）。
   Widget _buildCommentRow(Map<String, dynamic> c) {
     final userId = c['userId']?.toString() ?? '';
     final account = c['account']?.toString() ?? '';
@@ -936,78 +937,24 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     );
   }
 
-  /// 讨论的六个指标：评论/转发/点赞/阅读 + 收藏/分享。
-  /// 与话题讨论页操作行同款：左四个用 spaceBetween 平铺，右两个（收藏/分享）
-  /// 用 SizedBox(width: 36) / SizedBox(width: 6) 收窄间距。
-  /// 讨论暂无评论/转发/阅读数据，展示 0。
+  /// 讨论的四个指标：评论/转发/点赞/阅读（与笔记详情页操作行同款样式）。
+  /// 收藏与分享已移至讨论右上角三点菜单。
   Widget _buildCommentMetricRow(Map<String, dynamic> c) {
     final id = c['id']?.toString() ?? '';
     final liked = id.isNotEmpty && _likedCommentIds.contains(id);
-    final favorited = id.isNotEmpty && _favCommentIds.contains(id);
-    return Row(
-      children: [
-        Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildActionCell(
-                  Image.asset('assets/images/ic_comment.png',
-                      width: 16, height: 16),
-                  _textSec,
-                  '0',
-                  null),
-              _buildActionCell(
-                  const Icon(Icons.repeat_rounded, size: 16, color: _textSec),
-                  _textSec,
-                  '0',
-                  null),
-              _buildActionCell(
-                  Icon(
-                      liked
-                          ? Icons.favorite_rounded
-                          : Icons.favorite_border_rounded,
-                      size: 16,
-                      color: liked ? _gold : _textSec),
-                  liked ? _gold : _textSec,
-                  '${c['likeCount'] ?? 0}',
-                  () => setState(() {
-                    final likeCount =
-                        ((c['likeCount'] as num?)?.toInt() ?? 0) +
-                            (liked ? -1 : 1);
-                    c['likeCount'] = likeCount < 0 ? 0 : likeCount;
-                    if (id.isEmpty) return;
-                    if (!_likedCommentIds.remove(id)) _likedCommentIds.add(id);
-                  })),
-              _buildActionCell(
-                  Image.asset('assets/images/ic_view.png',
-                      width: 16, height: 16),
-                  _textSec,
-                  '0',
-                  null),
-            ],
-          ),
-        ),
-        const SizedBox(width: 36),
-        _buildActionCell(
-            Icon(
-                favorited
-                    ? Icons.bookmark_rounded
-                    : Icons.bookmark_border_rounded,
-                size: 16,
-                color: favorited ? _gold : _textSec),
-            favorited ? _gold : _textSec,
-            '',
-            () => setState(() {
-              if (id.isEmpty) return;
-              if (!_favCommentIds.remove(id)) _favCommentIds.add(id);
-            })),
-        const SizedBox(width: 6),
-        _buildActionCell(
-            const Icon(Icons.share_rounded, size: 16, color: _textSec),
-            _textSec,
-            '',
-            () => _shareComment(c)),
-      ],
+    return buildStatsRow(
+      commentCount: 0,
+      repostCount: 0,
+      likeCount: (c['likeCount'] as num?)?.toInt() ?? 0,
+      viewCount: 0,
+      liked: liked,
+      onLike: () => setState(() {
+        final likeCount =
+            ((c['likeCount'] as num?)?.toInt() ?? 0) + (liked ? -1 : 1);
+        c['likeCount'] = likeCount < 0 ? 0 : likeCount;
+        if (id.isEmpty) return;
+        if (!_likedCommentIds.remove(id)) _likedCommentIds.add(id);
+      }),
     );
   }
 
@@ -1142,66 +1089,17 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       style: const TextStyle(
                           fontSize: 12, color: Color(0xFF8C8C8C))),
                   const SizedBox(height: 10),
-                  // 六个指标：评论/转发/点赞/阅读/收藏/分享。
-                  // 与话题讨论页操作行同款：左四个 spaceBetween，右两个用 36/6 收窄间距。
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _buildActionCell(
-                                Image.asset('assets/images/ic_comment.png',
-                                    width: 16, height: 16),
-                                _textSec,
-                                '${n.commentCount}',
-                                () => _openRelatedDetail(n)),
-                            _buildActionCell(
-                                const Icon(Icons.repeat_rounded,
-                                    size: 16, color: _textSec),
-                                _textSec,
-                                '${n.repostCount}',
-                                () => _openRelatedDetail(n)),
-                            _buildActionCell(
-                                Icon(
-                                    liked
-                                        ? Icons.favorite_rounded
-                                        : Icons.favorite_border_rounded,
-                                    size: 16,
-                                    color: liked ? _gold : _textSec),
-                                liked ? _gold : _textSec,
-                                '${n.likeCount}',
-                                () => _openRelatedDetail(n)),
-                            _buildActionCell(
-                                Image.asset('assets/images/ic_view.png',
-                                    width: 16, height: 16),
-                                _textSec,
-                                '${n.viewCount}',
-                                null),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 36),
-                      _buildActionCell(
-                          Icon(
-                              _relatedFavIds.contains(n.id)
-                                  ? Icons.bookmark_rounded
-                                  : Icons.bookmark_border_rounded,
-                              size: 16,
-                              color: _relatedFavIds.contains(n.id)
-                                  ? _gold
-                                  : _textSec),
-                          _relatedFavIds.contains(n.id) ? _gold : _textSec,
-                          '',
-                          () => _toggleRelatedFavorite(n)),
-                      const SizedBox(width: 6),
-                      _buildActionCell(
-                          const Icon(Icons.share_rounded,
-                              size: 16, color: _textSec),
-                          _textSec,
-                          '',
-                          () => _shareNote(n)),
-                    ],
+                  // 四个指标：评论/转发/点赞/阅读（与笔记详情页操作行同款样式）。
+                  // 收藏与分享已移至帖子右上角三点菜单。
+                  buildStatsRow(
+                    commentCount: n.commentCount,
+                    repostCount: n.repostCount,
+                    likeCount: n.likeCount,
+                    viewCount: n.viewCount,
+                    liked: liked,
+                    onComment: () => _openRelatedDetail(n),
+                    onRepost: () => _openRelatedDetail(n),
+                    onLike: () => _openRelatedDetail(n),
                   ),
                 ],
               ),
@@ -1252,7 +1150,8 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     }
   }
 
-  /// 讨论右侧三点菜单：自己的讨论可删除，他人的可关注/屏蔽（与主页帖子一致）。
+  /// 讨论右侧三点菜单：收藏/分享讨论 + 自己的讨论可删除，他人的可关注/屏蔽
+  /// （与笔记详情页评论三点菜单同款样式）。
   Future<void> _showCommentMenu(Map<String, dynamic> c) async {
     final me = AuthService.instance.currentUser.value;
     final userId = c['userId']?.toString() ?? '';
@@ -1261,8 +1160,64 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       _promptLogin();
       return;
     }
-    if (userId.isNotEmpty && me.id == userId) {
-      // 自己的讨论：删除。
+    final id = c['id']?.toString() ?? '';
+    final favorited = id.isNotEmpty && _favCommentIds.contains(id);
+    final isOwn = userId.isNotEmpty && me.id == userId;
+    final following =
+        CloudNotesService.instance.followingUserIds.contains(userId);
+    final blocked = CloudNotesService.instance.blockedUserIds.contains(userId);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+            ),
+            const Divider(height: 1, color: _border),
+            _menuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏讨论'),
+            _menuItem(ctx, 'share', Icons.share_rounded, '分享讨论'),
+            if (isOwn)
+              _menuItem(ctx, 'delete', Icons.delete_outline, '删除讨论')
+            else if (userId.isNotEmpty) ...[
+              _menuItem(ctx, following ? 'unfollow' : 'follow',
+                  Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
+              _menuItem(ctx, blocked ? 'unblock' : 'block',
+                  Icons.block_outlined, blocked ? '取消屏蔽' : '屏蔽该用户'),
+            ],
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'favorite') {
+      setState(() {
+        if (id.isEmpty) return;
+        if (!_favCommentIds.remove(id)) _favCommentIds.add(id);
+      });
+      return;
+    }
+    if (choice == 'share') {
+      await _shareComment(c);
+      return;
+    }
+    if (choice == 'delete') {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -1301,39 +1256,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       }
       return;
     }
-    if (userId.isEmpty) return;
-    // 他人的讨论：关注/屏蔽。
-    final following =
-        CloudNotesService.instance.followingUserIds.contains(userId);
-    final blocked = CloudNotesService.instance.blockedUserIds.contains(userId);
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: _card,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text(name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-            ),
-            const Divider(height: 1, color: _border),
-            _menuItem(ctx, following ? 'unfollow' : 'follow',
-                Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
-            _menuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
-                blocked ? '取消屏蔽' : '屏蔽该用户'),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (choice == null || !mounted) return;
     try {
       if (choice == 'follow' || choice == 'unfollow') {
         final ok = await CloudNotesService.instance.toggleFollow(userId);
@@ -1354,13 +1276,15 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     }
   }
 
-  /// 相关帖子右侧三点菜单：自己的帖子可编辑/删除，他人的可关注/屏蔽（与主页帖子一致）。
+  /// 相关帖子右侧三点菜单：收藏/分享帖子 + 自己的帖子可编辑/删除，他人的可关注/屏蔽
+  /// （与笔记详情页回复三点菜单同款样式）。
   Future<void> _showRelatedMenu(PlazaNote n) async {
     final me = AuthService.instance.currentUser.value;
     if (me == null) {
       _promptLogin();
       return;
     }
+    final favorited = _relatedFavIds.contains(n.id);
     if (me.id == n.ownerUserId) {
       final choice = await showModalBottomSheet<String>(
         context: context,
@@ -1382,6 +1306,14 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                         color: _text)),
               ),
               const Divider(height: 1, color: _border),
+              _menuItem(
+                  ctx,
+                  'favorite',
+                  favorited
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  favorited ? '取消收藏' : '收藏帖子'),
+              _menuItem(ctx, 'share', Icons.share_rounded, '分享帖子'),
               _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑帖子'),
               _menuItem(ctx, 'delete', Icons.delete_outline, '删除帖子'),
               const SizedBox(height: 8),
@@ -1389,14 +1321,18 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
           ),
         ),
       );
-      if (choice == 'edit') {
+      if (choice == 'favorite') {
+        await _toggleRelatedFavorite(n);
+      } else if (choice == 'share') {
+        await _shareNote(n);
+      } else if (choice == 'edit') {
         await _editRelatedNote(n);
       } else if (choice == 'delete') {
         await _deleteRelatedNote(n);
       }
       return;
     }
-    // 他人的帖子：关注/屏蔽。
+    // 他人的帖子：收藏/分享 + 关注/屏蔽。
     final following =
         CloudNotesService.instance.followingUserIds.contains(n.ownerUserId);
     final blocked =
@@ -1419,6 +1355,14 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
+            _menuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏帖子'),
+            _menuItem(ctx, 'share', Icons.share_rounded, '分享帖子'),
             _menuItem(ctx, following ? 'unfollow' : 'follow',
                 Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
             _menuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
@@ -1429,6 +1373,14 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       ),
     );
     if (choice == null || !mounted) return;
+    if (choice == 'favorite') {
+      await _toggleRelatedFavorite(n);
+      return;
+    }
+    if (choice == 'share') {
+      await _shareNote(n);
+      return;
+    }
     try {
       if (choice == 'follow' || choice == 'unfollow') {
         final ok = await CloudNotesService.instance.toggleFollow(n.ownerUserId);
@@ -1545,29 +1497,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
         duration: const Duration(milliseconds: 1800),
         behavior: SnackBarBehavior.floating,
       ));
-  }
-
-  /// 与话题讨论页同款的操作单元格：图标 16 + 数字 13（行高 1）。
-  Widget _buildActionCell(
-      Widget icon, Color color, String text, VoidCallback? onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(width: 16, height: 16, child: icon),
-            if (text.isNotEmpty) ...[
-              const SizedBox(width: 3),
-              Text(text,
-                  style: TextStyle(fontSize: 13, height: 1, color: color)),
-            ],
-          ],
-        ),
-      ),
-    );
   }
 
   /// 分享一条讨论到系统分享面板（与笔记详情页 _share 同款文案模板）。
@@ -1907,16 +1836,13 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                   final liked = CloudNotesService
                                       .instance.likedNoteIds
                                       .contains(n.id);
-                                  final fav = CloudNotesService
-                                      .instance.favoriteNoteIds
-                                      .contains(n.id);
                                   // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（与首页帖子一致）。
                                   final pct = postCanonPercent(
                                     isSelf: isSelf,
                                     cloudRead: n.canonRead,
                                     cloudTotal: n.canonTotal,
                                   );
-                                  // 与主页帖子同款：头像 + 昵称/@账号/认证 + 阅藏进度 + 三点菜单 + 内容 + 时间 + 六个指标。
+                                  // 与主页帖子同款：头像 + 昵称/@账号/认证 + 阅藏进度 + 三点菜单 + 内容 + 时间 + 四个指标。
                                   final content = InkWell(
                                     onTap: () => Navigator.push(
                                       context,
@@ -2160,89 +2086,22 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                               ),
                                             ],
                                           ),
-                                          // 六个指标：评论/转发/点赞/阅读/收藏/分享。
+                                          // 四个指标：评论/转发/点赞/阅读。
                                           // 与笔记详情页操作行一致：操作行在头像行下方整行通栏，
-                                          // 左缩进 48 对齐内容左缘（单元格内含 6px 水平内边距，外层减掉该值），上下留 8px。
+                                          // 左缩进 52 对齐内容左缘（单元格内含 2px 水平内边距，外层减掉该值），上下留 8px。
+                                          // 收藏与分享已移至帖子右上角三点菜单。
                                           Padding(
                                             padding: const EdgeInsets.fromLTRB(
-                                                48, 8, 0, 8),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment
-                                                            .spaceBetween,
-                                                    children: [
-                                                      _buildActionCell(
-                                                          Image.asset(
-                                                              'assets/images/ic_comment.png',
-                                                              width: 16,
-                                                              height: 16),
-                                                          _textSec,
-                                                          '${n.commentCount}',
-                                                          () => _openDetail(n)),
-                                                      _buildActionCell(
-                                                          const Icon(
-                                                              Icons
-                                                                  .repeat_rounded,
-                                                              size: 16,
-                                                              color: _textSec),
-                                                          _textSec,
-                                                          '${n.repostCount}',
-                                                          () => _openDetail(n)),
-                                                      _buildActionCell(
-                                                          Icon(
-                                                              liked
-                                                                  ? Icons
-                                                                      .favorite_rounded
-                                                                  : Icons
-                                                                      .favorite_border_rounded,
-                                                              size: 16,
-                                                              color: liked
-                                                                  ? _gold
-                                                                  : _textSec),
-                                                          liked
-                                                              ? _gold
-                                                              : _textSec,
-                                                          '${n.likeCount}',
-                                                          () => _toggleLike(n)),
-                                                      _buildActionCell(
-                                                          Image.asset(
-                                                              'assets/images/ic_view.png',
-                                                              width: 16,
-                                                              height: 16),
-                                                          _textSec,
-                                                          '${n.viewCount}',
-                                                          null),
-                                                    ],
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 36),
-                                                _buildActionCell(
-                                                    Icon(
-                                                        fav
-                                                            ? Icons
-                                                                .bookmark_rounded
-                                                            : Icons
-                                                                .bookmark_border_rounded,
-                                                        size: 16,
-                                                        color: fav
-                                                            ? _gold
-                                                            : _textSec),
-                                                    fav ? _gold : _textSec,
-                                                    '',
-                                                    () => _toggleFavorite(n)),
-                                                const SizedBox(width: 6),
-                                                _buildActionCell(
-                                                    const Icon(
-                                                        Icons.share_rounded,
-                                                        size: 16,
-                                                        color: _textSec),
-                                                    _textSec,
-                                                    '',
-                                                    () => _shareNote(n)),
-                                              ],
+                                                52, 8, 0, 8),
+                                            child: buildStatsRow(
+                                              commentCount: n.commentCount,
+                                              repostCount: n.repostCount,
+                                              likeCount: n.likeCount,
+                                              viewCount: n.viewCount,
+                                              liked: liked,
+                                              onComment: () => _openDetail(n),
+                                              onRepost: () => _openDetail(n),
+                                              onLike: () => _toggleLike(n),
                                             ),
                                           ),
                                         ],
@@ -2333,29 +2192,6 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     ).then((content) {
       if (content != null && content.isNotEmpty) _publish(content);
     });
-  }
-
-  /// 与经书讨论页同款的操作单元格：图标 16 + 数字 13（行高 1）。
-  Widget _buildActionCell(
-      Widget icon, Color color, String text, VoidCallback? onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(width: 16, height: 16, child: icon),
-            if (text.isNotEmpty) ...[
-              const SizedBox(width: 3),
-              Text(text,
-                  style: TextStyle(fontSize: 13, height: 1, color: color)),
-            ],
-          ],
-        ),
-      ),
-    );
   }
 
   void _openDetail(PlazaNote n) {
@@ -2506,13 +2342,16 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     }
   }
 
-  /// 帖子右侧三点菜单：自己的帖子可编辑/删除，他人的可关注/屏蔽（与首页帖子一致）。
+  /// 帖子右侧三点菜单：收藏/分享帖子 + 自己的帖子可编辑/删除，他人的可关注/屏蔽
+  /// （与笔记详情页回复三点菜单同款样式）。
   Future<void> _showUserMenu(PlazaNote n) async {
     final me = AuthService.instance.currentUser.value;
     if (me == null) {
       _promptLogin();
       return;
     }
+    final favorited =
+        CloudNotesService.instance.favoriteNoteIds.contains(n.id);
     if (me.id == n.ownerUserId) {
       final choice = await showModalBottomSheet<String>(
         context: context,
@@ -2546,6 +2385,14 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                 ),
               ),
               const Divider(height: 1, color: _border),
+              _userMenuItem(
+                  ctx,
+                  'favorite',
+                  favorited
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  favorited ? '取消收藏' : '收藏帖子'),
+              _userMenuItem(ctx, 'share', Icons.share_rounded, '分享帖子'),
               _userMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑帖子'),
               _userMenuItem(ctx, 'delete', Icons.delete_outline, '删除帖子'),
               const SizedBox(height: 8),
@@ -2553,7 +2400,11 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
           ),
         ),
       );
-      if (choice == 'edit') {
+      if (choice == 'favorite') {
+        await _toggleFavorite(n);
+      } else if (choice == 'share') {
+        await _shareNote(n);
+      } else if (choice == 'edit') {
         await _editTopicNote(n);
       } else if (choice == 'delete') {
         await _deleteTopicNote(n);
@@ -2597,6 +2448,14 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
             ),
             const Divider(height: 1, color: _border),
             _userMenuItem(
+                ctx,
+                'favorite',
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                favorited ? '取消收藏' : '收藏帖子'),
+            _userMenuItem(ctx, 'share', Icons.share_rounded, '分享帖子'),
+            _userMenuItem(
               ctx,
               following ? 'unfollow' : 'follow',
               Icons.person_add_alt,
@@ -2614,6 +2473,14 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
       ),
     );
     if (choice == null || !mounted) return;
+    if (choice == 'favorite') {
+      await _toggleFavorite(n);
+      return;
+    }
+    if (choice == 'share') {
+      await _shareNote(n);
+      return;
+    }
     try {
       if (choice == 'follow' || choice == 'unfollow') {
         final ok = await CloudNotesService.instance.toggleFollow(n.ownerUserId);

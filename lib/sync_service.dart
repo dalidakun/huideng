@@ -49,6 +49,18 @@ class SyncService with WidgetsBindingObserver {
     'checkin_goals',
   };
 
+  /// 云端权威字段：这些字段以云端返回值为准，只要云端有非空值就覆盖本地。
+  /// 用于修复「第二天后加入时间变昨天、认证状态丢失」等问题——
+  /// 冷启动时若本地缓存异常被清，my_page.dart 会错误写入当前时间；
+  /// 同步时默认规则是"本地已有值就跳过云端"，导致错误值永久固化。
+  static const Set<String> _cloudAuthorityKeys = {
+    'user_created_at',
+    'user_verified',
+    'user_verified_name',
+    'user_account_name',
+    'user_nickname',
+  };
+
   static const Set<String> _excludeKeys = {
     'switch_to_sutra',
     'switch_to_assistant',
@@ -169,6 +181,11 @@ class SyncService with WidgetsBindingObserver {
     } finally {
       _busy = false;
     }
+    // ★ 权威字段修正：绝不信任「云端备份的 prefs 中的 user_created_at / user_verified」
+    // 因为旧版本 bug 会把 DateTime.now() 兜底写入本地，然后 push 污染云端备份。
+    // 真实注册时间 & 认证状态只来自服务端注册/认证记录表，
+    // 通过 getUserProfiles.joinTime 与 getMyVerification() 直接拿到，然后无条件覆盖本地。
+    unawaited(_enforceAuthorityFields());
     // 云端恢复的昵称/签名立即刷新到登录态展示（重装/清数据后启动时读到的是默认值）。
     await AuthService.instance.reloadLocalProfile();
     await push();
@@ -178,6 +195,75 @@ class SyncService with WidgetsBindingObserver {
     // 登录/恢复会话后立即上报阅藏进度与读经时长，主页尽快有数据。
     await _reportCanonProgress();
     await ReadingTimeService.instance.reportToCloud();
+  }
+
+  /// 用最权威的数据源（getUserProfiles.joinTime / getMyVerification）
+  /// 无条件覆盖本地 prefs 中的事实性字段，修复旧版本兜底写入污染问题。
+  /// 执行顺序：先写本地 → 再 push 回云端备份 → 彻底把错误的备份值也纠正。
+  Future<void> _enforceAuthorityFields() async {
+    if (!AuthService.instance.isLoggedIn) return;
+    final me = AuthService.instance.currentUser.value;
+    if (me == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    bool anyChanged = false;
+    try {
+      final profiles =
+          await CloudNotesService.instance.getUserProfiles([me.id]);
+      if (profiles.isNotEmpty) {
+        final p = profiles.first;
+        if (p.joinTime > 0) {
+          final local = prefs.getInt('user_created_at');
+          if (local == null || local != p.joinTime) {
+            await prefs.setInt('user_created_at', p.joinTime);
+            anyChanged = true;
+          }
+        }
+        if (p.account.isNotEmpty) {
+          final local = prefs.getString('user_account_name') ?? '';
+          if (local != p.account) {
+            await prefs.setString('user_account_name', p.account);
+            anyChanged = true;
+          }
+        }
+        if (p.name.isNotEmpty) {
+          final local = prefs.getString('user_nickname') ?? '';
+          if (local != p.name) {
+            await prefs.setString('user_nickname', p.name);
+            anyChanged = true;
+          }
+        }
+        // verified 兜底：若 getUserProfiles 说已认证，先覆盖，getMyVerification 会再细查
+        final localVer = prefs.getBool('user_verified') ?? false;
+        if (p.verified && !localVer) {
+          await prefs.setBool('user_verified', true);
+          anyChanged = true;
+        }
+      }
+    } catch (_) {}
+    try {
+      final info = await CloudNotesService.instance.getMyVerification();
+      final localVer = prefs.getBool('user_verified') ?? false;
+      // 认证状态永久单向：只在云端确认为「已认证」时覆盖为 true，
+      // 绝不因云端误报 false（匿名/降级会话解析到共享匿名 uid）把已认证清掉。
+      if (info.verified && !localVer) {
+        await prefs.setBool('user_verified', true);
+        anyChanged = true;
+      }
+      // 认证后的脱敏真名（如「张*三」），显示在昵称下方；一旦写入不再清空。
+      if (info.realNameMasked.isNotEmpty) {
+        final local = prefs.getString('user_verified_name') ?? '';
+        if (local != info.realNameMasked) {
+          await prefs.setString('user_verified_name', info.realNameMasked);
+          anyChanged = true;
+        }
+      }
+    } catch (_) {}
+    if (anyChanged) {
+      dataVersion.value++;
+      // 权威字段修正后立即 push 回云端备份，
+      // 把"云端备份里错误的昨天日期/未认证状态"也一起纠正。
+      unawaited(push());
+    }
   }
 
   /// 拉取云端并合并到本地。
@@ -194,9 +280,16 @@ class SyncService with WidgetsBindingObserver {
         if (_isLocalOnlyRedundantKey(key)) continue;
         final cv = e.value;
         final lv = _readPref(prefs, key);
-        if (lv == null && cv != null) {
-          // 经书路径类键先规范化再写入，避免旧版本遗留的本机绝对路径
-          // 被恢复后误判为「未下载」。
+        if (_cloudAuthorityKeys.contains(key) && cv != null) {
+          // 云端权威字段：只要云端有非空值就覆盖本地，修复错误的兜底写入。
+          final normalizedCv = _normalizeSutraPaths(
+              key, cv, prefs, cPrefs['current_sutra_title']?.toString());
+          if (lv == null || lv.toString() != normalizedCv.toString()) {
+            _writePref(prefs, key, normalizedCv);
+            changed = true;
+          }
+        } else if (lv == null && cv != null) {
+          // 普通字段：本地缺失才从云端补齐，避免覆盖本地用户的最新设置。
           _writePref(
               prefs,
               key,

@@ -18,6 +18,64 @@
 // 云函数专用 Server SDK：自动读取环境注入的管理员凭证，数据库端点自带地域。
 const cloudbase = require("@cloudbase/node-sdk");
 const crypto = require("crypto");
+const https = require("https");
+
+/**
+ * 用 access token 调 CloudBase auth/v1/user/me 解析真实用户 ID。
+ * 使用 Node.js 内置 https 模块，不依赖 fetch（Node 16 及以下无全局 fetch）。
+ * 超时 5 秒，失败返回空字符串。
+ */
+function resolveUidByToken(token) {
+  return new Promise((resolve) => {
+    const envId = process.env.TCB_ENV || "randeng-d8gs968w22a3d98e8";
+    const options = {
+      hostname: `${envId}.api.tcloudbasegateway.com`,
+      path: "/auth/v1/user/me",
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    };
+    const req = https.request(options, (res) => {
+      let body = "";
+      res.on("data", (chunk) => (body += chunk));
+      res.on("end", () => {
+        if (res.statusCode === 200) {
+          try {
+            const profile = JSON.parse(body);
+            // 匿名会话（signInAnonymously 浏览广场）解析出的不是真实用户：
+            // 返回空串，让上层绝不把「共享匿名 uid」当作真实身份，
+            // 否则所有未登录用户共用同一 uid 会导致点赞/评论/查询全部串号。
+            const isAnon =
+              profile.is_anonymous === true ||
+              profile.isAnonymous === true ||
+              String(profile.user_type || "").toUpperCase() === "ANONYMOUS";
+            if (isAnon) {
+              console.log("[api] user/me anonymous, treat as no identity");
+              return resolve("");
+            }
+            const u = profile.user_id || profile.sub || profile.uid || "";
+            resolve(u ? String(u) : "");
+          } catch (e) {
+            console.log("[api] user/me parse error:", e.message);
+            resolve("");
+          }
+        } else {
+          console.log("[api] user/me status:", res.statusCode);
+          resolve("");
+        }
+      });
+    });
+    req.on("error", (e) => {
+      console.log("[api] user/me request error:", e.message);
+      resolve("");
+    });
+    req.setTimeout(5000, () => {
+      req.destroy();
+      console.log("[api] user/me timeout");
+      resolve("");
+    });
+    req.end();
+  });
+}
 
 // 按环境变量显式构造凭证（与 SDK 自动读取等价，显式更稳妥）。
 function buildInitOptions() {
@@ -50,44 +108,51 @@ const app = cloudbase.init(buildInitOptions());
 let hotDiscussionsCache = null;
 
 async function resolveUid(event, context) {
-  // 1) 新架构：context.environment（JSON 字符串）里的 TCB_UUID
+  // 1) 客户端显式传入的 access token → 官方接口解析调用者
+  //    优先级最高：新平台不会自动注入用户身份到普通云函数，
+  //    context.environment.TCB_UUID 可能为匿名 UUID 而非真实用户，
+  //    此时若先取 TCB_UUID 会导致所有用户共享同一 uid：
+  //    - 点赞/评论时 note.ownerUserId === uid（误判为自己赞自己）→ 通知不创建
+  //    - 查询时 userId 与 activity.userId 不一致 → 通知查不到
+  //    - getMyNotes/getMyVerification 返回共享匿名数据 → 认证丢失、帖子串号
+  //    因此有 token 时必须只信任 token 解析出的真实用户；token 存在但解析为空
+  //    （匿名会话/过期/失败）也绝不回退 TCB_UUID，避免数据串号。
+  const token = event.__accessToken || (event.data && event.data.__accessToken);
+  if (token) {
+    return resolveUidByToken(token);
+  }
+
+  // 2) 无 token（纯匿名浏览，未建匿名会话或调用方不带 token）时才回退
+  //    context.environment（JSON 字符串）里的 TCB_UUID。
+  //    ⚠️ 注意：未认证的 publishable-key 调用，TCB_UUID 是字面量 "anon"
+  //    （共享占位符，不是真实用户）。绝不能把它当 uid 用——否则评论/回复/
+  //    转发/关注全部写成同一个 "anon"，出现"评论没有@账号、主页空白"。
+  //    真实匿名会话（signInAnonymously）的 TCB_UUID 是唯一长字符串，不在此列。
   try {
     const raw = context.environment;
     const env =
       typeof raw === "string" ? JSON.parse(raw) : raw && typeof raw === "object" ? raw : null;
-    if (env && env.TCB_UUID) return String(env.TCB_UUID);
+    if (env && env.TCB_UUID) {
+      const u = String(env.TCB_UUID);
+      if (u && u !== "anon" && u.toLowerCase() !== "anonymous") return u;
+    }
   } catch (e) {}
 
-  // 2) 旧架构：parseContext().environ 里的 TCB_UUID
+  // 3) 旧架构：parseContext().environ 里的 TCB_UUID
   try {
     const ctx = app.parseContext(context);
     if (ctx && ctx.environ && ctx.environ.TCB_UUID) {
-      return String(ctx.environ.TCB_UUID);
+      const u = String(ctx.environ.TCB_UUID);
+      if (u && u !== "anon" && u.toLowerCase() !== "anonymous") {
+        return u;
+      }
     }
   } catch (e) {}
 
-  // 3) 进程级环境变量（旧架构实例级）
-  if (process.env.TCB_UUID) return String(process.env.TCB_UUID);
-
-  // 4) 客户端显式传入的 access token → 官方接口解析调用者
-  const token = event.__accessToken || (event.data && event.data.__accessToken);
-  if (token) {
-    try {
-      const envId = process.env.TCB_ENV || "randeng-d8gs968w22a3d98e8";
-      const res = await fetch(
-        `https://${envId}.api.tcloudbasegateway.com/auth/v1/user/me`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (res.ok) {
-        const profile = await res.json();
-        const u = profile.user_id || profile.sub || profile.uid || "";
-        if (u) return String(u);
-      } else {
-        console.log("[api] user/me status:", res.status);
-      }
-    } catch (e) {
-      console.log("[api] token resolve error:", e.message);
-    }
+  // 4) 进程级环境变量（旧架构实例级）
+  if (process.env.TCB_UUID) {
+    const u = String(process.env.TCB_UUID);
+    if (u && u !== "anon" && u.toLowerCase() !== "anonymous") return u;
   }
 
   return "";
@@ -335,6 +400,41 @@ exports.main = async (event, context) => {
     }
   }
 
+  // 给评论列表附加作者账号名（authorAccount）与实名认证标记（authorVerified）。
+  // 详情页评论行要展示 @账号 与认证图标；此前 getComments 不返回这两项，
+  // 客户端只能靠异步拉 profile 补齐，慢且不稳定。评论按 authorId 关联用户。
+  async function attachCommentAuthorInfo(commentList) {
+    if (!commentList || commentList.length === 0) return;
+    const ids = [...new Set(commentList.map((c) => c.authorId).filter(Boolean))];
+    if (ids.length === 0) return;
+    const accounts = {};
+    try {
+      await ensureUserAccounts();
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        const { data } = await userAccounts
+          .where({ uid: _.in(chunk) })
+          .get();
+        for (const a of data || []) accounts[a.uid] = a.username || "";
+      }
+    } catch (e) {}
+    const verified = {};
+    try {
+      await ensureVerifications();
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        const { data } = await verifications
+          .where({ uid: _.in(chunk) })
+          .get();
+        for (const v of data || []) verified[v.uid] = true;
+      }
+    } catch (e) {}
+    for (const c of commentList) {
+      c.authorAccount = accounts[c.authorId] || "";
+      c.authorVerified = !!verified[c.authorId];
+    }
+  }
+
   const action = event.action;
   console.log(`[api] action=${action} uid=${uid} tokenPresent=${!!(event.__accessToken)}`);
 
@@ -373,10 +473,64 @@ exports.main = async (event, context) => {
 
       // 身份诊断接口：返回当前识别到的调用者身份
       case "whoami": {
+        // 诊断端点：帮助排查通知不显示问题
+        let ctxEnvTcbUuid = "";
+        try {
+          const raw = context.environment;
+          const env =
+            typeof raw === "string" ? JSON.parse(raw) : raw && typeof raw === "object" ? raw : null;
+          ctxEnvTcbUuid = (env && env.TCB_UUID) || "";
+        } catch (e) {}
+        let myNoteCount = -1;
+        let myActivityCount = -1;
+        let myActivitySample = [];
+        let myNotifCount = -1;
+        let myNotifSample = [];
+        let notifByType = {};
+        try {
+          const noteRes = await notes.where({ ownerUserId: uid }).count();
+          myNoteCount = noteRes.total;
+          const actRes = await activities.where({ userId: uid }).orderBy("createdAt", "desc").limit(5).get();
+          myActivitySample = (actRes.data || []).map((a) => ({
+            type: a.type,
+            noteId: a.noteId,
+            actorId: a.actorId,
+            createdAt: a.createdAt,
+            viewed: a.viewed,
+          }));
+          const actCountRes = await activities.where({ userId: uid }).count();
+          myActivityCount = actCountRes.total;
+          // 按类型统计通知数（单次查询 + 内存过滤，避免 14 次查询超时）
+          const receivedSet = new Set(receivedTypes);
+          const allActRes = await activities
+            .where({ userId: uid })
+            .orderBy("createdAt", "desc")
+            .limit(200)
+            .get();
+          const allNotifActs = (allActRes.data || []).filter((a) => receivedSet.has(a.type));
+          myNotifCount = allNotifActs.length;
+          for (const a of allNotifActs) {
+            notifByType[a.type] = (notifByType[a.type] || 0) + 1;
+          }
+          myNotifSample = allNotifActs.slice(0, 5).map((a) => ({
+            type: a.type,
+            noteId: a.noteId,
+            actorId: a.actorId,
+            createdAt: a.createdAt,
+            viewed: a.viewed,
+          }));
+        } catch (e) {}
         return ok({
           uid,
           tokenPresent: !!(event.__accessToken || (event.data && event.data.__accessToken)),
+          ctxEnvTcbUuid,
           envTcbUuid: process.env.TCB_UUID || "",
+          myNoteCount,
+          myActivityCount,
+          myActivitySample,
+          myNotifCount,
+          myNotifSample,
+          notifByType,
         });
       }
 
@@ -458,10 +612,13 @@ exports.main = async (event, context) => {
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 50, 100);
         // 排除公告（kind: announcement），公告只在公告栏展示。
-        const base = notes.where({
+        const query = {
           ownerUserId: uid,
           kind: _.neq("announcement"),
-        });
+        };
+        // 可选按 repostKind 过滤（如「我的回复」只拉 reply 类型，避免客户端翻大量非回复帖）。
+        if (event.repostKind) query.repostKind = String(event.repostKind);
+        const base = notes.where(query);
         const res = await base
           .orderBy("updatedAt", "desc")
           .skip((page - 1) * pageSize)
@@ -646,6 +803,52 @@ exports.main = async (event, context) => {
           });
         }
 
+        const res = await base
+          .orderBy("createdAt", "desc")
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .get();
+        const filtered = filterBlocked(res.data);
+        const { total } = await base.count();
+        await attachAuthorAccounts(filtered);
+        await attachAuthorVerified(filtered);
+        await attachAuthorCanonProgress(filtered);
+        return ok({
+          notes: filtered,
+          total,
+          hasMore: (page - 1) * pageSize + res.data.length < total,
+        });
+      }
+
+      case "getFollowingNotes": {
+        if (!uid) return fail("unauthorized");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 100);
+        // 获取关注的用户 ID 列表
+        const fr = await follows.where({ followerId: uid }).limit(1000).get();
+        const followedIds = fr.data.map((r) => r.followeeId);
+        if (followedIds.length === 0)
+          return ok({ notes: [], total: 0, hasMore: false });
+        // 屏蔽的用户内容过滤
+        const br = await blocks.where({ blockerId: uid }).limit(1000).get();
+        const blocked = br.data.map((r) => r.blockedId);
+        const filterBlocked = (arr) =>
+          blocked.length
+            ? arr.filter(
+                (n) =>
+                  !blocked.includes(n.ownerUserId) &&
+                  !(
+                    n.repostSourceUserId &&
+                    blocked.includes(n.repostSourceUserId)
+                  )
+              )
+            : arr;
+        const base = notes.where({
+          ownerUserId: _.in(followedIds),
+          visibility: "public",
+          status: "normal",
+          kind: _.neq("announcement"),
+        });
         const res = await base
           .orderBy("createdAt", "desc")
           .skip((page - 1) * pageSize)
@@ -999,6 +1202,9 @@ exports.main = async (event, context) => {
             viewed: false,
             createdAt: now(),
           });
+          console.log(`[api/repostNote] repost_me notification created: noteOwner=${src.ownerUserId} actor=${uid} repostKind=${repostKind}`);
+        } else {
+          console.log(`[api/repostNote] repost_me notification skipped: ownerUserId=${src.ownerUserId || "(empty)"} uid=${uid} self=${src.ownerUserId === uid} repostKind=${repostKind}`);
         }
         return ok({ id: res.id });
       }
@@ -1108,8 +1314,10 @@ exports.main = async (event, context) => {
           } catch (e) {}
         }
         // 账号名称：userAccounts 中登记的 username；阅藏进度：同表 canonRead/canonTotal；
-        // 读经时长：同表 readingSeconds（他人主页徽章点亮依据）。
+        // 读经时长：同表 readingSeconds（他人主页徽章点亮依据）；
+        // ★ userAccounts.createdAt：用户首次创建 @账户 时写入，比同步 prefs 更接近真实注册时间。
         const accounts = {};
+        const accountCreatedAt = {};
         const canonRead = {};
         const canonTotal = {};
         const readingSeconds = {};
@@ -1125,12 +1333,41 @@ exports.main = async (event, context) => {
                 canonRead[a.uid] = Math.max(0, Number(a.canonRead) || 0);
                 canonTotal[a.uid] = Math.max(0, Number(a.canonTotal) || 0);
                 readingSeconds[a.uid] = Math.max(0, Number(a.readingSeconds) || 0);
+                // 首次设置 @账户 时的写入时间戳（毫秒），作为注册时间一级候选。
+                if (a.createdAt) accountCreatedAt[a.uid] = Number(a.createdAt) || 0;
               }
             }
           } catch (e) {}
         }
-        // 昵称/签名/加入时间/头像/横幅：从 userData.payload 取（由 SyncService 定期推送）。
-        // 头像横幅为 base64，存于 payload.files.avatar / payload.files.banner。
+        // ★ 最早笔记时间：仅当该用户连 userAccounts.createdAt 都没有时才需要扫
+        //   notes 表兜底计算加入时间（有 @账户 的用户直接跳过）。此前每次调用都
+        //   无脑拉 5000 条，数据量上来后云函数容易被拖到超时被杀，连带账号/认证/
+        //   昵称全部不返回——这正是评论 @账号 与主页 @账户 时而丢失的根源。
+        const notesFirstCreatedAt = {};
+        if (ids.length > 0) {
+          try {
+            const needFallback = ids.filter((id) => !accountCreatedAt[id]);
+            for (let i = 0; i < needFallback.length; i += 100) {
+              const chunk = needFallback.slice(i, i + 100);
+              if (chunk.length === 0) continue;
+              // 上限 500：只需找到最早一条作为加入时间候选，足够。
+              const { data } = await notes
+                .where({ ownerUserId: _.in(chunk), status: "normal" })
+                .orderBy("createdAt", "asc")
+                .limit(500)
+                .get();
+              for (const n of data || []) {
+                const t = Number(n.createdAt) || 0;
+                if (t <= 0 || !n.ownerUserId) continue;
+                const cur = notesFirstCreatedAt[n.ownerUserId];
+                if (cur == null || t < cur) notesFirstCreatedAt[n.ownerUserId] = t;
+              }
+            }
+          } catch (e) {}
+        }
+        // 昵称/签名/头像/横幅：从 userData.payload 取（由 SyncService 定期推送）。
+        // ★ userData.createdAt（即 row.createdAt）= 用户首次同步时的写入时间戳，
+        //   优先级高于 prefs.user_created_at（后者会被旧版本客户端的"兜底写入当前日期"污染）。
         const profiles = {};
         if (ids.length > 0) {
           try {
@@ -1144,10 +1381,24 @@ exports.main = async (event, context) => {
               const files = payload.files || {};
               const avatar = files.avatar;
               const banner = files.banner;
-              profiles[row.uid] = {
+              // ★ 权威链：所有候选时间取「最老（最小）」的那个，
+              //   即用户第一次在系统里留下痕迹的真实时间 = 实际"加入时间"。
+              //   1) userAccounts.createdAt   （首次创建 @账户 时间，永不修改）
+              //   2) notes 最早 createdAt       （第一篇笔记/回复时间，行为证据）
+              //   3) userData.row.createdAt    （新部署后首次同步时间）
+              //   4) prefs.user_created_at     （客户端同步备份，兼容历史）
+              //   注意：**禁止用 userData.updatedAt**，它每次 push 都会刷新。
+              const uid = row.uid;
+              const c1 = accountCreatedAt[uid] || 0;
+              const c2 = notesFirstCreatedAt[uid] || 0;
+              const c3 = (row && row.createdAt) ? Number(row.createdAt) || 0 : 0;
+              const c4 = Number(prefs.user_created_at) || 0;
+              const candidates = [c1, c2, c3, c4].filter((v) => v > 0);
+              const joinTime = candidates.length > 0 ? Math.min(...candidates) : 0;
+              profiles[uid] = {
                 nickname: String(prefs.user_nickname || "").slice(0, 30),
                 tagline: String(prefs.user_tagline || "").slice(0, 60),
-                joinTime: Number(prefs.user_created_at) || 0,
+                joinTime,
                 avatar:
                   avatar && typeof avatar.data === "string" && avatar.data
                     ? avatar.data
@@ -1156,6 +1407,15 @@ exports.main = async (event, context) => {
                   banner && typeof banner.data === "string" && banner.data
                     ? banner.data
                     : "",
+                // ★ 调试字段：查看是哪个源头决定了最终 joinTime。
+                // 生产验证完可以删除，不影响客户端正常显示（客户端忽略多余字段）。
+                _debugJoinCandidates: {
+                  "① userAccounts.createdAt（首次创建@账号）": c1,
+                  "② notes 最早 createdAt（第一篇笔记）": c2,
+                  "③ userData.createdAt（首次同步）": c3,
+                  "④ prefs.user_created_at（备份，可能被污染）": c4,
+                  "最终 min（即显示的 joinTime）": joinTime,
+                },
               };
             }
           } catch (e) {}
@@ -1176,18 +1436,38 @@ exports.main = async (event, context) => {
               if (n && n.authorName) name = String(n.authorName);
             } catch (e) {}
           }
+          // ★ 兜底：极个别极端用户既没有 userData 记录也没有昵称 fallback 的场景，
+          //   仍然在最外层按同样规则计算一次 joinTime，避免显示"加入时间为 0"。
+          let finalJoinTime = p.joinTime || 0;
+          const c1Out = accountCreatedAt[id] || 0;
+          const c2Out = notesFirstCreatedAt[id] || 0;
+          if (finalJoinTime <= 0) {
+            const candidates = [c1Out, c2Out, 0, 0].filter((v) => v > 0);
+            if (candidates.length > 0) finalJoinTime = Math.min(...candidates);
+          }
+          const debug = p._debugJoinCandidates || {
+            "① userAccounts.createdAt（首次创建@账号）": c1Out,
+            "② notes 最早 createdAt（第一篇笔记）": c2Out,
+            "③ userData.createdAt（首次同步）": 0,
+            "④ prefs.user_created_at（备份，可能被污染）": 0,
+            "最终 min（即显示的 joinTime）": finalJoinTime,
+            "⚠️ 说明": "此用户无 userData 记录，仅返回外层兜底候选",
+          };
           users.push({
             id,
             name,
             account: accounts[id] || "",
             verified: !!verified[id],
             tagline: p.tagline || "",
-            joinTime: p.joinTime || 0,
+            joinTime: finalJoinTime,
             canonRead: canonRead[id] || 0,
             canonTotal: canonTotal[id] || 0,
             readingSeconds: readingSeconds[id] || 0,
             avatar: p.avatar || "",
             banner: p.banner || "",
+            // ★ 调试字段：查看是哪个源头决定了最终 joinTime。
+            // 部署验证完可以安全删除，客户端 UserProfile.fromJson 会忽略未知字段。
+            _debugJoinCandidates: debug,
           });
         }
         return ok({ users });
@@ -1313,6 +1593,7 @@ exports.main = async (event, context) => {
           viewed: false,
           createdAt: now(),
         });
+        console.log(`[api/toggleFollow] follow_me notification created: target=${target} actor=${uid}`);
         return ok({ following: true });
       }
 
@@ -1414,6 +1695,9 @@ exports.main = async (event, context) => {
               viewed: false,
               createdAt: now(),
             });
+            console.log(`[api/toggleLike] notification created: noteOwner=${note.ownerUserId} actor=${uid} noteId=${noteId}`);
+          } else {
+            console.log(`[api/toggleLike] notification skipped: ownerUserId=${note.ownerUserId || "(empty)"} uid=${uid} self=${note.ownerUserId === uid}`);
           }
         }
         await notes.doc(noteId).update({ likeCount });
@@ -1469,6 +1753,9 @@ exports.main = async (event, context) => {
             viewed: false,
             createdAt: now(),
           });
+          console.log(`[api/createComment] reply notification created: noteOwner=${note.ownerUserId} actor=${uid} noteId=${noteId}`);
+        } else {
+          console.log(`[api/createComment] reply notification skipped: ownerUserId=${note.ownerUserId || "(empty)"} uid=${uid} self=${note.ownerUserId === uid}`);
         }
         // @提及：评论中 @其他同修时给对方发通知。
         // 若该同修已在同帖评论过，则视为「回复我的评论」；否则为「@提及我」。
@@ -1506,7 +1793,7 @@ exports.main = async (event, context) => {
             createdAt: now(),
           });
         }
-        return ok({ comment: { _id: res.id, noteId, authorId: uid, authorName: actorName, content, likeCount: 0, createdAt: now() } });
+        return ok({ comment: { _id: res.id, noteId, authorId: uid, authorName: actorName, authorAccount: await getAccountName(uid), content, likeCount: 0, createdAt: now() } });
       }
 
       // ==================== 菩提空间：我的互动动态 ====================
@@ -1568,6 +1855,8 @@ exports.main = async (event, context) => {
           .limit(pageSize)
           .get();
         const list = res.data || [];
+        // 附加每条评论作者的账号名与认证标记，供详情页展示 @账号 与认证图标。
+        await attachCommentAuthorInfo(list);
         // 附加当前用户对每条评论的点赞状态，供详情页恢复点亮状态。
         if (uid && list.length > 0) {
           try {
@@ -1679,27 +1968,38 @@ exports.main = async (event, context) => {
 
       // 拉取「收到的互动」通知列表（分页，最新在前）。不自动标记已读，
       // 只有用户真正查看对应通知或执行「全部标记已读」后未读数才减少。
+      // 注意：CloudBase SDK 的 _.in() 对 type 字段可能不生效，
+      // 但逐个类型查询（14 次数据库调用）会导致云函数超时。
+      // 改为单次查询 userId 的所有活动，内存中过滤 receivedTypes 类型。
       case "getNotifications": {
         if (!uid) return fail("unauthorized");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
-        const base = activities.where({
-          userId: uid,
-          type: _.in(receivedTypes),
-        });
-        const res = await base
+
+        // 单次查询：拉取用户所有活动（最多 500 条），内存中过滤通知类型。
+        // 比逐个类型查询快 10 倍以上，避免云函数超时。
+        const receivedSet = new Set(receivedTypes);
+        const fetchLimit = Math.max(page * pageSize, 200);
+        const res = await activities
+          .where({ userId: uid })
           .orderBy("createdAt", "desc")
-          .skip((page - 1) * pageSize)
-          .limit(pageSize)
+          .limit(fetchLimit)
           .get();
-        const { total } = await base.count();
+        const allNotif = (res.data || []).filter((a) => receivedSet.has(a.type));
+        const total = allNotif.length;
+
+        // 内存分页
+        const start = (page - 1) * pageSize;
+        const items = allNotif.slice(start, start + pageSize);
+
+        console.log(`[api/getNotifications] uid=${uid} page=${page} returned=${items.length} total=${total} fetched=${(res.data || []).length}`);
         // 拉取互动用户头像（base64，存于 userData.payload.files.avatar）、
         // 账号名与认证状态，消息页直接展示真实头像而非默认 App 图标。
-        const items = res.data || [];
         const actorIds = [...new Set(items.map((a) => a.actorId).filter(Boolean))];
         const avatars = {};
         const accounts = {};
         const verified = {};
+        const nicknames = {};
         if (actorIds.length > 0) {
           try {
             await ensureUserAccounts();
@@ -1723,10 +2023,16 @@ exports.main = async (event, context) => {
               .limit(1000)
               .get();
             for (const row of ud || []) {
-              const av = row && row.payload && row.payload.files && row.payload.files.avatar;
+              const payload = (row && row.payload) || {};
+              const files = payload.files || {};
+              const prefs = payload.prefs || {};
+              const av = files.avatar;
               if (av && typeof av.data === "string" && av.data) {
                 avatars[row.uid] = av.data;
               }
+              // 补全真实昵称：修复历史 activity 记录中 actorName 为"同修"的问题。
+              const nick = String(prefs.user_nickname || "").slice(0, 30);
+              if (nick) nicknames[row.uid] = nick;
             }
           } catch (e) {}
         }
@@ -1734,6 +2040,10 @@ exports.main = async (event, context) => {
           if (avatars[a.actorId]) a.actorAvatar = avatars[a.actorId];
           if (accounts[a.actorId]) a.actorAccount = accounts[a.actorId];
           if (verified[a.actorId]) a.actorVerified = true;
+          // actorName 为"同修"或空时，用 userData 中的真实昵称补全。
+          if (nicknames[a.actorId] && (!a.actorName || a.actorName === "同修")) {
+            a.actorName = nicknames[a.actorId];
+          }
         }
         return ok({
           activities: items,
@@ -1745,13 +2055,14 @@ exports.main = async (event, context) => {
       // 消息中心未读数（覆盖点赞/评论/回复评论/转发/收藏/关注/@提及）。
       case "getNotificationUnreadCount": {
         if (!uid) return ok({ unread: 0 });
+        // 并行查询 7 种类型，总耗时约等于 1 次查询。
+        const counts = await Promise.all(
+          receivedTypes.map((t) =>
+            activities.where({ userId: uid, type: t, viewed: false }).count()
+          )
+        );
         let unread = 0;
-        for (const t of receivedTypes) {
-          const r = await activities
-            .where({ userId: uid, type: t, viewed: false })
-            .count();
-          unread += r.total || 0;
-        }
+        for (const r of counts) unread += r.total || 0;
         return ok({ unread });
       }
 
@@ -1759,8 +2070,9 @@ exports.main = async (event, context) => {
       case "markNotificationsRead": {
         if (!uid) return fail("unauthorized");
         if (event.all === true) {
+          // 单次更新所有未读活动（含自己发的 share/comment 等，无副作用）。
           await activities
-            .where({ userId: uid, type: _.in(receivedTypes), viewed: false })
+            .where({ userId: uid, viewed: false })
             .update({ viewed: true });
           return ok({});
         }
@@ -1924,15 +2236,19 @@ exports.main = async (event, context) => {
         }
         const json = JSON.stringify(merged);
         if (json.length > 2 * 1024 * 1024) return fail("payload_too_large");
+        const nowMs = now();
         const record = {
           uid,
           payload: merged,
           payloadJson: json,
-          updatedAt: now(),
+          updatedAt: nowMs,
         };
         if (row) {
           await userData.doc(row._id).update(record);
         } else {
+          // ★ 首次同步时写入 createdAt = 注册后首次联网时间戳。
+          //   用于 getUserProfiles 做 joinTime 的 fallback，比被污染的 prefs 可靠。
+          record.createdAt = nowMs;
           await userData.add(record);
         }
         return ok({ updatedAt: record.updatedAt });

@@ -263,6 +263,8 @@ class _ReplyThreadState extends State<ReplyThread> {
       builder: (context, _) {
         final n = NoteStatsCenter.instance.latest(note.id) ?? note;
         final liked = CloudNotesService.instance.likedNoteIds.contains(n.id);
+        // 与个人主页帖子同款：第一个指标与内容左对齐，其余固定间距；
+        // 数字较多时单元格内等比缩小，避免溢出或间距被挤压。
         return Row(
           children: [
             _cell(
@@ -285,10 +287,10 @@ class _ReplyThreadState extends State<ReplyThread> {
               onTap: onLike == null ? null : () => onLike(note),
             ),
             const SizedBox(width: 48),
-            Image.asset('assets/images/ic_view.png', width: 16, height: 16),
-            const SizedBox(width: 3),
-            Text('${n.viewCount}',
-                style: const TextStyle(fontSize: 13, color: _textSec)),
+            _cell(
+              Image.asset('assets/images/ic_view.png', width: 16, height: 16),
+              '${n.viewCount}',
+            ),
           ],
         );
       },
@@ -301,7 +303,14 @@ class _ReplyThreadState extends State<ReplyThread> {
       children: [
         SizedBox(width: 16, height: 16, child: icon),
         const SizedBox(width: 3),
-        Text(text, style: const TextStyle(fontSize: 13, color: _textSec)),
+        Flexible(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(text,
+                maxLines: 1,
+                style: const TextStyle(fontSize: 13, color: _textSec)),
+          ),
+        ),
       ],
     );
     if (onTap == null) return cell;

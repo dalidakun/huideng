@@ -157,6 +157,16 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
   int _page = 0;
   bool _error = false;
 
+  /// 首次加载失败后已自动重试的次数（最多 [_maxLoadRetries] 次）。
+  /// 冷启动时会话恢复/token 刷新需要几秒，期间拉取会失败，等待会话就绪后
+  /// 自动重试，避免一直停在「加载失败」、要等切页或手动刷新才恢复。
+  int _loadRetries = 0;
+  static const int _maxLoadRetries = 2;
+  static const Duration _retryDelay = Duration(seconds: 4);
+
+  /// 上一次见到的未读数：用于检测「未读数增加 → 有新通知到达」。
+  int _prevUnread = 0;
+
   late final AnimationController _pageFade =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 380))
         ..forward();
@@ -167,16 +177,17 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
   void initState() {
     super.initState();
     appDarkMode.addListener(_onExternalChanged);
-    NotificationCenter.instance.unread.addListener(_onExternalChanged);
+    NotificationCenter.instance.unread.addListener(_onUnreadChanged);
     AuthService.instance.currentUser.addListener(_onAuthChanged);
     widget.activeTab?.addListener(_onTabChanged);
+    _prevUnread = NotificationCenter.instance.unread.value;
     _load();
   }
 
   @override
   void dispose() {
     appDarkMode.removeListener(_onExternalChanged);
-    NotificationCenter.instance.unread.removeListener(_onExternalChanged);
+    NotificationCenter.instance.unread.removeListener(_onUnreadChanged);
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
     widget.activeTab?.removeListener(_onTabChanged);
     _pageFade.dispose();
@@ -184,6 +195,18 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
   }
 
   void _onExternalChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// 未读数变化时：增加（新通知到达）则静默刷新列表；其余仅重建 UI。
+  /// 初始 _load() 进行中时不重复触发，避免与首次拉取并发。
+  void _onUnreadChanged() {
+    if (!mounted) return;
+    final n = NotificationCenter.instance.unread.value;
+    if (n > _prevUnread && !_loading) {
+      _silentRefresh();
+    }
+    _prevUnread = n;
     if (mounted) setState(() {});
   }
 
@@ -224,6 +247,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       final (groups, hasMore) =
           await NotificationCenter.instance.fetchGroups(page: 1);
       if (!mounted) return;
+      _loadRetries = 0;
       setState(() {
         _groups
           ..clear()
@@ -238,7 +262,21 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
         _loading = false;
         _error = true;
       });
+      _scheduleRetry();
     }
+  }
+
+  /// 首次加载失败后延迟自动重试：等待会话恢复完成窗口（_retryRestoreSession
+  /// 4s 后重试 + token 修复）后再拉取一次，期间已被其它路径（静默刷新/切页/
+  /// 下拉）恢复时不再重复请求。
+  void _scheduleRetry() {
+    if (_loadRetries >= _maxLoadRetries || !mounted) return;
+    _loadRetries++;
+    Future.delayed(_retryDelay, () {
+      if (!mounted) return;
+      if (_groups.isNotEmpty) return;
+      _load();
+    });
   }
 
   Future<void> _loadMore() async {
@@ -475,10 +513,20 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
             );
           }
           final g = _groups[index];
-          if (g.type == 'like_me' || g.type == 'repost_me') {
-            // 点赞/转发共用同一格局（以点赞类为标准）。
+          if (g.type == 'repost_me') {
+            // 转发沿用点赞类卡片格局。
             return _LikeNotificationCard(
               key: ValueKey('like:${g.noteId}:${g.latestAt}'),
+              group: g,
+              palette: p,
+              onTap: () => _openGroup(g),
+              onLongPress: () => _showActions(g),
+            );
+          }
+          if (g.type == 'like_me' || g.type == 'favorite_me' || g.type == 'follow_me') {
+            // 点赞/收藏/关注共用同一卡片格局（头像重叠堆叠）。
+            return _FollowNotificationCard(
+              key: ValueKey('follow-like:${g.type}:${g.noteId}:${g.latestAt}'),
               group: g,
               palette: p,
               onTap: () => _openGroup(g),
@@ -488,15 +536,6 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
           if (g.type == 'reply' || g.type == 'comment_reply') {
             return _ReplyNotificationCard(
               key: ValueKey('reply:${g.noteId}:${g.latestAt}'),
-              group: g,
-              palette: p,
-              onTap: () => _openGroup(g),
-              onLongPress: () => _showActions(g),
-            );
-          }
-          if (g.type == 'follow_me') {
-            return _FollowNotificationCard(
-              key: ValueKey('follow:${g.latestAt}'),
               group: g,
               palette: p,
               onTap: () => _openGroup(g),
@@ -1336,7 +1375,7 @@ class _ActorAvatar extends StatelessWidget {
 
 /// 回复类通知卡片（reply / comment_reply）：
 /// 与主页帖子同款样式：头像 + 昵称 + @账号 + 时间 + 三点菜单（关注/屏蔽），
-/// 下方「回复@我的账号」+ 回复内容，底部为 6 个指标（评论/转发/点赞/阅读/收藏/分享）。
+/// 下方「回复@我的账号」+ 回复内容，底部为 4 个指标（评论/转发/点赞/阅读）。
 class _ReplyNotificationCard extends StatefulWidget {
   final NotificationGroup group;
   final _Palette palette;
@@ -1535,7 +1574,7 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
                         Text(_formatMonthDay(g.latestAt),
                             style: TextStyle(fontSize: 12, color: p.textHint)),
                       ],
-                      // 底部 6 个指标（与详情页同款：评论/转发/点赞/阅读/收藏/分享）。
+                      // 底部 4 个指标（评论/转发/点赞/阅读），与主页帖子同款布局。
                       const SizedBox(height: 10),
                       _buildMetricsRow(p),
                     ],
@@ -1549,49 +1588,33 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
     );
   }
 
-  /// 底部指标行：评论/转发/点赞/阅读 带数字，收藏/分享 仅图标。
+  /// 底部指标行：评论/转发/点赞/阅读 带数字。
+  /// 与主页帖子同款：第一个指标与正文左对齐，其余固定间距，数字较多时等比缩小。
   Widget _buildMetricsRow(_Palette p) {
     final nid = widget.group.noteId;
     final note = _note;
     final liked = nid.isNotEmpty &&
         CloudNotesService.instance.likedNoteIds.contains(nid);
-    final favorited = nid.isNotEmpty &&
-        CloudNotesService.instance.favoriteNoteIds.contains(nid);
     final sec = p.textSec;
     return Row(
       children: [
-        Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _metricCell(Image.asset('assets/images/ic_comment.png',
-                  width: 18, height: 18), sec, '${note?.commentCount ?? 0}'),
-              _metricCell(Icon(Icons.repeat_rounded,
-                  size: 18, color: sec), sec, '${note?.repostCount ?? 0}'),
-              _metricCell(
-                  Icon(liked
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                      size: 18,
-                      color: liked ? _gold : sec),
-                  liked ? _gold : sec,
-                  '${note?.likeCount ?? 0}'),
-              _metricCell(Image.asset('assets/images/ic_view.png',
-                  width: 18, height: 18), sec, '${note?.viewCount ?? 0}'),
-            ],
-          ),
-        ),
-        const SizedBox(width: 36),
+        _metricCell(Image.asset('assets/images/ic_comment.png',
+            width: 16, height: 16), sec, '${note?.commentCount ?? 0}'),
+        const SizedBox(width: 48),
+        _metricCell(Icon(Icons.repeat_rounded,
+            size: 16, color: sec), sec, '${note?.repostCount ?? 0}'),
+        const SizedBox(width: 48),
         _metricCell(
-            Icon(favorited
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-                size: 18,
-                color: favorited ? _gold : sec),
-            favorited ? _gold : sec,
-            ''),
-        const SizedBox(width: 6),
-        _metricCell(Icon(Icons.share_rounded, size: 18, color: sec), sec, ''),
+            Icon(liked
+                ? Icons.favorite_rounded
+                : Icons.favorite_border_rounded,
+                size: 16,
+                color: liked ? _gold : sec),
+            liked ? _gold : sec,
+            '${note?.likeCount ?? 0}'),
+        const SizedBox(width: 48),
+        _metricCell(Image.asset('assets/images/ic_view.png',
+            width: 16, height: 16), sec, '${note?.viewCount ?? 0}'),
       ],
     );
   }
@@ -1600,11 +1623,17 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(width: 18, height: 18, child: icon),
+        SizedBox(width: 16, height: 16, child: icon),
         if (text.isNotEmpty) ...[
           const SizedBox(width: 3),
-          Text(text,
-              style: TextStyle(fontSize: 15, height: 1, color: color)),
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(text,
+                  maxLines: 1,
+                  style: TextStyle(fontSize: 13, height: 1, color: color)),
+            ),
+          ),
         ],
       ],
     );
@@ -1679,9 +1708,13 @@ class _FollowNotificationCardState extends State<_FollowNotificationCard>
     final actor = actors.isNotEmpty ? actors.first : null;
     final name = actor?.name ?? '同修';
     final verified = actor?.verified ?? false;
+    // 关注/点赞/收藏共用同一卡片：动作文案随类型变化。
+    final baseAction = (g.type == 'like_me' && g.noteRepostKind == 'reply')
+        ? '喜欢了你的回复'
+        : _TypeStyle.of(g.type).action;
     final actionText = single
-        ? ' 关注了你'
-        : ' 和另外 ${g.count - 1} 个人关注了你';
+        ? ' $baseAction'
+        : ' 和另外 ${g.count - 1} 个人$baseAction';
     final nameStyle = TextStyle(
       fontSize: 15,
       fontWeight: FontWeight.w700,

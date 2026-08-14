@@ -77,8 +77,13 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
       }
 
       // 仅保留真正“发的帖子”：剔除 reply 类型（仍保留 forward/quote）。
+      // 同时只保留当前真实账号的笔记（降级/匿名会话串号数据一律过滤）。
+      final myUid = AuthService.instance.currentUser.value?.id ??
+          AuthService.instance.cachedUserId;
       final mine = all
-          .where((n) => n.repostKind != 'reply')
+          .where((n) =>
+              n.repostKind != 'reply' &&
+              (myUid == null || myUid.isEmpty || n.ownerUserId == myUid))
           .toList();
 
       final map = <int, List<PlazaNote>>{};

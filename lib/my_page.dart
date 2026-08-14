@@ -80,8 +80,9 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
 
   /// 累计读经时长（秒）：驱动昵称行右侧的五枚修学徽章点亮。
   int _readingSeconds = 0;
-  String _joinedDate =
-      '${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日加入';
+  /// 注意：初始值必须为空串，绝不能用 DateTime.now() 兜底！
+  /// 冷启动同步未完成时本地可能暂无值，用当前日期会误导用户以为"注册时间变成昨天"。
+  String _joinedDate = '';
 
   /// 保存资料成功后，在横幅下边缘显示的"已保存"气泡。
   bool _showSavedBubble = false;
@@ -124,6 +125,10 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   void _onAuthChanged() {
     _loadData();
     _loadCounts();
+    // 会话变化（登录/登出/缓存兜底→真实身份/token刷新恢复）后，
+    // 主动触发各子 Tab reload，避免竞态窗口下首次加载失败、
+    // 后续会话恢复却不重新拉取而一直显示空列表/错误状态。
+    reload();
   }
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
@@ -148,19 +153,98 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
         _tagline = prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
       }
       final createdMs = prefs.getInt('user_created_at');
-      if (createdMs != null) {
+      if (createdMs != null && createdMs > 0) {
         final dt = DateTime.fromMillisecondsSinceEpoch(createdMs);
         _joinedDate = '${dt.year}年${dt.month}月${dt.day}日加入';
-      } else {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        prefs.setInt('user_created_at', now);
-        final dt = DateTime.fromMillisecondsSinceEpoch(now);
-        _joinedDate = '${dt.year}年${dt.month}月${dt.day}日加入';
       }
+      // 注意：绝不在 createdMs 为 null 时用 DateTime.now() 兜底写入！
+      // 冷启动时同步还没完成，本地缓存可能暂时缺失；若此时写入当前日期，
+      // 会把云端的真实注册时间永久覆盖掉（sync_service 默认"本地有值就跳过"）。
+      // 缺失时由 _ensureJoinTimeFromCloud() 后台从云端拉取补齐。
     });
+    unawaited(_ensureJoinTimeFromCloud());
     _loadAccountName();
     _loadVerification();
     unawaited(_loadReadingBadge());
+  }
+
+  /// 用权威数据源（getUserProfiles.joinTime / getMyVerification）无条件
+  /// 覆盖本地 prefs 的事实性字段，修复旧版本「兜底写入当前日期→再push污染云端」。
+  /// 即便本地已经有 user_created_at（可能是被污染的"昨天"），也必须重跑，
+  /// 用服务端注册时的真实 joinTime 覆盖掉。
+  Future<void> _ensureJoinTimeFromCloud() async {
+    if (!_isLoggedIn) return;
+    final me = AuthService.instance.currentUser.value;
+    if (me == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      // 并行拉：getUserProfiles（joinTime/account/name）+ getMyVerification（verified/realName）
+      final profF = CloudNotesService.instance.getUserProfiles([me.id]);
+      final verF = Future<VerificationInfo?>.delayed(
+        Duration.zero,
+        () async {
+          try {
+            return await CloudNotesService.instance.getMyVerification();
+          } catch (_) {
+            return null;
+          }
+        },
+      );
+      final results = await Future.wait([profF, verF]);
+      final profiles = results[0] as List<UserProfile>;
+      final info = results[1] as VerificationInfo?;
+
+      if (profiles.isNotEmpty) {
+        final p = profiles.first;
+        if (p.joinTime > 0) {
+          final local = prefs.getInt('user_created_at');
+          if (local == null || local != p.joinTime) {
+            await prefs.setInt('user_created_at', p.joinTime);
+          }
+        }
+        if (p.account.isNotEmpty) {
+          final local = prefs.getString('user_account_name') ?? '';
+          if (local != p.account) {
+            await prefs.setString('user_account_name', p.account);
+          }
+        }
+        if (p.name.isNotEmpty) {
+          final local = prefs.getString('user_nickname') ?? '';
+          if (local != p.name) {
+            await prefs.setString('user_nickname', p.name);
+          }
+        }
+      }
+      if (info != null) {
+        // 认证状态永久单向：只在云端确认为「已认证」时覆盖为 true，
+        // 绝不因云端误报 false（匿名/降级会话）把已认证清掉。
+        final localVer = prefs.getBool('user_verified') ?? false;
+        if (info.verified && !localVer) {
+          await prefs.setBool('user_verified', true);
+        }
+        // 认证后的脱敏真名（如「张*三」），显示在昵称下方；一旦写入不再清空。
+        if (info.realNameMasked.isNotEmpty) {
+          final local = prefs.getString('user_verified_name') ?? '';
+          if (local != info.realNameMasked) {
+            await prefs.setString('user_verified_name', info.realNameMasked);
+          }
+        }
+      }
+      // 重新从 prefs 读一次（可能被上面覆盖了权威值）刷新 UI
+      if (mounted) {
+        final newCreatedMs = prefs.getInt('user_created_at');
+        final newVerified = prefs.getBool('user_verified') ?? false;
+        setState(() {
+          if (newCreatedMs != null && newCreatedMs > 0) {
+            final dt = DateTime.fromMillisecondsSinceEpoch(newCreatedMs);
+            _joinedDate = '${dt.year}年${dt.month}月${dt.day}日加入';
+          }
+          _verified = newVerified;
+          _accountName = prefs.getString('user_account_name') ?? '';
+          _nickname = prefs.getString('user_nickname') ?? _nickname;
+        });
+      }
+    } catch (_) {}
   }
 
   /// 读经徽章：读取本地累计时长驱动徽章点亮；首次点亮新徽章时弹恭喜。
@@ -184,14 +268,22 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   }
 
   /// 实名认证状态：优先取云端，云端失败时回退到本地缓存。
+  /// 注意：认证是永久单向的（同一账号仅可认证一次），
+  /// 因此本地已知「已认证」时绝不因云端误报 false（如匿名/降级会话
+  /// 解析到共享匿名 uid）而降级，避免认证标识莫名消失。
   Future<void> _loadVerification() async {
     final prefs = await SharedPreferences.getInstance();
     var verified = prefs.getBool('user_verified') ?? false;
     if (_isLoggedIn) {
       try {
         final info = await CloudNotesService.instance.getMyVerification();
-        verified = info.verified;
-        await prefs.setBool('user_verified', verified);
+        if (info.verified) {
+          verified = true;
+          await prefs.setBool('user_verified', true);
+          if (info.realNameMasked.isNotEmpty) {
+            await prefs.setString('user_verified_name', info.realNameMasked);
+          }
+        }
       } catch (_) {}
     } else {
       verified = false;
@@ -1178,16 +1270,23 @@ class _PostBlockState extends State<PostBlock> {
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
-    // 双重兜底：即使上层传了错误的 ownerUserId，只要 currentUser 有效，
-    // 就确保自己的帖子永远不显示「关注」按钮。
-    final isSelf = me != null && widget.ownerUserId == me.id;
+    final cachedUid = AuthService.instance.cachedUserId;
+    // 三重兜底：
+    // 1) 上层通过 showFollowButton 参数控制（如我的主页帖子 Tab 直接传 false）；
+    // 2) currentUser 有效时，用 ownerUserId == me.id 判断；
+    // 3) 会话恢复竞态窗口 currentUser 暂为 null 时，用本地缓存的 cachedUserId 判断。
+    // 三种方式任一命中即判定为自己的内容，永远不显示「关注」按钮。
+    final isSelf = (me != null && widget.ownerUserId == me.id) ||
+        (cachedUid != null && widget.ownerUserId == cachedUid);
     final showMore = !isSelf &&
         me != null &&
         widget.ownerUserId != null &&
-        widget.ownerUserId != me.id;
-    final canManage = me != null &&
+        widget.ownerUserId!.isNotEmpty;
+    // 使用 isSelf（含 cachedUid 兜底）判断，避免会话恢复竞态时 me 为 null
+    // 导致自己的帖子显示屏蔽菜单而非编辑/删除/置顶菜单。
+    final canManage = isSelf &&
         widget.ownerUserId != null &&
-        widget.ownerUserId == me.id &&
+        widget.ownerUserId!.isNotEmpty &&
         widget.noteId != null &&
         (widget.onTogglePin != null ||
             widget.onEdit != null ||
@@ -1752,7 +1851,11 @@ class PostFeedRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final note = this.note;
     final me = AuthService.instance.currentUser.value;
-    final isMine = me != null && note.ownerUserId == me.id;
+    final cachedUid = AuthService.instance.cachedUserId;
+    // 与 PostBlock.isSelf 一致的三重兜底：会话恢复竞态时 me 可能为 null，
+    // 用 cachedUserId 判断确保自己的帖子在喜欢/书签 Tab 不显示关注按钮。
+    final isMine = (me != null && note.ownerUserId == me.id) ||
+        (cachedUid != null && note.ownerUserId == cachedUid);
     // 回复帖：渲染成连贴样式（原帖在上 + 回复在下 + 头像竖线连接）。
     if (note.repostKind == 'reply') {
       return Padding(
@@ -1774,7 +1877,7 @@ class PostFeedRow extends StatelessWidget {
     }
     return PostBlock(
       ownerUserId: note.ownerUserId,
-      nickname: isMine ? me.displayName : note.authorName,
+      nickname: (isMine && me != null) ? me.displayName : note.authorName,
       account: note.authorAccount,
       authorVerified: note.authorVerified,
       canonRead: note.canonRead,
@@ -1810,7 +1913,9 @@ class PostFeedRow extends StatelessWidget {
 }
 
 /// 四个数据指标行（评论/转发/点赞/阅读），与菩提空间笔记详情页样式一致。
-/// 均匀分布占满整行，第一个图标与昵称/内容左对齐，右侧不留白。
+/// 四个指标均分整行宽度：第一个图标与昵称/内容左对齐，指标间保留固定间隔，
+/// 数字在所在指标格内等比缩小。这样最后一个指标（阅读量）即使上万，
+/// 也不会因为三处固定间隔占位过多而被挤出屏幕右缘。
 Widget buildStatsRow({
   required int commentCount,
   required int repostCount,
@@ -1823,24 +1928,34 @@ Widget buildStatsRow({
 }) {
   return Row(
     children: [
-      statsCell(
-          Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
-          '$commentCount',
-          onTap: onComment),
-      const SizedBox(width: 48),
-      statsCell(
-          Icon(Icons.repeat_rounded, size: 16, color: _textSec), '$repostCount',
-          onTap: onRepost),
-      const SizedBox(width: 48),
-      statsCell(
-          Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-              size: 16, color: liked ? _gold : _textSec),
-          '$likeCount',
-          color: liked ? _gold : null,
-          onTap: onLike),
-      const SizedBox(width: 48),
-      statsCell(Image.asset('assets/images/ic_view.png', width: 16, height: 16),
-          '$viewCount'),
+      Expanded(
+        child: statsCell(
+            Image.asset('assets/images/ic_comment.png', width: 16, height: 16),
+            '$commentCount',
+            onTap: onComment),
+      ),
+      const SizedBox(width: 20),
+      Expanded(
+        child: statsCell(
+            Icon(Icons.repeat_rounded, size: 16, color: _textSec),
+            '$repostCount',
+            onTap: onRepost),
+      ),
+      const SizedBox(width: 20),
+      Expanded(
+        child: statsCell(
+            Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                size: 16, color: liked ? _gold : _textSec),
+            '$likeCount',
+            color: liked ? _gold : null,
+            onTap: onLike),
+      ),
+      const SizedBox(width: 20),
+      Expanded(
+        child: statsCell(
+            Image.asset('assets/images/ic_view.png', width: 16, height: 16),
+            '$viewCount'),
+      ),
     ],
   );
 }
@@ -1915,6 +2030,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   void didUpdateWidget(covariant _MyPostsTab oldWidget) {
     super.didUpdateWidget(oldWidget);
 
+    // didUpdateWidget 中：基于 widget 属性的变化检测保留。
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
     if (widget.reloadNotifier != oldWidget.reloadNotifier) {
       oldWidget.reloadNotifier.removeListener(_onReload);
@@ -1934,17 +2050,28 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     }
 
     // 帖子 = 我发布的帖子 + 我转发（含引用转发）的帖子，不含回复帖。
+    // 注意：此处用实时 AuthService.instance.isLoggedIn 判断，
+    // 避免 reloadNotifier 同步触发时 widget 属性还是旧值导致跳过加载。
     List<PlazaNote> cloudNotes = [];
     bool hasMore = false;
     String? errorText;
-    if (widget.isLoggedIn) {
+    final loggedIn = AuthService.instance.isLoggedIn;
+    // 只展示属于当前真实账号的帖子：降级/匿名会话时服务端可能返回
+    // 共享匿名 uid 名下其他人的帖子（昵称/头像串号），一律过滤掉。
+    final myUid = AuthService.instance.currentUser.value?.id ??
+        AuthService.instance.cachedUserId;
+    if (loggedIn) {
       try {
         await CloudNotesService.instance.refreshLikedNoteIds();
         final (list, more) = await CloudNotesService.instance.getMyNotes(
           page: 1,
           pageSize: _pageSize,
         );
-        cloudNotes = list.where((n) => n.repostKind != 'reply').toList();
+        cloudNotes = list
+            .where((n) =>
+                n.repostKind != 'reply' &&
+                (myUid == null || myUid.isEmpty || n.ownerUserId == myUid))
+            .toList();
         hasMore = more;
       } catch (e) {
         errorText = '云端加载失败';
@@ -2098,6 +2225,13 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       final uid = AuthService.instance.currentUser.value?.id ?? 'local';
       final nickname =
           AuthService.instance.currentUser.value?.displayName ?? '同修';
+      // 本地兜底也要补齐 @账户 / 认证符号 / 阅藏百分比：
+      // 云调用全部失败降级到本地缓存时，帖子卡片才能显示完整作者信息
+      // （否则昵称后 @账户、认证符号、阅藏百分比会消失）。
+      final account = prefs.getString('user_account_name') ?? '';
+      final verified = prefs.getBool('user_verified') ?? false;
+      final canonRead = LocalCanonProgress.read;
+      final canonTotal = LocalCanonProgress.total;
       return list.reversed
           .where((n) => n['shared'] == true)
           .map<PlazaNote>((n) {
@@ -2109,6 +2243,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
           title: n['title']?.toString() ?? '无标题',
           content: n['content']?.toString() ?? '',
           authorName: nickname,
+          authorAccount: account,
+          authorVerified: verified,
+          canonRead: canonRead,
+          canonTotal: canonTotal,
           visibility: 'public',
           status: 'normal',
           likeCount: 0,
@@ -2132,7 +2270,11 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       );
       if (!mounted) return;
       setState(() {
-        _notes.addAll(list.where((n) => n.repostKind != 'reply'));
+        final myUid = AuthService.instance.currentUser.value?.id ??
+            AuthService.instance.cachedUserId;
+        _notes.addAll(list.where((n) =>
+            n.repostKind != 'reply' &&
+            (myUid == null || myUid.isEmpty || n.ownerUserId == myUid)));
         _hasMore = more;
         _page++;
         _loadingMore = false;
@@ -2318,6 +2460,9 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       onEdit: () => _editNote(note),
       onDelete: () => _deleteNote(note),
       onMore: (n) => _showReplyMenu(n),
+      // 我的主页帖子 Tab：全部是自己发布的帖子，显式关闭关注按钮，
+      // 不受会话恢复竞态（currentUser 短暂为 null）影响。
+      showFollowButton: false,
     );
   }
 }
@@ -2358,7 +2503,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   void initState() {
     super.initState();
     _loadPinnedIds();
-    if (widget.isLoggedIn) _load();
+    // initState 时：用实时登录态判断（创建时已是新属性，无过时问题，但统一风格）。
+    if (AuthService.instance.isLoggedIn) _load();
     widget.reloadNotifier.addListener(_onReload);
   }
 
@@ -2370,7 +2516,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
 
   void _onReload() {
     _loadPinnedIds();
-    if (widget.isLoggedIn) _load();
+    // 注意：reloadNotifier 同步触发时 widget 属性可能是旧值，必须用实时 getter 判断。
+    if (AuthService.instance.isLoggedIn) _load();
   }
 
   @override
@@ -2395,23 +2542,57 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     });
     try {
       await CloudNotesService.instance.refreshLikedNoteIds();
-      final (list, more) = await CloudNotesService.instance.getMyNotes(
-        page: 1,
-        pageSize: _pageSize,
-      );
+      // 服务端按 repostKind='reply' 过滤，直接拉取全部回复帖，不再只取前 20 条。
+      // 旧版服务端不识别 repostKind 时返回全部笔记，客户端仍做兜底过滤。
+      // 翻完所有分页确保历史回复全部加载，maxPages 兜底防死循环。
+      var p = 1;
+      var hasMore = true;
+      const maxPages = 100;
+      final collected = <PlazaNote>[];
+      while (p <= maxPages && hasMore) {
+        final (list, more) = await CloudNotesService.instance.getMyNotes(
+          page: p,
+          pageSize: _pageSize,
+          repostKind: 'reply',
+        );
+        // 客户端兜底过滤：旧版服务端未按 repostKind 过滤时仍能正确筛选。
+        // 同时只保留属于当前真实账号的回复（降级/匿名会话串号数据一律过滤）。
+        final myUid = AuthService.instance.currentUser.value?.id ??
+            AuthService.instance.cachedUserId;
+        final repliesInPage = list
+            .where((n) =>
+                n.repostKind == 'reply' &&
+                (myUid == null || myUid.isEmpty || n.ownerUserId == myUid))
+            .toList();
+        if (repliesInPage.isNotEmpty) {
+          debugPrint('[Replies] page=$p found ${repliesInPage.length} replies');
+        }
+        collected.addAll(repliesInPage);
+        hasMore = more;
+        if (!hasMore) break;
+        p++;
+      }
+      debugPrint('[Replies] _load done: total collected=${collected.length}, lastPage=$p, hasMore=$hasMore');
       if (!mounted) return;
       setState(() {
-        _replies.addAll(list.where((n) => n.repostKind == 'reply'));
-        _hasMore = more;
-        _page = 2;
+        _replies.addAll(collected);
+        _hasMore = hasMore;
+        _page = p + 1;
       });
-      await _buildGroups();
+      try {
+        await _buildGroups();
+      } catch (e, st) {
+        debugPrint('[Replies] _buildGroups error: $e\n$st');
+        if (!mounted) return;
+        setState(() => _error = '分组数据出错，请下拉重试');
+      }
       if (!mounted) return;
       setState(() => _loading = false);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[Replies] _load error: $e\n$st');
       if (!mounted) return;
       setState(() {
-        _error = '加载失败';
+        _error = '加载失败：${e.toString().replaceAll('Exception: ', '')}';
         _loading = false;
       });
     }
@@ -2421,19 +2602,50 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     if (_loadingMore || !_hasMore) return;
     setState(() => _loadingMore = true);
     try {
-      final (list, more) = await CloudNotesService.instance.getMyNotes(
-        page: _page,
-        pageSize: _pageSize,
-      );
+      // 加载更多：服务端已按 repostKind='reply' 过滤，直接翻页即可。
+      // 旧版服务端未过滤时客户端仍做兜底筛选。
+      var p = _page;
+      var hasMore = _hasMore;
+      const maxExtraPages = 50;
+      final collected = <PlazaNote>[];
+      var tried = 0;
+      while (tried < maxExtraPages && hasMore) {
+        final (list, more) = await CloudNotesService.instance.getMyNotes(
+          page: p,
+          pageSize: _pageSize,
+          repostKind: 'reply',
+        );
+        final myUid = AuthService.instance.currentUser.value?.id ??
+            AuthService.instance.cachedUserId;
+        final repliesInPage = list
+            .where((n) =>
+                n.repostKind == 'reply' &&
+                (myUid == null || myUid.isEmpty || n.ownerUserId == myUid))
+            .toList();
+        if (repliesInPage.isNotEmpty) {
+          debugPrint('[Replies] loadMore page=$p found ${repliesInPage.length} replies');
+        }
+        collected.addAll(repliesInPage);
+        hasMore = more;
+        p++;
+        tried++;
+        if (collected.isNotEmpty || !hasMore) break;
+      }
+      debugPrint('[Replies] _loadMore done: collected=${collected.length}, nextPage=$p, hasMore=$hasMore');
       if (!mounted) return;
       setState(() {
-        _replies.addAll(list.where((n) => n.repostKind == 'reply'));
-        _hasMore = more;
-        _page++;
+        _replies.addAll(collected);
+        _hasMore = hasMore;
+        _page = p;
         _loadingMore = false;
       });
-      await _buildGroups();
-    } catch (_) {
+      try {
+        await _buildGroups();
+      } catch (e, st) {
+        debugPrint('[Replies] _buildGroups (loadMore) error: $e\n$st');
+      }
+    } catch (e, st) {
+      debugPrint('[Replies] _loadMore error: $e\n$st');
       if (!mounted) return;
       setState(() => _loadingMore = false);
     }
@@ -2467,21 +2679,50 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       if (!children.containsKey(top)) rootIds.add(top);
       children.putIfAbsent(top, () => []).add(n);
     }
-    // 并行预取各组原贴数据（失败时用已有数据或占位兜底）。
-    final futures = rootIds.map((id) async {
+    // 并行预取各组原贴数据。
+    // 关键修复：若直接按 rootId 取帖失败（典型场景：中间回复 b 被删，
+    // c.repostOf 仍指向 b.id，b 既不在本地也无法从云端拿到），不使用空的
+    // 「同修」占位，而是沿该组第一条回复的 repostOf 链向云端逐级向上查找，
+    // 直到找到存在的根帖子；极端情况下把该回复本身当作根卡片展示（至少
+    // 作者、内容是正确的），避免原贴区域变成空白占位。
+    Future<MapEntry<String, PlazaNote>> resolveRoot(String rootId) async {
       PlazaNote? root;
       try {
-        root = await CloudNotesService.instance.getNoteById(id);
+        root = await CloudNotesService.instance.getNoteById(rootId);
       } catch (_) {
-        root = allById[id];
+        root = allById[rootId];
       }
-      return MapEntry(id, root);
-    });
-    final roots = <String, PlazaNote>{};
-    for (final e in await Future.wait(futures)) {
-      final root = e.value ??
+      if (root != null && (root.ownerUserId.isNotEmpty || root.content.isNotEmpty)) {
+        accountsById[rootId] = root.authorAccount;
+        return MapEntry(rootId, root);
+      }
+      // 本地 + 直接云端都没拿到，走逐级回溯链兜底
+      final list = children[rootId] ?? const <PlazaNote>[];
+      PlazaNote? fallback;
+      for (final reply in list) {
+        if (fallback == null) fallback = reply;
+        var currentId = reply.repostOf;
+        var guard = 0;
+        while (currentId.isNotEmpty && guard < 20) {
+          guard++;
+          try {
+            final n = await CloudNotesService.instance.getNoteById(currentId);
+            if (n.repostKind != 'reply' || n.repostOf.isEmpty) {
+              // 找到真正的根帖子（非 reply 类型或已到顶）
+              accountsById[rootId] = n.authorAccount;
+              return MapEntry(rootId, n);
+            }
+            currentId = n.repostOf;
+          } catch (_) {
+            break;
+          }
+        }
+      }
+      // 整条链都拿不到，就用该组第一条回复当作展示的「根」，
+      // 至少作者头像/昵称/内容是真实的，不会显示空的"同修"占位。
+      final fallbackRoot = fallback ??
           PlazaNote(
-            id: e.key,
+            id: rootId,
             ownerUserId: '',
             title: '',
             content: '',
@@ -2493,8 +2734,14 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             createdAt: 0,
             updatedAt: 0,
           );
-      roots[e.key] = root;
-      accountsById[e.key] = root.authorAccount;
+      accountsById[rootId] = fallbackRoot.authorAccount;
+      return MapEntry(rootId, fallbackRoot);
+    }
+
+    final futures = rootIds.map((id) => resolveRoot(id));
+    final roots = <String, PlazaNote>{};
+    for (final e in await Future.wait(futures)) {
+      roots[e.key] = e.value;
     }
     final groups = <(PlazaNote, List<PlazaNote>)>[];
     for (final id in rootIds) {
@@ -2613,6 +2860,9 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       if (!mounted) return;
       setState(() => _replies.removeWhere((n) => n.id == note.id));
       showPostToast(context, '已删除');
+      // 删除后立即重建分组，避免"切换页面才消失"；
+      // 同时 _buildGroups 内的兜底逻辑会修复被删中间回复导致的原贴占位问题。
+      await _buildGroups();
     } catch (e) {
       if (mounted) showPostToast(context, e.toString());
     }
@@ -2904,6 +3154,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               onEdit: () => _editNote(root),
               onDelete: () => _deleteNote(root),
               onMore: (n) => _showReplyMenu(n),
+              // 回复 Tab 只展示我回复过的帖子，原贴无需显示关注按钮。
+              showFollowButton: false,
             ),
           ],
         ),
@@ -3068,7 +3320,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
   @override
   void initState() {
     super.initState();
-    if (widget.isLoggedIn) _load();
+    if (AuthService.instance.isLoggedIn) _load();
     widget.reloadNotifier.addListener(_onReload);
   }
 
@@ -3079,12 +3331,14 @@ class _MyLikesTabState extends State<_MyLikesTab> {
   }
 
   void _onReload() {
-    if (widget.isLoggedIn) _load();
+    // reloadNotifier 同步触发时 widget 属性可能是旧值，必须用实时 getter。
+    if (AuthService.instance.isLoggedIn) _load();
   }
 
   @override
   void didUpdateWidget(covariant _MyLikesTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // didUpdateWidget：widget 属性变化检测保留。
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
     if (widget.reloadNotifier != oldWidget.reloadNotifier) {
       oldWidget.reloadNotifier.removeListener(_onReload);
@@ -3097,6 +3351,15 @@ class _MyLikesTabState extends State<_MyLikesTab> {
       _loading = true;
       _error = null;
     });
+    // 先校验登录态：避免 widget 属性过时导致误判。
+    if (!AuthService.instance.isLoggedIn) {
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _loading = false;
+      });
+      return;
+    }
     try {
       final notes = await CloudNotesService.instance.getLikedNotes();
       // 喜欢 Tab 里的帖子全部是已点赞的，写入点赞记录让爱心显示为填充色。
@@ -3106,11 +3369,12 @@ class _MyLikesTabState extends State<_MyLikesTab> {
         _notes = notes;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[Likes] _load error: $e\n$st');
       if (!mounted) return;
       setState(() {
         _notes = [];
-        _error = '加载失败';
+        _error = '加载失败：${e.toString().replaceAll('Exception: ', '')}';
         _loading = false;
       });
     }
@@ -3138,7 +3402,12 @@ class _MyLikesTabState extends State<_MyLikesTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  return PostFeedRow(note: note, onReplyPosted: _load);
+                  return PostFeedRow(
+                    note: note,
+                    onReplyPosted: _load,
+                    // 喜欢 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                    showFollowButton: false,
+                  );
                 },
                 childCount: _notes!.length,
               ),
@@ -3211,7 +3480,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
   @override
   void initState() {
     super.initState();
-    if (widget.isLoggedIn) _load();
+    if (AuthService.instance.isLoggedIn) _load();
     widget.reloadNotifier.addListener(_onReload);
   }
 
@@ -3222,12 +3491,14 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
   }
 
   void _onReload() {
-    if (widget.isLoggedIn) _load();
+    // reloadNotifier 同步触发时 widget 属性可能是旧值，必须用实时 getter。
+    if (AuthService.instance.isLoggedIn) _load();
   }
 
   @override
   void didUpdateWidget(covariant _MyBookmarksTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // didUpdateWidget：widget 属性变化检测保留。
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
     if (widget.reloadNotifier != oldWidget.reloadNotifier) {
       oldWidget.reloadNotifier.removeListener(_onReload);
@@ -3240,6 +3511,15 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
       _loading = true;
       _error = null;
     });
+    // 先校验登录态：避免 widget 属性过时导致误判。
+    if (!AuthService.instance.isLoggedIn) {
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _loading = false;
+      });
+      return;
+    }
     try {
       final notes = await CloudNotesService.instance.getFavoriteNotes();
       if (!mounted) return;
@@ -3247,11 +3527,12 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
         _notes = notes;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[Bookmarks] _load error: $e\n$st');
       if (!mounted) return;
       setState(() {
         _notes = [];
-        _error = '加载失败';
+        _error = '加载失败：${e.toString().replaceAll('Exception: ', '')}';
         _loading = false;
       });
     }
@@ -3279,7 +3560,12 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final note = _notes![index];
-                  return PostFeedRow(note: note, onReplyPosted: _load);
+                  return PostFeedRow(
+                    note: note,
+                    onReplyPosted: _load,
+                    // 书签 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                    showFollowButton: false,
+                  );
                 },
                 childCount: _notes!.length,
               ),

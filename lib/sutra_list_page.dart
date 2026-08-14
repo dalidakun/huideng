@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/foundation.dart'
     show kIsWeb, ValueListenable;
 import 'package:flutter/services.dart';
@@ -166,6 +167,11 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 「换一部」轮换选中的部类（保持稳定，避免每次重建都换）。
   String? _randomFolder;
+
+  /// 随机经部区块的 GlobalKey，用于测量其滚动位置以决定「回到经部」按钮的显隐与目标偏移。
+  final GlobalKey _randomFolderKey = GlobalKey();
+  /// 「回到经部」浮动按钮是否显示：仅当随机经部上方内容全部滚出视口后才显示。
+  bool _showScrollToFolderButton = false;
 
   /// 从全部部类（56 部）中随机抽取一部，尽量不与当前重复。
   String? _rollRandomFolder() {
@@ -333,6 +339,7 @@ class SutraListPageState extends State<SutraListPage>
     if (_drawerOpen) _closeDrawer();
     setState(() {
       _searchActive = true;
+      _showScrollToFolderButton = false;
     });
     widget.onSearchModeChanged?.call(true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -349,6 +356,10 @@ class SutraListPageState extends State<SutraListPage>
       _searchActive = false;
     });
     _dismissKeyboard();
+    // 退出搜索后滚动视图重建、位置归零，需重新评估按钮显隐。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _updateScrollToFolderButton();
+    });
   }
 
   /// 页内清空按钮：退出搜索激活状态并通知主页面。
@@ -360,6 +371,10 @@ class SutraListPageState extends State<SutraListPage>
     });
     widget.onSearchModeChanged?.call(false);
     _dismissKeyboard();
+    // 退出搜索后滚动视图重建、位置归零，需重新评估按钮显隐。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _updateScrollToFolderButton();
+    });
   }
 
   String _resolveSutraPath(Sutra sutra) {
@@ -796,6 +811,7 @@ class SutraListPageState extends State<SutraListPage>
     _loadDownloadedIds();
     AuthService.instance.currentUser.addListener(_onAuthChanged);
     widget.activeTab?.addListener(_onActiveTabChanged);    _searchController.addListener(_filterSutras);
+    _scrollController.addListener(_onScroll);
     _drawerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 320),
@@ -834,12 +850,84 @@ class SutraListPageState extends State<SutraListPage>
     _loadDownloadedIds();
   }
 
+  /// 滚动监听：根据随机经部区块相对视口的位置，决定「回到经部」按钮的显隐。
+  void _onScroll() {
+    _updateScrollToFolderButton();
+  }
+
+  /// 重新计算「回到经部」按钮是否应显示。
+  /// 仅当随机经部区块顶部已滚出视口（上方内容全部被遮盖）时才显示。
+  void _updateScrollToFolderButton() {
+    if (!_scrollController.hasClients) {
+      if (_showScrollToFolderButton) {
+        setState(() => _showScrollToFolderButton = false);
+      }
+      return;
+    }
+    if (_randomFolder == null) {
+      if (_showScrollToFolderButton) {
+        setState(() => _showScrollToFolderButton = false);
+      }
+      return;
+    }
+    final ctx = _randomFolderKey.currentContext;
+    if (ctx == null) return;
+    final renderObject = ctx.findRenderObject();
+    if (renderObject == null) return;
+    final viewport = RenderAbstractViewport.of(renderObject);
+    final targetOffset = viewport.getOffsetToReveal(renderObject, 0.0).offset;
+    final shouldShow = _scrollController.offset >= targetOffset - 1.0;
+    if (shouldShow != _showScrollToFolderButton) {
+      setState(() => _showScrollToFolderButton = shouldShow);
+    }
+  }
+
+  /// 点击「回到经部」按钮：平滑滚动到随机经部区块顶部。
+  void _scrollToRandomFolder() {
+    if (!_scrollController.hasClients) return;
+    final ctx = _randomFolderKey.currentContext;
+    if (ctx == null) return;
+    final renderObject = ctx.findRenderObject();
+    if (renderObject == null) return;
+    final viewport = RenderAbstractViewport.of(renderObject);
+    final targetOffset = viewport.getOffsetToReveal(renderObject, 0.0).offset;
+    _scrollController.animateTo(
+      targetOffset,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// 「回到经部」浮动按钮：圆形底色 + 上箭头，与页面暖色调协调。
+  Widget _buildScrollToFolderButton() {
+    return Material(
+      color: const Color(0xFFD4A06A),
+      shape: const CircleBorder(),
+      elevation: 3,
+      shadowColor: const Color(0xFF5d4037).withValues(alpha: 0.3),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: _scrollToRandomFolder,
+        child: const SizedBox(
+          width: 44,
+          height: 44,
+          child: Icon(
+            Icons.keyboard_arrow_up,
+            color: Colors.white,
+            size: 26,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     widget.activeTab?.removeListener(_onActiveTabChanged);
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
     routeObserver.unsubscribe(this);
     _drawerController.dispose();
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -2091,6 +2179,7 @@ class SutraListPageState extends State<SutraListPage>
     final sutras = _getAllSutrasInFolder(folder);
     final name = _folderDisplayNames[folder] ?? folder;
     return Container(
+      key: _randomFolderKey,
       decoration: BoxDecoration(
         color: const Color(0xFFFFFAF5),
         borderRadius: BorderRadius.circular(12),
@@ -2742,6 +2831,13 @@ class SutraListPageState extends State<SutraListPage>
             ],
           ),
         ),
+        // 「回到经部」浮动按钮：随机经部上方内容全部滚出视口后显示。
+        if (_showScrollToFolderButton && !_searchActive && !_drawerOpen)
+          Positioned(
+            bottom: MediaQuery.of(context).padding.bottom + 16,
+            right: 16,
+            child: _buildScrollToFolderButton(),
+          ),
         Positioned.fill(
           child: IgnorePointer(
             ignoring: !_drawerOpen,

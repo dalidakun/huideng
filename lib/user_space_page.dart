@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -51,6 +52,20 @@ class _UserSpacePageState extends State<UserSpacePage> {
   bool _hasMore = true;
   bool _loading = true;
   bool _loadingMore = false;
+
+  /// 置顶帖/回复的 id 集合（与「我的」页/笔记详情页共用同一份本地记录）。
+  final Set<String> _pinnedIds = {};
+  static const String _pinnedKey = 'my_pinned_note_ids';
+
+  /// 是否自己的内容：优先用 currentUser，会话恢复竞态窗口（currentUser 暂为 null）
+  /// 时用本地缓存 uid 兜底，避免自己的帖子误显示「关注/屏蔽」菜单。
+  bool _isOwn(String? ownerUserId) {
+    if (ownerUserId == null || ownerUserId.isEmpty) return false;
+    final me = AuthService.instance.currentUser.value;
+    if (me != null && ownerUserId == me.id) return true;
+    final cachedUid = AuthService.instance.cachedUserId;
+    return cachedUid != null && ownerUserId == cachedUid;
+  }
   String _profileTagline = '';
   int _profileJoinTime = 0;
   String _profileAccount = '';
@@ -93,6 +108,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
   /// 是否已屏蔽对方。
   bool get _isBlocked =>
       CloudNotesService.instance.blockedUserIds.contains(widget.userId);
+
+  /// 关注态是否可信：refreshFollowStates 刷新失败（登录失效）时为 false，
+  /// 此时不能按本地旧集合显示「关注/已关注」，必须提示登录已失效。
+  bool _followStateOk = true;
 
   /// 是否查看的是自己的主页。
   bool get _isSelf =>
@@ -219,7 +238,41 @@ class _UserSpacePageState extends State<UserSpacePage> {
   @override
   void initState() {
     super.initState();
+    _loadPinnedIds();
     _load();
+  }
+
+  /// 从本地读取置顶帖/回复 id 列表（与「我的」页共用同一份记录）。
+  Future<void> _loadPinnedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _pinnedIds
+          ..clear()
+          ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
+      });
+    } catch (_) {}
+  }
+
+  /// 置顶/取消置顶（本地保存，重启后仍生效）。
+  Future<void> _togglePin(PlazaNote note) async {
+    final wasPinned = _pinnedIds.contains(note.id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_pinnedKey) ?? [];
+      if (wasPinned) {
+        list.remove(note.id);
+        _pinnedIds.remove(note.id);
+      } else {
+        list.add(note.id);
+        _pinnedIds.add(note.id);
+      }
+      await prefs.setStringList(_pinnedKey, list);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {});
+    _showToast(context, wasPinned ? '已取消置顶' : '已置顶');
   }
 
   Future<void> _load() async {
@@ -234,8 +287,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
       String avatar = '';
       String banner = '';
       try {
-        final profiles =
-            await CloudNotesService.instance.getUserProfiles([widget.userId]);
+        final profiles = await CloudNotesService.instance
+            .getUserProfiles([widget.userId],
+                timeout: const Duration(seconds: 25));
         if (profiles.isNotEmpty) {
           tagline = profiles.first.tagline;
           joinTime = profiles.first.joinTime;
@@ -281,50 +335,135 @@ class _UserSpacePageState extends State<UserSpacePage> {
       _page = 0;
     });
     try {
-      final (list, hasMore) =
-          await CloudNotesService.instance.getUserNotes(widget.userId, page: 1);
-      // 签名/加入时间：查看自己主页时用本地数据；他人用 getUserProfiles。
+      // 进入他人主页前先刷新关注/屏蔽列表，避免 _following 读到旧值误显「关注」。
+      // 自己主页同样刷新（首屏头部也要用关注数）。
+      try {
+        final followOk =
+            await CloudNotesService.instance.refreshFollowStates();
+        if (!mounted) return;
+        _followStateOk = followOk;
+      } catch (_) {
+        if (mounted) _followStateOk = false;
+      }
+      // 用刷新后的最新列表重算关注态：_following 字段在 State 创建时已用旧值初始化，
+      // 不在这里重算的话，刷新结果永远不生效，已关注的用户仍会误显「关注」按钮。
+      // 刷新失败（登录失效）时不能信任旧集合，保持 _followStateOk=false 并提示。
+      if (_followStateOk) {
+        _following =
+            CloudNotesService.instance.followingUserIds.contains(widget.userId);
+      }
+      final me = AuthService.instance.currentUser.value;
+      final bool isSelf = me != null && me.id == widget.userId;
+      final prefs = isSelf ? await SharedPreferences.getInstance() : null;
+
+      // ── 自己主页：先读本地做兜底值，然后和「全量笔记加载」并行启动
+      //    权威字段请求（getUserProfiles + getMyVerification），
+      //    请求完成后首屏直接用权威值渲染，不再"先显示昨天再跳正确值"。
+      //    同时权威值立即写回本地 prefs，修复旧版本污染。
       String tagline = '';
       int joinTime = 0;
       String account = '';
       bool verified = false;
-      // 昵称/头像/横幅：自己用本地 prefs（头像由 UserAvatar 按 userId 读取路径）；
-      // 他人用 getUserProfiles 返回的 name/avatar/banner。
       String name = '';
       String avatar = '';
       String banner = '';
-      // 阅藏进度：自己用本地实时统计，他人用云端 canonRead/canonTotal。
       int canonRead = 0;
       int canonTotal = 0;
-      // 读经时长（徽章点亮依据）：自己用本地实时数据，他人用云端 readingSeconds。
       int readingSeconds = 0;
-      final me = AuthService.instance.currentUser.value;
-      if (me != null && me.id == widget.userId) {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          tagline = prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
-          joinTime = prefs.getInt('user_created_at') ?? 0;
-          account = prefs.getString('user_account_name') ?? '';
-          verified = prefs.getBool('user_verified') ?? false;
-          name = prefs.getString('user_nickname') ?? '';
-          final bannerPath = prefs.getString('user_banner_path');
-          if (bannerPath != null &&
-              bannerPath.isNotEmpty &&
-              File(bannerPath).existsSync()) {
-            try {
-              banner = base64Encode(await File(bannerPath).readAsBytes());
-            } catch (_) {}
-          }
-        } catch (_) {}
+      UserProfile? selfCloudProfile;
+      VerificationInfo? selfVerification;
+      if (isSelf && prefs != null) {
+        // 读本地先填充兜底
+        tagline = prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
+        joinTime = prefs.getInt('user_created_at') ?? 0;
+        account = prefs.getString('user_account_name') ?? '';
+        verified = prefs.getBool('user_verified') ?? false;
+        name = prefs.getString('user_nickname') ?? '';
+        final bannerPath = prefs.getString('user_banner_path');
+        if (bannerPath != null &&
+            bannerPath.isNotEmpty &&
+            File(bannerPath).existsSync()) {
+          try {
+            banner = base64Encode(await File(bannerPath).readAsBytes());
+          } catch (_) {}
+        }
         await LocalCanonProgress.refresh();
         canonRead = LocalCanonProgress.read;
         canonTotal = LocalCanonProgress.total;
         await ReadingTimeService.instance.ensureLoaded();
         readingSeconds = ReadingTimeService.instance.totalSeconds.value;
-      } else {
+        // 同时并行拉权威字段（不阻塞本地兜底值，但首屏渲染前等待它，用权威值覆盖）
         try {
-          final profiles =
-              await CloudNotesService.instance.getUserProfiles([widget.userId]);
+          final profF = CloudNotesService.instance.getUserProfiles([me.id]);
+          final verF = CloudNotesService.instance.getMyVerification();
+          final results = await Future.wait([
+            profF,
+            Future<VerificationInfo?>.delayed(
+              Duration.zero,
+              () async {
+                try {
+                  return await verF;
+                } catch (_) {
+                  return null;
+                }
+              },
+            ),
+          ]);
+          final profiles = results[0] as List<UserProfile>;
+          if (profiles.isNotEmpty) selfCloudProfile = profiles.first;
+          selfVerification = results[1] as VerificationInfo?;
+        } catch (_) {
+          selfCloudProfile = null;
+          selfVerification = null;
+        }
+        // ★ 权威字段优先：覆盖所有本地兜底值，立刻写回本地 prefs
+        if (selfCloudProfile != null) {
+          final UserProfile p = selfCloudProfile;
+          if (p.joinTime > 0) {
+            final local = prefs.getInt('user_created_at');
+            if (local == null || local != p.joinTime) {
+              await prefs.setInt('user_created_at', p.joinTime);
+            }
+            joinTime = p.joinTime;
+          }
+          if (p.account.isNotEmpty) {
+            final local = prefs.getString('user_account_name') ?? '';
+            if (local != p.account) {
+              await prefs.setString('user_account_name', p.account);
+            }
+            account = p.account;
+          }
+          if (p.name.isNotEmpty) {
+            final local = prefs.getString('user_nickname') ?? '';
+            if (local != p.name) {
+              await prefs.setString('user_nickname', p.name);
+            }
+            name = p.name;
+          }
+          // verified 先按 getUserProfiles 覆盖 true（若本地为 false）
+          if (p.verified && !verified) verified = true;
+        }
+        // verified 以 getMyVerification 为最高权威
+        if (selfVerification != null) {
+          final VerificationInfo v = selfVerification;
+          final localVer = prefs.getBool('user_verified') ?? false;
+          if (localVer != v.verified) {
+            await prefs.setBool('user_verified', v.verified);
+          }
+          verified = v.verified;
+          if (v.realNameMasked.isNotEmpty) {
+            final local = prefs.getString('user_verified_name') ?? '';
+            if (local != v.realNameMasked) {
+              await prefs.setString('user_verified_name', v.realNameMasked);
+            }
+          }
+        }
+      } else {
+        // 他人主页：正常 getUserProfiles + 笔记兜底
+        try {
+          final profiles = await CloudNotesService.instance
+              .getUserProfiles([widget.userId],
+                  timeout: const Duration(seconds: 25));
           if (profiles.isNotEmpty) {
             tagline = profiles.first.tagline;
             joinTime = profiles.first.joinTime;
@@ -339,11 +478,29 @@ class _UserSpacePageState extends State<UserSpacePage> {
           }
         } catch (_) {}
       }
+
+      // 自动翻页加载全部笔记（最多 50 页兜底）：
+      // 修复「回复只显示昨天的」——默认第 1 页只有 20 条，
+      // 若昨天回复较多占满第 1 页，更早的历史回复会被永远卡在后续页
+      // 等待滚动到底触发 loadMore，但用户通常看不到更远的历史。
+      const maxPages = 50;
+      var p = 1;
+      var hasMore = true;
+      final allNotes = <PlazaNote>[];
+      while (p <= maxPages && hasMore) {
+        final (list, more) =
+            await CloudNotesService.instance.getUserNotes(widget.userId, page: p);
+        allNotes.addAll(list);
+        hasMore = more;
+        if (!hasMore) break;
+        p++;
+      }
+
       if (!mounted) return;
       setState(() {
         _notes
           ..clear()
-          ..addAll(list);
+          ..addAll(allNotes);
         _profileName = name;
         _profileTagline = tagline;
         _profileJoinTime = joinTime;
@@ -354,7 +511,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
         _profileCanonRead = canonRead;
         _profileCanonTotal = canonTotal;
         _profileReadingSeconds = readingSeconds;
-        _page = 1;
+        _page = p;
         _hasMore = hasMore;
         _loading = false;
       });
@@ -532,19 +689,25 @@ class _UserSpacePageState extends State<UserSpacePage> {
                       ),
                     ),
                     // 关注按钮：位于三个点点右侧（他人主页才显示）。
+                    // 关注态刷新失败（登录失效）时，不能按旧值误显「关注/已关注」，
+                    // 改成灰色的「登录失效」按钮：点按提示重新登录。
                     if (!isSelf) ...[
                       const SizedBox(width: 8),
                       GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: _toggleFollow,
+                        onTap: _followStateOk
+                            ? _toggleFollow
+                            : () => _showToast(context, kLoginExpiredMessage),
                         child: Container(
                           height: _rowBtnSize,
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: following
-                                ? const Color(0xFFECE9E4)
-                                : const Color(0xFF70867A),
+                            color: _followStateOk
+                                ? (following
+                                    ? const Color(0xFFECE9E4)
+                                    : const Color(0xFF70867A))
+                                : const Color(0xFFC9C4BC),
                             borderRadius:
                                 BorderRadius.circular(_rowBtnSize / 2),
                             boxShadow: [
@@ -554,11 +717,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
                                   offset: const Offset(0, 1)),
                             ],
                           ),
-                          child: Text(following ? '已关注' : '关注',
+                          child: Text(
+                              _followStateOk
+                                  ? (following ? '已关注' : '关注')
+                                  : '登录失效',
                               style: TextStyle(
                                   fontSize: 12,
-                                  color: following
-                                      ? const Color(0xFF8C8C8C)
+                                  color: _followStateOk
+                                      ? (following
+                                          ? const Color(0xFF5A5A5A)
+                                          : Colors.white)
                                       : Colors.white,
                                   fontWeight: FontWeight.w600)),
                         ),
@@ -751,8 +919,17 @@ class _UserSpacePageState extends State<UserSpacePage> {
       _notes.where((n) => n.repostKind == 'reply').toList();
 
   /// 帖子 Tab：自己的帖子 + 转发（引用转发），与「我的菜单页 → 帖子」同款样式。
+  /// 自己主页的置顶帖子排在最前；他人主页保持服务端顺序。
   Widget _buildPostsTab() {
-    final posts = _posts;
+    final posts = List<PlazaNote>.of(_posts);
+    if (_isOwn(widget.userId)) {
+      posts.sort((a, b) {
+        final ap = _pinnedIds.contains(a.id);
+        final bp = _pinnedIds.contains(b.id);
+        if (ap != bp) return ap ? -1 : 1;
+        return 0;
+      });
+    }
     if (posts.isEmpty) {
       return const Center(
         child: Text('还没有帖子', style: TextStyle(fontSize: 14, color: _textHint)),
@@ -1375,39 +1552,73 @@ class _UserSpacePageState extends State<UserSpacePage> {
     ];
   }
 
-  /// 按最顶层原贴分组：非回复为根，回复（含回复的回复）递归挂到父帖下。
+  /// 按最顶层原贴分组：沿 repostOf 逐级向上找到根，根优先取「非回复类型的原贴」。
+  /// 关键修复：父子关系查找使用全量 _notes（含帖子 + 回复）作为池，而不是只在
+  /// replies 参数（只有 reply 类型）里查。对于 a→b→c 多级回复链，即使中间回复 b
+  /// 被本地移除，只要原贴 a 仍在 _notes 中，就能正确把 c 挂到 a 下面，避免
+  /// c 误被当作 root 然后渲染成「空占位同修 + 空内容」的原贴卡片。
   List<(PlazaNote, List<PlazaNote>)> _buildReplyGroups(
       List<PlazaNote> replies) {
-    final byId = {for (final n in replies) n.id: n};
-    final children = <String, List<PlazaNote>>{};
-    final roots = <PlazaNote>[];
+    // 全量池：包含 _notes 中所有帖子 + 回复，用于 repostOf 逐级回溯
+    final poolById = {for (final n in _notes) n.id: n};
     for (final n in replies) {
-      if (byId.containsKey(n.repostOf)) {
-        children.putIfAbsent(n.repostOf, () => []).add(n);
-      } else {
-        roots.add(n);
-      }
+      poolById[n.id] = n;
     }
-    List<PlazaNote> collect(PlazaNote node) {
-      final subs = children[node.id] ?? const <PlazaNote>[];
-      return [
-        for (final c in subs) c,
-        for (final c in subs) ...collect(c),
-      ];
+    final children = <String, List<PlazaNote>>{};
+    final rootIds = <String>[];
+    for (final n in replies) {
+      var topId = n.repostOf;
+      var guard = 0;
+      // 在全量池内沿 repostOf 逐级向上回溯到最顶
+      while (topId.isNotEmpty && poolById.containsKey(topId) && guard < 30) {
+        final parent = poolById[topId]!;
+        // 父节点还有 repostOf 且池中能查到，继续向上
+        if (parent.repostOf.isNotEmpty && poolById.containsKey(parent.repostOf)) {
+          topId = parent.repostOf;
+        } else {
+          break;
+        }
+        guard++;
+      }
+      // 如果顶部 id 不在池中（对应中间回复已被删除 / 原贴不属于当前用户），
+      // 退而求其次：用这条回复自己作为 root，并交给渲染层的 ReplyThread
+      // 通过云端异步查找缺失的父节点。
+      if (topId.isEmpty || !poolById.containsKey(topId)) {
+        topId = n.id;
+      }
+      if (!children.containsKey(topId)) {
+        rootIds.add(topId);
+      }
+      children.putIfAbsent(topId, () => []).add(n);
+    }
+
+    List<PlazaNote> collect(String nodeId, Set<String> visited) {
+      if (visited.contains(nodeId)) return const <PlazaNote>[];
+      visited.add(nodeId);
+      final subs = children[nodeId] ?? const <PlazaNote>[];
+      final out = <PlazaNote>[];
+      for (final c in subs) {
+        out.add(c);
+        out.addAll(collect(c.id, visited));
+      }
+      return out;
     }
 
     return [
-      for (final r in roots) (r, collect(r)),
+      for (final rid in rootIds)
+        (poolById[rid] ?? replies.firstWhere((r) => r.id == rid),
+         collect(rid, {}))
     ];
   }
 
   Widget _buildNoteRow(PlazaNote note, List<PlazaNote> all) {
-    final me = AuthService.instance.currentUser.value;
-    final isMine = me != null && note.ownerUserId == me.id;
+    final isMine = _isOwn(note.ownerUserId);
     return PostFeedRow(
       note: note,
       onReplyPosted: _load,
       onTap: () => _openNote(note),
+      pinned: _pinnedIds.contains(note.id),
+      onTogglePin: isMine ? () => _togglePin(note) : null,
       onEdit: isMine ? () => _editOwnNote(note) : null,
       onDelete: isMine ? () => _deleteOwnNote(note) : null,
       onMore: (n) => _showNoteMenu(n),
@@ -1444,6 +1655,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
         ),
         ReplyChain(
           replies: replies,
+          pinnedIds: _pinnedIds,
           parentAccounts: {
             root.id: root.authorAccount,
             for (final r in replies) r.id: r.authorAccount,
@@ -1457,10 +1669,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
     );
   }
 
-  /// 笔记三点菜单：自己的显示编辑/删除，他人显示关注/屏蔽。
+  /// 笔记三点菜单：自己的显示置顶/编辑/删除，他人显示关注/屏蔽。
   Future<void> _showNoteMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || note.ownerUserId != me.id) {
+    if (!_isOwn(note.ownerUserId)) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
         // 屏蔽/关注后刷新，让被屏蔽用户的主页立即变为「已屏蔽」占位。
@@ -1468,6 +1680,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       }
       return;
     }
+    final pinned = _pinnedIds.contains(note.id);
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: _card,
@@ -1484,6 +1697,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             const Divider(height: 1, color: _border),
+            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
+                pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -1492,7 +1707,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
       ),
     );
     if (choice == null || !mounted) return;
-    if (choice == 'edit') {
+    if (choice == 'pin') {
+      await _togglePin(note);
+    } else if (choice == 'edit') {
       _editOwnNote(note);
     } else if (choice == 'delete') {
       _deleteOwnNote(note);
@@ -1557,8 +1774,13 @@ class _UserSpacePageState extends State<UserSpacePage> {
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
       if (!mounted) return;
+      // 先乐观移除，让界面立即响应删除动作。
+      // 然后调用 _load() 从云端重新拉取全量笔记——对「回复的回复」多级链，
+      // 本地简单 remove 无法正确修复分组根节点（中间回复删后，原贴a会找不到），
+      // 必须通过云端最新数据重建才能保证 a 正常显示、子回复归组正确。
       setState(() => _notes.removeWhere((n) => n.id == note.id));
       _showToast(context, '已删除');
+      await _load();
     } catch (e) {
       if (mounted) _showToast(context, e.toString());
     }

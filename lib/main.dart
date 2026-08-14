@@ -18,6 +18,7 @@ import 'auth_service.dart';
 import 'sync_service.dart';
 import 'notification_service.dart';
 import 'notification_center.dart';
+import 'user_avatar_cache.dart';
 import 'update_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -28,7 +29,8 @@ bool _errorDialogShown = false;
 void _installErrorHandler() {
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    _showErrorReport(details.exceptionAsString(), details.stack?.toString() ?? '');
+    _showErrorReport(
+        details.exceptionAsString(), details.stack?.toString() ?? '');
   };
   PlatformDispatcher.instance.onError = (error, stack) {
     _showErrorReport(error.toString(), stack.toString());
@@ -65,8 +67,7 @@ class _ErrorReportPage extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.copy),
-            onPressed: () =>
-                Clipboard.setData(ClipboardData(text: full)),
+            onPressed: () => Clipboard.setData(ClipboardData(text: full)),
           ),
         ],
       ),
@@ -91,6 +92,8 @@ void main() async {
     ),
   );
   _installErrorHandler();
+  // 预加载磁盘缓存的头像到内存（不阻塞启动，下次 request() 即可命中）。
+  unawaited(UserAvatarCache.instance.loadFromDisk());
   runApp(const MyApp());
   // 后台静默恢复登录会话（不阻塞启动，登录态通过 ValueNotifier 广播）。
   unawaited(AuthService.instance.restoreSession());
@@ -98,9 +101,15 @@ void main() async {
   SyncService.instance.init();
   // 本地通知（打卡提醒）初始化与调度恢复。
   unawaited(NotificationService.instance.init());
-  // App 回到前台时重新挂起打卡提醒（国产 ROM 常在后台清掉闹钟任务）。
+  // App 回到前台时重新挂起打卡提醒（国产 ROM 常在后台清掉闹钟任务），
+  // 并先续期登录会话：后台停留超过 2 小时（access token 有效期）回来后
+  // token 已过期，先修复会话再让界面刷新，避免带着过期 token 的云调用
+  // 被网关 401 拦截导致帖子全部加载失败（本地兜底缺作者信息）。
   AppLifecycleListener(
-    onResume: () => NotificationService.instance.onAppResumed(),
+    onResume: () {
+      NotificationService.instance.onAppResumed();
+      unawaited(AuthService.instance.ensureFreshSession());
+    },
   );
 }
 
@@ -125,24 +134,32 @@ class MyApp extends StatelessWidget {
           ],
         );
       },
-      home: WillPopScope(
-        onWillPop: () async {
+      home: PopScope(
+        // 根路由不允许直接 pop（否则系统会直接退出应用）：所有返回意图都
+        // 统一在 onPopInvokedWithResult 里处理（收起面板 → 依次返回 → 最小化）。
+        // 不能用已废弃的 WillPopScope：Android 14+ 预测性返回（targetSdk 34+
+        // 默认开启）下，系统侧滑返回手势不会触发 onWillPop，导致「侧滑无反应」。
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop) return;
           // 圆形助手面板展开时，先收起它而不是退出应用。
           if (assistantReveal.value) {
             assistantReveal.value = false;
-            return false;
+            return;
           }
           // AI 面板展开时，先收起它而不是退出应用。
           if (assistantVisible.value) {
             assistantVisible.value = false;
-            return false;
+            return;
           }
           // 如有可返回的路由（如从主页打开的个人空间页/详情页），先 pop 回上一页，
           // 而不是直接最小化 App。只有在最底层（主页）才执行最小化。
-          final nav = Navigator.of(context);
-          if (nav.canPop()) {
+          // 注意：不能在这里用 Navigator.of(context)——MyApp 的 context 在
+          // MaterialApp 之上，找不到 Navigator 会抛空错误，改用全局 navigatorKey。
+          final nav = navigatorKey.currentState;
+          if (nav != null && nav.canPop()) {
             nav.pop();
-            return false;
+            return;
           }
           // 最小化应用到后台，模拟从底部滑动的行为
           if (Platform.isAndroid) {
@@ -156,7 +173,6 @@ class MyApp extends StatelessWidget {
           } else {
             SystemNavigator.pop();
           }
-          return false;
         },
         child: const _AppEntry(),
       ),
@@ -317,7 +333,7 @@ class _MainPageState extends State<MainPage>
   void _syncAssistantTab() {
     AssistantSession.instance.setTabActive(_currentIndex == 2);
   }
-  
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
@@ -336,12 +352,14 @@ class _MainPageState extends State<MainPage>
     ),
     BottomNavigationBarItem(
       icon: Image.asset('assets/images/search.png', width: 24, height: 24),
-      activeIcon: Image.asset('assets/images/search_selected.png', width: 24, height: 24),
+      activeIcon: Image.asset('assets/images/search_selected.png',
+          width: 24, height: 24),
       label: '',
     ),
     BottomNavigationBarItem(
       icon: Image.asset('assets/images/sutra_book.png', width: 27, height: 27),
-      activeIcon: Image.asset('assets/images/sutra_book_selected.png', width: 27, height: 27),
+      activeIcon: Image.asset('assets/images/sutra_book_selected.png',
+          width: 27, height: 27),
       label: '',
     ),
     BottomNavigationBarItem(
@@ -516,15 +534,15 @@ class _MainPageState extends State<MainPage>
               child: MediaQuery(
                 data: MediaQuery.of(context).copyWith(
                   padding: MediaQuery.of(context).padding.copyWith(
-                    bottom: MediaQuery.of(context).padding.bottom +
-                        _BottomNavBar.heightOnly(context),
-                  ),
+                        bottom: MediaQuery.of(context).padding.bottom +
+                            _BottomNavBar.heightOnly(context),
+                      ),
                   // Scaffold 的 FAB 定位读取的是 viewPadding，需同步加高，
                   // 否则右下角加号按钮会落到菜单栏上重叠。
                   viewPadding: MediaQuery.of(context).viewPadding.copyWith(
-                    bottom: MediaQuery.of(context).viewPadding.bottom +
-                        _BottomNavBar.heightOnly(context),
-                  ),
+                        bottom: MediaQuery.of(context).viewPadding.bottom +
+                            _BottomNavBar.heightOnly(context),
+                      ),
                 ),
                 child: IndexedStack(
                   index: _currentIndex,
@@ -602,9 +620,7 @@ class _BottomNavBar extends StatelessWidget {
                 children: List.generate(items.length, (i) {
                   final selected = i == currentIndex;
                   final item = items[i];
-                  final Widget icon = selected
-                      ? item.activeIcon
-                      : item.icon;
+                  final Widget icon = selected ? item.activeIcon : item.icon;
                   return Expanded(
                     child: InkWell(
                       onTap: () => onTap(i),
@@ -729,7 +745,7 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
         ),
         Positioned(
           top: -6,
-          right: -11,
+          right: -6,
           child: IgnorePointer(
             child: AnimatedOpacity(
               opacity: visible ? 1 : 0,
@@ -977,7 +993,8 @@ class _AssistantRevealOverlay extends StatefulWidget {
   const _AssistantRevealOverlay();
 
   @override
-  State<_AssistantRevealOverlay> createState() => _AssistantRevealOverlayState();
+  State<_AssistantRevealOverlay> createState() =>
+      _AssistantRevealOverlayState();
 }
 
 class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>

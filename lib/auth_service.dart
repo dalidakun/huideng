@@ -64,6 +64,11 @@ class AuthService {
 
   bool get isLoggedIn => currentUser.value != null;
 
+  /// 本地缓存的用户 ID：会话恢复竞态窗口（currentUser 暂为 null）时，
+  /// 用于 UI 层判断「是否是自己的帖子/回复」，避免自己的内容误显示关注按钮。
+  /// 启动时从 SharedPreferences 预载到 _cachedLogin，同步可读，不依赖异步。
+  String? get cachedUserId => currentUser.value?.id ?? _cachedLogin?.id;
+
   /// 本地签名（tagline），CloudBase 不存此字段，保留本地。
   String _localTagline = '燃一盏灯，看见自己，照亮别人。';
 
@@ -92,6 +97,11 @@ class AuthService {
 
   /// 本地登录身份缓存（uid/手机号/昵称）：会话恢复失败时兜底保持登录态。
   AuthUser? _cachedLogin;
+
+  /// 登录态保活定时器：登录期间每 25 分钟主动刷新一次 access token，
+  /// 避免「界面仍显示已登录、实际 token 已过期」的静默失效
+  /// （CloudBase access token 2 小时过期且 SDK 不自动刷新）。
+  Timer? _keepAliveTimer;
 
   static const String _kCachedUid = 'user_login_uid';
   static const String _kCachedPhone = 'user_login_phone';
@@ -127,17 +137,62 @@ class AuthService {
           : CloudBaseAppConfig.accessKey,
     );
     _app = app;
+    _wireSessionSync(app);
     return app;
+  }
+
+  /// 接管 SDK 的会话变更回调，保证本地备份与存储**永远同步**：
+  ///
+  /// SDK 的会话持久化（credentials_[envId]）只有它自己知道，任何路径
+  /// （登录/刷新/清空）写会话时都不通知业务层。如果备份里存的是
+  /// 「已轮换作废的旧 refresh token」（服务端每次刷新都会作废旧 token），
+  /// 一旦存储被删（unauthenticated 清理/清数据），下次恢复就会用旧 RT
+  /// 去刷新 → invalid_grant → 会话永久死亡，必须重新登录——
+  /// 这正是「登录当天一切正常、第二天全部失效」的机械根因。
+  /// 这里在 SDK 持久化之后链式同步备份：备份永远等于存储，不存在旧值。
+  void _wireSessionSync(CloudBase app) {
+    // ignore: invalid_use_of_visible_for_testing_member
+    final prev = app.httpClient.onSessionChanged;
+    // ignore: invalid_use_of_visible_for_testing_member
+    app.httpClient.onSessionChanged = (s) {
+      prev?.call(s);
+      // 清空会话（s == null）时**保留**备份：这是唯一能自愈的凭证副本，
+      // 下次 ensureFreshSession 会先从备份重建会话再尝试刷新。
+      unawaited(_backupSession(s));
+    };
+    // 接管 SDK 的「401 自动刷新」：SDK 在请求被网关 401 时会用**当前会话的
+    // access token** 当 Authorization 头去调 /auth/v1/token——此时该 token
+    // 恰恰已过期/无效，刷新请求的凭证就错了。改用本服务的原生修复刷新
+    // （无 Authorization 头 + refresh_token，官方标准方式，实测有效），
+    // 刷新成功会同时更新存储 + 备份，请求自动重试后恢复。
+    // 去重：并发 401 只执行一次刷新，避免同 refresh token 竞态轮换。
+    Future<void>? tokenRefreshInFlight;
+    // ignore: invalid_use_of_visible_for_testing_member
+    app.httpClient.onTokenRefresh = () {
+      final existing = tokenRefreshInFlight;
+      if (existing != null) return existing;
+      final f = () async {
+        final app2 = await _ensureApp();
+        if (app2 == null) return;
+        await _repairExpiredSession(app2);
+      }();
+      tokenRefreshInFlight = f;
+      f.whenComplete(() => tokenRefreshInFlight = null);
+      return f;
+    };
   }
 
   /// 初始化并返回 CloudBase 实例（供云函数等服务使用），未配置环境时返回 null。
   Future<CloudBase?> ensureApp() => _ensureApp();
 
   /// 当前登录会话的 access token，用于云函数侧校验调用者身份。
-  /// 未登录或取不到时返回 null。
-  /// 刷新失败时同样返回 null——绝不把过期 token 交给云调用，
-  /// 否则请求会被网关判为 unauthenticated、SDK 直接删除本地真实会话，
-  /// 导致下次启动被强制登出、需要重新登录。
+  /// 未登录、取不到或 token 已过期时返回 null。
+  ///
+  /// **绝不把过期 token 交给调用方/云函数**：SDK 会把当前会话的 access token
+  /// 注入到每个请求的 Authorization header，网关对过期 token 直接回
+  /// 401 INVALID_CREDENTIALS，云函数根本不会执行——这就是「登录一段时间后
+  /// 首页/发现/关注帖子全部不显示」的根因。返回 null 后由 _doCall 走恢复
+  /// 或 publishable key 匿名级降级，云函数仍能执行并返回公开数据。
   Future<String?> getAccessToken() async {
     final app = await _ensureApp();
     if (app == null) return null;
@@ -146,20 +201,33 @@ class AuthService {
       final res = await app.auth.getSession();
       if (res.isSuccess && res.data?.session != null) {
         final token = res.data!.session!.accessToken;
-        if (token != null && token.isNotEmpty) return token;
+        if (token != null &&
+            token.isNotEmpty &&
+            !_isTokenExpiredByExp(token)) {
+          return token;
+        }
       }
-      // 刷新失败：返回当前 session 的 token（即使过期也比 null 好——
-      // 云函数网关对过期 token 返回 INVALID_CREDENTIALS 而不是 unauthenticated，
-      // 不会删会话；但不带 token 则返回 MISSING_CREDENTIALS 也不通过。
-      // 所以有过期 token 时至少给云函数一个解析 uid 的机会。）
+      // 会话里的 token 同样要做过期校验：刷新失败时 SDK 可能仍持有过期
+      // session，绝不能把它交出去（否则云调用全部 401 失败）。
       // ignore: invalid_use_of_visible_for_testing_member
       final session = app.httpClient.currentSession;
       final token = session?.accessToken;
-      if (token != null && token.isNotEmpty) return token;
+      if (token != null &&
+          token.isNotEmpty &&
+          !_isTokenExpiredByExp(token)) {
+        return token;
+      }
       return null;
     } catch (_) {
       return null;
     }
+  }
+
+  /// 判断 access token（JWT）是否已过期；解析失败返回 false（不误判）。
+  bool _isTokenExpiredByExp(String token) {
+    final exp = _tokenExpiry(token);
+    if (exp == null) return false;
+    return DateTime.now().isAfter(exp);
   }
 
   /// 确保当前 access token 未过期：临近过期（<10 分钟）或无法确认时主动刷新。
@@ -193,6 +261,9 @@ class AuthService {
       final now = DateTime.now();
       // token 仍有效且距过期 >10 分钟：直接可用，无需刷新。
       if (exp != null && exp.difference(now).inSeconds > 600) {
+        // 会话健康：同步备份最新的 refresh token（服务端每次刷新都轮换），
+        // 防止 SDK 被 unauthenticated 删除持久化会话后丢失唯一刷新凭证。
+        unawaited(_backupSession(session));
         _syncUserFromSession(session);
         return true;
       }
@@ -200,6 +271,7 @@ class AuthService {
       if (exp != null && now.isBefore(exp)) {
         final rr = await app.auth.refreshSession();
         if (rr.isSuccess) {
+          unawaited(_backupSession(rr.data?.session));
           _syncUserFromSession(rr.data?.session);
           return true;
         }
@@ -208,6 +280,7 @@ class AuthService {
         await Future.delayed(const Duration(milliseconds: 1200));
         final rr2 = await app.auth.refreshSession();
         if (rr2.isSuccess) {
+          unawaited(_backupSession(rr2.data?.session));
           _syncUserFromSession(rr2.data?.session);
           return true;
         }
@@ -220,13 +293,102 @@ class AuthService {
       }
       // token 已过期（exp 在过去）：_repairExpiredSession 已尝试合法 header
       // 刷新，到这里说明修复失败。绝不再调 refreshSession()（会带过期 header
-      // 被网关判 unauthenticated 删会话）。保持缓存身份等下次再试。
+      // 被网关判 unauthenticated 删会话）。清空会话让后续云调用回落
+      // publishable key（匿名级）仍能拿到公开数据，并保持缓存身份等下次再试。
       debugPrint('[auth] ensureFreshSession: token 已过期且修复失败，保持缓存身份');
+      await clearSessionIfExpired();
       return false;
     } catch (e) {
       debugPrint('[auth] ensureFreshSession error: $e');
       return false;
     }
+  }
+
+  /// 启动登录态保活：登录期间每 25 分钟主动刷新一次 access token。
+  /// CloudBase access token 2 小时过期且 SDK 不自动刷新；若不主动续期，
+  /// 用户长时间停留在 App 内（或频繁返回前台）时 token 会悄悄过期，
+  /// 界面仍显示已登录，但写操作会被当成匿名用户处理（uid 变 "anon"，
+  /// 评论/回复/@账号 全部丢失）——这是「登录失效但看着还正常」的根源。
+  /// 保活会乘 ensureFreshSession 的刷新锁，不会与业务调用互相干扰。
+  void _startKeepAlive() {
+    _stopKeepAlive();
+    _keepAliveTimer = Timer.periodic(const Duration(minutes: 25), (_) {
+      if (!isLoggedIn) return;
+      unawaited(() async {
+        try {
+          if (!await ensureFreshSession()) {
+            // 主动续期失败：给一次完整恢复机会，仍失败则保持缓存身份，
+            // 下一次云调用里的 tryRestoreOrRefreshSession 会再兜底。
+            await restoreDone;
+            await ensureFreshSession();
+          }
+        } catch (_) {}
+      }());
+    });
+  }
+
+  void _stopKeepAlive() {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+  }
+
+  /// 已登录但拿不到 access token 时，尽力恢复会话并返回最新 token；
+  /// 恢复失败返回 null（调用方应拒绝写操作，避免数据写成匿名 "anon"）。
+  Future<String?> tryRestoreOrRefreshSession() async {
+    if (!isLoggedIn) return null;
+    try {
+      // 若启动恢复还在进行，先等它结束。
+      await restoreDone;
+    } catch (_) {}
+    try {
+      if (!_restoreRetried) {
+        _restoreRetried = true;
+        await _retryRestoreSession();
+      } else {
+        await ensureFreshSession();
+      }
+      final token = await getAccessToken();
+      if (token != null && token.isNotEmpty) return token;
+    } catch (_) {}
+    return null;
+  }
+
+  /// 已登录但会话中的 access token 已过期（或无法确认有效）时，清空 SDK 会话，
+  /// 让 SDK 后续请求回落到 publishable key（匿名级）：
+  ///  - 云函数仍能执行并返回公开数据（广场帖子等，含完整作者信息），
+  ///    不会被网关 401 INVALID_CREDENTIALS 挡在门外导致帖子全部加载失败；
+  ///  - 清空前把会话备份到 prefs（_kSessionBackupKey），下次 ensureFreshSession
+  ///    会从备份重建会话并重试刷新——refresh token 仍有效时自动自愈回登录态。
+  /// 仅当 token 确认已过期时才清空；仍有效的会话原样保留。
+  Future<void> clearSessionIfExpired() async {
+    final app = await _ensureApp();
+    if (app == null) return;
+    try {
+      // ignore: invalid_use_of_visible_for_testing_member
+      final session = app.httpClient.currentSession;
+      if (session == null) return;
+      final exp = _tokenExpiry(session.accessToken);
+      if (exp != null && DateTime.now().isBefore(exp)) return; // 仍有效
+      await _backupSession(session);
+      debugPrint('[auth] 清除过期会话，云调用回落 publishable key（匿名级）');
+      // ignore: invalid_use_of_visible_for_testing_member
+      app.httpClient.currentSession = null;
+    } catch (_) {}
+  }
+
+  /// 把当前会话 JSON 备份到 prefs：SDK 在 unauthenticated 错误时会直接删除
+  /// 持久化会话（credentials_[envId]），备份是唯一保留 refresh token 的副本，
+  /// 用于 next 修复/冷启动时重建会话。健康会话每次确认时同步更新，
+  /// 保证备份里始终是最新的 refresh token（服务端每次刷新都会轮换）。
+  Future<void> _backupSession(Session? session) async {
+    if (session == null) return;
+    // 匿名会话不备份：匿名仅是无登录态的浏览兜底，若把匿名凭证写入备份，
+    // 恢复路径会重建出匿名会话，真实用户的登录态被永久卡在匿名分流里。
+    if (session.user?.isAnonymous == true) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kSessionBackupKey, jsonEncode(session.toJson()));
+    } catch (_) {}
   }
 
   /// 修复"过期 access token"：服务端刷新接口会校验 Authorization header，
@@ -241,6 +403,17 @@ class AuthService {
   Future<void> _repairExpiredSession(CloudBase app) async {
     // ignore: invalid_use_of_visible_for_testing_member
     var session = app.httpClient.currentSession;
+    if (session?.user?.isAnonymous == true) {
+      // 当前是匿名回落会话：若本地有真实用户的备份，先清掉匿名会话，
+      // 从备份重建真实会话再刷新，避免匿名态把真实登录态覆盖/卡死。
+      final prefs = await SharedPreferences.getInstance();
+      final backup = prefs.getString(_kSessionBackupKey);
+      if (backup != null && backup.isNotEmpty) {
+        // ignore: invalid_use_of_visible_for_testing_member
+        app.httpClient.currentSession = null;
+        session = null;
+      }
+    }
     if (session == null) {
       // 上次修复中途被杀：从备份重建会话，再走下面的刷新修复。
       try {
@@ -262,21 +435,22 @@ class AuthService {
       return; // access token 仍有效，无需修复。
     }
 
-    // 保留原始 session 引用：如果修复失败，恢复它（不从 prefs 读，避免 prefs 写入
-    // 和读取的竞态）。
-    final originalSession = session;
-
     // 备份到 prefs（修复中途被杀时下次冷启动能恢复）。
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kSessionBackupKey, jsonEncode(session.toJson()));
-    } catch (_) {}
+    await _backupSession(session);
 
     try {
       // 原生 HTTP 刷新：绕开 SDK 的 _onRequest（会注入过期 currentSession.accessToken
       // 当 Authorization header），直接用 publishable key 作合法 header。
+      // 注意：/auth/v1/token 接口**不能带 Authorization 头**——
+      // 实测（curl 全矩阵）：
+      //   - 无头 + 假 refresh_token → 400 invalid_grant(4026)「invalid refresh token」
+      //     （服务端正常走到 RT 校验，说明无头就是官方标准刷新方式）
+      //   - 带 Bearer publishable key → 400 failed_precondition「oidc malformed jwt
+      //     expected 3 parts got 1」/ INVALID_ACCESS_TOKEN——发布密钥根本不被
+      //     当作合法 JWT，刷新请求在 RT 校验前就被拒！
+      // 这正是「登录当天正常、第二天全部失效」的机械根因：每天 access token
+      // 过期后的原生修复因带错请求头而 100% 失败 → 会话被清 → 匿名回落。
       final envId = CloudBaseAppConfig.envId;
-      final accessKey = CloudBaseAppConfig.accessKey;
       final url = Uri.parse(
           'https://$envId.api.tcloudbasegateway.com/auth/v1/token'
           '?client_id=$envId');
@@ -284,7 +458,6 @@ class AuthService {
         ..connectionTimeout = const Duration(seconds: 15);
       final req = await httpClient.postUrl(url);
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $accessKey');
       req.headers.set('x-device-id', 'flutter');
       req.add(utf8.encode(jsonEncode({
         'client_id': envId,
@@ -296,16 +469,18 @@ class AuthService {
       httpClient.close();
       if (resp.statusCode != 200) {
         debugPrint('[auth] 原生刷新失败 ${resp.statusCode}: $body');
-        // 恢复原会话
+        // 清空会话：不保留过期 token（否则 SDK 每个请求都被网关 401 拦截，
+        // 云函数根本不执行）；备份已在上面写入，下次 ensureFreshSession 会
+        // 从备份重建会话再试。
         // ignore: invalid_use_of_visible_for_testing_member
-        app.httpClient.currentSession = originalSession;
+        app.httpClient.currentSession = null;
         return;
       }
       final json = jsonDecode(body) as Map<String, dynamic>;
       if (json['error'] != null) {
         debugPrint('[auth] 原生刷新返回错误: ${json['error']}');
         // ignore: invalid_use_of_visible_for_testing_member
-        app.httpClient.currentSession = originalSession;
+        app.httpClient.currentSession = null;
         return;
       }
       // 手动构建 Session 并注入 SDK。
@@ -328,16 +503,13 @@ class AuthService {
       // ignore: invalid_use_of_visible_for_testing_member
       app.httpClient.currentSession = newSession;
       debugPrint('[auth] 过期会话已用原生 HTTP 重新刷新');
-      // 同步更新备份。
-      try {
-        final prefs2 = await SharedPreferences.getInstance();
-        await prefs2.setString(_kSessionBackupKey, jsonEncode(newSession.toJson()));
-      } catch (_) {}
+      // 同步更新备份（服务端每次刷新都会轮换 refresh token，必须存最新值）。
+      await _backupSession(newSession);
     } catch (e) {
       debugPrint('[auth] repair expired session error: $e');
-      // 恢复原会话
+      // 同上：清空会话避免 SDK 带着过期 token 反复 401。
       // ignore: invalid_use_of_visible_for_testing_member
-      app.httpClient.currentSession = originalSession;
+      app.httpClient.currentSession = null;
     }
   }
 
@@ -475,6 +647,9 @@ class AuthService {
       if (cached != null) {
         _currentUserIsCached = true;
         currentUser.value = cached;
+        // 缓存身份兜底登录态同样启动保活：周期性尝试恢复真实会话并续期，
+        // 避免"看起来已登录、实际会话早已失效"的静默降级。
+        _startKeepAlive();
         if (!_restoreRetried) {
           _restoreRetried = true;
           unawaited(_retryRestoreSession());
@@ -510,6 +685,7 @@ class AuthService {
     await _saveCachedLogin(authUser);
     _currentUserIsCached = false;
     currentUser.value = authUser;
+    _startKeepAlive();
     await _ensureDefaultNickname(user);
     await _recordFirstJoin();
   }
@@ -641,6 +817,7 @@ class AuthService {
     }
     _cachedLogin = null;
     await _clearCachedLogin();
+    _stopKeepAlive();
     _restoreRetried = false;
     _currentUserIsCached = false;
     _restoreCompleted = true;

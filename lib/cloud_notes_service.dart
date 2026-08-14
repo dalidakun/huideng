@@ -13,6 +13,12 @@ class CloudApiException implements Exception {
   String toString() => message;
 }
 
+/// 云调用返回 401 unauthorized / 登录态无法恢复时的统一提示文案。
+/// 云函数对需要真实身份的 action（我的帖子/回复/书签/喜欢/关注列表等）
+/// 在 uid 为空时返回 fail("unauthorized")，SDK 会把它包装成
+/// AuthError: [null] unauthorized 抛给业务层——一律展示为这句可操作的文案。
+const String kLoginExpiredMessage = '登录已失效，请退出后重新登录';
+
 /// 广场笔记（云端返回的一条记录）。
 class PlazaNote {
   final String id;
@@ -571,20 +577,56 @@ class CloudNotesService {
   Future<Map<String, dynamic>> _call(
     String action, {
     Map<String, dynamic>? params,
+    Duration? timeout,
   }) {
-    // 所有云端调用统一加超时，避免网络异常时页面永久卡在加载状态。
-    return _doCall(action, params: params).timeout(
-      const Duration(seconds: 8),
-      onTimeout: () => throw const CloudApiException('请求超时'),
-    );
+    return _doCall(action, params: params, timeout: timeout);
+  }
+
+    /// 写操作名单：已登录但 token 拿不到时，这些动作绝不能静默以匿名身份执行
+  /// （否则评论/回复/转发/关注会被写成共享 uid "anon"，@账号 全部丢失）。
+  static bool _isWriteAction(String action) {
+    const writes = <String>{
+      'createNote',
+      'updateNote',
+      'deleteNote',
+      'repostNote',
+      'toggleNoteFavorite',
+      'toggleFollow',
+      'toggleBlockUser',
+      'toggleLike',
+      'toggleCommentLike',
+      'createComment',
+      'createSutraDiscussion',
+      'deleteSutraDiscussion',
+      'deleteComment',
+      'reportNote',
+      'markNotificationsRead',
+      'deleteNotifications',
+      'setUserData',
+      'submitFeedback',
+      'markFeedbackHandled',
+      'addAdmin',
+      'removeAdmin',
+      'addAnnouncement',
+      'deleteAnnouncement',
+      'reportReadingTime',
+      'reportCanonProgress',
+      'deleteTopic',
+    };
+    return writes.contains(action);
   }
 
   Future<Map<String, dynamic>> _doCall(
     String action, {
     Map<String, dynamic>? params,
+    Duration? timeout,
   }) async {
     // 等待启动会话恢复完成（含 token 刷新）：避免热重启/冷启动后会话未就绪，
     // 请求被云函数判定为未授权，导致通知等页面首次打开直接「加载失败」。
+    // 注意：此处等待不占用下面的云调用超时预算——冷启动时会话恢复/修复
+    // （原始 HTTP 刷新等）可能耗时数秒到十几秒，若把整条链路套进 8s 超时，
+    // 首次加载会在会话就绪前就被判「请求超时」而显示「加载失败」，
+    // 要等会话恢复完成后的下一次拉取才刷新出来。
     await AuthService.instance.restoreDone;
     final app = await AuthService.instance.ensureApp();
     if (app == null) {
@@ -592,15 +634,30 @@ class CloudNotesService {
     }
     // 未登录时先确保有一个匿名会话，否则网关会拒绝调用（如浏览广场）。
     await AuthService.instance.ensureAnonymousForBrowse();
-    final token = await AuthService.instance.getAccessToken();
-    // 已登录但拿不到 access token（token 过期且刷新失败）时，不终止调用：
-    // 不带 __accessToken 发请求（用匿名级 publishable key），云函数会返回
-    // 公开数据（如广场帖子），用户至少能看到内容而不是白屏。
+    var token = await AuthService.instance.getAccessToken();
+    // 已登录但拿不到 access token（token 过期且刷新失败）时，禁止静默降级：
+    // 直接以匿名级发起写操作会把评论/回复/转发/关注全部写成共享 uid "anon"，
+    // 导致对方页面上「@账号、认证、百分比全都不显示」。先尝试恢复会话，
+    // 恢复不了且是写操作则明确报错要求重新登录（读操作可匿名级取公开数据）。
     if (token == null && AuthService.instance.isLoggedIn) {
-      debugPrint('[cloud] 已登录但 access token 为空，以匿名级调用降级');
+      debugPrint('[cloud] 已登录但 access token 为空，尝试恢复会话');
+      final recovered = await AuthService.instance.tryRestoreOrRefreshSession();
+      if (recovered != null) token = recovered;
+      if (token == null) {
+        // 清掉过期会话：让 SDK 后续请求回落 publishable key（匿名级），
+        // 云函数仍会执行并返回公开数据（广场帖子 + 完整作者信息），
+        // 而不是带着过期 token 被网关 401 INVALID_CREDENTIALS 挡在门外
+        // 导致首页/发现/关注帖子全部加载失败。
+        await AuthService.instance.clearSessionIfExpired();
+        if (_isWriteAction(action)) {
+          throw const CloudApiException(kLoginExpiredMessage);
+        }
+      }
     }
     final FunctionResponse res;
     try {
+      // 超时只覆盖真正的云函数调用（避免网络异常时页面永久卡在加载状态）；
+      // 会话准备在前置步骤已完成，不占用此超时预算。
       res = await app.callFunction(
         name: _fnName,
         data: {
@@ -608,9 +665,20 @@ class CloudNotesService {
           if (token != null) '__accessToken': token,
           if (params != null) ...params,
         },
+      ).timeout(
+        timeout ?? const Duration(seconds: 8),
+        onTimeout: () => throw const CloudApiException('请求超时'),
       );
     } catch (e) {
-      throw CloudApiException('网络异常：${e.toString()}');
+      if (e is CloudApiException) rethrow;
+      final msg = e.toString();
+      // 云函数对需真实身份的动作在 uid 为空时返回 fail("unauthorized")，
+      // SDK 包装成 AuthError: [null] unauthorized —— 别把技术错误直接甩给用户，
+      // 统一提示登录已失效（可操作）。
+      if (msg.contains('unauthorized')) {
+        throw const CloudApiException(kLoginExpiredMessage);
+      }
+      throw CloudApiException('网络异常：$msg');
     }
     final result = res.result is Map<String, dynamic>
         ? res.result as Map<String, dynamic>
@@ -619,7 +687,11 @@ class CloudNotesService {
       throw CloudApiException(res.message ?? '请求失败，请稍后重试');
     }
     if (result['ok'] != true) {
-      throw CloudApiException(result['error']?.toString() ?? '请求失败');
+      final err = result['error']?.toString() ?? '请求失败';
+      if (err.contains('unauthorized')) {
+        throw const CloudApiException(kLoginExpiredMessage);
+      }
+      throw CloudApiException(err);
     }
     return result;
   }
@@ -717,6 +789,25 @@ class CloudNotesService {
     return (list, hasMore);
   }
 
+  /// 拉取关注用户的帖子（服务端按关注列表 + 屏蔽列表过滤）。
+  /// 需登录，未登录返回空。
+  Future<(List<PlazaNote>, bool hasMore)> getFollowingNotes({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) return (<PlazaNote>[], false);
+    final res = await _call('getFollowingNotes', params: {
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+    final hasMore = res['hasMore'] == true;
+    return (list, hasMore);
+  }
+
   /// 拉取热门讨论：返回（top 话题, top 经文），每类最多 10 条。
   /// 热度由云端按互动量 + 时间衰减聚合；客户端负责取前 3 并做当日轮换。
   Future<(List<HotDiscussionItem>, List<HotDiscussionItem>)>
@@ -804,7 +895,8 @@ class CloudNotesService {
     if (!AuthService.instance.isLoggedIn) {
       throw const CloudApiException('请先登录');
     }
-    final res = await _call('toggleNoteFavorite', params: {'noteId': noteId});
+    final res = await _call('toggleNoteFavorite',
+        params: {'noteId': noteId, 'authorName': _authorName});
     final favorited = res['favorited'] == true;
     if (favorited) {
       favoriteNoteIds.add(noteId);
@@ -856,14 +948,17 @@ class CloudNotesService {
   }
 
   /// 拉取当前用户自己发布的笔记列表（含私密笔记）。
+  /// [repostKind] 非空时服务端按转发类型过滤（如 'reply' 只返回回复帖）。
   Future<(List<PlazaNote>, bool hasMore)> getMyNotes({
     int page = 1,
     int pageSize = 20,
+    String? repostKind,
   }) async {
     if (!AuthService.instance.isLoggedIn) return (<PlazaNote>[], false);
     final res = await _call('getMyNotes', params: {
       'page': page,
       'pageSize': pageSize,
+      if (repostKind != null) 'repostKind': repostKind,
     });
     final notes = (res['notes'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
@@ -873,11 +968,17 @@ class CloudNotesService {
     return (notes, hasMore);
   }
 
+  /// 最近一次关注/屏蔽列表刷新是否失败（登录失效/网络异常）。
+  /// 失败时关注/屏蔽集合是旧的（或空的），UI 不能据此展示「未关注」等状态，
+  /// 应提示登录已失效，而不是给用户错误的按钮/空列表。
+  bool followStateFailed = false;
+
   /// 预取当前登录用户的关注/屏蔽记录。未登录时清空。
   /// 先拉取成功再整体替换，避免网络抖动时清空本地集合导致屏蔽失效。
   /// 并发调用去重：主页多个栏目同时预取时共享同一次请求。
-  Future<void>? _followStatesInFlight;
-  Future<void> refreshFollowStates() {
+  /// 返回是否刷新成功（失败时集合保持原值，UI 应提示登录失效而非误用旧值）。
+  Future<bool>? _followStatesInFlight;
+  Future<bool> refreshFollowStates() {
     final existing = _followStatesInFlight;
     if (existing != null) return existing;
     final f = _refreshFollowStates();
@@ -886,15 +987,20 @@ class CloudNotesService {
     return f;
   }
 
-  Future<void> _refreshFollowStates() async {
+  Future<bool> _refreshFollowStates() async {
     if (!AuthService.instance.isLoggedIn) {
       followingUserIds.clear();
       blockedUserIds.clear();
-      return;
+      followStateFailed = false;
+      return true;
     }
+    followStateFailed = false;
     try {
       final app = await AuthService.instance.ensureApp();
-      if (app == null) return;
+      if (app == null) {
+        followStateFailed = true;
+        return false;
+      }
       final f = await _call('getFollowingUserIds');
       final fs = f['ids'];
       final b = await _call('getBlockedUserIds');
@@ -911,7 +1017,11 @@ class CloudNotesService {
       blockedUserIds
         ..clear()
         ..addAll(newBlocked);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      followStateFailed = true;
+      return false;
+    }
   }
 
   /// 拉取当前用户关注的用户 id 列表（未登录返回空）。
@@ -933,9 +1043,16 @@ class CloudNotesService {
   }
 
   /// 批量获取用户展示信息（昵称）。用于关注/粉丝列表。
-  Future<List<UserProfile>> getUserProfiles(List<String> ids) async {
+  /// 拉取一批用户的资料（昵称/账号/认证/阅藏进度/头像等）。
+  /// [timeout] 可放宽：详情页评论作者资料是后台预取，不影响首屏，
+  /// 但服务端要按人扫 notes 表算加入时间，数据多时可能超过默认 8 秒。
+  Future<List<UserProfile>> getUserProfiles(
+    List<String> ids, {
+    Duration? timeout,
+  }) async {
     if (ids.isEmpty) return [];
-    final res = await _call('getUserProfiles', params: {'ids': ids});
+    final res = await _call('getUserProfiles',
+        params: {'ids': ids}, timeout: timeout);
     return (res['users'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
         .map(UserProfile.fromJson)
@@ -1214,6 +1331,10 @@ class CloudNotesService {
             .map((e) => NotificationItem.fromJson(e as Map<String, dynamic>))
             .toList()
         : <NotificationItem>[];
+    debugPrint('[Notif] getNotifications page=$page rawKeys=${res.keys.toList()} count=${items.length} hasMore=${res['hasMore']}');
+    if (items.isEmpty) {
+      debugPrint('[Notif] empty! total=${res['total']} ok=${res['ok']}');
+    }
     return NotificationPageResult(
       items: items,
       hasMore: res['hasMore'] == true,
@@ -1225,6 +1346,12 @@ class CloudNotesService {
     if (!AuthService.instance.isLoggedIn) return 0;
     final res = await _call('getNotificationUnreadCount');
     return (res['unread'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 诊断接口：返回当前 uid、笔记数、活动数、活动样本。
+  /// 用于排查通知不显示问题。
+  Future<Map<String, dynamic>> debugWhoami() async {
+    return _call('whoami');
   }
 
   /// 标记通知已读：传 ids 标记指定通知；[all] 为 true 时全部标记已读。

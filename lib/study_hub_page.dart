@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'sync_service.dart';
 import 'user_avatar.dart';
+import 'user_avatar_cache.dart';
 import 'login_page.dart';
 import 'reading_page.dart';
 import 'checkin_settings_page.dart';
@@ -151,6 +152,9 @@ class StudyHubPageState extends State<StudyHubPage>
   bool _feedInitial = true;
   bool _feedLoading = false;
   bool _feedError = false;
+  /// 关注 tab 关注态刷新失败（登录失效）时的状态：
+  /// 此时不能显示「还没有关注同修」的空态误导用户，需提示重新登录。
+  bool _feedAuthDead = false;
   /// 点击「显示X条新帖子」后当前栏目切到「最新优先」视图：新帖从列表第一条开始展示。
   /// 推荐栏默认按热度排序，切到最新视图后新帖不会被旧热帖压住；切走栏目或下拉刷新后恢复默认。
   bool _feedNewestFirst = false;
@@ -831,6 +835,7 @@ class StudyHubPageState extends State<StudyHubPage>
       setState(() {
         _feedInitial = true;
         _feedError = false;
+        _feedAuthDead = false;
         _feedNotes.clear();
         _feedVersion++;
         _feedPage = 1;
@@ -884,8 +889,15 @@ class StudyHubPageState extends State<StudyHubPage>
         } else if (tab == 'follow') {
           await _loadFollowedIds();
           if (mounted) setState(() => _feedInitial = false);
-          if (mounted && _followedIds.isNotEmpty) {
-            await _loadFollowingNotes();
+          if (mounted) {
+            if (_followedIds.isEmpty &&
+                CloudNotesService.instance.followStateFailed) {
+              // 关注态刷新失败（登录失效）：别把「还没关注同修」空态给用户，
+              // 明确提示登录已失效、引导重新登录。
+              setState(() => _feedAuthDead = true);
+            } else if (_followedIds.isNotEmpty) {
+              await _loadFollowingNotes();
+            }
           }
         } else if (tab == 'announce') {
           await _loadAnnouncements();
@@ -901,6 +913,19 @@ class StudyHubPageState extends State<StudyHubPage>
         }
       }
       _saveFeedToCache(tab);
+      // 帖子列表加载后，批量预取作者头像（不阻塞 UI）。
+      // UserAvatarCache 内部有 100ms 合并窗口，这里逐个 request 即可，
+      // 会合并成一次 getUserProfiles 批量请求。
+      if (_feedNotes.isNotEmpty) {
+        final uids = <String>{};
+        for (final n in _feedNotes) {
+          if (n.ownerUserId.isNotEmpty) uids.add(n.ownerUserId);
+          if (n.repostSourceUserId.isNotEmpty) uids.add(n.repostSourceUserId);
+        }
+        for (final uid in uids) {
+          UserAvatarCache.instance.request(uid);
+        }
+      }
     } finally {
       _feedRefreshing = false;
     }
@@ -1070,10 +1095,15 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 把帖子列表滚动到顶部（无动画、不卡帧），用于点击「显示X帖子」后让新帖立刻可见。
+  /// 滚动到帖子列表区域顶部（无动画、不卡帧），用于点击「显示X帖子」后让新帖立刻可见。
+  /// 当 Tab 栏已贴住 AppBar 时，保持粘贴状态（只滚到 _topSectionHeight），
+  /// 不回显精读经文/功课等顶部区块，避免「页面刷新一遍」的体感。
   void _scrollInstantTop() {
-    if (_feedScroll.hasClients && _feedScroll.offset > 0) {
-      _feedScroll.jumpTo(0);
+    if (!_feedScroll.hasClients) return;
+    final target = _topSectionHeight > 0 ? _topSectionHeight : 0.0;
+    if ((_topSectionHeight > 0 && _feedScroll.offset > target) ||
+        (_topSectionHeight <= 0 && _feedScroll.offset > 0)) {
+      _feedScroll.jumpTo(target);
     }
   }
 
@@ -1123,33 +1153,19 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 关注栏目前瞻拉取：分页拉取公开笔记并筛选出已关注同修的作品，用于统计新帖。
-  /// 与 _loadFollowingNotes 相同口径（最多 10 页凑够一屏），但不改动界面数据。
+  /// 关注栏目前瞻拉取：服务端直接查关注用户帖子，用于统计新帖。
+  /// 只拉第一页（最新一屏），与 _loadFollowingNotes 口径一致但不改动界面数据。
   Future<List<PlazaNote>> _fetchFollowFeedPreview() async {
-    final ids = CloudNotesService.instance.followingUserIds;
-    if (ids.isEmpty) return const [];
-    final all = <PlazaNote>[];
-    final seen = <String>{};
-    var page = 1;
-    var hasMore = true;
-    const maxPages = 10;
-    const minCollect = _feedPageSize;
-    while (hasMore && page <= maxPages && all.length < minCollect) {
-      final (list, more) = await CloudNotesService.instance
-          .getPlazaNotes(page: page, pageSize: _feedPageSize);
-      for (final n in list) {
-        if (ids.contains(n.ownerUserId) &&
-            !_isBlockedContent(n) &&
-            !_isBannedNote(n) &&
-            seen.add(n.id)) {
-          all.add(n);
-        }
-      }
-      hasMore = more;
-      page++;
-      if (all.length >= minCollect) break;
+    if (CloudNotesService.instance.followingUserIds.isEmpty) {
+      return const [];
     }
-    return all;
+    try {
+      final (list, _) = await CloudNotesService.instance
+          .getFollowingNotes(page: 1, pageSize: _feedPageSize);
+      return list;
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// 计算悬浮「显示X帖子」按钮是否可见：有新帖且已滚动到顶部提醒条被隐藏。
@@ -1163,10 +1179,13 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 点击悬浮按钮：回到帖子顶部，并立即把新帖插入到列表顶部（不清空重载）。
+  /// 点击悬浮按钮：滚动到帖子列表区域顶部，并立即把新帖插入到列表顶部（不清空重载）。
+  /// 当 Tab 栏已贴住 AppBar 时，只滚到 _topSectionHeight，保持粘贴状态，
+  /// 不回显精读经文/功课等顶部区块，避免「页面刷新一遍」的体感。
   Future<void> _refreshFromPill() async {
-    final animFuture = (_feedScroll.hasClients && _feedScroll.offset > 0)
-        ? _feedScroll.animateTo(0,
+    final target = _topSectionHeight > 0 ? _topSectionHeight : 0.0;
+    final animFuture = (_feedScroll.hasClients && _feedScroll.offset > target)
+        ? _feedScroll.animateTo(target,
             duration: const Duration(milliseconds: 300), curve: Curves.easeOut)
         : Future<void>.value();
     await _refreshNewPostsOnly();
@@ -1272,8 +1291,7 @@ class StudyHubPageState extends State<StudyHubPage>
       ..addAll(CloudNotesService.instance.followingUserIds));
   }
 
-  /// 关注 tab：拉取公开笔记并筛选出关注同修的作品。
-  /// 最多翻 10 页（200 条），凑够一屏（20 条）即停止。
+  /// 关注 tab：服务端直接查关注用户的帖子，翻完所有分页确保全部加载。
   Future<void> _loadFollowingNotes() async {
     setState(() => _feedLoading = true);
     try {
@@ -1281,20 +1299,15 @@ class StudyHubPageState extends State<StudyHubPage>
       final seen = <String>{};
       var page = 1;
       var hasMore = true;
-      const maxPages = 10;
-      const minCollect = _feedPageSize;
-      while (hasMore && page <= maxPages && all.length < minCollect) {
+      const maxPages = 100;
+      while (hasMore && page <= maxPages) {
         final (list, more) = await CloudNotesService.instance
-            .getPlazaNotes(page: page, pageSize: _feedPageSize);
+            .getFollowingNotes(page: page, pageSize: _feedPageSize);
         for (final n in list) {
-          if (_followedIds.contains(n.ownerUserId) &&
-              !_isBlockedContent(n) &&
-              !_isBannedNote(n) &&
-              seen.add(n.id)) {
-            all.add(n);
-          }
+          if (seen.add(n.id)) all.add(n);
         }
         hasMore = more;
+        if (!hasMore) break;
         page++;
       }
       if (!mounted) return;
@@ -1342,6 +1355,11 @@ class StudyHubPageState extends State<StudyHubPage>
         _feedHasMore = hasMore;
         _feedLoading = false;
       });
+      // 预取新加载页的作者头像。
+      for (final n in list) {
+        if (n.ownerUserId.isNotEmpty) UserAvatarCache.instance.request(n.ownerUserId);
+        if (n.repostSourceUserId.isNotEmpty) UserAvatarCache.instance.request(n.repostSourceUserId);
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _feedLoading = false);
@@ -1688,17 +1706,9 @@ class StudyHubPageState extends State<StudyHubPage>
           child: Row(
             children: [
               GestureDetector(
-                onTap: () {
-                  final me = AuthService.instance.currentUser.value;
-                  if (me != null) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => UserSpacePage(
-                              userId: me.id, userName: me.displayName)),
-                    );
-                  }
-                },
+                // 与帖子卡头像一致：打开「我的」页（个人主页）。
+                // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
+                onTap: widget.onOpenMyPage,
                 child: UserAvatar(
                   userId: AuthService.instance.currentUser.value?.id,
                   radius: 16,
@@ -2289,6 +2299,20 @@ class StudyHubPageState extends State<StudyHubPage>
           ),
         ];
       }
+if (_feedAuthDead) {
+        return [
+          if (hotCard != null) hotCard,
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: minFeed),
+                child: _buildFeedAuthDead(),
+              ),
+            ),
+          ),
+        ];
+      }
       if (_feedError) {
         return [
           if (hotCard != null) hotCard,
@@ -2845,6 +2869,40 @@ class StudyHubPageState extends State<StudyHubPage>
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     String two(int v) => v.toString().padLeft(2, '0');
     return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
+
+  Widget _buildFeedAuthDead() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 60, bottom: 40),
+      child: Column(
+        children: [
+          Icon(Icons.lock_clock_outlined, size: 52, color: _textHint),
+          const SizedBox(height: 14),
+          const Text('登录已失效',
+              style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          const SizedBox(height: 6),
+          const Text('请退出后重新登录，关注内容才能恢复显示',
+              style: TextStyle(fontSize: 13, color: _textSec)),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginPage()),
+            ),
+            icon: const Icon(Icons.login, size: 17),
+            label: const Text('重新登录',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+            style: FilledButton.styleFrom(
+              backgroundColor: _gold,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildFeedError() {
