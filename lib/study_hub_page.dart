@@ -862,7 +862,10 @@ class StudyHubPageState extends State<StudyHubPage>
       try {
         if (tab == 'latest' || tab == 'hot') {
           final sort = (tab == 'hot' && !newestFirst) ? 'hot' : 'latest';
-          final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+          var (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+          // 与「关注」栏目同口径兜底：作者 @账号/认证/阅藏进度缺失时按 uid 补齐，
+          // 避免发现页同一用户与关注页显示不一致（头像旁无 @账号、无百分比）。
+          list = await CloudNotesService.instance.enrichFeedAuthors(list);
           if (mounted) {
             setState(() {
               _feedNotes.addAll(list);
@@ -875,8 +878,9 @@ class StudyHubPageState extends State<StudyHubPage>
         } else if (tab == 'discuss') {
           // 讨论：最新的「带 #话题 或 $经名」帖子 + 顶部热门榜（并行加载）。
           unawaited(_loadHotDiscussions());
-          final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
+          var (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
               filter: _isDiscussionNote, maxPages: 8);
+          list = await CloudNotesService.instance.enrichFeedAuthors(list);
           if (mounted) {
             setState(() {
               _feedNotes.addAll(list);
@@ -1055,11 +1059,11 @@ class StudyHubPageState extends State<StudyHubPage>
       if (tab == 'latest' || tab == 'hot') {
         // 始终按最新排序拿第一页，确保新帖出现在结果最前。
         final (first, _, _) = await _fetchFilteredFeed(1, 'latest');
-        list = first;
+        list = await CloudNotesService.instance.enrichFeedAuthors(first);
       } else if (tab == 'discuss') {
         final (first, _, _) = await _fetchFilteredFeed(1, 'latest',
             filter: _isDiscussionNote, maxPages: 2);
-        list = first;
+        list = await CloudNotesService.instance.enrichFeedAuthors(first);
       } else if (tab == 'follow') {
         list = await _fetchFollowFeedPreview();
       } else {
@@ -1221,7 +1225,8 @@ class StudyHubPageState extends State<StudyHubPage>
             _feedNewestFirst &&
             _plazaTabs[_tabIndex] == tab;
         final sort = (tab == 'hot' && !keepNewest) ? 'hot' : 'latest';
-        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+        var (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
+        list = await CloudNotesService.instance.enrichFeedAuthors(list);
         if (!mounted) return;
         c.notes = list;
         c.page = nextPage;
@@ -1230,8 +1235,9 @@ class StudyHubPageState extends State<StudyHubPage>
         c.error = false;
       } else if (tab == 'discuss') {
         unawaited(_loadHotDiscussions());
-        final (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
+        var (list, nextPage, hasMore) = await _fetchFilteredFeed(1, 'latest',
             filter: _isDiscussionNote, maxPages: 8);
+        list = await CloudNotesService.instance.enrichFeedAuthors(list);
         if (!mounted) return;
         c.notes = list;
         c.page = nextPage;
@@ -1341,12 +1347,13 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       // 最新优先视图下继续按最新拉取，与顶部新帖保持一致排序。
       final sort = (tab == 'hot' && !_feedNewestFirst) ? 'hot' : 'latest';
-      final (list, nextPage, hasMore) = await _fetchFilteredFeed(
+      var (list, nextPage, hasMore) = await _fetchFilteredFeed(
         _feedPage,
         sort,
         filter: tab == 'discuss' ? _isDiscussionNote : null,
         maxPages: tab == 'discuss' ? 8 : 4,
       );
+      list = await CloudNotesService.instance.enrichFeedAuthors(list);
       if (!mounted) return;
       setState(() {
         _feedNotes.addAll(list);

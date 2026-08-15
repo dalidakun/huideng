@@ -111,6 +111,42 @@ class PlazaNote {
   /// 把云端返回的 viewCount 安全转成数字（容忍字符串脏数据）。
   static int _parseViewCount(dynamic v) =>
       v is num ? v.toInt() : int.tryParse('$v') ?? 0;
+
+  /// 复制一份并覆盖作者展示字段（@账号/认证/阅藏进度）。
+  /// 用于列表作者信息缺失时用 getUserProfiles 兜底补齐，
+  /// 保证「发现/讨论」等栏目与「关注」栏目展示口径一致。
+  PlazaNote copyWith({
+    String? authorAccount,
+    bool? authorVerified,
+    int? canonRead,
+    int? canonTotal,
+  }) =>
+      PlazaNote(
+        id: id,
+        ownerUserId: ownerUserId,
+        title: title,
+        content: content,
+        authorName: authorName,
+        authorAccount: authorAccount ?? this.authorAccount,
+        authorVerified: authorVerified ?? this.authorVerified,
+        canonRead: canonRead ?? this.canonRead,
+        canonTotal: canonTotal ?? this.canonTotal,
+        visibility: visibility,
+        status: status,
+        likeCount: likeCount,
+        commentCount: commentCount,
+        viewCount: viewCount,
+        repostCount: repostCount,
+        repostOf: repostOf,
+        repostSourceAuthor: repostSourceAuthor,
+        repostSourceUserId: repostSourceUserId,
+        repostKind: repostKind,
+        quoteContent: quoteContent,
+        quoteOfTitle: quoteOfTitle,
+        quoteOfContent: quoteOfContent,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+      );
 }
 
 /// 热门讨论中的单个话题 / 经文条目（由云端聚合热度后返回）。
@@ -806,6 +842,50 @@ class CloudNotesService {
         .toList();
     final hasMore = res['hasMore'] == true;
     return (list, hasMore);
+  }
+
+  /// 兜底补齐笔记列表的作者展示信息（@账号/认证/阅藏进度）。
+  ///
+  /// 服务端 attachAuthorAccounts/attachAuthorCanonProgress 正常时返回原列表
+  /// （零开销）；仅当笔记里作者信息缺失（历史脏数据、云端记录顺序漂移、
+  /// 旧版云函数未附加等）时，才批量拉取 getUserProfiles 按 uid 补齐——
+  /// 与「关注」栏目数据来源一致，保证发现/讨论等栏目同一用户显示口径相同：
+  /// 头像旁有 @账号、阅藏百分比，点击头像进入个人主页信息完整。
+  Future<List<PlazaNote>> enrichFeedAuthors(List<PlazaNote> notes) async {
+    if (notes.isEmpty) return notes;
+    final missing = <String>{};
+    for (final n in notes) {
+      if (n.ownerUserId.isEmpty) continue;
+      if (n.authorAccount.isEmpty || n.canonTotal <= 0) {
+        missing.add(n.ownerUserId);
+      }
+    }
+    if (missing.isEmpty) return notes;
+    try {
+      final profiles = await getUserProfiles(missing.toList());
+      if (profiles.isEmpty) return notes;
+      final byUid = {for (final p in profiles) p.id: p};
+      return [
+        for (final n in notes) _patchFeedAuthor(n, byUid[n.ownerUserId]),
+      ];
+    } catch (_) {
+      return notes;
+    }
+  }
+
+  /// 单条笔记按用户资料补齐缺失的作者展示字段；资料未命中或无需补齐时原样返回。
+  static PlazaNote _patchFeedAuthor(PlazaNote n, UserProfile? p) {
+    if (p == null) return n;
+    final needsAccount = n.authorAccount.isEmpty && p.account.isNotEmpty;
+    final needsCanon = n.canonTotal <= 0 && p.canonTotal > 0;
+    final needsVerified = !n.authorVerified && p.verified;
+    if (!needsAccount && !needsCanon && !needsVerified) return n;
+    return n.copyWith(
+      authorAccount: needsAccount ? p.account : n.authorAccount,
+      authorVerified: n.authorVerified || p.verified,
+      canonRead: n.canonRead > 0 ? n.canonRead : p.canonRead,
+      canonTotal: n.canonTotal > 0 ? n.canonTotal : p.canonTotal,
+    );
   }
 
   /// 拉取热门讨论：返回（top 话题, top 经文），每类最多 10 条。

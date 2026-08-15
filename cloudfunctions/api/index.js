@@ -340,13 +340,20 @@ exports.main = async (event, context) => {
     const ids = [...new Set(noteList.map((n) => n.ownerUserId).filter(Boolean))];
     if (ids.length === 0) return;
     const accounts = {};
+    try {
+      await ensureUserAccounts();
+    } catch (e) {}
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
       try {
         const { data } = await userAccounts
           .where({ uid: _.in(chunk) })
           .get();
-        for (const a of data || []) accounts[a.uid] = a.username || "";
+        for (const a of data || []) {
+          // 同一 uid 可能存在多条历史记录（重复同步/迁移残留）：
+          // 空用户名不得覆盖已有值，保证 @账号 的解析结果确定、不随查询顺序漂移。
+          if (a.username) accounts[a.uid] = String(a.username);
+        }
       } catch (e) {}
     }
     for (const n of noteList) {
@@ -360,6 +367,9 @@ exports.main = async (event, context) => {
     const ids = [...new Set(noteList.map((n) => n.ownerUserId).filter(Boolean))];
     if (ids.length === 0) return;
     const verified = {};
+    try {
+      await ensureVerifications();
+    } catch (e) {}
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
       try {
@@ -382,6 +392,9 @@ exports.main = async (event, context) => {
     if (ids.length === 0) return;
     const reads = {};
     const totals = {};
+    try {
+      await ensureUserAccounts();
+    } catch (e) {}
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
       try {
@@ -389,8 +402,12 @@ exports.main = async (event, context) => {
           .where({ uid: _.in(chunk) })
           .get();
         for (const a of data || []) {
-          reads[a.uid] = Math.max(0, Number(a.canonRead) || 0);
-          totals[a.uid] = Math.max(0, Number(a.canonTotal) || 0);
+          const read = Math.max(0, Number(a.canonRead) || 0);
+          const total = Math.max(0, Number(a.canonTotal) || 0);
+          // 历史残留记录可能没有进度字段（0），不得覆盖已有真实进度，
+          // 否则阅藏百分比会随查询记录顺序在「正常/0%」间随机漂移。
+          if (total > 0 || reads[a.uid] == null) reads[a.uid] = read;
+          if (total > 0 || totals[a.uid] == null) totals[a.uid] = total;
         }
       } catch (e) {}
     }
@@ -1329,12 +1346,24 @@ exports.main = async (event, context) => {
                 .where({ uid: _.in(ids.slice(i, i + 100)) })
                 .get();
               for (const a of data || []) {
-                accounts[a.uid] = a.username || "";
-                canonRead[a.uid] = Math.max(0, Number(a.canonRead) || 0);
-                canonTotal[a.uid] = Math.max(0, Number(a.canonTotal) || 0);
-                readingSeconds[a.uid] = Math.max(0, Number(a.readingSeconds) || 0);
-                // 首次设置 @账户 时的写入时间戳（毫秒），作为注册时间一级候选。
-                if (a.createdAt) accountCreatedAt[a.uid] = Number(a.createdAt) || 0;
+                // 同一 uid 存在多条历史记录时，空用户名/0 进度不得覆盖有效值，
+                // 保证 @账号、阅藏百分比、读经时长的解析结果确定、不随查询顺序漂移。
+                if (a.username) accounts[a.uid] = String(a.username);
+                const read = Math.max(0, Number(a.canonRead) || 0);
+                const total = Math.max(0, Number(a.canonTotal) || 0);
+                const seconds = Math.max(0, Number(a.readingSeconds) || 0);
+                if (total > 0 || canonRead[a.uid] == null) canonRead[a.uid] = read;
+                if (total > 0 || canonTotal[a.uid] == null) canonTotal[a.uid] = total;
+                if (seconds > 0 || readingSeconds[a.uid] == null) {
+                  readingSeconds[a.uid] = seconds;
+                }
+                // 首次创建 @账户 的时间戳：多条记录时取最早（最接近真实注册时间）。
+                const t = Number(a.createdAt) || 0;
+                if (t > 0 &&
+                    (accountCreatedAt[a.uid] == null ||
+                     t < accountCreatedAt[a.uid])) {
+                  accountCreatedAt[a.uid] = t;
+                }
               }
             }
           } catch (e) {}
