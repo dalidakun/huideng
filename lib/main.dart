@@ -367,6 +367,12 @@ class _MainPageState extends State<MainPage>
       activeIcon: const _NotificationTabIcon(active: true),
       label: '',
     ),
+    BottomNavigationBarItem(
+      icon: Image.asset('assets/images/my.png', width: 21.5, height: 21.5),
+      activeIcon: Image.asset('assets/images/my_selected.png',
+          width: 21.5, height: 21.5),
+      label: '',
+    ),
   ];
 
   /// 经藏页搜索模式变化（页内退出搜索时同步菜单高亮）。
@@ -377,7 +383,7 @@ class _MainPageState extends State<MainPage>
     });
   }
 
-  /// 当前页面索引 → 底部菜单索引（搜索是模式入口；助手/我的无菜单项，不高亮）。
+  /// 当前页面索引 → 底部菜单索引（搜索是模式入口；助手无菜单项，不高亮）。
   int _navIndexForCurrent() {
     if (_searchMode) return 1;
     switch (_currentIndex) {
@@ -390,7 +396,7 @@ class _MainPageState extends State<MainPage>
       case 3: // 消息
         return 3;
       default: // 我的
-        return -1;
+        return 4;
     }
   }
 
@@ -417,7 +423,9 @@ class _MainPageState extends State<MainPage>
       _searchMode = false;
       _sutraListKey.currentState?.deactivateSearch();
     }
-    final pageIndex = index == 3 ? 3 : (index == 2 ? 1 : 0);
+    final pageIndex = index == 4
+        ? 4
+        : (index == 3 ? 3 : (index == 2 ? 1 : 0));
     // 已停留在修学页再次点击修学菜单图标：
     // - 有新帖（角标 > 0）：保持原 reload 行为，刷出新帖。
     // - 无新帖：检测双击，第二次点击则回到页面最顶部。
@@ -595,7 +603,7 @@ class _BottomNavBar extends StatelessWidget {
   static double heightOnly(BuildContext context) {
     final media = MediaQuery.of(context);
     final large = media.size.height >= 820 || media.size.width >= 430;
-    return large ? 60.0 : 54.0;
+    return large ? 51.0 : 45.9;
   }
 
   @override

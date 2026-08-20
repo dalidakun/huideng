@@ -1081,10 +1081,14 @@ class CloudNotesService {
         followStateFailed = true;
         return false;
       }
-      final f = await _call('getFollowingUserIds');
-      final fs = f['ids'];
-      final b = await _call('getBlockedUserIds');
-      final bs = b['ids'];
+      // 关注/屏蔽列表互相独立，串行 await 会累积两倍网络延迟；
+      // 并行拉取让预热更快，列表就绪后首页/关注刷新都等更短。
+      final results = await Future.wait([
+        _call('getFollowingUserIds'),
+        _call('getBlockedUserIds'),
+      ]);
+      final fs = results[0]['ids'];
+      final bs = results[1]['ids'];
       // 先构建新集合，成功后再替换——避免云调用失败时清空本地集合
       // 导致关注/屏蔽状态丢失（token 过期时的竞态问题）。
       final newFollowing = <String>{};

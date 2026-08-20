@@ -177,7 +177,10 @@ class AuthService {
         await _repairExpiredSession(app2);
       }();
       tokenRefreshInFlight = f;
-      f.whenComplete(() => tokenRefreshInFlight = null);
+      // whenComplete 会派生一个携带同样错误的新 Future；若底层修复抛错且此
+      // 派生 Future 无人监听，会成为未处理异步错误触发全局错误弹窗。
+      // 挂一个 onError 让它被"消化"（原 Future f 仍照常把错误交给 SDK 调用方）。
+      f.whenComplete(() => tokenRefreshInFlight = null).then((_) {}, onError: (_) {});
       return f;
     };
   }

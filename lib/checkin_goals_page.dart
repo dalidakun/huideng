@@ -26,6 +26,9 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
   Map<String, double> _goals = {};
   Map<String, double> _totals = {};
 
+  /// 各类型在每日功课中配置的具体内容（如诵的经、持的咒），用于历史统计明细。
+  Map<String, List<String>> _details = {};
+
   /// 是否允许他人在主页查看我的「功课」（打卡设置与目标）。
   bool _showCheckinOnHome = false;
 
@@ -43,11 +46,12 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
 
     final customs = (jsonDecode(prefs.getString('custom_checkin_types') ?? '[]') as List<dynamic>).cast<Map<String, dynamic>>();
     final types = <_GoalType>[
-      _GoalType(key: 'meditation', label: '静坐', unit: '分钟', icon: Icons.self_improvement_outlined),
       _GoalType(key: 'reading', label: '诵经', unit: '遍', icon: Icons.chrome_reader_mode_outlined),
-      _GoalType(key: 'mantra', label: '持咒', unit: '遍', icon: Icons.notifications_none_outlined),
+      _GoalType(key: 'nianfo', label: '念佛', unit: '声', icon: Icons.local_florist_outlined),
       _GoalType(key: 'buddha', label: '称名', unit: '声', icon: Icons.spa_outlined),
+      _GoalType(key: 'mantra', label: '持咒', unit: '遍', icon: Icons.notifications_none_outlined),
       _GoalType(key: 'copying', label: '抄经', unit: '篇', icon: Icons.edit_outlined),
+      _GoalType(key: 'meditation', label: '静坐', unit: '分钟', icon: Icons.self_improvement_outlined),
       ...customs.map((c) => _GoalType(
         key: c['key'].toString(),
         label: c['label'].toString(),
@@ -69,12 +73,74 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
       totals[key] = (totals[key] ?? 0) + amt;
     }
 
+    final details = _buildDetails(prefs);
+
     if (!mounted) return;
     setState(() {
       _types = types;
       _goals = goals;
       _totals = totals;
+      _details = details;
     });
+  }
+
+  /// 读取每日功课配置，汇总各类型的具体内容（诵的经、持的咒、抄的经等），
+  /// 只保留名称（数量由历史总量体现，不在此重复展示）。
+  Map<String, List<String>> _buildDetails(SharedPreferences prefs) {
+    final out = <String, List<String>>{};
+    out['meditation'] = [
+      for (final e in _decodeStrList(prefs.getString('setting_meditation_minutes')))
+        if (e.trim().isNotEmpty) '${e.trim()}分钟',
+    ];
+    out['reading'] = [
+      for (final e in _decodeNamed(prefs.getString('setting_reading_titles')))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['nianfo'] = [
+      for (final e in _decodeNamed(prefs.getString('setting_nianfo_items')))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['mantra'] = [
+      for (final e in _decodeNamed(prefs.getString('setting_mantra_items')))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['buddha'] = [
+      for (final e in _decodeNamed(prefs.getString('setting_buddha_items')))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['copying'] = [
+      for (final e in _decodeStrList(prefs.getString('setting_copying_titles')))
+        if (e.trim().isNotEmpty) e.trim(),
+    ];
+    return out;
+  }
+
+  List<String> _decodeStrList(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) return d.map((e) => e.toString()).toList();
+    } catch (_) {}
+    return [];
+  }
+
+  /// 解析「名称 + 数量」配置：{name, count}，数量可能为空。
+  List<(String, String)> _decodeNamed(String? raw) {
+    final out = <(String, String)>[];
+    if (raw == null || raw.isEmpty) return out;
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) {
+        for (final e in d) {
+          if (e is Map) {
+            out.add(((e['name'] ?? '').toString(), (e['count'] ?? '').toString()));
+          } else {
+            out.add((e.toString(), ''));
+          }
+        }
+      }
+    } catch (_) {}
+    return out;
   }
 
   Future<void> _setGoal(_GoalType t) async {
@@ -237,12 +303,15 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
     );
   }
 
-  /// 历史统计条目：各类型自使用以来累计的总量。
+  /// 历史统计条目：各类型自使用以来累计的总量，并附每日功课的具体内容明细。
   List<CheckInStatEntry> get _historyStats => [
         for (final t in _types)
           if ((_totals[t.key] ?? 0) > 0)
             CheckInStatEntry(
-                label: t.label, unit: t.unit, total: _totals[t.key] ?? 0),
+                label: t.label,
+                unit: t.unit,
+                total: _totals[t.key] ?? 0,
+                detail: _details[t.key] ?? const []),
       ];
 
   Widget _buildTypeCard(_GoalType t) {

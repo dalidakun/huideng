@@ -119,7 +119,7 @@ class StudyHubPageState extends State<StudyHubPage>
   String? _currentFilePath;
   double _progress = 0.0;
   List<Map<String, String>> _todayCheckIns = [];
-  int _checkinStreak = 0;
+  int _checkinTotalDays = 0;
   String? _lockedTitle;
   String? _lockedFilePath;
   bool _currentFavorite = false;
@@ -404,7 +404,7 @@ class StudyHubPageState extends State<StudyHubPage>
       _currentRead = read;
       _allowReadingShare = prefs.getBool('privacy_show_reading') ?? false;
       _todayCheckIns = _loadTodayCheckIns(prefs);
-      _checkinStreak = _calcStreak(prefs);
+      _checkinTotalDays = _calcTotalDays(prefs);
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes =
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
@@ -699,25 +699,10 @@ class StudyHubPageState extends State<StudyHubPage>
         .toList();
   }
 
-  int _calcStreak(SharedPreferences prefs) {
+  int _calcTotalDays(SharedPreferences prefs) {
     final raw = prefs.getString('checkin_records') ?? '[]';
-    final records = (jsonDecode(raw) as List<dynamic>)
-        .map((r) => r['date'].toString())
-        .toSet();
-    int streak = 0;
-    final today = DateTime.now();
-    final startIndex = records.contains(_today()) ? 0 : 1;
-    for (int i = startIndex; i < 365; i++) {
-      final day = today.subtract(Duration(days: i));
-      final ds =
-          '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      if (records.contains(ds)) {
-        streak++;
-      } else {
-        break;
-      }
-    }
-    return streak;
+    final records = jsonDecode(raw) as List<dynamic>;
+    return records.map((r) => r['date'].toString()).toSet().length;
   }
 
   String _today() {
@@ -1245,32 +1230,42 @@ class StudyHubPageState extends State<StudyHubPage>
         c.initial = false;
         c.error = false;
       } else {
-        // 关注：先确保关注/屏蔽列表就绪，再筛选关注同修的笔记。
+        // 关注：服务端按关注列表 + 屏蔽列表直接筛选。
+        // 老实现是遍历整个广场分页（最多 50 页）在本地筛关注用户的帖子，
+        // 每次 app 打开后台预取都会串行打 50 次云调用，非常慢且易超时。
+        // 现在只拉前 3 页填满缓存，切到「关注」后再按需翻页。
         await CloudNotesService.instance.refreshFollowStates();
-        final ids = CloudNotesService.instance.followingUserIds;
-        final all = <PlazaNote>[];
-        final seen = <String>{};
-        var page = 1;
-        var hasMore = true;
-        while (hasMore && page <= 50) {
-          final (list, more) = await CloudNotesService.instance
-              .getPlazaNotes(page: page, pageSize: _feedPageSize);
-          for (final n in list) {
-            if (ids.contains(n.ownerUserId) &&
-                !_isBlockedContent(n) &&
-                !_isBannedNote(n) &&
-                seen.add(n.id)) {
-              all.add(n);
+        if (!AuthService.instance.isLoggedIn) {
+          if (!mounted) return;
+          c.notes = const [];
+          c.page = 1;
+          c.hasMore = false;
+          c.initial = false;
+          c.error = false;
+        } else {
+          final all = <PlazaNote>[];
+          final seen = <String>{};
+          var page = 1;
+          var hasMore = true;
+          const maxBackgroundPages = 3;
+          while (hasMore && page <= maxBackgroundPages) {
+            final (list, more) = await CloudNotesService.instance
+                .getFollowingNotes(page: page, pageSize: _feedPageSize);
+            for (final n in list) {
+              if (!_isBlockedContent(n) && !_isBannedNote(n) && seen.add(n.id)) {
+                all.add(n);
+              }
             }
+            hasMore = more;
+            page++;
           }
-          hasMore = more;
-          page++;
+          if (!mounted) return;
+          c.notes = all;
+          c.page = page;
+          c.hasMore = hasMore;
+          c.initial = false;
+          c.error = false;
         }
-        if (!mounted) return;
-        c.notes = all;
-        c.hasMore = false;
-        c.initial = false;
-        c.error = false;
       }
       if (!mounted) return;
       if (_plazaTabs[_tabIndex] == tab) {
@@ -1297,31 +1292,31 @@ class StudyHubPageState extends State<StudyHubPage>
       ..addAll(CloudNotesService.instance.followingUserIds));
   }
 
-  /// 关注 tab：服务端直接查关注用户的帖子，翻完所有分页确保全部加载。
+  /// 关注 tab：服务端按关注列表 + 屏蔽列表直接筛选。
+  /// 只拉第一页快速出首屏，后续翻页由 _loadMoreFeed 按需加载。
+  /// 老实现会一次性串行翻完所有分页（最多 100 页，每页一次云调用），
+  /// 弱网下要等几十秒甚至中途超时判「加载失败」——这是「关注特别慢」的根因。
   Future<void> _loadFollowingNotes() async {
+    if (!AuthService.instance.isLoggedIn) {
+      if (mounted) {
+        setState(() {
+          _feedLoading = false;
+          _feedInitial = false;
+        });
+      }
+      return;
+    }
     setState(() => _feedLoading = true);
     try {
-      final all = <PlazaNote>[];
-      final seen = <String>{};
-      var page = 1;
-      var hasMore = true;
-      const maxPages = 100;
-      while (hasMore && page <= maxPages) {
-        final (list, more) = await CloudNotesService.instance
-            .getFollowingNotes(page: page, pageSize: _feedPageSize);
-        for (final n in list) {
-          if (seen.add(n.id)) all.add(n);
-        }
-        hasMore = more;
-        if (!hasMore) break;
-        page++;
-      }
+      final (list, more) = await CloudNotesService.instance
+          .getFollowingNotes(page: 1, pageSize: _feedPageSize);
       if (!mounted) return;
       setState(() {
         _feedNotes
           ..clear()
-          ..addAll(all);
-        _feedHasMore = false;
+          ..addAll(list);
+        _feedPage = 2;
+        _feedHasMore = more;
         _feedLoading = false;
         _feedInitial = false;
       });
@@ -1337,7 +1332,7 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Future<void> _loadMoreFeed() async {
     final tab = _plazaTabs[_tabIndex];
-    if ((tab != 'latest' && tab != 'hot' && tab != 'discuss') ||
+    if (tab == 'announce' ||
         _feedLoading ||
         !_feedHasMore ||
         _feedInitial) {
@@ -1345,6 +1340,23 @@ class StudyHubPageState extends State<StudyHubPage>
     }
     setState(() => _feedLoading = true);
     try {
+      if (tab == 'follow') {
+        final (list, more) = await CloudNotesService.instance
+            .getFollowingNotes(page: _feedPage, pageSize: _feedPageSize);
+        if (!mounted) return;
+        setState(() {
+          _feedNotes.addAll(list);
+          _feedVersion++;
+          _feedPage++;
+          _feedHasMore = more;
+          _feedLoading = false;
+        });
+        for (final n in list) {
+          if (n.ownerUserId.isNotEmpty) UserAvatarCache.instance.request(n.ownerUserId);
+          if (n.repostSourceUserId.isNotEmpty) UserAvatarCache.instance.request(n.repostSourceUserId);
+        }
+        return;
+      }
       // 最新优先视图下继续按最新拉取，与顶部新帖保持一致排序。
       final sort = (tab == 'hot' && !_feedNewestFirst) ? 'hot' : 'latest';
       var (list, nextPage, hasMore) = await _fetchFilteredFeed(
@@ -2172,7 +2184,7 @@ class StudyHubPageState extends State<StudyHubPage>
                     children: [
                       Icon(Icons.today, size: 12, color: _primaryLight),
                       const SizedBox(width: 4),
-                      Text('打卡$_checkinStreak天',
+                      Text('打卡$_checkinTotalDays天',
                           style: TextStyle(
                               fontSize: 11,
                               color: _primaryLight,
@@ -3317,11 +3329,12 @@ if (_feedAuthDead) {
 
   List<Map<String, dynamic>> _allCheckInTypes() {
     return [
-      {'key': 'meditation', 'label': '静坐', 'icon': Icons.self_improvement_outlined},
       {'key': 'reading', 'label': '诵经', 'icon': Icons.chrome_reader_mode_outlined},
-      {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
+      {'key': 'nianfo', 'label': '念佛', 'icon': Icons.local_florist_outlined},
       {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
+      {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
       {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
+      {'key': 'meditation', 'label': '静坐', 'icon': Icons.self_improvement_outlined},
       ..._customTypes.map((t) =>
           {'key': t['key'], 'label': t['label'], 'icon': Icons.playlist_add}),
     ];
@@ -3336,6 +3349,8 @@ if (_feedAuthDead) {
           return _hasNonEmptyItems(prefs, 'setting_meditation_minutes');
         case 'reading':
           return _hasNonEmptyNamed(prefs, 'setting_reading_titles');
+        case 'nianfo':
+          return _hasNonEmptyNamed(prefs, 'setting_nianfo_items');
         case 'mantra':
           return _hasNonEmptyNamed(prefs, 'setting_mantra_items');
         case 'buddha':
@@ -3472,6 +3487,12 @@ if (_feedAuthDead) {
               lines.add('诵经 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
             }
           }
+        case 'nianfo':
+          for (final e in _decodeNamedList(prefs.getString('setting_nianfo_items'))) {
+            if (e.$1.isNotEmpty) {
+              lines.add('念佛 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
+            }
+          }
         case 'mantra':
           for (final e in _decodeNamedList(prefs.getString('setting_mantra_items'))) {
             if (e.$1.isNotEmpty) {
@@ -3541,6 +3562,8 @@ if (_feedAuthDead) {
             0, (s, e) => s + (double.tryParse(e.toString()) ?? 0));
       case 'reading':
         return _sumNamedCount(prefs.getString('setting_reading_titles'));
+      case 'nianfo':
+        return _sumNamedCount(prefs.getString('setting_nianfo_items'));
       case 'mantra':
         return _sumNamedCount(prefs.getString('setting_mantra_items'));
       case 'buddha':

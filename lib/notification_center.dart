@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -121,15 +122,38 @@ class NotificationCenter {
   }
 
   /// 拉取一页通知并聚合（含帖子摘要补齐）。返回 (通知组, 是否还有更多)。
+  /// 并发调用去重：消息页首次加载、未读数变化、切回 Tab 的静默刷新
+  /// 可能同时打 page:1，去重后共享同一次请求，避免重复云调用拖慢/超时。
+  final Map<String, Future<(List<NotificationGroup>, bool)>> _fetchInFlight = {};
+
   Future<(List<NotificationGroup>, bool)> fetchGroups({
     int page = 1,
     int pageSize = 20,
+  }) {
+    final key = '$page:$pageSize';
+    final existing = _fetchInFlight[key];
+    if (existing != null) return existing;
+    final f = _fetchGroups(page: page, pageSize: pageSize, key: key);
+    _fetchInFlight[key] = f;
+    return f;
+  }
+
+  Future<(List<NotificationGroup>, bool)> _fetchGroups({
+    int page = 1,
+    int pageSize = 20,
+    String key = '',
   }) async {
-    final res =
-        await CloudNotesService.instance.getNotifications(page: page, pageSize: pageSize);
-    final groups = aggregate(res.items);
-    await _attachNotePreviews(groups);
-    return (groups, res.hasMore);
+    try {
+      final res =
+          await CloudNotesService.instance.getNotifications(page: page, pageSize: pageSize);
+      final groups = aggregate(res.items);
+      await _attachNotePreviews(groups);
+      return (groups, res.hasMore);
+    } finally {
+      // 用 try/finally 清理在途标记：既不会像 whenComplete 那样派生一个
+      // 未被监听的失败 Future（会触发全局错误弹窗），也能保证无论成败都释放。
+      _fetchInFlight.remove(key);
+    }
   }
 
   /// 按「相同帖子 + 相同互动类型」聚合成通知组。
@@ -184,6 +208,9 @@ class NotificationCenter {
   }
 
   /// 补齐帖子内容摘要：帖子摘要为空且帖子还在时拉取正文；失败保留原样。
+  /// 一页最多 20 个通知组，老实现一次性并发 20 个 getNoteById 云调用，
+  /// 冷启动/弱网下互相拖慢甚至超时。这里按小批量（≤4）串行补齐，
+  /// 既不阻塞首屏渲染、也不会把云函数并发打满。
   Future<void> _attachNotePreviews(List<NotificationGroup> groups) async {
     final pending = groups.where((g) {
       if (g.type == 'follow_me') return false;
@@ -191,15 +218,19 @@ class NotificationCenter {
       // 点赞通知缺少转发类型时回源补齐（区分「喜欢了你的回复」/「点赞了你的帖子」）。
       if (g.type == 'like_me' && g.noteRepostKind.isEmpty) return true;
       return false;
-    });
-    await Future.wait(pending.map((g) async {
-      if (g.noteId.isEmpty) return;
-      try {
-        final note = await CloudNotesService.instance.getNoteById(g.noteId);
-        if (g.noteContent.isEmpty) g.noteContent = note.content;
-        if (g.noteRepostKind.isEmpty) g.noteRepostKind = note.repostKind;
-      } catch (_) {}
-    }));
+    }).where((g) => g.noteId.isNotEmpty).toList();
+    const batchSize = 4;
+    for (var i = 0; i < pending.length; i += batchSize) {
+      final batch = pending.sublist(
+          i, math.min(i + batchSize, pending.length));
+      await Future.wait(batch.map((g) async {
+        try {
+          final note = await CloudNotesService.instance.getNoteById(g.noteId);
+          if (g.noteContent.isEmpty) g.noteContent = note.content;
+          if (g.noteRepostKind.isEmpty) g.noteRepostKind = note.repostKind;
+        } catch (_) {}
+      }));
+    }
   }
 
   /// 把指定通知组标记为已读，并同步本地未读数。

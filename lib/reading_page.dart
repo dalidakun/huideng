@@ -16,6 +16,7 @@ import 'reader_preferences.dart';
 import 'note_edit_page.dart';
 import 'reading_time_service.dart';
 import 'sutra_list_page.dart' show routeObserver;
+import 'reading_guide_page.dart';
 
 class ReadingPage extends StatefulWidget {
   final String title;
@@ -986,6 +987,11 @@ class _ReadingPageState extends State<ReadingPage>
                               label: _isFavorite ? '取消收藏' : '收藏',
                               onTap: _toggleFavorite,
                             ),
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.help_outline, size: 18),
+                              label: '使用说明',
+                              onTap: _openUsageGuide,
+                            ),
                           ],
                         ),
                       ),
@@ -1066,6 +1072,16 @@ class _ReadingPageState extends State<ReadingPage>
     setState(() {
       _showMoreMenu = !_showMoreMenu;
     });
+  }
+
+  /// 打开「使用说明」页面。
+  void _openUsageGuide() {
+    setState(() {
+      _showMoreMenu = false;
+    });
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ReadingGuidePage()),
+    );
   }
 
   /// 加载当前经书收藏状态（菜单图标/文字随状态切换）。

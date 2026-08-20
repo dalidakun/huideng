@@ -157,6 +157,12 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
   int _page = 0;
   bool _error = false;
 
+  /// 是否已完成一次真正的列表加载（含失败）。用于「首次切到通知页才加载」：
+  /// 消息页位于底部 IndexedStack，App 启动时即便用户没看也会被构建；老实现
+  /// 启动即打 getNotifications（含逐条摘要补齐），与首页预取形成云调用风暴，
+  /// 弱网下互相拖慢导致「通知加载失败」。延迟到用户真正切到该 Tab 再拉取。
+  bool _loadedOnce = false;
+
   /// 首次加载失败后已自动重试的次数（最多 [_maxLoadRetries] 次）。
   /// 冷启动时会话恢复/token 刷新需要几秒，期间拉取会失败，等待会话就绪后
   /// 自动重试，避免一直停在「加载失败」、要等切页或手动刷新才恢复。
@@ -181,7 +187,10 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
     AuthService.instance.currentUser.addListener(_onAuthChanged);
     widget.activeTab?.addListener(_onTabChanged);
     _prevUnread = NotificationCenter.instance.unread.value;
-    _load();
+    // 首次可见时才加载（activeTab==3 或独立页面无 Tab）；否则切到该页时再拉。
+    if (widget.activeTab == null || widget.activeTab!.value == 3) {
+      _load();
+    }
   }
 
   @override
@@ -217,7 +226,11 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
         _groups.clear();
         _loading = false;
       });
-    } else {
+    } else if (_loadedOnce ||
+        widget.activeTab == null ||
+        widget.activeTab!.value == 3) {
+      // 只有看过的页面才在登录态变化时后台刷新；从未看过的 Tab 保持延迟加载，
+      // 避免冷启动会话恢复一完成就替用户打通知请求（与首页预取叠加成风暴）。
       _load();
     }
   }
@@ -228,11 +241,16 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       _pageFade.forward(from: 0);
       // 切回通知页时顺带刷新未读数，并静默拉取最新通知列表。
       NotificationCenter.instance.refreshUnread();
-      _silentRefresh();
+      if (_loadedOnce) {
+        _silentRefresh();
+      } else {
+        _load();
+      }
     }
   }
 
   Future<void> _load() async {
+    _loadedOnce = true;
     if (!AuthService.instance.isLoggedIn) {
       if (mounted) setState(() => _loading = false);
       return;
@@ -299,8 +317,11 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
   }
 
   /// 静默刷新：不闪加载态，仅替换列表；从详情页返回/新增通知时从顶部插入。
+  /// 加载中/翻页中/从未看过此页时直接跳过，避免并发互相覆盖或启动即拉取。
   Future<void> _silentRefresh() async {
     if (!AuthService.instance.isLoggedIn) return;
+    if (_loading || _loadingMore) return;
+    if (!_loadedOnce) return;
     try {
       final (groups, hasMore) =
           await NotificationCenter.instance.fetchGroups(page: 1);

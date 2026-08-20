@@ -60,6 +60,8 @@ flutter:
     - assets/images/ic_clock.png
     - assets/images/star_filled.png
     - assets/images/star_outline.png
+    - assets/images/weixin.png
+    - assets/images/zhifubao.png
     - assets/sutras_catalog.json
     - assets/tool.html
 

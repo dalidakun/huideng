@@ -22,6 +22,7 @@ class CheckInSettingsPage extends StatefulWidget {
 class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
   List<_Item> _meditationItems = [];
   List<_NamedCountItem> _readingItems = [];
+  List<_NamedCountItem> _nianfoItems = [];
   List<_NamedCountItem> _mantraItems = [];
   List<_NamedCountItem> _buddhaItems = [];
   List<_Item> _copyingItems = [];
@@ -44,6 +45,8 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       if (_meditationItems.isEmpty) _meditationItems.add(_Item(ctrl: TextEditingController(text: '30')));
       _readingItems = _decodeReading(prefs.getString('setting_reading_titles'));
       if (_readingItems.isEmpty) _readingItems.add(_NamedCountItem(nameCtrl: TextEditingController(), countCtrl: TextEditingController()));
+      _nianfoItems = _decodeNamedCount(prefs.getString('setting_nianfo_items'));
+      if (_nianfoItems.isEmpty) _nianfoItems.add(_NamedCountItem(nameCtrl: TextEditingController(), countCtrl: TextEditingController(text: '108')));
       _mantraItems = _decodeNamedCount(prefs.getString('setting_mantra_items'));
       if (_mantraItems.isEmpty) _mantraItems.add(_NamedCountItem(nameCtrl: TextEditingController(), countCtrl: TextEditingController(text: '108')));
       _buddhaItems = _decodeNamedCount(prefs.getString('setting_buddha_items'));
@@ -104,6 +107,10 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       final n = e.name.trim();
       if (n.isNotEmpty) lines.add('诵经 $n ${e.count}遍');
     }
+    for (final e in _nianfoItems) {
+      final n = e.name.trim();
+      if (n.isNotEmpty) lines.add('念佛 $n ${e.count}声');
+    }
     for (final e in _mantraItems) {
       final n = e.name.trim();
       if (n.isNotEmpty) lines.add('持咒 $n ${e.count}遍');
@@ -157,6 +164,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('setting_meditation_minutes', jsonEncode(_meditationItems.map((e) => e.text).toList()));
     await prefs.setString('setting_reading_titles', jsonEncode(_readingItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
+    await prefs.setString('setting_nianfo_items', jsonEncode(_nianfoItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_mantra_items', jsonEncode(_mantraItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_buddha_items', jsonEncode(_buddhaItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_copying_titles', jsonEncode(_copyingItems.map((e) => e.text).toList()));
@@ -281,6 +289,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
   void dispose() {
     for (final e in _meditationItems) e.ctrl.dispose();
     for (final e in _readingItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
+    for (final e in _nianfoItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _mantraItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _buddhaItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _copyingItems) e.ctrl.dispose();
@@ -407,7 +416,8 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     );
   }
 
-  Widget _buildNamedCountRow(int index, List<_NamedCountItem> items) {
+  Widget _buildNamedCountRow(int index, List<_NamedCountItem> items,
+      {String suffix = '遍'}) {
     final item = items[index];
     final isLast = index == items.length - 1;
     return Padding(
@@ -452,7 +462,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(vertical: 10),
                   isDense: true,
-                  suffixText: '遍',
+                  suffixText: suffix,
                   suffixStyle: TextStyle(fontSize: 13, color: _textHint),
                 ),
               ),
@@ -555,20 +565,23 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
               ),
             ),
           ),
-          _buildSection(Icons.self_improvement_outlined, '静坐', [
-            ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '30', suffix: '分钟', keyboardType: TextInputType.number)),
-          ]),
           _buildSection(Icons.chrome_reader_mode_outlined, '诵经', [
             ..._readingItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _readingItems)),
           ]),
-          _buildSection(Icons.notifications_none_outlined, '持咒', [
-            ..._mantraItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _mantraItems)),
+          _buildSection(Icons.local_florist_outlined, '念佛', [
+            ..._nianfoItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _nianfoItems, suffix: '声')),
           ]),
           _buildSection(Icons.spa_outlined, '称名', [
             ..._buddhaItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _buddhaItems)),
           ]),
+          _buildSection(Icons.notifications_none_outlined, '持咒', [
+            ..._mantraItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _mantraItems)),
+          ]),
           _buildSection(Icons.edit_outlined, '抄经', [
             ..._copyingItems.asMap().entries.map((e) => _buildItemRow(e.key, _copyingItems, '经书名')),
+          ]),
+          _buildSection(Icons.self_improvement_outlined, '静坐', [
+            ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '30', suffix: '分钟', keyboardType: TextInputType.number)),
           ]),
           if (_customTypes.isNotEmpty) ...[
             ..._customTypes.asMap().entries.map((e) {

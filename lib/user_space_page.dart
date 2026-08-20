@@ -1205,17 +1205,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
   List<String> _buildCheckinTaskLines(Map<String, dynamic>? checkin) {
     if (checkin == null) return [];
     final lines = <String>[];
-    for (final e in _decodeStringList(checkin['setting_meditation_minutes'])) {
-      if (e.trim().isNotEmpty) lines.add('静坐 ${e.trim()}分钟');
-    }
     for (final e in _decodeNamedItems(checkin['setting_reading_titles'])) {
       if (e.$1.isNotEmpty) {
         lines.add('诵经 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
       }
     }
-    for (final e in _decodeNamedItems(checkin['setting_mantra_items'])) {
+    for (final e in _decodeNamedItems(checkin['setting_nianfo_items'])) {
       if (e.$1.isNotEmpty) {
-        lines.add('持咒 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
+        lines.add('念佛 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
       }
     }
     for (final e in _decodeNamedItems(checkin['setting_buddha_items'])) {
@@ -1223,8 +1220,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
         lines.add('称名 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
       }
     }
+    for (final e in _decodeNamedItems(checkin['setting_mantra_items'])) {
+      if (e.$1.isNotEmpty) {
+        lines.add('持咒 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
+      }
+    }
     for (final e in _decodeStringList(checkin['setting_copying_titles'])) {
       if (e.trim().isNotEmpty) lines.add('抄经 ${e.trim()}');
+    }
+    for (final e in _decodeStringList(checkin['setting_meditation_minutes'])) {
+      if (e.trim().isNotEmpty) lines.add('静坐 ${e.trim()}分钟');
     }
     for (final e in _decodeCustomTypes(checkin['custom_checkin_types'])) {
       if (e.label.isNotEmpty) {
@@ -1250,6 +1255,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
     final typeInfo = <String, ({String label, String unit})>{
       'meditation': (label: '静坐', unit: '分钟'),
       'reading': (label: '诵经', unit: '遍'),
+      'nianfo': (label: '念佛', unit: '声'),
       'mantra': (label: '持咒', unit: '遍'),
       'buddha': (label: '称名', unit: '声'),
       'copying': (label: '抄经', unit: '篇'),
@@ -1284,17 +1290,55 @@ class _UserSpacePageState extends State<UserSpacePage> {
     final typeInfo = <String, ({String label, String unit})>{
       'meditation': (label: '静坐', unit: '分钟'),
       'reading': (label: '诵经', unit: '遍'),
+      'nianfo': (label: '念佛', unit: '声'),
       'mantra': (label: '持咒', unit: '遍'),
       'buddha': (label: '称名', unit: '声'),
       'copying': (label: '抄经', unit: '篇'),
       for (final c in customs) c.key: (label: c.label, unit: c.unit),
     };
     final out = <CheckInStatEntry>[];
+    final details = _buildCheckinStatDetails(checkin);
     totals.forEach((k, v) {
       final info = typeInfo[k];
       if (info == null) return;
-      out.add(CheckInStatEntry(label: info.label, unit: info.unit, total: v));
+      out.add(CheckInStatEntry(
+          label: info.label,
+          unit: info.unit,
+          total: v,
+          detail: details[k] ?? const []));
     });
+    return out;
+  }
+
+  /// 汇总各类型每日功课的具体内容（诵的经、持的咒、抄的经等），
+  /// 只保留名称（数量由历史总量体现，不在此重复展示）。
+  Map<String, List<String>> _buildCheckinStatDetails(
+      Map<String, dynamic> checkin) {
+    final out = <String, List<String>>{};
+    out['meditation'] = [
+      for (final e in _decodeStringList(checkin['setting_meditation_minutes']))
+        if (e.trim().isNotEmpty) '${e.trim()}分钟',
+    ];
+    out['reading'] = [
+      for (final e in _decodeNamedItems(checkin['setting_reading_titles']))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['nianfo'] = [
+      for (final e in _decodeNamedItems(checkin['setting_nianfo_items']))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['mantra'] = [
+      for (final e in _decodeNamedItems(checkin['setting_mantra_items']))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['buddha'] = [
+      for (final e in _decodeNamedItems(checkin['setting_buddha_items']))
+        if (e.$1.trim().isNotEmpty) e.$1.trim(),
+    ];
+    out['copying'] = [
+      for (final e in _decodeStringList(checkin['setting_copying_titles']))
+        if (e.trim().isNotEmpty) e.trim(),
+    ];
     return out;
   }
 
@@ -1585,6 +1629,15 @@ class _UserSpacePageState extends State<UserSpacePage> {
       // 通过云端异步查找缺失的父节点。
       if (topId.isEmpty || !poolById.containsKey(topId)) {
         topId = n.id;
+      }
+      // 关键修复：顶部 id 正好是本条回复自己时（原贴是他人帖子/已删除），
+      // 本条回复作为组的根卡片单独展示，只登记根、不加入自己的 children。
+      // 否则根卡片（ReplyThread 内已显示原贴+回复）与下方 ReplyChain 里
+      // 会各渲染一次，导致回复内容重复显示（b → c+c）。
+      if (topId == n.id) {
+        children.putIfAbsent(topId, () => []);
+        if (!rootIds.contains(topId)) rootIds.add(topId);
+        continue;
       }
       if (!children.containsKey(topId)) {
         rootIds.add(topId);

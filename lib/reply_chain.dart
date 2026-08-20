@@ -67,9 +67,18 @@ class _ReplyChainState extends State<ReplyChain> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
-  /// 自己的头像也走 Navigator.push，以便支持侧滑返回手势。
+  /// 自己的头像/昵称在提供 onOpenSelf 时走回调（如切换到「我的」页，与修学主页
+  /// 左上角头像一致）；否则仍进个人主页空间。
   void _openUser(BuildContext context, PlazaNote note) {
     if (note.ownerUserId.isEmpty) return;
+    final me = AuthService.instance.currentUser.value;
+    final cachedUid = AuthService.instance.cachedUserId;
+    final isSelf = (me != null && note.ownerUserId == me.id) ||
+        (cachedUid != null && note.ownerUserId == cachedUid);
+    if (isSelf && widget.onOpenSelf != null) {
+      widget.onOpenSelf!();
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -221,6 +230,19 @@ class _ReplyChainState extends State<ReplyChain> {
                           account: note.authorAccount,
                           onTap: () {
                             if (note.ownerUserId.isNotEmpty) {
+                              final me =
+                                  AuthService.instance.currentUser.value;
+                              final cachedUid =
+                                  AuthService.instance.cachedUserId;
+                              final isSelf =
+                                  (me != null &&
+                                          note.ownerUserId == me.id) ||
+                                      (cachedUid != null &&
+                                          note.ownerUserId == cachedUid);
+                              if (isSelf && widget.onOpenSelf != null) {
+                                widget.onOpenSelf!();
+                                return;
+                              }
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(

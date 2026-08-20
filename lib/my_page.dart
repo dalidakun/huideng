@@ -13,6 +13,7 @@ import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
 import 'forgot_password_page.dart';
 import 'about_page.dart';
+import 'donate_page.dart';
 import 'export_notes_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
@@ -1055,10 +1056,19 @@ class _PostBlockState extends State<PostBlock> {
   }
 
   /// 点击头像/昵称进入该用户个人主页空间。
-  /// 自己的头像也走 Navigator.push，以便支持侧滑返回手势。
+  /// 自己的头像/昵称在提供 onOpenSelf 时走回调（如切换到「我的」页，与修学主页
+  /// 左上角头像一致）；否则仍进个人主页空间。
   void _openUserSpace() {
     final uid = widget.ownerUserId;
     if (uid == null || uid.isEmpty) return;
+    final me = AuthService.instance.currentUser.value;
+    final cachedUid = AuthService.instance.cachedUserId;
+    final isSelf = (me != null && uid == me.id) ||
+        (cachedUid != null && uid == cachedUid);
+    if (isSelf && widget.onOpenSelf != null) {
+      widget.onOpenSelf!();
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1355,11 +1365,24 @@ class _PostBlockState extends State<PostBlock> {
                                   onTap: () {
                                     final uid = widget.ownerUserId;
                                     if (uid != null && uid.isNotEmpty) {
+                                      final me = AuthService
+                                          .instance.currentUser.value;
+                                      final cachedUid = AuthService
+                                          .instance.cachedUserId;
+                                      final isSelf =
+                                          (me != null && uid == me.id) ||
+                                              (cachedUid != null &&
+                                                  uid == cachedUid);
+                                      if (isSelf &&
+                                          widget.onOpenSelf != null) {
+                                        widget.onOpenSelf!();
+                                        return;
+                                      }
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
-                                            builder: (_) =>
-                                                UserSpacePage(userId: uid)),
+                                            builder: (_) => UserSpacePage(
+                                                userId: uid)),
                                       );
                                     }
                                   },
@@ -4047,6 +4070,14 @@ class _SettingsPageState extends State<_SettingsPage> {
                             title: '关于我们',
                             subtitle: '版本 · 介绍 · 版权',
                             page: const AboutPage(),
+                          ),
+                          const SettingsDivider(),
+                          _SettingsLinkTile(
+                            icon: Icons.favorite_outline,
+                            iconColor: _gold,
+                            title: '资助',
+                            subtitle: '捐款资助服务器运行',
+                            page: const DonatePage(),
                           ),
                         ],
                       ),

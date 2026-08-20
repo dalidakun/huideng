@@ -7,15 +7,17 @@ const Color _textHint = Color(0xFFC4B5A8);
 const Color _border = Color(0xFFEBE1D6);
 const Color _gold = Color(0xFFD4A06A);
 
-/// 单类功课的历史累计条目。
+/// 单类功课的历史累计条目。`detail` 为每日功课中的具体内容（如诵了哪些经）。
 class CheckInStatEntry {
   final String label;
   final String unit;
   final double total;
+  final List<String> detail;
   const CheckInStatEntry({
     required this.label,
     required this.unit,
     required this.total,
+    this.detail = const [],
   });
 }
 
@@ -84,9 +86,17 @@ class CheckInHistoryStats extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Text(e.label,
-              style: const TextStyle(fontSize: 14, color: _textSec)),
-          const Spacer(),
+          Expanded(
+            child: Text(
+              e.detail.isEmpty
+                  ? e.label
+                  : '${e.label} · ${e.detail.join('·')}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14, color: _textSec),
+            ),
+          ),
+          const SizedBox(width: 10),
           Text(_fmtNum(e.total),
               style: const TextStyle(
                   fontSize: 19,

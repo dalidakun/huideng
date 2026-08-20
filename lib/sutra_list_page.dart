@@ -2615,7 +2615,7 @@ class SutraListPageState extends State<SutraListPage>
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFFFFAF5),
         borderRadius: BorderRadius.circular(8),
       ),
       child: ListTile(
