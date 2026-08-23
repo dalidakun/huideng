@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 import 'reading_badges.dart';
@@ -72,7 +73,9 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载收藏...',
+      );
     }
     if (_notes.isEmpty) {
       return _buildEmpty();

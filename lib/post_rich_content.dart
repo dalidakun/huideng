@@ -38,15 +38,16 @@ Widget buildPostRichText(
   required void Function(String title, String filePath) onSutraTap,
   required void Function(String topic) onTopicTap,
   Color linkColor = const Color(0xFF70867A),
+  Color topicColor = const Color(0xFFD3A069),
   int? maxLines,
   TextOverflow? overflow,
 }) {
   final userTokenRe = RegExp(r'\[@([^\]]+)\]\(user:([^)]+)\)');
   final topicRe = RegExp(r'#([^\s#，。！？,;:!?（）()]+)');
 
-  WidgetSpan linkSpan(String label, VoidCallback onTap) {
+  WidgetSpan linkSpan(String label, VoidCallback onTap, {Color? color}) {
     final linkStyle = style.copyWith(
-      color: linkColor,
+      color: color ?? linkColor,
       fontWeight: FontWeight.w600,
     );
     return WidgetSpan(
@@ -121,7 +122,8 @@ Widget buildPostRichText(
       if (m != null && m.group(1)!.isNotEmpty) {
         flushLit();
         final topic = m.group(1)!;
-        spans.add(linkSpan('#$topic', () => onTopicTap(topic)));
+        spans.add(linkSpan('#$topic', () => onTopicTap(topic),
+            color: topicColor));
         i = m.end;
         litStart = i;
         continue;
@@ -754,7 +756,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                             const Divider(
                                 height: 1,
                                 thickness: 0.6,
-                                color: Color(0xFFD8CCBC)),
+                                color: Color(0xFFE6DAC8)),
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 10),
                             child: rows[i].$1 != null
@@ -1808,18 +1810,19 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                   if (_newPostCount > 0 && index <= 1) {
                                     return const SizedBox(height: 10);
                                   }
-                                  // 发起置顶帖子与下一条之间不画分割线（白色卡片自带区分）。
+                                  // 发起置顶帖子与下一条之间不画分割线，
+                                  // 但留出与经书讨论页一致的间隔（上下内边距 + 12 ≈ 32px）。
                                   final noteIndex =
                                       index - (_newPostCount > 0 ? 1 : 0);
                                   if (noteIndex == 0 &&
                                       _notes.isNotEmpty &&
                                       _notes.first.id == _pinnedId) {
-                                    return const SizedBox.shrink();
+                                    return const SizedBox(height: 12);
                                   }
                                   return const Divider(
                                       height: 1,
                                       thickness: 0.6,
-                                      color: Color(0xFFD8CCBC));
+                                      color: Color(0xFFE6DAC8));
                                 },
                                 itemBuilder: (context, index) {
                                   // 提醒条位于索引 1：置顶帖子之后、下面讨论帖子之前。

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'my_page.dart';
 import 'note_stats_center.dart';
@@ -110,7 +111,16 @@ class NoteDetailPage extends StatefulWidget {
 
   /// 从评论贴时间戳进入时，打开后滚动定位到该评论贴位置。
   final String? scrollToReplyId;
-  const NoteDetailPage({super.key, required this.noteId, this.scrollToReplyId});
+
+  /// 入口明确是公告（公告栏点击进入）时置 true：即使云端旧数据缺 kind 字段，
+  /// 详情页也按公告帖渲染（白色圆角卡片包裹 + 右上角「公告」标签）。
+  final bool isAnnouncement;
+  const NoteDetailPage({
+    super.key,
+    required this.noteId,
+    this.scrollToReplyId,
+    this.isAnnouncement = false,
+  });
 
   @override
   State<NoteDetailPage> createState() => _NoteDetailPageState();
@@ -766,20 +776,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载帖子...',
+      );
     }
     if (_error || _note == null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 48, color: _textHint),
-            const SizedBox(height: 12),
-            Text('加载失败', style: TextStyle(fontSize: 15, color: _textSec)),
-            const SizedBox(height: 12),
-            TextButton(onPressed: _load, child: const Text('重试')),
-          ],
-        ),
+      return AppLoadError(
+        onRetry: _load,
       );
     }
     final note = _note!;
@@ -818,7 +821,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 ),
               ] else ...[
                 // 头像在左，昵称/角标/内容/引用框都在头像右侧，与首页帖子对齐。
-                Row(
+                // 公告帖：与话题页「发起人」帖同款，顶部帖子用白色圆角卡片
+                // 包裹（右上角已带「公告」标签）。
+                _wrapAnnouncementPost(
+                  note,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     GestureDetector(
@@ -965,9 +975,20 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     ),
                   ],
                 ),
+                      // 公告帖：四个指标（讨论/转发/喜欢/阅读）一并收进白色卡片内。
+                      if (_isAnnouncementNote(note)) ...[
+                        const SizedBox(height: 10),
+                        _buildActionsRow(note, liked),
+                      ],
+                    ],
+                  ),
+                ),
               ],
-              const SizedBox(height: 8),
-              _buildActionsRow(note, liked),
+              // 普通帖：操作行保持卡片外原样式；公告帖已在白卡内渲染，避免重复两排。
+              if (!_isAnnouncementNote(note)) ...[
+                const SizedBox(height: 8),
+                _buildActionsRow(note, liked),
+              ],
               // 原贴（含操作行）与下面的评论用分割线分开。
               const SizedBox(height: 12),
               const Divider(height: 1, color: _border),
@@ -992,8 +1013,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   ),
                 )
               else
-                for (final e in visibleEntries)
-                  _buildDetailRow(e),
+                for (var i = 0; i < visibleEntries.length; i++) ...[
+                  // 评论之间的分割线：配合每行上下内边距留出呼吸感，不拥挤。
+                  if (i > 0)
+                    const Divider(
+                        height: 1,
+                        thickness: 0.6,
+                        color: Color(0xFFE6DAC8)),
+                  _buildDetailRow(visibleEntries[i]),
+                ],
               if (!showAll)
                 InkWell(
                   onTap: () => setState(() => _commentsShowAll = true),
@@ -1546,7 +1574,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
     const contentStyle = TextStyle(fontSize: 15, color: _text, height: 1.6);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
+      // 上下各 12px：与评论间分割线配合，间距舒适不拥挤。
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1826,6 +1855,25 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
+  /// 是否公告帖：入口标记或云端 kind 字段任一命中即可。
+  bool _isAnnouncementNote(PlazaNote note) =>
+      widget.isAnnouncement || note.kind == 'announcement';
+
+  /// 公告帖包裹：与话题页「发起人」帖同款白色圆角卡片；普通帖原样返回。
+  /// 内边距上下放宽（14/12），避免帖子内容贴着卡片边缘显得被截断。
+  Widget _wrapAnnouncementPost(PlazaNote note, Widget post) {
+    if (!_isAnnouncementNote(note)) return post;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: post,
+    );
+  }
+
   /// 昵称行（不含头像）：昵称 + 认证 + @账户名 + 阅藏进度 + 三点菜单
   /// （时间戳在内容下方，与首页帖子一致；任一元素都不换行）。
   Widget _buildUserNameRow(PlazaNote note) {
@@ -1889,6 +1937,22 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             ],
           ),
         ),
+        // 公告帖：与话题页「发起人」标签同款样式（D3A069 包裹色 + 白字）。
+        if (_isAnnouncementNote(note)) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFD3A069),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Text('公告',
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 8),
+        ],
         // 每个帖子都有三点菜单：自己的可编辑/删除，他人的可关注/屏蔽。
         GestureDetector(
           behavior: HitTestBehavior.opaque,

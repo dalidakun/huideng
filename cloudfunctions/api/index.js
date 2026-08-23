@@ -928,7 +928,7 @@ exports.main = async (event, context) => {
       }
 
       // 讨论页热门榜：聚合公开帖子中的 #话题 与 $经名 引用热度，
-      // 返回 top50 话题 + top50 经文（客户端卡片取前 3 + 当日轮换，「更多」页展示全榜）。
+      // 返回全量话题 + 全量经文（最多各 200 条；客户端卡片取前几名做当日轮换，「更多」页展示全榜）。
       case "getHotDiscussions": {
         const nowMs = Date.now();
         // 15 分钟 TTL 缓存：避免每次请求都全表扫描。
@@ -948,11 +948,9 @@ exports.main = async (event, context) => {
           const br = await topicBans.limit(1000).get();
           bannedTopics = new Set((br.data || []).map((r) => String(r.name || "")));
         } catch (e) {}
-        // 滚动窗口只统计最近 14 天的公开帖子（更早的帖子完全不进入榜单），
-        // 避免热门话题/经文靠历史存量霸顶——必须持续有近期讨论才能保持上榜。
-        // 按最新在前扫描；因按 createdAt 倒序，一旦出现早于窗口的帖子即停止，
-        // 并设置扫描上限控制冷启动耗时。
-        const window = nowMs - 14 * 24 * 3600000;
+        // 不再按时间窗口截断（旧逻辑只统计最近 14 天，导致 14 天没新帖的话题
+        // 整体掉出榜单、「更多」页时有时无）。改为全量扫描最新 cap 条公开帖子，
+        // 所有出现过的话题/经文都稳定在榜；排序仍由互动量 + 时间衰减决定。
         // 单条记录对热度榜的贡献（话题帖、经书讨论都复用同款聚合逻辑）：
         // - ageHours 小（新发布）且 engagement 越高，得分越高；
         // - 经书讨论（sutraDiscussions）的 sutraTitle 字段视作一条 $经名 引用，
@@ -1021,9 +1019,8 @@ exports.main = async (event, context) => {
         });
         const cap = 3000;
         let scanned = 0;
-        let done = false;
         let skip = 0;
-        while (scanned < cap && !done) {
+        while (scanned < cap) {
           const r = await hotBase
             .orderBy("createdAt", "desc")
             .skip(skip)
@@ -1032,10 +1029,6 @@ exports.main = async (event, context) => {
           const batch = r.data || [];
           if (batch.length === 0) break;
           for (const n of batch) {
-            if ((n.createdAt || 0) < window) {
-              done = true;
-              break;
-            }
             if (++scanned > cap) break;
             aggregateRecord(
               n.createdAt,
@@ -1056,8 +1049,7 @@ exports.main = async (event, context) => {
           let sdSkip = 0;
           const sdCap = 2000;
           let sdScanned = 0;
-          let sdDone = false;
-          while (sdScanned < sdCap && !sdDone) {
+          while (sdScanned < sdCap) {
             const sr = await sutraDiscussions
               .orderBy("createdAt", "desc")
               .skip(sdSkip)
@@ -1066,10 +1058,6 @@ exports.main = async (event, context) => {
             const sBatch = sr.data || [];
             if (sBatch.length === 0) break;
             for (const d of sBatch) {
-              if ((d.createdAt || 0) < window) {
-                sdDone = true;
-                break;
-              }
               if (++sdScanned > sdCap) break;
               aggregateRecord(
                 d.createdAt,

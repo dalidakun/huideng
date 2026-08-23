@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'login_page.dart';
 
 const Color _primary = Color(0xFF5C4033);
@@ -163,7 +164,9 @@ class _UserListPageState extends State<UserListPage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载用户列表...',
+      );
     }
     if (!AuthService.instance.isLoggedIn) {
       return Center(

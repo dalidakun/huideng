@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
@@ -280,7 +281,9 @@ class _PlazaPageState extends State<PlazaPage> {
 
   Widget _buildBody() {
     if (_loading && _notes.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载内容...',
+      );
     }
     if (_error && _notes.isEmpty) {
       return _buildError();
@@ -549,38 +552,9 @@ class _PlazaPageState extends State<PlazaPage> {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 120),
       children: [
-        Column(
-          children: [
-            Icon(Icons.wifi_off_outlined, size: 56, color: _textHint),
-            const SizedBox(height: 14),
-            Text('加载失败',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-            if (_errorMsg.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Text(_errorMsg,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12, color: _textHint)),
-              ),
-            ],
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _load,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('重试', style: TextStyle(fontSize: 14)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _gold,
-                foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                elevation: 0,
-              ),
-            ),
-          ],
+        AppLoadError(
+          subtitle: _errorMsg.isNotEmpty ? _errorMsg : '网络似乎不太顺畅',
+          onRetry: _load,
         ),
       ],
     );

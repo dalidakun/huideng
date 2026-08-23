@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'loading_widgets.dart';
 import 'sync_service.dart';
 import 'user_avatar.dart';
 import 'user_avatar_cache.dart';
@@ -162,7 +163,7 @@ class StudyHubPageState extends State<StudyHubPage>
   bool _announceLoading = false;
   bool _announceError = false;
   static const int _feedPageSize = 20;
-  /// 讨论栏目顶部的热门话题 / 热门经文（云端聚合，客户端取 3 个做当日轮换）。
+  /// 讨论栏目顶部的热门话题 / 热门经文（云端聚合，客户端经文取 8 个、话题取 4 个做当日轮换）。
   List<HotDiscussionItem> _hotTopics = [];
   List<HotDiscussionItem> _hotSutras = [];
   /// 全量热门榜（top50）：供「更多」页展示完整的经文/话题热度排行。
@@ -947,8 +948,8 @@ class StudyHubPageState extends State<StudyHubPage>
   _PlazaFeedCache _cacheFor(String tab) =>
       _tabCaches.putIfAbsent(tab, _PlazaFeedCache.new);
 
-  /// 拉取讨论栏目的热门话题 / 热门经文（云端聚合 top50，卡片各取 3 个做当日轮换）。
-  /// 轮换规则：前 3 名按当天日期确定性取 2 个 + 第 4~10 名取 1 个，
+  /// 拉取讨论栏目的热门话题 / 热门经文（云端聚合 top50，经文取 8 个、话题取 4 个做当日轮换）。
+  /// 轮换规则：前 N 名按当天日期确定性跳过少数几个 + 其余名次补足，
   /// 当天内稳定、跨天变化，避免永远同一批。经文名需命中经书目录才展示。
   Future<void> _loadHotDiscussions() async {
     try {
@@ -967,9 +968,9 @@ class StudyHubPageState extends State<StudyHubPage>
           : topics.where((t) => !bans.contains(t.name)).toList();
       if (!mounted) return;
       setState(() {
-        // 卡片只在前 10 名里做当日轮换，全量榜留给「更多」页。
-        _hotTopics = _pickHotThree(validTopics.take(10).toList(), daySeed);
-        _hotSutras = _pickHotThree(validSutras.take(10).toList(), daySeed);
+        // 经文两行 4+4（top14 内轮换）、话题一行 4 个（top10 内轮换），全量榜留给「更多」页。
+        _hotTopics = _pickHotItems(validTopics.take(10).toList(), 4, daySeed);
+        _hotSutras = _pickHotItems(validSutras.take(14).toList(), 8, daySeed);
         _hotTopicAll = validTopics;
         _hotSutraAll = validSutras;
       });
@@ -978,20 +979,29 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 当日确定性轮换：前 3 名取 2 个（按 seed 决定少展示哪个）+ 第 4~10 名取 1 个；
-  /// 总量不足 3 个时全部展示，避免「有 1 个却显示没有」。
-  static List<T> _pickHotThree<T>(List<T> list, int daySeed) {
+  /// 当日确定性轮换取 count 个：前 count 名按 seed 跳过 count~/3 个，
+  /// 再由第 count 名以后补足剩余名额；总量不足时全部展示，避免「有 1 个却显示没有」。
+  static List<T> _pickHotItems<T>(List<T> list, int count, int daySeed) {
     if (list.isEmpty) return const [];
-    if (list.length <= 3) return List.of(list);
-    final first = list.sublist(0, 3);
-    final rest = list.sublist(3);
+    if (list.length <= count) return List.of(list);
+    final first = list.sublist(0, count);
+    final rest = list.sublist(count);
     final picked = <T>[];
-    final skipIdx = daySeed % first.length;
+    // 跳过位按 seed 确定、互不重合。
+    final skip = count ~/ 3;
+    final offset = daySeed % count;
+    final stride = 1 + daySeed % (count - 1);
+    final skips = <int>{
+      for (var i = 0; i < skip; i++) (offset + i * stride) % count
+    };
     for (var i = 0; i < first.length; i++) {
-      if (i == skipIdx) continue;
+      if (skips.contains(i)) continue;
       picked.add(first[i]);
     }
-    picked.add(rest[daySeed % rest.length]);
+    // 其余名次补足剩余名额（不足时有多少取多少）。
+    for (var i = 0; i < skip && i < rest.length; i++) {
+      picked.add(rest[(offset + i) % rest.length]);
+    }
     return picked;
   }
 
@@ -1720,50 +1730,53 @@ class StudyHubPageState extends State<StudyHubPage>
         elevation: 0,
         shadowColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Color(0xFF212121)),
-        title: Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: Row(
-            children: [
-              GestureDetector(
-                // 与帖子卡头像一致：打开「我的」页（个人主页）。
-                // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
-                onTap: widget.onOpenMyPage,
-                child: UserAvatar(
-                  userId: AuthService.instance.currentUser.value?.id,
-                  radius: 16,
+        title: GestureDetector(
+          onDoubleTap: scrollToTop,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 2),
+            child: Row(
+              children: [
+                GestureDetector(
+                  // 与帖子卡头像一致：打开「我的」页（个人主页）。
+                  // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
+                  onTap: widget.onOpenMyPage,
+                  child: UserAvatar(
+                    userId: AuthService.instance.currentUser.value?.id,
+                    radius: 16,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              const Text(
-                '修学',
-                style: TextStyle(
-                  color: Color(0xFF5d4037),
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
+                const SizedBox(width: 10),
+                const Text(
+                  '功课',
+                  style: TextStyle(
+                    color: Color(0xFF5d4037),
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              const Text(
-                '·',
-                style: TextStyle(
-                  color: Color(0xFF9E9588),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  '燃一盏灯，看见自己，照亮别人',
+                const SizedBox(width: 6),
+                const Text(
+                  '·',
                   style: TextStyle(
                     color: Color(0xFF9E9588),
                     fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    '燃一盏灯，看见自己，照亮别人',
+                    style: TextStyle(
+                      color: Color(0xFF9E9588),
+                      fontSize: 12,
+                    ),
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -2307,13 +2320,8 @@ class StudyHubPageState extends State<StudyHubPage>
           if (hotCard != null) hotCard,
           SliverFillRemaining(
             hasScrollBody: false,
-            child: Center(
-              child: const SizedBox(
-                width: 24,
-                height: 24,
-                child:
-                    CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
-              ),
+            child: const AppLoadingIndicator(
+              message: '正在加载内容...',
             ),
           ),
         ];
@@ -2370,8 +2378,8 @@ if (_feedAuthDead) {
       if (_newPostCount > 0)
         SliverToBoxAdapter(child: _buildNewPostBanner()),
       SliverPadding(
-        // 横向内边距移入每条帖子内部，保证分割线通栏贴边（与「我的 → 帖子」一致）。
-        padding: const EdgeInsets.only(top: 4, bottom: 32),
+        // 横向内边距放在列表层：分割线随内容缩进、不贴手机边缘（与话题页一致）。
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         sliver: SliverList(
           key: ValueKey('feed_$_feedVersion'),
           delegate: SliverChildBuilderDelegate(
@@ -2386,14 +2394,11 @@ if (_feedAuthDead) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 帖子顶部通栏分割线（首条不画，避免顶部多一条线）。
+                  // 帖子顶部分割线（首条不画，避免顶部多一条线）。
                   if (index > 0)
                     const Divider(
-                        height: 1, thickness: 0.6, color: Color(0xFFD8CCBC)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: body,
-                  ),
+                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8)),
+                  body,
                 ],
               );
             },
@@ -2455,28 +2460,12 @@ if (_feedAuthDead) {
 
   Widget _buildFeedFooter() {
     if (_feedLoading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 18),
-        child: Center(
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2, color: _gold),
-          ),
-        ),
-      );
+      return const AppLoadMoreIndicator();
     }
     if (_feedError) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Center(
-          child: TextButton.icon(
-            onPressed: _loadFeed,
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('加载失败，点击重试', style: TextStyle(fontSize: 13)),
-            style: TextButton.styleFrom(foregroundColor: _textSec),
-          ),
-        ),
+      return AppLoadMoreIndicator(
+        hasError: true,
+        onRetry: _loadFeed,
       );
     }
     if (!_feedHasMore) {
@@ -2546,10 +2535,14 @@ if (_feedAuthDead) {
         SliverFillRemaining(
           hasScrollBody: false,
           child: Center(
-            child: const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(minHeight: math.max(0.0, viewportH - _headerHeight())),
+              child: const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+              ),
             ),
           ),
         ),
@@ -2585,18 +2578,28 @@ if (_feedAuthDead) {
     }
     return [
       SliverPadding(
-        padding: const EdgeInsets.only(top: 4, bottom: 32),
+        // 横向内边距放在列表层，公告卡片之间不放分割线。
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
-            (context, index) => _buildAnnouncementCard(_announcements[index]),
+            (context, index) =>
+                _buildAnnouncementCard(_announcements[index]),
             childCount: _announcements.length,
           ),
         ),
       ),
+      if (viewportH - _headerHeight() > 0)
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: math.max(0, viewportH - _headerHeight() - 40),
+          ),
+        ),
     ];
   }
 
-  /// 讨论栏目顶部的热门卡片：热门经文 / 热门话题两区，各 4 个可点击胶囊 + 更多入口。
+  /// 讨论栏目顶部的热门卡片，三行布局：
+  /// 第一行 4 个经文；第二行 4 个经文 + 「更多经文」入口；
+  /// 第三行 4 个话题 + 「更多话题」入口。整块无标题文案、无边框线条。
   /// 数据未就绪（加载中/失败）时返回 null 不渲染，避免占位闪烁。
   Widget? _buildHotCardSliver() {
     if (_hotTopics.isEmpty && _hotSutras.isEmpty) return null;
@@ -2607,40 +2610,35 @@ if (_feedAuthDead) {
           decoration: BoxDecoration(
             color: _overlay,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _border),
           ),
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 热门经文：绿色系（与「经书讨论」入口同色调），一行横滑 + 末尾更多入口。
-              _hotSectionLabel(
-                Icons.menu_book_rounded,
-                const Color(0xFF71867A),
-                '热门经文',
-                count: _hotSutraAll.isEmpty ? '' : '${_hotSutraAll.length} 部',
-              ),
-              const SizedBox(height: 9),
+              // 第一行：前 4 个热门经文（绿色系），第一个经文用火把替换 $ 前缀。
               _buildHotChips(
-                _hotSutras,
+                _hotSutras.take(4).toList(),
                 isSutra: true,
+                showFirstFire: true,
+              ),
+              const SizedBox(height: 10),
+              // 第二行：后 4 个热门经文 + 「更多经文」入口。
+              _buildHotChips(
+                _hotSutras.skip(4).toList(),
+                isSutra: true,
+                moreLabel: '更多经文',
                 onMore: _hotSutraAll.isEmpty
                     ? null
                     : () => _openHotListPage(
                         isSutra: true, title: '热门经文讨论'),
               ),
-              const SizedBox(height: 16),
-              // 热门话题：金色系（与 #话题 链接同色调）。
-              _hotSectionLabel(
-                Icons.local_fire_department_outlined,
-                const Color(0xFF9A6B3F),
-                '热门话题',
-                count: _hotTopicAll.isEmpty ? '' : '${_hotTopicAll.length} 个',
-              ),
-              const SizedBox(height: 9),
+              const SizedBox(height: 10),
+              // 第三行：4 个热门话题（金色系）+ 「更多话题」入口，第一个话题用火把替换 # 前缀。
               _buildHotChips(
                 _hotTopics,
                 isSutra: false,
+                moreLabel: '更多话题',
+                showFirstFire: true,
                 onMore: _hotTopicAll.isEmpty
                     ? null
                     : () => _openHotListPage(
@@ -2650,24 +2648,6 @@ if (_feedAuthDead) {
           ),
         ),
       ),
-    );
-  }
-
-  /// 热门区小节标题：小图标 + 标题 + 右侧总数角标，色系与胶囊一致。
-  Widget _hotSectionLabel(IconData icon, Color color, String label,
-      {String count = ''}) {
-    return Row(
-      children: [
-        Icon(icon, size: 14, color: color),
-        const SizedBox(width: 5),
-        Text(label,
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
-        const Spacer(),
-        if (count.isNotEmpty)
-          Text(count,
-              style: const TextStyle(fontSize: 11, color: _textHint)),
-      ],
     );
   }
 
@@ -2691,30 +2671,40 @@ if (_feedAuthDead) {
     });
   }
 
-  /// 热门胶囊：一行横滑展示（3 个胶囊 + 更多入口），字数较多时左右滑动查看，
-  /// 不换行截断、不撑高卡片。
+  /// 热门胶囊行：一行横滑展示（最多 4 个胶囊，可带「更多」入口），
+  /// 字数较多时左右滑动查看，不换行截断、不撑高卡片。
+  /// 本行没有胶囊时：有「更多」入口就只渲染入口，否则整行收起。
+  /// [showFirstFire] 为 true 时第一个胶囊用火把图标替换 $/# 前缀。
   Widget _buildHotChips(List<HotDiscussionItem> items,
-      {required bool isSutra, VoidCallback? onMore}) {
+      {required bool isSutra,
+      String moreLabel = '更多',
+      VoidCallback? onMore,
+      bool showFirstFire = false}) {
     if (items.isEmpty) {
-      return Text(isSutra ? '还没有热门经文' : '还没有热门话题',
-          style: const TextStyle(fontSize: 13, color: _textSec));
+      if (onMore == null) return const SizedBox.shrink();
+      return Row(children: [_buildHotMoreChip(onMore, label: moreLabel)]);
     }
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          for (final it in items)
+          for (var i = 0; i < items.length; i++)
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: _buildHotChip(it, isSutra: isSutra),
+              child: _buildHotChip(
+                items[i],
+                isSutra: isSutra,
+                showFire: i == 0 && showFirstFire,
+              ),
             ),
-          if (onMore != null) _buildHotMoreChip(onMore),
+          if (onMore != null) _buildHotMoreChip(onMore, label: moreLabel),
         ],
       ),
     );
   }
 
-  Widget _buildHotChip(HotDiscussionItem it, {required bool isSutra}) {
+  Widget _buildHotChip(HotDiscussionItem it,
+      {required bool isSutra, bool showFire = false}) {
     final color = isSutra ? const Color(0xFF71867A) : const Color(0xFF9A6B3F);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -2724,17 +2714,28 @@ if (_feedAuthDead) {
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
-        child: Text(isSutra ? '\$${it.name}' : '#${it.name}',
-            style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showFire)
+              const Icon(Icons.local_fire_department,
+                  size: 15, color: Color(0xFFD93B28))
+            else
+              Text(isSutra ? '\$' : '#',
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+            Text(it.name,
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+          ],
+        ),
       ),
     );
   }
 
-  /// 「更多 ›」胶囊：置灰细描边，与热门胶囊同一圆角规格。
-  Widget _buildHotMoreChip(VoidCallback onMore) {
+  /// 「更多 ›」胶囊：置灰、无描边，与热门胶囊同一圆角规格。
+  Widget _buildHotMoreChip(VoidCallback onMore, {String label = '更多'}) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onMore,
@@ -2743,14 +2744,13 @@ if (_feedAuthDead) {
         decoration: BoxDecoration(
           color: _card,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: _border),
         ),
-        child: const Row(
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('更多',
-                style: TextStyle(fontSize: 12, color: _textSec)),
-            Icon(Icons.chevron_right, size: 14, color: _textSec),
+            Text(label,
+                style: const TextStyle(fontSize: 12, color: _textSec)),
+            const Icon(Icons.chevron_right, size: 14, color: _textSec),
           ],
         ),
       ),
@@ -2780,14 +2780,17 @@ if (_feedAuthDead) {
 
   Widget _buildAnnouncementCard(AnnouncementItem item) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      // 横向内边距已由列表层提供，这里只保留纵向间距。
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-                builder: (_) => NoteDetailPage(noteId: item.id)),
+                builder: (_) => NoteDetailPage(
+                    noteId: item.id,
+                    isAnnouncement: true)),
           ),
           borderRadius: BorderRadius.circular(14),
           child: Container(
@@ -2925,30 +2928,8 @@ if (_feedAuthDead) {
   }
 
   Widget _buildFeedError() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 60, bottom: 40),
-      child: Column(
-        children: [
-          Icon(Icons.wifi_off_outlined, size: 52, color: _textHint),
-          const SizedBox(height: 14),
-          const Text('加载失败',
-              style: TextStyle(
-                  fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-          const SizedBox(height: 12),
-          ElevatedButton.icon(
-            onPressed: _loadFeed,
-            icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('重试', style: TextStyle(fontSize: 14)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _gold,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-              elevation: 0,
-            ),
-          ),
-        ],
-      ),
+    return AppLoadError(
+      onRetry: _loadFeed,
     );
   }
 
@@ -3071,15 +3052,19 @@ if (_feedAuthDead) {
           clipBehavior: Clip.none,
           children: [
             // 连接线：原贴头像底部 → 下面第一个回复头像之间。
-            // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
+            // top:68 = 根帖外层顶内边距(6) + 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
             // bottom:6 = 线下端距 ReplyChain 首个头像 6px。
             Positioned(
               left: 21,
-              top: 62,
+              top: 68,
               bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
-            rootWidget,
+            // 与无回复时同款 vertical:6 外边距：原帖与上方分割线的间隔不因回复出现而变小。
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: rootWidget,
+            ),
           ],
         ),
         ReplyChain(

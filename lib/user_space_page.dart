@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'checkin_history_stats.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
@@ -873,7 +874,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载...',
+      );
     }
     if (_isBlocked && !_isSelf) {
       return _buildBlockedPlaceholder();
@@ -964,7 +967,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
       child: _buildScrollListener(
         ListView.builder(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(top: 4, bottom: 32),
+          // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
           itemCount: groups.length,
           itemBuilder: (context, index) {
             final g = groups[index];
@@ -975,11 +979,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   const Divider(
                       height: 1,
                       thickness: 0.6,
-                      color: Color(0xFFD8CCBC)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: _buildReplyGroupCard(g.$1, g.$2),
-                ),
+                      color: Color(0xFFE6DAC8)),
+                _buildReplyGroupCard(g.$1, g.$2),
               ],
             );
           },
@@ -1005,7 +1006,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget _buildReadingTab() {
     final data = _homeData;
     if (!_homeLoaded) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载精读信息...',
+      );
     }
     if (_homeError) {
       return _tabPlaceholder(
@@ -1148,7 +1151,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget _buildCheckinTab() {
     final data = _homeData;
     if (!_homeLoaded) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载功课信息...',
+      );
     }
     if (_homeError) {
       return _tabPlaceholder(

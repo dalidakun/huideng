@@ -317,7 +317,9 @@ class _AdminManagePageState extends State<AdminManagePage> {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-                builder: (_) => NoteDetailPage(noteId: item.id)),
+                builder: (_) => NoteDetailPage(
+                    noteId: item.id,
+                    isAnnouncement: true)),
           ),
           borderRadius: BorderRadius.circular(16),
           child: Padding(

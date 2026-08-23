@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'app_state.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
@@ -475,22 +476,13 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       );
     }
     if (_loading) {
-      return Center(
-        child: CircularProgressIndicator(
-          strokeWidth: 2.5,
-          color: _gold,
-          backgroundColor: p.card,
-        ),
+      return const AppLoadingIndicator(
+        message: '正在加载通知...',
       );
     }
     if (_error && _groups.isEmpty) {
-      return _buildCentered(
-        p,
-        icon: Icons.wifi_off_outlined,
-        title: '加载失败',
-        subtitle: '网络似乎不太顺畅',
-        buttonText: '重试',
-        onButton: _load,
+      return AppLoadError(
+        onRetry: _load,
       );
     }
     if (_groups.isEmpty) {
@@ -500,8 +492,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            _buildCentered(
-              p,
+            const AppEmptyState(
               icon: Icons.notifications_none_rounded,
               title: '暂无通知',
               subtitle: '与其他同修的互动会显示在这里',
@@ -521,17 +512,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
           if (index == _groups.length) {
             if (!_hasMore) return const SizedBox(height: 12);
             WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());
-            return const Padding(
-              padding: EdgeInsets.all(18),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: _gold),
-                ),
-              ),
-            );
+            return const AppLoadMoreIndicator();
           }
           final g = _groups[index];
           if (g.type == 'repost_me') {

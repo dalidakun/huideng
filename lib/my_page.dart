@@ -33,6 +33,7 @@ import 'certification_page.dart';
 import 'note_stats_center.dart';
 import 'reading_badges.dart';
 import 'reading_time_service.dart';
+import 'loading_widgets.dart';
 
 const Color _primary = Color(0xFF5C4033);
 const Color _primaryLight = Color(0xFF8B6B5A);
@@ -2319,7 +2320,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
           ),
           const SliverFillRemaining(
             child: Center(
-              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+              child: AppLoadingIndicator(message: '正在加载内容...'),
             ),
           ),
         ],
@@ -2376,8 +2377,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
               child: SizedBox(height: 4),
             ),
             SliverPadding(
-              // 横向内边距移入每条帖子内部，保证分割线通栏贴边。
-              padding: const EdgeInsets.only(top: 4, bottom: 32),
+              // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -2395,24 +2396,21 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                           ),
                         );
                       }
-                      // 末尾收尾分割线，保证最后一条帖子下方也有分割线（通栏贴边）。
+                      // 末尾收尾分割线，保证最后一条帖子下方也有分割线（随内容缩进）。
                       return const Divider(
-                          height: 1, thickness: 0.6, color: Color(0xFFD8CCBC));
+                          height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
                     }
                     final note = _notes[index];
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // 帖子顶部通栏分割线（首条不画，避免顶部多一条线）。
+                        // 帖子顶部分割线（首条不画，避免顶部多一条线）。
                         if (index > 0)
                           const Divider(
                               height: 1,
                               thickness: 0.6,
-                              color: Color(0xFFD8CCBC)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: _buildNoteCard(note),
-                        ),
+                              color: Color(0xFFE6DAC8)),
+                        _buildNoteCard(note),
                       ],
                     );
                   },
@@ -2967,7 +2965,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               child: SizedBox(height: 4),
             ),
             SliverPadding(
-              padding: const EdgeInsets.only(top: 4, bottom: 32),
+              // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -2986,7 +2985,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                         );
                       }
                       return const Divider(
-                          height: 1, thickness: 0.6, color: Color(0xFFD8CCBC));
+                          height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
                     }
                     final Widget body;
                     if (index < _pinnedReplies.length) {
@@ -3004,11 +3003,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                           const Divider(
                               height: 1,
                               thickness: 0.6,
-                              color: Color(0xFFD8CCBC)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: body,
-                        ),
+                              color: Color(0xFFE6DAC8)),
+                        body,
                       ],
                     );
                   },
@@ -3291,7 +3287,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
           ),
           const SliverFillRemaining(
             child: Center(
-              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+              child: AppLoadingIndicator(message: '正在加载内容...'),
             ),
           ),
         ],
@@ -3325,6 +3321,119 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 }
 
+/// 「喜欢 / 书签」Tab 共用的帖子管理操作：置顶（本地）/ 编辑 / 删除自己的帖子，
+/// 与「我的帖子」Tab 行为一致；三点菜单由 PostBlock 内部按是否本人自动分发
+/// （本人 → 置顶/编辑/删除，他人 → 关注/屏蔽）。
+mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
+  final Set<String> _sharedPinnedIds = {};
+  static const String _sharedPinnedKey = 'my_pinned_note_ids';
+
+  /// 编辑等操作成功后由 Tab 自行刷新列表。
+  void onSharedNotesChanged();
+
+  bool isSharedPinned(PlazaNote note) => _sharedPinnedIds.contains(note.id);
+
+  Future<void> loadSharedPinnedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _sharedPinnedIds
+        ..clear()
+        ..addAll(prefs.getStringList(_sharedPinnedKey) ?? const []);
+    } catch (_) {}
+  }
+
+  /// 置顶/取消置顶（本地保存，与帖子/回复 Tab 共用同一份置顶记录）。
+  Future<void> toggleSharedPin(PlazaNote note) async {
+    final wasPinned = _sharedPinnedIds.contains(note.id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_sharedPinnedKey) ?? [];
+      if (wasPinned) {
+        list.remove(note.id);
+        _sharedPinnedIds.remove(note.id);
+      } else {
+        list.add(note.id);
+        _sharedPinnedIds.add(note.id);
+      }
+      await prefs.setStringList(_sharedPinnedKey, list);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {});
+    showPostToast(context, wasPinned ? '已取消置顶' : '已置顶');
+  }
+
+  /// 编辑帖子内容：更新云端后通知 Tab 刷新。
+  Future<void> editSharedNote(PlazaNote note) async {
+    final saved = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '编辑帖子',
+        hint: '写下新的内容…',
+        initialText: note.content,
+        maxLength: 2000,
+        minLines: 3,
+        maxLines: 6,
+        confirmText: '保存',
+      ),
+    );
+    if (saved == null || saved.trim().isEmpty || !mounted) return;
+    try {
+      await CloudNotesService.instance
+          .updateSharedNote(cloudId: note.id, content: saved.trim());
+      if (!mounted) return;
+      showPostToast(context, '已更新');
+      onSharedNotesChanged();
+    } catch (e) {
+      if (mounted) showPostToast(context, e.toString());
+    }
+  }
+
+  /// 删除帖子：从菩提空间移除后回调移除该条并刷新界面。
+  Future<void> deleteSharedNote(
+    PlazaNote note, {
+    required VoidCallback onRemoved,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除帖子',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await CloudNotesService.instance.deleteCloudNote(note.id);
+      _sharedPinnedIds.remove(note.id);
+      if (!mounted) return;
+      setState(onRemoved);
+      showPostToast(context, '已删除');
+    } catch (e) {
+      if (mounted) showPostToast(context, e.toString());
+    }
+  }
+}
+
 /// 喜欢 Tab：我点赞过的帖子列表。
 class _MyLikesTab extends StatefulWidget {
   final bool isLoggedIn;
@@ -3335,10 +3444,14 @@ class _MyLikesTab extends StatefulWidget {
   State<_MyLikesTab> createState() => _MyLikesTabState();
 }
 
-class _MyLikesTabState extends State<_MyLikesTab> {
+class _MyLikesTabState extends State<_MyLikesTab>
+    with _SharedNoteActions<_MyLikesTab> {
   List<PlazaNote>? _notes;
   bool _loading = true;
   String? _error;
+
+  @override
+  void onSharedNotesChanged() => _load(silent: true);
 
   @override
   void initState() {
@@ -3369,11 +3482,13 @@ class _MyLikesTabState extends State<_MyLikesTab> {
     }
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     // 先校验登录态：避免 widget 属性过时导致误判。
     if (!AuthService.instance.isLoggedIn) {
       if (!mounted) return;
@@ -3384,6 +3499,8 @@ class _MyLikesTabState extends State<_MyLikesTab> {
       return;
     }
     try {
+      // 置顶记录与「帖子」Tab 共用，每次加载时同步一次。
+      await loadSharedPinnedIds();
       final notes = await CloudNotesService.instance.getLikedNotes();
       // 喜欢 Tab 里的帖子全部是已点赞的，写入点赞记录让爱心显示为填充色。
       CloudNotesService.instance.likedNoteIds.addAll(notes.map((n) => n.id));
@@ -3420,19 +3537,42 @@ class _MyLikesTabState extends State<_MyLikesTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
+            // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
+                  // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
+                  if (index == _notes!.length) {
+                    return const Divider(
+                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                  }
                   final note = _notes![index];
-                  return PostFeedRow(
-                    note: note,
-                    onReplyPosted: _load,
-                    // 喜欢 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
-                    showFollowButton: false,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 帖子顶部分割线（首条不画，避免顶部多一条线）。
+                      if (index > 0)
+                        const Divider(
+                            height: 1,
+                            thickness: 0.6,
+                            color: Color(0xFFE6DAC8)),
+                      PostFeedRow(
+                        note: note,
+                        onReplyPosted: _load,
+                        pinned: isSharedPinned(note),
+                        onTogglePin: () => toggleSharedPin(note),
+                        onEdit: () => editSharedNote(note),
+                        onDelete: () => deleteSharedNote(note,
+                            onRemoved: () =>
+                                _notes!.removeWhere((n) => n.id == note.id)),
+                        // 喜欢 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                        showFollowButton: false,
+                      ),
+                    ],
                   );
                 },
-                childCount: _notes!.length,
+                childCount: _notes!.length + 1,
               ),
             ),
           ),
@@ -3450,7 +3590,7 @@ class _MyLikesTabState extends State<_MyLikesTab> {
           ),
           const SliverFillRemaining(
             child: Center(
-              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+              child: AppLoadingIndicator(message: '正在加载内容...'),
             ),
           ),
         ],
@@ -3495,10 +3635,14 @@ class _MyBookmarksTab extends StatefulWidget {
   State<_MyBookmarksTab> createState() => _MyBookmarksTabState();
 }
 
-class _MyBookmarksTabState extends State<_MyBookmarksTab> {
+class _MyBookmarksTabState extends State<_MyBookmarksTab>
+    with _SharedNoteActions<_MyBookmarksTab> {
   List<PlazaNote>? _notes;
   bool _loading = true;
   String? _error;
+
+  @override
+  void onSharedNotesChanged() => _load(silent: true);
 
   @override
   void initState() {
@@ -3529,11 +3673,13 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
     }
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     // 先校验登录态：避免 widget 属性过时导致误判。
     if (!AuthService.instance.isLoggedIn) {
       if (!mounted) return;
@@ -3544,6 +3690,8 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
       return;
     }
     try {
+      // 置顶记录与「帖子」Tab 共用，每次加载时同步一次。
+      await loadSharedPinnedIds();
       final notes = await CloudNotesService.instance.getFavoriteNotes();
       if (!mounted) return;
       setState(() {
@@ -3578,19 +3726,42 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
+            // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
+                  // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
+                  if (index == _notes!.length) {
+                    return const Divider(
+                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                  }
                   final note = _notes![index];
-                  return PostFeedRow(
-                    note: note,
-                    onReplyPosted: _load,
-                    // 书签 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
-                    showFollowButton: false,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 帖子顶部分割线（首条不画，避免顶部多一条线）。
+                      if (index > 0)
+                        const Divider(
+                            height: 1,
+                            thickness: 0.6,
+                            color: Color(0xFFE6DAC8)),
+                      PostFeedRow(
+                        note: note,
+                        onReplyPosted: _load,
+                        pinned: isSharedPinned(note),
+                        onTogglePin: () => toggleSharedPin(note),
+                        onEdit: () => editSharedNote(note),
+                        onDelete: () => deleteSharedNote(note,
+                            onRemoved: () =>
+                                _notes!.removeWhere((n) => n.id == note.id)),
+                        // 书签 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                        showFollowButton: false,
+                      ),
+                    ],
                   );
                 },
-                childCount: _notes!.length,
+                childCount: _notes!.length + 1,
               ),
             ),
           ),
@@ -3608,7 +3779,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
           ),
           const SliverFillRemaining(
             child: Center(
-              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+              child: AppLoadingIndicator(message: '正在加载内容...'),
             ),
           ),
         ],
@@ -3646,11 +3817,13 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab> {
 class _DraftRow extends StatelessWidget {
   final Map<String, dynamic> note;
   final VoidCallback onTap;
+  final VoidCallback? onDelete;
   final String account;
   final bool verified;
   const _DraftRow({
     required this.note,
     required this.onTap,
+    this.onDelete,
     this.account = '',
     this.verified = false,
   });
@@ -3663,13 +3836,20 @@ class _DraftRow extends StatelessWidget {
     final nickname =
         AuthService.instance.currentUser.value?.displayName ?? '同修';
     return PostBlock(
-      ownerUserId: AuthService.instance.currentUser.value?.id,
+      // 三重兜底取 uid：会话恢复竞态时 currentUser 可能为 null。
+      ownerUserId: AuthService.instance.currentUser.value?.id ??
+          AuthService.instance.cachedUserId ??
+          'local',
       nickname: nickname,
       account: account,
       authorVerified: verified,
       timeMs: ts?.millisecondsSinceEpoch ?? 0,
       content: content,
       onTap: onTap,
+      // 草稿三点菜单：编辑 / 删除（未发布无置顶）。
+      noteId: note['id']?.toString(),
+      onEdit: onTap,
+      onDelete: onDelete,
     );
   }
 }
@@ -3748,6 +3928,49 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
     });
   }
 
+  /// 删除草稿：从本地存储移除，无法恢复。
+  Future<void> _deleteDraft(Map<String, dynamic> note) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除草稿',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
+        content: const Text('删除后草稿将无法恢复。确定删除吗？',
+            style: TextStyle(fontSize: 14, color: _textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(
+                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final id = note['id']?.toString();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('notes') ?? '[]';
+      final list = (jsonDecode(raw) as List<dynamic>)
+          .cast<Map<String, dynamic>>()
+          .where((n) => n['id']?.toString() != id)
+          .toList();
+      await prefs.setString('notes', jsonEncode(list));
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() =>
+        _notes.removeWhere((n) => n['id']?.toString() == id));
+    showPostToast(context, '已删除');
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return _tabLoading();
@@ -3761,34 +3984,37 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
             child: SizedBox(height: 4),
           ),
           SliverPadding(
-            // 横向内边距移入每条草稿内部，保证分割线通栏贴边（与主页帖子一致）。
-            padding: const EdgeInsets.only(top: 4, bottom: 32),
+            // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页/帖子 Tab 一致）。
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
+                  // 末尾收尾分割线，保证最后一条草稿下方也有分割线（与其他 Tab 一致）。
+                  if (index == _notes.length) {
+                    return const Divider(
+                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                  }
                   final note = _notes[index];
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 草稿顶部通栏分割线（首条不画，避免顶部多一条线）。
+                      // 草稿顶部分割线（首条不画，避免顶部多一条线）。
                       if (index > 0)
                         const Divider(
                             height: 1,
                             thickness: 0.6,
-                            color: Color(0xFFD8CCBC)),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: _DraftRow(
-                          note: note,
-                          account: _account,
-                          verified: _verified,
-                          onTap: () => _openEdit(note),
-                        ),
+                            color: Color(0xFFE6DAC8)),
+                      _DraftRow(
+                        note: note,
+                        account: _account,
+                        verified: _verified,
+                        onTap: () => _openEdit(note),
+                        onDelete: () => _deleteDraft(note),
                       ),
                     ],
                   );
                 },
-                childCount: _notes.length,
+                childCount: _notes.length + 1,
               ),
             ),
           ),
@@ -3806,7 +4032,7 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
           ),
           const SliverFillRemaining(
             child: Center(
-              child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+              child: AppLoadingIndicator(message: '正在加载内容...'),
             ),
           ),
         ],

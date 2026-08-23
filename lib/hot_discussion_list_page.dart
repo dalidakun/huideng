@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'note_sutra_links.dart';
 import 'post_rich_content.dart';
 
@@ -88,10 +89,12 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     }
   }
 
-  /// 按名次取火把数：第 1 名 5 把，依次递减到第 5 名 1 把，第 6 名及之后都是 1 把。
+  /// 按名次取火把数：仅前三名显示火把——第 1 名 5 把、第 2 名 4 把、第 3 名 3 把；
+  /// 第 4 名起不再显示火把，改在名称右侧展示「讨论x个」。
   static int _flamesByRank(int index) => index < 5 ? 5 - index : 1;
 
   /// 火把：按名次取数量，颜色从橙黄到红渐变，模拟真实火簇。
+  /// 第一名整体用红色并放大，突出榜首。
   static const List<Color> _flameColors = [
     Color(0xFFF6A93B),
     Color(0xFFF0812B),
@@ -99,7 +102,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     Color(0xFFD93B28),
   ];
 
-  Widget _buildFlames(int level) {
+  Widget _buildFlames(int level, {bool firstPlace = false}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -107,7 +110,10 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
           Padding(
             padding: const EdgeInsets.only(left: 2),
             child: Icon(Icons.local_fire_department,
-                size: 15, color: _flameColors[i % _flameColors.length]),
+                size: firstPlace ? 18 : 15,
+                color: firstPlace
+                    ? const Color(0xFFD93B28)
+                    : _flameColors[i % _flameColors.length]),
           ),
       ],
     );
@@ -185,6 +191,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   }
 
   /// 顶部渐变摘要卡：色系与榜单一致（话题金、经文绿），暖色调不突兀。
+  /// 左侧图标不加底框：经文/话题两页统一用与热门胶囊同款的火把（放大版）。
   Widget _buildHeader() {
     final colors = widget.isSutra
         ? const [Color(0xFFE5F0EA), Color(0xFFF2F8F4)]
@@ -203,20 +210,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
         ),
         child: Row(
           children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: const Color(0xFF70867A),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                  widget.isSutra
-                      ? Icons.menu_book_rounded
-                      : Icons.local_fire_department,
-                  size: 20,
-                  color: Colors.white),
-            ),
+            const Icon(Icons.local_fire_department,
+                size: 34, color: Color(0xFFD93B28)),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -239,38 +234,17 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     );
   }
 
-  /// 名次牌：金色胶囊——第 1 名「奖杯 + NO.1」，第 2/3 名「NO.2/NO.3」，
-  /// 无圆环线框，纯渐变胶囊 + 光晕；第 4 名起灰色数字。
+  /// 名次牌：第 1 名仅一枚金色奖杯（无底框、无文字），第 2/3 名金色胶囊「NO.2/NO.3」，
+  /// 第 4 名起灰色数字。
   Widget _rankBadge(int index) {
     const gold =
         LinearGradient(colors: [Color(0xFFF6C57E), Color(0xFFD4A06A)]);
     if (index == 0) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          gradient: gold,
-          borderRadius: BorderRadius.circular(999),
-          boxShadow: [
-            BoxShadow(
-                color: const Color(0xFFD4A06A).withValues(alpha: 0.45),
-                blurRadius: 8,
-                offset: const Offset(0, 2)),
-          ],
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.emoji_events_rounded,
-                color: Colors.white, size: 16),
-            SizedBox(width: 4),
-            Text('NO.1',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                    letterSpacing: 0.5)),
-          ],
-        ),
+      // 与下方灰色数字同宽居中，保证各名次名称起始位置接近对齐。
+      // 榜首奖杯放大展示，突出第一名。
+      return SizedBox(
+        width: 34,
+        child: Icon(Icons.emoji_events_rounded, size: 34, color: _gold),
       );
     }
     if (index < 3) {
@@ -320,7 +294,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               ? () => _deleteTopic(it)
               : null,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            // 竖向 10：26px 奖杯 + 20 内边距 ≈ 普通行（20 文本 + 26 边距）高度一致。
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Row(
               children: [
                 _rankBadge(index),
@@ -337,7 +312,11 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                _buildFlames(_flamesByRank(index)),
+                if (index < 3)
+                  _buildFlames(_flamesByRank(index), firstPlace: index == 0)
+                else
+                  Text('讨论${it.posts}个',
+                      style: const TextStyle(fontSize: 12, color: _textHint)),
                 const SizedBox(width: 6),
                 const Icon(Icons.chevron_right, size: 16, color: _textHint),
               ],
@@ -348,7 +327,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     );
   }
 
-  /// 第 4 名起的普通行：名次 + 名称 + 火把 + 箭头，行间无边线。
+  /// 第 4 名起的普通行：名次 + 名称 + 笔记数 + 箭头，行间无边线。
   Widget _buildPlainRow(HotDiscussionItem it, int index) {
     return InkWell(
       onTap: () => _open(it),
@@ -372,7 +351,11 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               ),
             ),
             const SizedBox(width: 8),
-            _buildFlames(_flamesByRank(index)),
+            if (index < 3)
+              _buildFlames(_flamesByRank(index), firstPlace: index == 0)
+            else
+              Text('讨论${it.posts}个',
+                  style: const TextStyle(fontSize: 12, color: _textHint)),
             const SizedBox(width: 6),
             const Icon(Icons.chevron_right, size: 16, color: _textHint),
           ],
@@ -515,8 +498,9 @@ class _DeletedTopicsPageState extends State<DeletedTopicsPage> {
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(strokeWidth: 2, color: _gold))
+          ? const AppLoadingIndicator(
+              message: '正在加载...',
+            )
           : _topics.isEmpty
               ? const Center(
                   child: Text('回收站是空的',
@@ -526,7 +510,7 @@ class _DeletedTopicsPageState extends State<DeletedTopicsPage> {
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   itemCount: _topics.length,
                   separatorBuilder: (_, __) => const Divider(
-                      height: 1, thickness: 0.6, color: Color(0xFFD8CCBC)),
+                      height: 1, thickness: 0.6, color: Color(0xFFE6DAC8)),
                   itemBuilder: (context, index) {
                     final e = _topics[index];
                     return Padding(

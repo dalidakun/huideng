@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
@@ -205,7 +206,9 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _gold));
+      return const AppLoadingIndicator(
+        message: '正在加载动态...',
+      );
     }
     if (!AuthService.instance.isLoggedIn) {
       return _buildEmpty(

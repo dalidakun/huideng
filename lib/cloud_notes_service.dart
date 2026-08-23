@@ -47,6 +47,9 @@ class PlazaNote {
   /// 转发类型：forward / quote / reply（reply 不展示转发角标）。
   final String repostKind;
 
+  /// 帖子类型：普通帖为空；announcement = 管理员公告（详情页展示「公告」标签）。
+  final String kind;
+
   /// 引用转发时的用户引言（空表示直接转发）。
   final String quoteContent;
   final String quoteOfTitle;
@@ -74,6 +77,7 @@ class PlazaNote {
     this.repostSourceAuthor = '',
     this.repostSourceUserId = '',
     this.repostKind = '',
+    this.kind = '',
     this.quoteContent = '',
     this.quoteOfTitle = '',
     this.quoteOfContent = '',
@@ -101,6 +105,7 @@ class PlazaNote {
         repostSourceAuthor: json['repostSourceAuthor']?.toString() ?? '',
         repostSourceUserId: json['repostSourceUserId']?.toString() ?? '',
         repostKind: json['repostKind']?.toString() ?? '',
+        kind: json['kind']?.toString() ?? '',
         quoteContent: json['quoteContent']?.toString() ?? '',
         quoteOfTitle: json['quoteOfTitle']?.toString() ?? '',
         quoteOfContent: json['quoteOfContent']?.toString() ?? '',
@@ -141,6 +146,7 @@ class PlazaNote {
         repostSourceAuthor: repostSourceAuthor,
         repostSourceUserId: repostSourceUserId,
         repostKind: repostKind,
+        kind: kind,
         quoteContent: quoteContent,
         quoteOfTitle: quoteOfTitle,
         quoteOfContent: quoteOfContent,
