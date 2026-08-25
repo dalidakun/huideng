@@ -18,6 +18,7 @@ import 'reading_time_service.dart';
 import 'sutra_list_page.dart' show routeObserver;
 import 'reading_guide_page.dart';
 
+import 'app_palette.dart';
 class ReadingPage extends StatefulWidget {
   final String title;
   final String? filePath;
@@ -453,7 +454,7 @@ class _ReadingPageState extends State<ReadingPage>
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: _isDarkMode ? const Color(0xFF2c2c2c) : const Color(0xFFFFF3E0),
+        color: _isDarkMode ? const Color(0xFF2c2c2c) : AppPalette.p.tintBg,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -463,14 +464,14 @@ class _ReadingPageState extends State<ReadingPage>
                 ? Text(
                     '下载中… ${(_downloadProgress * 100).toStringAsFixed(0)}%',
                     style: TextStyle(
-                      color: _isDarkMode ? Colors.white : const Color(0xFF5d4037),
+                      color: _isDarkMode ? Colors.white : AppPalette.p.primary,
                       fontSize: 13,
                     ),
                   )
                 : Text(
                     '该经文正文未打包，需要联网下载。',
                     style: TextStyle(
-                      color: _isDarkMode ? Colors.white : const Color(0xFF5d4037),
+                      color: _isDarkMode ? Colors.white : AppPalette.p.primary,
                       fontSize: 13,
                     ),
                   ),
@@ -483,7 +484,7 @@ class _ReadingPageState extends State<ReadingPage>
               child: CircularProgressIndicator(
                 strokeWidth: 2,
                 value: _downloadProgress > 0 ? _downloadProgress : null,
-                color: const Color(0xFFD4A06A),
+                color: AppPalette.p.accent,
               ),
             )
           else
@@ -491,7 +492,7 @@ class _ReadingPageState extends State<ReadingPage>
               height: 30,
               child: FilledButton(
                 style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFD4A06A),
+                  backgroundColor: AppPalette.p.accent,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   textStyle: const TextStyle(fontSize: 13),
                 ),
@@ -652,7 +653,7 @@ class _ReadingPageState extends State<ReadingPage>
                 _saveSettings();
                 Navigator.pop(context);
               },
-              trailing: _fontSize == size ? const Icon(Icons.check, color: Color(0xFF5d4037)) : null,
+              trailing: _fontSize == size ? Icon(Icons.check, color: AppPalette.p.primary) : null,
             );
           }).toList(),
         ),
@@ -674,9 +675,9 @@ class _ReadingPageState extends State<ReadingPage>
         }
       },
       child: Scaffold(
-            backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFFFF3E0),
+            backgroundColor: _isDarkMode ? const Color(0xFF121212) : AppPalette.p.tintBg,
             appBar: AppBar(
-              backgroundColor: _isDarkMode ? const Color(0xFF121212) : const Color(0xFFFFF3E0),
+              backgroundColor: _isDarkMode ? const Color(0xFF121212) : AppPalette.p.tintBg,
               elevation: 0,
               leadingWidth: 48,
               titleSpacing: 0,
@@ -714,11 +715,11 @@ class _ReadingPageState extends State<ReadingPage>
                       ),
                     ),
                     if (_isEdited)
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.only(left: 6),
                         child: Text(
                           '已编辑',
-                          style: TextStyle(color: Color(0xFFD4A06A), fontSize: 11),
+                          style: TextStyle(color: AppPalette.p.accent, fontSize: 11),
                         ),
                       ),
                   ],
@@ -918,7 +919,7 @@ class _ReadingPageState extends State<ReadingPage>
                                       ? Colors.white.withOpacity(0.15)
                                       : const Color(0xFFE8D9C4),
                                   valueColor:
-                                      const AlwaysStoppedAnimation<Color>(Color(0xFFD4A06A)),
+                                      AlwaysStoppedAnimation<Color>(AppPalette.p.accent),
                                 ),
                               ),
                             ),
@@ -930,7 +931,7 @@ class _ReadingPageState extends State<ReadingPage>
                                 fontWeight: FontWeight.w600,
                                 color: _isDarkMode
                                     ? Colors.white.withOpacity(0.7)
-                                    : const Color(0xFF8B6B5A),
+                                    : AppPalette.p.textSec,
                               ),
                             ),
                           ],
@@ -1129,8 +1130,8 @@ class _ReadingPageState extends State<ReadingPage>
         highlightElevation: 12,
         shape: const CircleBorder(),
         child: IconTheme(
-          data: const IconThemeData(
-            color: Color(0xFF5d4037),
+          data: IconThemeData(
+            color: AppPalette.p.primary,
           ),
           child: child,
         ),
@@ -1149,7 +1150,7 @@ class _ReadingPageState extends State<ReadingPage>
     required String label,
     required VoidCallback onTap,
   }) {
-    final fg = _isDarkMode ? Colors.white : const Color(0xFF5d4037);
+    final fg = _isDarkMode ? Colors.white : AppPalette.p.primary;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),

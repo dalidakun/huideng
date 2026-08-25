@@ -5,14 +5,12 @@ import 'loading_widgets.dart';
 import 'note_sutra_links.dart';
 import 'post_rich_content.dart';
 
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _gold = Color(0xFFD4A06A);
-
-/// 热门经文/话题全量榜（「更多」页）：按讨论帖子数从多到少排列，
+import 'app_palette.dart';
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
 /// 右侧显示帖子数，点击进入对应的经书讨论页 / 话题页。样式仿新闻热搜榜。
 /// 管理员在话题榜上长按话题可删除（进回收站），右上角回收站可恢复。
 class HotDiscussionListPage extends StatefulWidget {
@@ -121,7 +119,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
 
   Color get _accent => widget.isSutra
       ? const Color(0xFF71867A)
-      : const Color(0xFF9A6B3F);
+      : AppPalette.p.accentDeep;
 
   String get _prefix => widget.isSutra ? r'$' : '#';
 
@@ -157,11 +155,11 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
         title: const Text('删除话题',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         content: Text('删除 #${it.name} 后，含该话题的帖子将在广场、讨论、关注、发现中隐藏，可到右上角回收站恢复。',
-            style: const TextStyle(fontSize: 14, color: _textSec)),
+            style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: _textSec))),
+              child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('删除', style: TextStyle(color: Color(0xFFC0392B)))),
@@ -195,7 +193,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   Widget _buildHeader() {
     final colors = widget.isSutra
         ? const [Color(0xFFE5F0EA), Color(0xFFF2F8F4)]
-        : const [Color(0xFFF7E7CE), Color(0xFFFCF4E6)];
+        : [AppPalette.p.tintBg, AppPalette.p.tintBg];
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: Container(
@@ -224,7 +222,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                           color: _accent)),
                   const SizedBox(height: 3),
                   Text('近 14 天 · 互动越多越靠前 · 共 $_totalLabel 项',
-                      style: const TextStyle(fontSize: 12, color: _textSec)),
+                      style: TextStyle(fontSize: 12, color: _textSec)),
                 ],
               ),
             ),
@@ -237,14 +235,22 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   /// 名次牌：第 1 名仅一枚金色奖杯（无底框、无文字），第 2/3 名金色胶囊「NO.2/NO.3」，
   /// 第 4 名起灰色数字。
   Widget _rankBadge(int index) {
-    const gold =
-        LinearGradient(colors: [Color(0xFFF6C57E), Color(0xFFD4A06A)]);
+    final gold =
+        LinearGradient(colors: [AppPalette.p.accent, AppPalette.p.accent]);
     if (index == 0) {
       // 与下方灰色数字同宽居中，保证各名次名称起始位置接近对齐。
-      // 榜首奖杯放大展示，突出第一名。
+      // 榜首奖杯放大展示，突出第一名；红金渐变（与火把同红色系）。
       return SizedBox(
         width: 34,
-        child: Icon(Icons.emoji_events_rounded, size: 34, color: _gold),
+        child: ShaderMask(
+          shaderCallback: (bounds) => const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFFF8A5C), Color(0xFFD93B28)],
+          ).createShader(bounds),
+          child: const Icon(Icons.emoji_events_rounded,
+              size: 34, color: Colors.white),
+        ),
       );
     }
     if (index < 3) {
@@ -266,7 +272,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
       width: 34,
       child: Text('${index + 1}',
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
               fontSize: 15, fontWeight: FontWeight.w500, color: _textHint)),
     );
   }
@@ -316,9 +322,9 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                   _buildFlames(_flamesByRank(index), firstPlace: index == 0)
                 else
                   Text('讨论${it.posts}个',
-                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                      style: TextStyle(fontSize: 12, color: _textHint)),
                 const SizedBox(width: 6),
-                const Icon(Icons.chevron_right, size: 16, color: _textHint),
+                Icon(Icons.chevron_right, size: 16, color: _textHint),
               ],
             ),
           ),
@@ -355,9 +361,9 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               _buildFlames(_flamesByRank(index), firstPlace: index == 0)
             else
               Text('讨论${it.posts}个',
-                  style: const TextStyle(fontSize: 12, color: _textHint)),
+                  style: TextStyle(fontSize: 12, color: _textHint)),
             const SizedBox(width: 6),
-            const Icon(Icons.chevron_right, size: 16, color: _textHint),
+            Icon(Icons.chevron_right, size: 16, color: _textHint),
           ],
         ),
       ),
@@ -376,7 +382,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
         backgroundColor: _bg,
         elevation: 0,
         title: Text(widget.title,
-            style: const TextStyle(
+            style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
         actions: [
           // 只有管理员、且是话题榜才显示回收站入口。
@@ -384,13 +390,13 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
             IconButton(
               onPressed: _openTrash,
               tooltip: '回收站',
-              icon: const Icon(Icons.delete_outline,
+              icon: Icon(Icons.delete_outline,
                   color: _textSec, size: 22),
             ),
         ],
       ),
       body: _items.isEmpty
-          ? const Center(
+          ? Center(
               child: Text('暂无数据',
                   style: TextStyle(fontSize: 14, color: _textHint)),
             )
@@ -493,7 +499,7 @@ class _DeletedTopicsPageState extends State<DeletedTopicsPage> {
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: const Text('回收站',
+        title: Text('回收站',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       ),
@@ -502,15 +508,15 @@ class _DeletedTopicsPageState extends State<DeletedTopicsPage> {
               message: '正在加载...',
             )
           : _topics.isEmpty
-              ? const Center(
+              ? Center(
                   child: Text('回收站是空的',
                       style: TextStyle(fontSize: 14, color: _textHint)),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   itemCount: _topics.length,
-                  separatorBuilder: (_, __) => const Divider(
-                      height: 1, thickness: 0.6, color: Color(0xFFE6DAC8)),
+                   separatorBuilder: (_, __) => Divider(
+                       height: 1, thickness: 0.5, color: AppPalette.p.divider),
                   itemBuilder: (context, index) {
                     final e = _topics[index];
                     return Padding(
@@ -525,13 +531,13 @@ class _DeletedTopicsPageState extends State<DeletedTopicsPage> {
                                 Text('#${e.key}',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         fontSize: 15,
                                         fontWeight: FontWeight.w600,
-                                        color: Color(0xFF9A6B3F))),
+                                        color: AppPalette.p.accentDeep)),
                                 if (e.value > 0)
                                   Text('删除于 ${_fmt(e.value)}',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           fontSize: 11, color: _textHint)),
                               ],
                             ),

@@ -4,7 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show ImageFilter, PlatformDispatcher;
+import 'dart:ui' show ImageFilter;
 import 'theme.dart';
 import 'sutra_list_page.dart';
 import 'discussion_page.dart';
@@ -21,77 +21,14 @@ import 'notification_center.dart';
 import 'user_avatar_cache.dart';
 import 'update_service.dart';
 
+import 'app_palette.dart';
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
-bool _errorDialogShown = false;
-
-/// 捕获未处理异常并把堆栈弹窗展示，方便在手机上直接看到出错位置。
-void _installErrorHandler() {
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    _showErrorReport(
-        details.exceptionAsString(), details.stack?.toString() ?? '');
-  };
-  PlatformDispatcher.instance.onError = (error, stack) {
-    _showErrorReport(error.toString(), stack.toString());
-    return true;
-  };
-}
-
-void _showErrorReport(String message, String stack) {
-  if (_errorDialogShown) return;
-  _errorDialogShown = true;
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    final nav = navigatorKey.currentState;
-    if (nav == null) return;
-    nav.push(
-      MaterialPageRoute(
-        builder: (_) => _ErrorReportPage(message: message, stack: stack),
-      ),
-    );
-  });
-}
-
-/// 展示错误详情（调试用）：消息 + 完整堆栈 + 复制按钮。
-class _ErrorReportPage extends StatelessWidget {
-  final String message;
-  final String stack;
-  const _ErrorReportPage({required this.message, required this.stack});
-
-  @override
-  Widget build(BuildContext context) {
-    final full = 'ERROR: $message\n\n$stack';
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('错误详情'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.copy),
-            onPressed: () => Clipboard.setData(ClipboardData(text: full)),
-          ),
-        ],
-      ),
-      body: SelectableText(
-        full,
-        style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-      ),
-    );
-  }
-}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await StudyHubPageState.warmPrefs();
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Color(0xFFededed),
-      statusBarIconBrightness: Brightness.dark,
-      statusBarBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFFededed),
-      systemNavigationBarIconBrightness: Brightness.dark,
-    ),
-  );
-  _installErrorHandler();
+  // 先加载外观偏好（暖黄/素白），再启动应用，避免首帧闪错主题。
+  await AppPalette.instance.load();
   // 预加载磁盘缓存的头像到内存（不阻塞启动，下次 request() 即可命中）。
   unawaited(UserAvatarCache.instance.loadFromDisk());
   runApp(const MyApp());
@@ -113,8 +50,30 @@ void main() async {
   );
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  // 监听外观切换：调色板变化时重建整棵树，所有页面即时换肤（无需重启）。
+  void _onPaletteChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    AppPalette.instance.addListener(_onPaletteChanged);
+  }
+
+  @override
+  void dispose() {
+    AppPalette.instance.removeListener(_onPaletteChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -201,7 +160,15 @@ class _AppEntryState extends State<_AppEntry> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_showMain) return SplashImagePage(onFinished: _finishSplash);
+    if (!_showMain) {
+      // 启动图跟随外观：米黄（warm）用 splash1.png，素白（plain）用 splash.png。
+      return SplashImagePage(
+        onFinished: _finishSplash,
+        assetPath: AppPalette.instance.isPlain
+            ? 'assets/images/splash.png'
+            : 'assets/images/splash1.png',
+      );
+    }
     return const MainPage();
   }
 }
@@ -257,6 +224,8 @@ class _MainPageState extends State<MainPage>
     ];
     WidgetsBinding.instance.addObserver(this);
     SyncService.instance.dataVersion.addListener(_onCloudDataChanged);
+    // 外观切换时刷新底部导航图标（素白用黑色版本）。
+    AppPalette.instance.addListener(_onPaletteChanged);
     // 消息中心未读数轮询（底部「通知」角标实时同步服务器）。
     NotificationCenter.instance.start();
     // 启动时清理应用目录里残留的旧头像/横幅文件（只保留当前使用的）。
@@ -269,10 +238,16 @@ class _MainPageState extends State<MainPage>
   @override
   void dispose() {
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
+    AppPalette.instance.removeListener(_onPaletteChanged);
     NotificationCenter.instance.stop();
     WidgetsBinding.instance.removeObserver(this);
     _navCtrl.dispose();
     super.dispose();
+  }
+
+  /// 外观切换时刷新底部导航图标（素白用黑色版本）。
+  void _onPaletteChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 云端同步拉取完成后刷新各页面展示的数据。
@@ -344,32 +319,39 @@ class _MainPageState extends State<MainPage>
     }
   }
 
-  final List<BottomNavigationBarItem> _bottomNavItems = [
+  /// 底部导航图标：素白外观用黑色版本（文件名 .png 前加「1」），
+  /// 每次构建重新取值，外观切换后立即换图。
+  List<BottomNavigationBarItem> get _bottomNavItems => [
     BottomNavigationBarItem(
-      icon: const _StudyTabIcon(active: false),
-      activeIcon: const _StudyTabIcon(active: true),
+      // 不用 const：保证外观切换时图标子树会重建、及时换黑色版本。
+      icon: _StudyTabIcon(active: false),
+      activeIcon: _StudyTabIcon(active: true),
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/search.png', width: 24, height: 24),
-      activeIcon: Image.asset('assets/images/search_selected.png',
+      icon: Image.asset(navIconAsset('assets/images/search.png'),
+          width: 24, height: 24),
+      activeIcon: Image.asset(navIconAsset('assets/images/search_selected.png'),
           width: 24, height: 24),
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/sutra_book.png', width: 27, height: 27),
-      activeIcon: Image.asset('assets/images/sutra_book_selected.png',
+      icon: Image.asset(navIconAsset('assets/images/sutra_book.png'),
           width: 27, height: 27),
+      activeIcon:
+          Image.asset(navIconAsset('assets/images/sutra_book_selected.png'),
+              width: 27, height: 27),
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: const _NotificationTabIcon(active: false),
-      activeIcon: const _NotificationTabIcon(active: true),
+      icon: _NotificationTabIcon(active: false),
+      activeIcon: _NotificationTabIcon(active: true),
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset('assets/images/my.png', width: 21.5, height: 21.5),
-      activeIcon: Image.asset('assets/images/my_selected.png',
+      icon: Image.asset(navIconAsset('assets/images/my.png'),
+          width: 21.5, height: 21.5),
+      activeIcon: Image.asset(navIconAsset('assets/images/my_selected.png'),
           width: 21.5, height: 21.5),
       label: '',
     ),
@@ -587,6 +569,12 @@ class _MainPageState extends State<MainPage>
   }
 }
 
+/// 素白外观下底部导航使用黑色图标：文件名在 .png 前加「1」
+/// （如 my.png → my1.png、my_selected.png → my_selected1.png）。
+String navIconAsset(String base) => AppPalette.instance.isPlain
+    ? base.replaceAll('.png', '1.png')
+    : base;
+
 /// X 风格毛玻璃底部导航栏：始终悬浮在内容之上，内容从下方滚过时呈磨砂效果。
 class _BottomNavBar extends StatelessWidget {
   final List<BottomNavigationBarItem> items;
@@ -615,9 +603,9 @@ class _BottomNavBar extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFFFFFAF5).withValues(alpha: 0.4),
-            border: const Border(
-              top: BorderSide(color: Color(0xFFE8E0D5), width: 0.8),
+            color: AppPalette.p.card.withValues(alpha: 0.4),
+            border: Border(
+              top: BorderSide(color: AppPalette.p.borderSoft, width: 0.8),
             ),
           ),
           child: SafeArea(
@@ -670,9 +658,9 @@ class _StudyTabIcon extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Image.asset(
-              active
+              navIconAsset(active
                   ? 'assets/images/study_selected.png'
-                  : 'assets/images/study.png',
+                  : 'assets/images/study.png'),
               width: 24,
               height: 24,
             ),
@@ -745,9 +733,9 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
       clipBehavior: Clip.none,
       children: [
         Image.asset(
-          widget.active
+          navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
-              : 'assets/images/chat.png',
+              : 'assets/images/chat.png'),
           width: 23,
           height: 23,
         ),
@@ -839,18 +827,18 @@ class _AssistantTabPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5EDE3),
+      backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF5EDE3),
+        backgroundColor: AppPalette.p.bg,
         elevation: 0,
         shadowColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
+        iconTheme: IconThemeData(color: AppPalette.p.primary),
         title: Row(
-          children: const [
+          children: [
             Text(
               '助手',
               style: TextStyle(
-                color: Color(0xFF5d4037),
+                color: AppPalette.p.primary,
                 fontSize: 17,
                 fontWeight: FontWeight.w700,
               ),
@@ -975,12 +963,12 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
                       elevation: 8,
                       highlightElevation: 12,
                       shape: const CircleBorder(),
-                      child: const Text(
+                      child: Text(
                         'AI',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
-                          color: Color(0xFF5d4037),
+                          color: AppPalette.p.primary,
                         ),
                       ),
                     ),
@@ -1071,7 +1059,7 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
                   child: Stack(
                     children: [
                       // 背景 + DeepSeek 页面。
-                      ColoredBox(color: const Color(0xFFF5EDE3), child: child),
+                      ColoredBox(color: AppPalette.p.bg, child: child),
                       // 右上角收起按钮。
                       if (t > 0.6)
                         Positioned(
@@ -1084,12 +1072,12 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
                             child: InkWell(
                               customBorder: const CircleBorder(),
                               onTap: () => assistantReveal.value = false,
-                              child: const Padding(
+                              child: Padding(
                                 padding: EdgeInsets.all(8),
                                 child: Icon(
                                   Icons.close,
                                   size: 20,
-                                  color: Color(0xFF5d4037),
+                                  color: AppPalette.p.primary,
                                 ),
                               ),
                             ),

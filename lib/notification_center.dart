@@ -162,7 +162,15 @@ class NotificationCenter {
     final groups = <String, NotificationGroup>{};
 
     NotificationGroup ensureGroup(NotificationItem it) {
-      final key = it.type == 'follow_me' ? 'follow_me' : '${it.type}:${it.noteId}';
+      // 聚合键：关注类全局一组；点赞类显式带「被赞对象类型」拆组——
+      // 「点赞了你的帖子」与「喜欢了你的回复」是两类通知（X 内部事件同样
+      // 按 favorited_tweet / favorited_reply 区分），即使 id 异常也不合并；
+      // 其余按 类型:帖子id 聚合。
+      final key = it.type == 'follow_me'
+          ? 'follow_me'
+          : it.type == 'like_me'
+              ? 'like_me:${it.noteRepostKind}:${it.noteId}'
+              : '${it.type}:${it.noteId}';
       var g = groups[key];
       if (g == null) {
         g = NotificationGroup(

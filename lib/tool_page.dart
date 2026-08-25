@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'app_palette.dart';
 
 class ToolPage extends StatefulWidget {
   const ToolPage({super.key});
@@ -252,7 +253,7 @@ class _ToolPageState extends State<ToolPage> {
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 48,
-        backgroundColor: const Color(0xFF9d5e4b),
+        backgroundColor: AppPalette.p.accentDeep,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),

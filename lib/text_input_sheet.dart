@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
-/// 通用底部输入弹窗：自行持有 TextEditingController 并随弹窗生命周期释放，
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 /// 避免在弹窗退出动画期间 dispose 控制器触发 `dependents.isEmpty` 断言红屏。
 /// 通过 `Navigator.pop(context, 文本)` 返回输入内容。
 class SheetTextInput extends StatefulWidget {
@@ -62,7 +61,7 @@ class _SheetTextInputState extends State<SheetTextInput> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(widget.title,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
               const SizedBox(height: 12),
               TextField(
@@ -71,10 +70,10 @@ class _SheetTextInputState extends State<SheetTextInput> {
                 maxLength: widget.maxLength,
                 minLines: widget.minLines,
                 maxLines: widget.maxLines,
-                style: const TextStyle(fontSize: 14, color: _text),
+                style: TextStyle(fontSize: 14, color: _text),
                 decoration: InputDecoration(
                   hintText: widget.hint,
-                  hintStyle: const TextStyle(color: _textHint),
+                  hintStyle: TextStyle(color: _textHint),
                   filled: true,
                   fillColor: _bg,
                   border: OutlineInputBorder(
@@ -91,7 +90,7 @@ class _SheetTextInputState extends State<SheetTextInput> {
                       onPressed: () => Navigator.pop(context),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _textSec,
-                        side: const BorderSide(color: _border),
+                        side: BorderSide(color: _border),
                         minimumSize: const Size(0, 44),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),

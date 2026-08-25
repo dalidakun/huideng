@@ -5,13 +5,13 @@ import 'cloud_notes_service.dart';
 import 'note_edit_page.dart';
 import 'recycle_bin_page.dart';
 
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _gold = Color(0xFFD4A06A);
-const Color _divider = Color(0xFFEDE3D6);
-
+import 'app_palette.dart';
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _gold => AppPalette.p.accent;
+Color get _divider => AppPalette.p.borderSoft;
 class NotesPage extends StatefulWidget {
   const NotesPage({super.key});
 
@@ -53,10 +53,10 @@ class _NotesPageState extends State<NotesPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('确定将这篇笔记移入回收站吗？', style: const TextStyle(color: _textSec)),
+        title: Text('删除笔记', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: Text('确定将这篇笔记移入回收站吗？', style: TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
         ],
       ),
@@ -121,7 +121,7 @@ class _NotesPageState extends State<NotesPage> {
           child: FloatingActionButton(
             onPressed: () => _openEdit(),
             heroTag: 'notes_fab',
-            backgroundColor: const Color(0xFF5D4037),
+            backgroundColor: AppPalette.p.primary,
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
@@ -184,8 +184,8 @@ class _NotesPageState extends State<NotesPage> {
                                   color: _gold.withValues(alpha: 0.12),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: const Text('菩提空间',
-                                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF9A6B3F))),
+                                child: Text('菩提空间',
+                                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: AppPalette.p.accentDeep)),
                               ),
                             ],
                             Container(

@@ -9,14 +9,14 @@ import 'login_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _gold = Color(0xFFD4A06A);
-
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _gold => AppPalette.p.accent;
 class NoteEditPage extends StatefulWidget {
   final Map<String, dynamic>? note;
 
@@ -477,7 +477,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
       decoration: BoxDecoration(
         color: _card,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFEBE1D6)),
+        border: Border.all(color: AppPalette.p.border),
         boxShadow: [
           BoxShadow(
               color: Colors.black.withValues(alpha: 0.10),
@@ -503,24 +503,24 @@ class _NoteEditPageState extends State<NoteEditPage> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(title,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 13,
                           color: _textSec,
                           fontWeight: FontWeight.w600)),
                 ),
                 GestureDetector(
                   onTap: _hidePanel,
-                  child: const Icon(Icons.close, size: 16, color: _textHint),
+                  child: Icon(Icons.close, size: 16, color: _textHint),
                 ),
               ],
             ),
           ),
-          const Divider(height: 1, color: Color(0xFFEBE1D6)),
+          Divider(height: 1, color: AppPalette.p.border),
           if (trigger == '#' && items.isEmpty)
             // 无已有话题时直接提供「创建话题」入口。
             InkWell(
               onTap: _createNewTopic,
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 child: Row(
                   children: [
@@ -542,7 +542,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
               padding: const EdgeInsets.symmetric(vertical: 18),
               child: Center(
                 child: Text(empty,
-                    style: const TextStyle(fontSize: 13, color: _textHint)),
+                    style: TextStyle(fontSize: 13, color: _textHint)),
               ),
             )
           else
@@ -562,14 +562,14 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             horizontal: 14, vertical: 9),
                         child: Row(
                           children: [
-                            const Icon(Icons.person_outline,
+                            Icon(Icons.person_outline,
                                 size: 17, color: _textSec),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text('@$account · ${p.name}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 14, color: _text)),
                             ),
                           ],
@@ -586,13 +586,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             horizontal: 14, vertical: 9),
                         child: Row(
                           children: [
-                            const Icon(Icons.tag, size: 17, color: _gold),
+                            Icon(Icons.tag, size: 17, color: _gold),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text('#$t',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
                                       color: _text)),
@@ -619,7 +619,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                                 Text(s.title,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                         color: _text)),
@@ -628,7 +628,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                                   Text(s.folder,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           fontSize: 11, color: _textHint)),
                                 ],
                               ],
@@ -656,15 +656,15 @@ class _NoteEditPageState extends State<NoteEditPage> {
           backgroundColor: _card,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('创建话题',
+          title: Text('创建话题',
               style: TextStyle(
                   fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
           content: TextField(
             controller: c,
             autofocus: true,
             maxLength: 20,
-            style: const TextStyle(fontSize: 15, color: _text),
-            decoration: const InputDecoration(
+            style: TextStyle(fontSize: 15, color: _text),
+            decoration: InputDecoration(
               hintText: '输入话题名称',
               hintStyle: TextStyle(color: _textHint),
               border: UnderlineInputBorder(),
@@ -673,7 +673,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消', style: TextStyle(color: _textSec)),
+              child: Text('取消', style: TextStyle(color: _textSec)),
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, c.text.trim()),
@@ -721,12 +721,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                           color: titleColor)),
                   const SizedBox(height: 1),
                   Text(_shared ? '已分享，保存后同步到菩提空间' : '开启后同修可在菩提空间看到',
-                      style: const TextStyle(fontSize: 10, color: _textSec)),
+                      style: TextStyle(fontSize: 10, color: _textSec)),
                 ],
               ),
             ),
             if (_savingCloud)
-              const SizedBox(
+              SizedBox(
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(strokeWidth: 2, color: _gold),
@@ -736,12 +736,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                 data: SwitchThemeData(
                   thumbColor: WidgetStateProperty.resolveWith((states) =>
                       states.contains(WidgetState.selected)
-                          ? const Color(0xFFFFFAF5)
-                          : const Color(0xFFC9BFB2)),
+                          ? AppPalette.p.card
+                          : AppPalette.p.muted),
                   trackColor: WidgetStateProperty.resolveWith((states) =>
                       states.contains(WidgetState.selected)
                           ? _gold
-                          : const Color(0xFFE8DED0)),
+                          : AppPalette.p.borderSoft),
                   trackOutlineColor: WidgetStateProperty.resolveWith(
                       (_) => Colors.transparent),
                 ),
@@ -893,14 +893,14 @@ class _NoteEditPageState extends State<NoteEditPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('放弃修改？',
+        title: Text('放弃修改？',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: const Text('您有未保存的更改', style: TextStyle(color: _textSec)),
+        content: Text('您有未保存的更改', style: TextStyle(color: _textSec)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: _textSec))),
+              child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('放弃',
@@ -929,7 +929,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
           backgroundColor: _bg,
           elevation: 0,
           title: Text(isNew ? '新建笔记' : '编辑笔记',
-              style: const TextStyle(
+              style: TextStyle(
                   color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
           actions: [
             Padding(
@@ -943,7 +943,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                     color: _primary.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(18),
                   ),
-                  child: const Text('保存',
+                  child: Text('保存',
                       style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -972,10 +972,10 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                         child: Text('#${widget.fixedTopic}',
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF9A6B3F))),
+                                color: AppPalette.p.accentDeep)),
                       ),
                     Expanded(
                       child: Stack(
@@ -985,7 +985,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             maxLines: null,
                             expands: true,
                             textAlignVertical: TextAlignVertical.top,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 16, color: _text, height: 1.6),
                             decoration: InputDecoration(
                               hintText: '开始记录...\n'

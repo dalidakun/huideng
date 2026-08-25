@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show pow;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,15 +20,25 @@ import 'text_input_sheet.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 
-/// 渲染帖子正文：识别并渲染三类可点击标记——
+/// 与云端 getPlazaNotes「hot」同款的热度衰减分：
+/// (1 + 互动量) / (发帖小时龄 + 2)^1.3。
+/// 热帖靠前但随时间下沉，新帖随时有机会浮上来。
+/// 互动量权重与云端一致：阅读 + 赞×3 + 评论×5 + 转发×8；
+/// 经书讨论没有阅读/评论计数，只按 赞×3 折算，让两路来源能用同一把尺子混排。
+double discussionHotScore(int createdAt, int engagement) {
+  final ageHours = ((DateTime.now().millisecondsSinceEpoch - createdAt) / 3600000)
+      .clamp(0, double.infinity);
+  return (1 + engagement) / pow(ageHours + 2, 1.3);
+}
 /// `[@账号](user:用户ID)` 提及用户、`$经书名` 引用经文、`#话题名` 话题；
 /// 兼容旧式 `[@经名](路径)` 与 `@经书名`。
 Widget buildPostRichText(
@@ -38,7 +49,7 @@ Widget buildPostRichText(
   required void Function(String title, String filePath) onSutraTap,
   required void Function(String topic) onTopicTap,
   Color linkColor = const Color(0xFF70867A),
-  Color topicColor = const Color(0xFFD3A069),
+  Color? topicColor,
   int? maxLines,
   TextOverflow? overflow,
 }) {
@@ -122,8 +133,12 @@ Widget buildPostRichText(
       if (m != null && m.group(1)!.isNotEmpty) {
         flushLit();
         final topic = m.group(1)!;
+        // 素白外观下 accent 是近黑色，#话题 用中灰更协调；暖黄保持金棕。
         spans.add(linkSpan('#$topic', () => onTopicTap(topic),
-            color: topicColor));
+            color: topicColor ??
+                (AppPalette.instance.isPlain
+                    ? const Color(0xFF666666)
+                    : AppPalette.p.accent)));
         i = m.end;
         litStart = i;
         continue;
@@ -366,15 +381,15 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('经文尚未下载',
+        title: Text('经文尚未下载',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
         content: Text('《${widget.title}》的正文尚未下载，是否现在下载？下载完成即可阅读。',
-            style: const TextStyle(color: _textSec)),
+            style: TextStyle(color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _gold),
@@ -470,8 +485,11 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     await Future.wait([_loadComments(), _loadRelatedNotes()]);
   }
 
-  /// 合并「广场相关帖子」与「讨论」为单一列表：两种来源的帖子混排展示，
-  /// 按时间倒序（最新在前），沿用各自的行样式（两者与主页帖子同款）。
+  /// 合并「广场相关帖子」与「讨论」为单一列表。展示顺序：
+  /// 1) 我刚发布的帖子置顶（仅本次刚发的这一条、30 分钟内有效，
+  ///    只在自己的客户端可见；历史帖一律不置顶）；
+  /// 2) 其余按热度衰减分倒序混排（与发现页同款：热帖靠前、随时间下沉给新帖让位），
+  ///    两路来源用同一把尺子打分，沿用各自的行样式。
   List<(PlazaNote?, Map<String, dynamic>?)> _mergedRows() {
     final rows = <(PlazaNote?, Map<String, dynamic>?)>[];
     for (final n in _relatedNotes) {
@@ -480,12 +498,37 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     for (final c in _comments) {
       rows.add((null, c));
     }
+    double score((PlazaNote?, Map<String, dynamic>?) row) {
+      final n = row.$1;
+      if (n != null) {
+        final engagement = n.viewCount +
+            n.likeCount * 3 +
+            n.commentCount * 5 +
+            n.repostCount * 8;
+        return discussionHotScore(n.createdAt, engagement);
+      }
+      final c = row.$2 ?? const {};
+      // 经书讨论只有点赞计数，按 赞×3 折算互动量（与广场赞的权重一致）。
+      final engagement = ((c['likeCount'] as num?)?.toInt() ?? 0) * 3;
+      return discussionHotScore((c['at'] as num?)?.toInt() ?? 0, engagement);
+    }
+
+    String rowId((PlazaNote?, Map<String, dynamic>?) row) =>
+        row.$1?.id ?? row.$2?['id']?.toString() ?? '';
+    bool fresh((PlazaNote?, Map<String, dynamic>?) row) =>
+        CloudNotesService.isRecentlyPublished(rowId(row));
+
+    int createdAt((PlazaNote?, Map<String, dynamic>?) row) =>
+        row.$1?.createdAt ?? (row.$2?['at'] as num?)?.toInt() ?? 0;
+
     rows.sort((a, b) {
-      final ta = a.$1?.createdAt ?? (a.$2?['at'] as num?)?.toInt() ?? 0;
-      final tb = b.$1?.createdAt ?? (b.$2?['at'] as num?)?.toInt() ?? 0;
-      return tb.compareTo(ta);
+      final byScore = score(b).compareTo(score(a));
+      if (byScore != 0) return byScore;
+      return createdAt(b).compareTo(createdAt(a));
     });
-    return rows;
+    // 稳定分区：刚发布的帖子整体提到最前，组内相对顺序不变。
+    final mine = rows.where(fresh).toList();
+    return mine.isEmpty ? rows : [...mine, ...rows.where((r) => !fresh(r))];
   }
 
   /// 一次性迁移：把旧版本存在本地的讨论上传到云端（仅自己的帖子），
@@ -556,7 +599,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
         backgroundColor: _bg,
         elevation: 0,
         title: Text('${widget.title} · 讨论',
-            style: const TextStyle(
+            style: TextStyle(
                 color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
       ),
       body: Column(
@@ -605,20 +648,20 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                                     child: Text(widget.title,
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                             fontSize: 15,
                                             fontWeight: FontWeight.w700,
                                             color: _text)),
                                   ),
                                   if (_loading)
-                                    const SizedBox(
+                                    SizedBox(
                                       width: 18,
                                       height: 18,
                                       child: CircularProgressIndicator(
                                           strokeWidth: 2, color: _gold),
                                     )
                                   else if (_downloading)
-                                    const SizedBox(
+                                    SizedBox(
                                       width: 18,
                                       height: 18,
                                       child: CircularProgressIndicator(
@@ -637,7 +680,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                               ),
                               const SizedBox(height: 12),
                               if (_loading)
-                                const Padding(
+                                Padding(
                                   padding: EdgeInsets.symmetric(vertical: 10),
                                   child: Center(
                                     child: SizedBox(
@@ -656,7 +699,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                                         size: 15,
                                         color: Color(0xFFB08878)),
                                     const SizedBox(width: 6),
-                                    const Expanded(
+                                    Expanded(
                                       child: Text('经文尚未下载，点击下载后即可阅读',
                                           style: TextStyle(
                                               fontSize: 12, color: _textSec)),
@@ -696,7 +739,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                                     const Icon(Icons.check_circle_rounded,
                                         size: 15, color: Color(0xFF8FBC8F)),
                                     const SizedBox(width: 6),
-                                    const Expanded(
+                                    Expanded(
                                       child: Text('经文已下载',
                                           style: TextStyle(
                                               fontSize: 12, color: _textSec)),
@@ -730,7 +773,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       if (_newPostCount > 0) _buildNewPostBanner(),
                       const SizedBox(height: 16),
                       if (_commentsLoading && _comments.isEmpty)
-                        const Padding(
+                        Padding(
                           padding: EdgeInsets.symmetric(vertical: 24),
                           child: Center(
                             child: SizedBox(
@@ -746,17 +789,20 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                           padding: const EdgeInsets.symmetric(vertical: 24),
                           child: Center(
                             child: Text('还没有讨论，来分享你的体会吧',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 13, color: _textHint)),
                           ),
                         )
                       else
                         for (var i = 0; i < rows.length; i++) ...[
-                          if (i > 0)
-                            const Divider(
+                          if (i > 0) ...[
+                            const SizedBox(height: 8),
+                            Divider(
                                 height: 1,
-                                thickness: 0.6,
-                                color: Color(0xFFE6DAC8)),
+                                thickness: 0.5,
+                                color: AppPalette.p.divider),
+                            const SizedBox(height: 8),
+                          ],
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 10),
                             child: rows[i].$1 != null
@@ -797,7 +843,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                     borderRadius: BorderRadius.circular(21),
                   ),
                   alignment: Alignment.centerLeft,
-                  child: const Text(
+                  child: Text(
                     '说说你的体会…',
                     style: TextStyle(color: _textHint, fontSize: 14),
                   ),
@@ -865,7 +911,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                           child: Text(c['name']?.toString() ?? '同修',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600,
                                   color: _text)),
@@ -923,7 +969,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
               const SizedBox(height: 4),
               Text(c['content']?.toString() ?? '',
                   style:
-                      const TextStyle(fontSize: 15, color: _text, height: 1.6)),
+                      TextStyle(fontSize: 15, color: _text, height: 1.6)),
               // 发布时间：放在内容和指标行之间（与主页帖子同款）。
               const SizedBox(height: 6),
               Text(
@@ -993,7 +1039,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                               child: Text(n.authorName,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.w600,
                                       color: _text)),
@@ -1051,7 +1097,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                   const SizedBox(height: 4),
                   buildPostRichText(
                     n.content,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 15, color: _text, height: 1.6),
                     library: _sutraLibrary,
                     maxLines: 4,
@@ -1182,10 +1228,10 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
               child: Text(name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             _menuItem(
                 ctx,
                 'favorite',
@@ -1226,15 +1272,15 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
           backgroundColor: _card,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('删除讨论',
+          title: Text('删除讨论',
               style: TextStyle(
                   fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-          content: const Text('删除后该讨论将从本经书的讨论区移除，无法恢复。确定删除吗？',
+          content: Text('删除后该讨论将从本经书的讨论区移除，无法恢复。确定删除吗？',
               style: TextStyle(fontSize: 14, color: _textSec)),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: _textSec)),
+              child: Text('取消', style: TextStyle(color: _textSec)),
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, true),
@@ -1302,12 +1348,12 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                 child: Text(n.authorName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: _text)),
               ),
-              const Divider(height: 1, color: _border),
+              Divider(height: 1, color: _border),
               _menuItem(
                   ctx,
                   'favorite',
@@ -1353,10 +1399,10 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
               child: Text(n.authorName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             _menuItem(
                 ctx,
                 'favorite',
@@ -1443,15 +1489,15 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除帖子',
+        title: Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -1483,7 +1529,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
           children: [
             Icon(icon, size: 18, color: _textSec),
             const SizedBox(width: 12),
-            Text(label, style: const TextStyle(fontSize: 15, color: _text)),
+            Text(label, style: TextStyle(fontSize: 15, color: _text)),
           ],
         ),
       ),
@@ -1550,6 +1596,8 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
 }
 
 /// 话题页：展示含该话题的所有帖子。
+/// 排序：发起人帖置顶（公告位）→ 我刚发布的帖子短暂置顶（30 分钟内，
+/// 仅自己可见；历史帖不置顶）→ 其余按热度衰减分倒序（与「发现」同款）。
 class TopicPage extends StatefulWidget {
   final String topic;
   const TopicPage({super.key, required this.topic});
@@ -1562,7 +1610,8 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
   List<PlazaNote> _notes = [];
   bool _loading = true;
 
-  /// 话题发起人帖子的 id（置顶展示并标注「发起人」）。
+  /// 话题发起人帖子的 id（服务端权威查出的最早一条，置顶展示并标注「发起人」；
+  /// 若超出分页范围不在结果集里，则不显示标签）。
   String _pinnedId = '';
 
   /// 新帖提醒：后台静默统计本话题新帖数量，只更新「显示X帖子」提醒条与悬浮按钮，
@@ -1643,14 +1692,12 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     if (_notes.isEmpty || _loading) return;
     _newPostChecking = true;
     try {
-      final tag = '#${widget.topic}';
-      final (list, _) = await CloudNotesService.instance
-          .getPlazaNotes(page: 1, pageSize: _pageSize);
+      // 服务端按话题过滤后统计新帖 id，不再客户端筛 tag。
+      final (list, _, _) = await CloudNotesService.instance
+          .getTopicNotes(widget.topic, pageSize: _pageSize);
       if (!mounted) return;
       final known = _notes.map((n) => n.id).toSet();
-      final count = list
-          .where((n) => n.content.contains(tag) && !known.contains(n.id))
-          .length;
+      final count = list.where((n) => !known.contains(n.id)).length;
       if (count > 0 && count != _newPostCount) {
         setState(() => _newPostCount = count);
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1725,24 +1772,30 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
 
   Future<void> _load() async {
     try {
-      final (list, _) = await CloudNotesService.instance
-          .getPlazaNotes(page: 1, pageSize: _pageSize);
-      final tag = '#${widget.topic}';
+      // 服务端按 #话题 精确过滤 + 热度衰减分倒序返回，并附带发起人帖 id
+      // （最早的含该话题帖子，不受分页截断影响）。
+      final (list, _, firstId) = await CloudNotesService.instance
+          .getTopicNotes(widget.topic, pageSize: _pageSize);
       if (!mounted) return;
       setState(() {
-        final tagged = list.where((n) => n.content.contains(tag)).toList();
-        _pinnedId = '';
-        if (tagged.isNotEmpty) {
-          // 发起人帖子置顶：最早发布该话题帖子的用户。
-          var first = tagged.first;
-          for (final n in tagged) {
-            if (n.createdAt < first.createdAt) first = n;
-          }
-          _pinnedId = first.id;
-          _notes = [first, ...tagged.where((n) => n.id != first.id)];
-        } else {
-          _notes = tagged;
-        }
+        _pinnedId = firstId;
+        // 发起人帖（公告位，服务端权威查出的最早一条）。
+        final initiator = _pinnedId.isEmpty
+            ? const <PlazaNote>[]
+            : list.where((n) => n.id == _pinnedId).toList();
+        // 「我刚发布」的帖子短暂置顶（仅本次刚发的这一条、30 分钟内有效，
+        // 历史帖一律不置顶），组内保持热度序。
+        bool fresh(PlazaNote n) =>
+            n.id != _pinnedId &&
+            CloudNotesService.isRecentlyPublished(n.id);
+        final mine = list.where(fresh).toList();
+        final others = list.where((n) => !fresh(n)).toList();
+        // 展示顺序：发起人帖 → 刚发布的帖子 → 其余帖子（云端热度序）。
+        _notes = [
+          ...initiator,
+          ...mine,
+          ...others,
+        ];
         _loading = false;
         _newPostCount = 0;
       });
@@ -1764,7 +1817,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
         backgroundColor: _bg,
         elevation: 0,
         title: Text('#${widget.topic}',
-            style: const TextStyle(
+            style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       // 底部输入框：直接发布带 #话题 的帖子（与经书讨论页同款）。
@@ -1774,7 +1827,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
             child: Stack(
               children: [
                 _loading
-                    ? const Center(
+                    ? Center(
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: _gold))
                     : RefreshIndicator(
@@ -1790,7 +1843,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                   if (_newPostCount > 0)
                                     _buildNewPostBanner(key: _topSectionKey),
                                   const SizedBox(height: 24),
-                                  const Center(
+                                  Center(
                                     child: Text('还没有该话题的帖子',
                                         style: TextStyle(
                                             fontSize: 14, color: _textHint)),
@@ -1819,10 +1872,13 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                       _notes.first.id == _pinnedId) {
                                     return const SizedBox(height: 12);
                                   }
-                                  return const Divider(
-                                      height: 1,
-                                      thickness: 0.6,
-                                      color: Color(0xFFE6DAC8));
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Divider(
+                                        height: 1,
+                                        thickness: 0.5,
+                                        color: AppPalette.p.divider),
+                                  );
                                 },
                                 itemBuilder: (context, index) {
                                   // 提醒条位于索引 1：置顶帖子之后、下面讨论帖子之前。
@@ -1892,7 +1948,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                                     overflow:
                                                                         TextOverflow
                                                                             .ellipsis,
-                                                                    style: const TextStyle(
+                                                                    style: TextStyle(
                                                                         fontSize:
                                                                             15,
                                                                         fontWeight:
@@ -1971,7 +2027,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                         ),
                                                         if (n.id ==
                                                             _pinnedId) ...[
-                                                          // 发起人：d3a069 包裹色小标签，白色字符。
+                                                          // 发起人：暖黄用 d3a069 包裹色小标签，素白改黑色底，白色字符。
                                                           Container(
                                                             padding:
                                                                 const EdgeInsets
@@ -1982,8 +2038,13 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                                         2),
                                                             decoration:
                                                                 BoxDecoration(
-                                                              color: const Color(
-                                                                  0xFFD3A069),
+                                                              color: AppPalette
+                                                                      .instance
+                                                                      .isPlain
+                                                                  ? const Color(
+                                                                      0xFF1A1A1A)
+                                                                  : const Color(
+                                                                      0xFFD3A069),
                                                               borderRadius:
                                                                   BorderRadius
                                                                       .circular(
@@ -2033,7 +2094,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                     const SizedBox(height: 4),
                                                     buildPostRichText(
                                                       n.content,
-                                                      style: const TextStyle(
+                                                      style: TextStyle(
                                                           fontSize: 15,
                                                           color: _text,
                                                           height: 1.6),
@@ -2111,7 +2172,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                       ),
                                     ),
                                   );
-                                  // 发起置顶（发起人）的帖子用白色卡片包裹与下面帖子区分。
+                                  // 发起置顶（发起人）的帖子用卡片底色包裹与下面帖子区分。
                                   if (n.id == _pinnedId) {
                                     return Container(
                                       margin: const EdgeInsets.symmetric(
@@ -2119,8 +2180,9 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                       padding: const EdgeInsets.fromLTRB(
                                           10, 2, 10, 4),
                                       decoration: BoxDecoration(
-                                        color: Colors.white,
+                                        color: _card,
                                         borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: _border),
                                       ),
                                       child: content,
                                     );
@@ -2161,7 +2223,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     '发布带 #${widget.topic} 的帖子…',
-                    style: const TextStyle(color: _textHint, fontSize: 14),
+                    style: TextStyle(color: _textHint, fontSize: 14),
                   ),
                 ),
               ),
@@ -2315,15 +2377,15 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除帖子',
+        title: Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -2374,7 +2436,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                       child: Text(n.authorName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                               color: _text)),
@@ -2387,7 +2449,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-              const Divider(height: 1, color: _border),
+              Divider(height: 1, color: _border),
               _userMenuItem(
                   ctx,
                   'favorite',
@@ -2436,7 +2498,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                     child: Text(n.authorName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: _text)),
@@ -2449,7 +2511,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             _userMenuItem(
                 ctx,
                 'favorite',
@@ -2517,7 +2579,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
           children: [
             Icon(icon, size: 18, color: _textSec),
             const SizedBox(width: 12),
-            Text(label, style: const TextStyle(fontSize: 15, color: _text)),
+            Text(label, style: TextStyle(fontSize: 15, color: _text)),
           ],
         ),
       ),

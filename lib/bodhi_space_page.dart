@@ -9,16 +9,15 @@ import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 import 'user_space_page.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-
-/// 菩提空间：记录我自己的互动动态（转发、我发表的评论、别人对我的回复）。
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
 class BodhiSpacePage extends StatefulWidget {
   const BodhiSpacePage({super.key});
 
@@ -121,11 +120,11 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+          colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
         ),
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
@@ -137,18 +136,18 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
             children: [
               IconButton(
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back_ios_new,
+                icon: Icon(Icons.arrow_back_ios_new,
                     color: _text, size: 20),
               ),
               const SizedBox(width: 4),
-              const Text('互动',
+              Text('互动',
                   style: TextStyle(
                       fontSize: 19,
                       fontWeight: FontWeight.w600,
                       color: _text)),
               const Spacer(),
               Text('${_activities.length} 条动态',
-                  style: const TextStyle(fontSize: 13, color: _textSec)),
+                  style: TextStyle(fontSize: 13, color: _textSec)),
             ],
           ),
         ),
@@ -263,7 +262,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
           if (index == visible.length) {
             if (!_hasMore) return const SizedBox(height: 16);
             WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());
-            return const Padding(
+            return Padding(
               padding: EdgeInsets.all(20),
               child: Center(
                 child: SizedBox(
@@ -295,7 +294,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
           Icon(icon, size: 48, color: _textHint.withValues(alpha: 0.6)),
           const SizedBox(height: 14),
           Text(title,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                   color: _text)),
@@ -303,7 +302,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
             const SizedBox(height: 6),
             Text(subtitle,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 13, color: _textSec)),
+                style: TextStyle(fontSize: 13, color: _textSec)),
           ],
           if (buttonText != null && onButton != null) ...[
             const SizedBox(height: 18),
@@ -371,7 +370,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
                         ),
                         const SizedBox(width: 8),
                         Text(_formatTime(a.createdAt),
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 11, color: _textHint)),
                       ],
                     ),
@@ -381,7 +380,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
                         NoteSutraLinks.plainText(a.content),
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 13, color: _textSec, height: 1.5),
                       ),
                     ],
@@ -397,7 +396,7 @@ class _BodhiSpacePageState extends State<BodhiSpacePage> {
 
   /// 动态标题，@用户 与 《笔记》 分别可点击。
   Widget _buildTitle(PlazaActivity a) {
-    final baseStyle = const TextStyle(
+    final baseStyle = TextStyle(
         fontSize: 14, fontWeight: FontWeight.w600, color: _text);
     final linkStyle = TextStyle(
       fontSize: 14,

@@ -7,10 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
 import 'user_avatar_cache.dart';
+import 'app_palette.dart';
 
-const Color _primaryLight = Color(0xFF8B6B5A);
-
-/// base64 → 解码后的字节缓存（按 base64 字符串复用同一份字节）。
+Color get _primaryLight => AppPalette.p.textSec;
 ///
 /// [Image.memory] 底层用 [MemoryImage]，其相等性按「字节对象同一性」判断；
 /// 若每次重建都重新 [base64Decode]，会生成新的字节对象 → 新的 ImageProvider →

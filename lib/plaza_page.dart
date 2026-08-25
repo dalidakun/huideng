@@ -7,16 +7,16 @@ import 'login_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 class PlazaPage extends StatefulWidget {
   const PlazaPage({super.key});
 
@@ -153,7 +153,7 @@ class _PlazaPageState extends State<PlazaPage> {
                     child: Text(note.authorName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: _text)),
@@ -166,7 +166,7 @@ class _PlazaPageState extends State<PlazaPage> {
                 ],
               ),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             _menuItem(
               ctx,
               following ? 'unfollow' : 'follow',
@@ -246,7 +246,7 @@ class _PlazaPageState extends State<PlazaPage> {
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: const Text('菩提空间',
+        title: Text('菩提空间',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
         actions: [
@@ -263,7 +263,7 @@ class _PlazaPageState extends State<PlazaPage> {
                 foregroundColor: _primary,
                 selectedForegroundColor: Colors.white,
                 selectedBackgroundColor: _gold,
-                side: const BorderSide(color: _border),
+                side: BorderSide(color: _border),
                 visualDensity: VisualDensity.compact,
                 textStyle: const TextStyle(fontSize: 13),
               ),
@@ -345,7 +345,7 @@ class _PlazaPageState extends State<PlazaPage> {
                             note.authorName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: _text),
@@ -361,13 +361,13 @@ class _PlazaPageState extends State<PlazaPage> {
                   ),
                   Text(_formatTime(note.createdAt),
                       style:
-                          const TextStyle(fontSize: 11, color: _textHint)),
+                          TextStyle(fontSize: 11, color: _textHint)),
                   const SizedBox(width: 4),
                   if (!_isSelf(note))
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => _showUserMenu(note),
-                      child: const Padding(
+                      child: Padding(
                         padding: EdgeInsets.all(4),
                         child: Icon(Icons.more_horiz,
                             size: 18, color: _textSec),
@@ -385,7 +385,7 @@ class _PlazaPageState extends State<PlazaPage> {
                         Icon(Icons.repeat, size: 12, color: _gold),
                         const SizedBox(width: 2),
                         Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 11, color: _gold)),
                       ],
                     ),
@@ -398,7 +398,7 @@ class _PlazaPageState extends State<PlazaPage> {
                   preview,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 14, color: _textSec, height: 1.5),
                 ),
               ],
@@ -428,7 +428,7 @@ class _PlazaPageState extends State<PlazaPage> {
                             '@${note.repostSourceAuthor} 的笔记',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 12, color: _textSec)),
                         if (quotePreview.isNotEmpty) ...[
                           const SizedBox(height: 4),
@@ -436,7 +436,7 @@ class _PlazaPageState extends State<PlazaPage> {
                             quotePreview,
                             maxLines: 4,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 13, color: _textSec, height: 1.5),
                           ),
                         ],
@@ -445,7 +445,7 @@ class _PlazaPageState extends State<PlazaPage> {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.menu_book_rounded,
+                              Icon(Icons.menu_book_rounded,
                                   size: 13, color: _gold),
                               const SizedBox(width: 4),
                               Flexible(
@@ -453,9 +453,9 @@ class _PlazaPageState extends State<PlazaPage> {
                                   '@${q.$1}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 12,
-                                      color: Color(0xFF9A6B3F),
+                                      color: AppPalette.p.accentDeep,
                                       fontWeight: FontWeight.w600),
                                 ),
                               ),
@@ -479,19 +479,19 @@ class _PlazaPageState extends State<PlazaPage> {
                   ),
                   const SizedBox(width: 3),
                   Text('${note.likeCount}',
-                      style: const TextStyle(fontSize: 12, color: _textSec)),
+                      style: TextStyle(fontSize: 12, color: _textSec)),
                   const SizedBox(width: 14),
                   Icon(Icons.mode_comment_outlined,
                       size: 12, color: _textHint),
                   const SizedBox(width: 3),
                   Text('${note.commentCount}',
-                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                      style: TextStyle(fontSize: 12, color: _textHint)),
                   const SizedBox(width: 14),
                   Icon(Icons.visibility_outlined,
                       size: 12, color: _textHint),
                   const SizedBox(width: 3),
                   Text('${note.viewCount}',
-                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                      style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
             ],
@@ -503,7 +503,7 @@ class _PlazaPageState extends State<PlazaPage> {
 
   Widget _buildFooter() {
     if (_loading) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.symmetric(vertical: 16),
         child: Center(
           child: SizedBox(
@@ -519,7 +519,7 @@ class _PlazaPageState extends State<PlazaPage> {
         padding: const EdgeInsets.symmetric(vertical: 16),
         child: Center(
           child: Text('— 到底了 —',
-              style: const TextStyle(fontSize: 12, color: _textHint)),
+              style: TextStyle(fontSize: 12, color: _textHint)),
         ),
       );
     }

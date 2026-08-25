@@ -10,14 +10,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'image_crop_page.dart';
 
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-
+import 'app_palette.dart';
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
 class EditProfilePage extends StatefulWidget {
   const EditProfilePage({super.key});
 
@@ -310,8 +310,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
       );
     }
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Color(0xFFD2C5B3),
+      value: SystemUiOverlayStyle(
+        statusBarColor: AppPalette.p.muted,
         statusBarIconBrightness: Brightness.dark,
         statusBarBrightness: Brightness.light,
       ),
@@ -331,7 +331,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                         width: double.infinity,
                         height: 160,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFD2C5B3),
+                            color: AppPalette.p.muted,
                             image: _bannerPath != null
                                 ? DecorationImage(
                                     image: FileImage(File(_bannerPath!)),
@@ -447,7 +447,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 20),
-                          const Text('昵称',
+                          Text('昵称',
                               style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w500,
@@ -456,9 +456,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           TextField(
                             controller: _nameCtrl,
                             maxLength: 12,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 16, color: _text),
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               hintText: '输入你的昵称',
                               hintStyle:
                                   TextStyle(color: _textHint),
@@ -466,13 +466,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                 borderRadius: BorderRadius.all(
                                     Radius.circular(12)),
                                 borderSide: BorderSide(
-                                    color: Color(0xFFEFE6DB)),
+                                    color: AppPalette.p.borderSoft),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.all(
                                     Radius.circular(12)),
                                 borderSide: BorderSide(
-                                    color: Color(0xFFEFE6DB)),
+                                    color: AppPalette.p.borderSoft),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.all(
@@ -489,7 +489,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          const Text('签名',
+                          Text('签名',
                               style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w500,
@@ -498,9 +498,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           TextField(
                             controller: _taglineCtrl,
                             maxLength: 20,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 16, color: _text),
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               hintText: '一句修学感悟',
                               hintStyle:
                                   TextStyle(color: _textHint),
@@ -508,13 +508,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                 borderRadius: BorderRadius.all(
                                     Radius.circular(12)),
                                 borderSide: BorderSide(
-                                    color: Color(0xFFEFE6DB)),
+                                    color: AppPalette.p.borderSoft),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.all(
                                     Radius.circular(12)),
                                 borderSide: BorderSide(
-                                    color: Color(0xFFEFE6DB)),
+                                    color: AppPalette.p.borderSoft),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.all(
@@ -531,7 +531,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          const Text('账号',
+                          Text('账号',
                               style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w500,
@@ -540,9 +540,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           TextField(
                             controller: _accountCtrl,
                             maxLength: 10,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 16, color: _text),
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               prefixText: '@ ',
                               prefixStyle:
                                   TextStyle(color: _textSec, fontSize: 16),
@@ -553,13 +553,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                 borderRadius: BorderRadius.all(
                                     Radius.circular(12)),
                                 borderSide: BorderSide(
-                                    color: Color(0xFFEFE6DB)),
+                                    color: AppPalette.p.borderSoft),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.all(
                                     Radius.circular(12)),
                                 borderSide: BorderSide(
-                                    color: Color(0xFFEFE6DB)),
+                                    color: AppPalette.p.borderSoft),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.all(
@@ -663,7 +663,7 @@ class _SmsCodeDialogState extends State<_SmsCodeDialog> {
     return AlertDialog(
       backgroundColor: _card,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('手机验证',
+      title: Text('手机验证',
           style: TextStyle(
               color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       content: Column(
@@ -671,14 +671,14 @@ class _SmsCodeDialogState extends State<_SmsCodeDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('验证码已发送至 $_maskedPhone',
-              style: const TextStyle(fontSize: 13, color: _textSec)),
+              style: TextStyle(fontSize: 13, color: _textSec)),
           const SizedBox(height: 10),
           TextField(
             controller: _controller,
             autofocus: true,
             maxLength: 6,
             keyboardType: TextInputType.number,
-            style: const TextStyle(fontSize: 16, color: _text),
+            style: TextStyle(fontSize: 16, color: _text),
             decoration: const InputDecoration(hintText: '请输入短信验证码'),
           ),
         ],
@@ -686,10 +686,10 @@ class _SmsCodeDialogState extends State<_SmsCodeDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消', style: TextStyle(color: _textSec))),
+            child: Text('取消', style: TextStyle(color: _textSec))),
         TextButton(
           onPressed: () => Navigator.pop(context, _controller.text.trim()),
-          child: const Text('确定',
+          child: Text('确定',
               style: TextStyle(color: _text, fontWeight: FontWeight.w600)),
         ),
       ],

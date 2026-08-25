@@ -6,14 +6,13 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'identity_util.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-
-/// 实名认证页：输入真实姓名与身份证号，通过格式核验后获得认证标识。
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
 class CertificationPage extends StatefulWidget {
   const CertificationPage({super.key});
 
@@ -125,15 +124,15 @@ class _CertificationPageState extends State<CertificationPage> {
         backgroundColor: _bg,
         elevation: 0,
         shadowColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: _text),
-        title: const Text('实名认证',
+        iconTheme: IconThemeData(color: _text),
+        title: Text('实名认证',
             style: TextStyle(
                 color: _text,
                 fontSize: 17,
                 fontWeight: FontWeight.w600)),
       ),
       body: _loading
-          ? const Center(
+          ? Center(
               child: CircularProgressIndicator(
                   color: _gold, strokeWidth: 2.5))
           : _verified
@@ -151,13 +150,13 @@ class _CertificationPageState extends State<CertificationPage> {
           decoration: BoxDecoration(
             color: _card,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFEBE1D6)),
+            border: Border.all(color: AppPalette.p.border),
           ),
           child: Column(
             children: [
               const Icon(Icons.verified, size: 64, color: Color(0xFF70867A)),
               const SizedBox(height: 16),
-              const Text('已实名认证',
+              Text('已实名认证',
                   style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
@@ -165,16 +164,16 @@ class _CertificationPageState extends State<CertificationPage> {
               const SizedBox(height: 10),
               if (_verifiedName.isNotEmpty)
                 Text('认证姓名：$_verifiedName',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 14, color: _textSec)),
               if (_verifiedAt > 0) ...[
                 const SizedBox(height: 6),
                 Text('认证时间：${_formatDate(_verifiedAt)}',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 14, color: _textSec)),
               ],
               const SizedBox(height: 12),
-              const Text('昵称旁已显示认证标识',
+              Text('昵称旁已显示认证标识',
                   style: TextStyle(fontSize: 13, color: _textHint)),
             ],
           ),
@@ -214,9 +213,9 @@ class _CertificationPageState extends State<CertificationPage> {
                   color: _card,
                   borderRadius: BorderRadius.circular(12),
                   border:
-                      Border.all(color: const Color(0xFFEBE1D6)),
+                      Border.all(color: AppPalette.p.border),
                 ),
-                child: const Row(
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(Icons.info_outline,
@@ -235,7 +234,7 @@ class _CertificationPageState extends State<CertificationPage> {
                 ),
               ),
               const SizedBox(height: 24),
-              const Text('真实姓名',
+              Text('真实姓名',
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -248,8 +247,8 @@ class _CertificationPageState extends State<CertificationPage> {
                   FilteringTextInputFormatter.allow(
                       RegExp('[\\u4e00-\\u9fa5·]')),
                 ],
-                style: const TextStyle(fontSize: 16, color: _text),
-                decoration: const InputDecoration(
+                style: TextStyle(fontSize: 16, color: _text),
+                decoration: InputDecoration(
                   hintText: '与身份证一致的姓名',
                   hintStyle: TextStyle(color: _textHint),
                   counterText: '',
@@ -257,13 +256,13 @@ class _CertificationPageState extends State<CertificationPage> {
                     borderRadius:
                         BorderRadius.all(Radius.circular(12)),
                     borderSide:
-                        BorderSide(color: Color(0xFFEFE6DB)),
+                        BorderSide(color: AppPalette.p.borderSoft),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius:
                         BorderRadius.all(Radius.circular(12)),
                     borderSide:
-                        BorderSide(color: Color(0xFFEFE6DB)),
+                        BorderSide(color: AppPalette.p.borderSoft),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius:
@@ -278,7 +277,7 @@ class _CertificationPageState extends State<CertificationPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              const Text('身份证号',
+              Text('身份证号',
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -292,8 +291,8 @@ class _CertificationPageState extends State<CertificationPage> {
                       RegExp('[0-9xX]')),
                   LengthLimitingTextInputFormatter(18),
                 ],
-                style: const TextStyle(fontSize: 16, color: _text),
-                decoration: const InputDecoration(
+                style: TextStyle(fontSize: 16, color: _text),
+                decoration: InputDecoration(
                   hintText: '18 位身份证号，末位可为 X',
                   hintStyle: TextStyle(color: _textHint),
                   counterText: '',
@@ -301,13 +300,13 @@ class _CertificationPageState extends State<CertificationPage> {
                     borderRadius:
                         BorderRadius.all(Radius.circular(12)),
                     borderSide:
-                        BorderSide(color: Color(0xFFEFE6DB)),
+                        BorderSide(color: AppPalette.p.borderSoft),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius:
                         BorderRadius.all(Radius.circular(12)),
                     borderSide:
-                        BorderSide(color: Color(0xFFEFE6DB)),
+                        BorderSide(color: AppPalette.p.borderSoft),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius:
@@ -322,7 +321,7 @@ class _CertificationPageState extends State<CertificationPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              const Row(
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(Icons.lock_outline,

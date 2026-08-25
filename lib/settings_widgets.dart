@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 
-const Color sPrimary = Color(0xFF5C4033);
-const Color sGold = Color(0xFFD4A06A);
-const Color sBg = Color(0xFFF5EDE3);
-const Color sCard = Color(0xFFFFFAF5);
-const Color sText = Color(0xFF3E2723);
-const Color sTextSec = Color(0xFF8B6B5A);
-const Color sTextHint = Color(0xFFC4B5A8);
-
-/// 设置类页面统一外壳：渐变圆角头部 + 返回按钮 + 标题 + 可选右上角操作 + 滚动主体。
+import 'app_palette.dart';
+Color get sPrimary => AppPalette.p.primary;
+Color get sGold => AppPalette.p.accent;
+Color get sBg => AppPalette.p.bg;
+Color get sCard => AppPalette.p.card;
+Color get sText => AppPalette.p.text;
+Color get sTextSec => AppPalette.p.textSec;
+Color get sTextHint => AppPalette.p.textHint;
 class SettingsPageScaffold extends StatelessWidget {
   final String title;
   final Widget child;
@@ -29,11 +28,11 @@ class SettingsPageScaffold extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+                colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
               ),
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
             ),
@@ -45,11 +44,11 @@ class SettingsPageScaffold extends StatelessWidget {
                   children: [
                     IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back_ios_new, color: sText, size: 20),
+                      icon: Icon(Icons.arrow_back_ios_new, color: sText, size: 20),
                     ),
                     const SizedBox(width: 4),
                     Expanded(
-                      child: Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: sText), overflow: TextOverflow.ellipsis),
+                      child: Text(title, style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: sText), overflow: TextOverflow.ellipsis),
                     ),
                     if (trailing != null) trailing!,
                   ],
@@ -95,7 +94,7 @@ class SettingsDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.only(left: indent),
-      child: const Divider(height: 1, thickness: 0.5, color: Color(0xFFEFE6DB)),
+      child: Divider(height: 1, thickness: 0.5, color: AppPalette.p.borderSoft),
     );
   }
 }
@@ -143,11 +142,11 @@ class SettingsTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontSize: 16, color: sText, fontWeight: FontWeight.w500)),
+                  Text(title, style: TextStyle(fontSize: 16, color: sText, fontWeight: FontWeight.w500)),
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
                     Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12, color: sTextHint)),
+                        style: TextStyle(fontSize: 12, color: sTextHint)),
                   ],
                 ],
               ),

@@ -601,6 +601,11 @@ exports.main = async (event, context) => {
         patch.updatedAt = now();
         const note = await getOwnedNote(notes, id, uid);
         if (!note) return fail("not_found");
+        // 帖子被隐藏（进回收站/下架）后不再出现在任何列表，等同删除处理：
+        // 子回复重挂到父帖，避免回复链断开；恢复显示时链路保持有效。
+        if (patch.status === "hidden" && note.status !== "hidden") {
+          await reattachChildReplies(notes, id, String(note.repostOf || ""));
+        }
         await notes.doc(id).update(patch);
         // 内容/可见性/状态改变会改变 #话题/$经名的贡献，重新聚合热门榜。
         if (event.content != null || event.visibility != null || event.status != null) {
@@ -614,6 +619,19 @@ exports.main = async (event, context) => {
         const id = String(event.id || "");
         const note = await getOwnedNote(notes, id, uid);
         if (!note) return fail("not_found");
+        // 先把子回复重新挂接再删除，保持回复链连通：
+        // a→b→c 链中删掉中间的 b 时，c 的 repostOf 从 b 改指到 a（c/d 与原贴 a 保持头像连线）；
+        // 被删的就是根帖（无父帖）时，子回复退化为独立的引用帖（quote 快照保留其回复对象），
+        // 避免 c/d 悬空指向已删除的帖子、在广场/个人主页被拆成孤立的碎块。
+        // 同时把被删 id 记入子帖 tombstoneAncestorIds，详情页渲染「已删除」占位。
+        await reattachChildReplies(
+          notes,
+          id,
+          String(note.repostOf || ""),
+          Array.isArray(note.tombstoneAncestorIds)
+            ? note.tombstoneAncestorIds
+            : []
+        );
         await notes.doc(id).remove();
         await likes.where({ noteId: id }).remove();
         await comments.where({ noteId: id }).remove();
@@ -685,12 +703,25 @@ exports.main = async (event, context) => {
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 100);
         const sort = event.sort === "hot" ? "hot" : "latest";
-        const base = notes
-          .where({
-            visibility: "public",
-            status: "normal",
-            kind: _.neq("announcement"),
-          });
+        // 可选话题过滤（话题页专用）：只返回含 #话题 的帖子。
+        // 匹配精确到边界（#打坐 不误伤 #打坐中），与客户端词边界规则一致。
+        const rawTopic = String(event.topic || "").trim().slice(0, 50);
+        const topicFilter = rawTopic
+          ? db.RegExp({
+              regexp: `#${rawTopic.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s#，。！？,;:!?（）()]|$)`,
+              options: "",
+            })
+          : null;
+        const base = notes.where(
+          Object.assign(
+            {
+              visibility: "public",
+              status: "normal",
+              kind: _.neq("announcement"),
+            },
+            topicFilter ? { content: topicFilter } : {}
+          )
+        );
 
         // 屏蔽的用户内容从广场隐藏
         let blocked = [];
@@ -722,25 +753,41 @@ exports.main = async (event, context) => {
           const nowMs = Date.now();
           // 热门扫描只取最近 3 天的帖子（帖子成千上万时不再每次全表扫描，刷新更快）。
           // 若热门池不足三页（冷清时段），放宽到 7 天、再放宽到 30 天兜底，保证热门榜有内容。
+          // 话题模式例外：带该话题的帖子总量有限，直接全量扫描（不限时间窗），
+          // 冷清的老话题也能完整展示历史帖，再按同一套热度衰减公式排序。
           const hotPoolMin = 60;
           let all = [];
-          for (const days of [3, 7, 30]) {
-            const since = nowMs - days * 24 * 3600000;
-            const collected = [];
+          if (topicFilter) {
             let skip = 0;
             while (true) {
               const r = await base
-                .where({ createdAt: _.gte(since) })
+                .orderBy("createdAt", "desc")
                 .skip(skip)
                 .limit(1000)
                 .get();
-              const batch = r.data || [];
-              collected.push(...batch);
-              if (batch.length < 1000) break;
+              all.push(...(r.data || []));
+              if ((r.data || []).length < 1000) break;
               skip += 1000;
             }
-            all = collected;
-            if (collected.length >= hotPoolMin) break;
+          } else {
+            for (const days of [3, 7, 30]) {
+              const since = nowMs - days * 24 * 3600000;
+              const collected = [];
+              let skip = 0;
+              while (true) {
+                const r = await base
+                  .where({ createdAt: _.gte(since) })
+                  .skip(skip)
+                  .limit(1000)
+                  .get();
+                const batch = r.data || [];
+                collected.push(...batch);
+                if (batch.length < 1000) break;
+                skip += 1000;
+              }
+              all = collected;
+              if (collected.length >= hotPoolMin) break;
+            }
           }
           // 我本人 + 我关注的用户发出的回复帖：{父帖id: 最新回复时间} 用于父帖置顶。
           const parentBoostTime = new Map();
@@ -808,6 +855,16 @@ exports.main = async (event, context) => {
             (a, b) => b._hotScore - a._hotScore || (b.createdAt || 0) - (a.createdAt || 0)
           );
           const total = scored.length;
+          // 话题发起人帖：可见帖子里最早的一条（服务端权威查询，
+          // 客户端不再受「前 N 条里挑最早」的截断影响）。
+          let firstNoteId = "";
+          if (topicFilter && scored.length) {
+            let first = scored[0];
+            for (const n of scored) {
+              if ((n.createdAt || 0) < (first.createdAt || 0)) first = n;
+            }
+            firstNoteId = String(first._id || first.id || "");
+          }
           const pageNotes = scored.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
           const notesOut = pageNotes.map(({ _hotScore, ...rest }) => rest);
           await attachAuthorAccounts(notesOut);
@@ -817,6 +874,7 @@ exports.main = async (event, context) => {
             notes: notesOut,
             total,
             hasMore: (page - 1) * pageSize + pageNotes.length < total,
+            firstNoteId,
           });
         }
 
@@ -830,10 +888,20 @@ exports.main = async (event, context) => {
         await attachAuthorAccounts(filtered);
         await attachAuthorVerified(filtered);
         await attachAuthorCanonProgress(filtered);
+        // 话题模式（latest 排序）同样附带发起人帖 id：单独按 createdAt asc 查最早一条。
+        let firstNoteId = "";
+        if (topicFilter) {
+          try {
+            const fr = await base.orderBy("createdAt", "asc").limit(1).get();
+            const f = (fr.data || [])[0];
+            if (f) firstNoteId = String(f._id || f.id || "");
+          } catch (e) {}
+        }
         return ok({
           notes: filtered,
           total,
           hasMore: (page - 1) * pageSize + res.data.length < total,
+          firstNoteId,
         });
       }
 
@@ -1177,9 +1245,13 @@ exports.main = async (event, context) => {
           base.quoteOfContent = String(src.content || "").slice(0, 500);
         }
         const res = await notes.add(base);
-        await notes.doc(id).update({
-          repostCount: (src.repostCount || 0) + 1,
-        });
+        // 转发量只统计「直接转发/引用转发」；回复帖（kind='reply'）属于评论行为，
+        // 评论量已由 createComment 增加，这里不再重复累计原帖转发量。
+        if (repostKind !== "reply") {
+          await notes.doc(id).update({
+            repostCount: (src.repostCount || 0) + 1,
+          });
+        }
         const newTitle = String(base.title || "无标题").slice(0, 100);
         const reposterName = String(event.authorName || "同修").slice(0, 30);
         await activities.add({
@@ -2697,6 +2769,12 @@ exports.main = async (event, context) => {
 
       case "hideNote": {
         const id = String(event.id || "");
+        const { data: hd } = await notes.doc(id).get();
+        const hideTarget = hd && hd[0];
+        if (hideTarget && hideTarget.status !== "hidden") {
+          // 隐藏前先把子回复重挂到父帖（同 deleteNote），保持回复链连通。
+          await reattachChildReplies(notes, id, String(hideTarget.repostOf || ""));
+        }
         await notes.doc(id).update({ status: "hidden" });
         return ok({});
       }
@@ -2720,6 +2798,43 @@ async function getOwnedNote(notesColl, id, uid) {
 async function getNote(notesColl, id) {
   const { data } = await notesColl.doc(id).get();
   return data && data[0];
+}
+
+// 把直接子回复（repostOf == id）重新挂到 [parentOf] 上，保持回复链连通。
+// - parentOf 非空：删/隐中间回复 b 时，c/d 的 repostOf 从 b 改指到 b 的父帖 a，
+//   广场/个人主页的分组逻辑能继续把 c/d 归到原贴 a 下方连线展示。
+// - parentOf 为空（删/隐的就是根帖）：子回复没有可挂靠的上游，转为独立引用帖
+//   （repostOf 置空 + repostKind 改为 quote，quoteOf 快照保留其原回复对象），避免悬空引用。
+// 失败不抛出：重挂只是显示优化，不能阻塞删除/隐藏主流程。
+async function reattachChildReplies(notesColl, id, parentOf, deletedTombstones) {
+  try {
+    // 参考 X 的 tombstone_ancestor_ids：祖先 id 不可变，被删祖先显式记录在
+    // 子帖的 tombstoneAncestorIds 里（nearest-first，紧邻父帖在前），
+    // 客户端详情页据此渲染「已删除帖子」占位并保持回复链连线不断。
+    // 重挂本身仍保留：广场/个人主页列表依赖 repostOf 指向存在的帖子，
+    // 避免拆成孤立碎块；墓碑只在详情页链路上展示。
+    const delTs = Array.isArray(deletedTombstones) ? deletedTombstones : [];
+    const children = await notesColl.where({ repostOf: id }).get();
+    for (const child of children.data || []) {
+      const prev = Array.isArray(child.tombstoneAncestorIds)
+        ? child.tombstoneAncestorIds
+        : [];
+      const patch = {
+        // child 原有墓碑（原本就贴着 child）在前，其次才是本次被删节点，
+        // 最后是被删节点自身携带的更上层墓碑——整体保持 nearest-first。
+        tombstoneAncestorIds: [...prev, id, ...delTs],
+      };
+      if (parentOf) {
+        patch.repostOf = parentOf;
+      } else {
+        patch.repostOf = "";
+        patch.repostKind = "quote";
+      }
+      await notesColl.doc(child._id).update(patch);
+    }
+  } catch (e) {
+    console.error(`[api] reattachChildReplies failed for ${id}:`, e);
+  }
 }
 
 // 查询账号名称（userAccounts 中登记的 username），无则返回空串。

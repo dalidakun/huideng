@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 /// 帖子时间戳链接：按下时显示下划线，点击触发回调（进入帖子详情）。
 class PostTimeLink extends StatefulWidget {
   final String text;
-  final VoidCallback onTap;
-  const PostTimeLink({super.key, required this.text, required this.onTap});
+  final VoidCallback? onTap;
+  const PostTimeLink({super.key, required this.text, this.onTap});
 
   @override
   State<PostTimeLink> createState() => _PostTimeLinkState();
@@ -20,7 +20,7 @@ class _PostTimeLinkState extends State<PostTimeLink> {
       onTapDown: (_) => setState(() => _pressed = true),
       onTapUp: (_) => setState(() => _pressed = false),
       onTapCancel: () => setState(() => _pressed = false),
-      onTap: widget.onTap,
+      onTap: widget.onTap ?? () {},
       child: Text(
         widget.text,
         maxLines: 1,

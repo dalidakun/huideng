@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 
 import 'settings_widgets.dart';
 
+import 'app_palette.dart';
 /// 资助：以温暖克制的随喜方式展示收款码，增强信任与资助意愿。
 class DonatePage extends StatelessWidget {
   const DonatePage({super.key});
@@ -64,7 +65,7 @@ class DonatePage extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 32),
             child: Text(
               '打开微信 / 支付宝扫一扫即可转账，\n或长按收款码保存后付款。金额不限，随喜随心。',
@@ -83,10 +84,10 @@ class DonatePage extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFF8E9CD), Color(0xFFFCF4E7)],
+          colors: [AppPalette.p.tintBg, AppPalette.p.tintBg],
         ),
         borderRadius: BorderRadius.circular(20),
       ),
@@ -111,12 +112,12 @@ class DonatePage extends StatelessWidget {
             child: Image.asset('assets/images/app_icon.png', fit: BoxFit.cover),
           ),
           const SizedBox(height: 14),
-          const Text(
+          Text(
             '燃一盏灯 · 照一路人',
             style: TextStyle(fontSize: 21, fontWeight: FontWeight.w700, color: sText),
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             '燃灯由我一人独自维护。若它曾给您带来清净与欢喜，随喜资助即可——每一份心意，都将用于维持服务器与持续开发，化作照亮更多人前路的光。',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: sTextSec, height: 1.8),
@@ -131,7 +132,7 @@ class DonatePage extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 13, color: sTextSec, fontWeight: FontWeight.w600),
+        style: TextStyle(fontSize: 13, color: sTextSec, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -163,13 +164,13 @@ class DonatePage extends StatelessWidget {
           ),
           Text(
             label,
-            style: const TextStyle(fontSize: 15, color: sText, fontWeight: FontWeight.w600),
+            style: TextStyle(fontSize: 15, color: sText, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 6),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.download_outlined, size: 13, color: sTextHint),
+              Icon(Icons.download_outlined, size: 13, color: sTextHint),
               const SizedBox(width: 3),
               Text(
                 '长按保存',
@@ -353,12 +354,12 @@ class _PurposeTile extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(fontSize: 15, color: sText, fontWeight: FontWeight.w500),
+                  style: TextStyle(fontSize: 15, color: sText, fontWeight: FontWeight.w500),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: const TextStyle(fontSize: 12, color: sTextHint),
+                  style: TextStyle(fontSize: 12, color: sTextHint),
                 ),
               ],
             ),

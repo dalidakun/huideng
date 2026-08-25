@@ -18,17 +18,16 @@ import 'reply_chain.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
-/// 昵称行操作按钮（关注按钮/三个点点圆圈）统一尺寸。
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 const double _rowBtnSize = 26;
 
 /// 某位用户的菩提空间：展示对方公开发布的所有笔记（含转发），点击可查看评论/点赞等。
@@ -157,10 +156,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(_displayName,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             InkWell(
               onTap: () => Navigator.pop(ctx, 'block'),
               child: Padding(
@@ -168,10 +167,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                 child: Row(
                   children: [
-                    const Icon(Icons.block_outlined, size: 18, color: _textSec),
+                    Icon(Icons.block_outlined, size: 18, color: _textSec),
                     const SizedBox(width: 12),
                     Text(label,
-                        style: const TextStyle(fontSize: 15, color: _text)),
+                        style: TextStyle(fontSize: 15, color: _text)),
                   ],
                 ),
               ),
@@ -607,11 +606,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
     return Container(
       width: double.infinity,
       height: 150,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFD2C5B3), Color(0xFFC6B79E)],
+          colors: [AppPalette.p.muted, AppPalette.p.muted],
         ),
       ),
     );
@@ -675,7 +674,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         width: _rowBtnSize,
                         height: _rowBtnSize,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFECE9E4),
+                          color: AppPalette.p.borderSoft,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
@@ -706,7 +705,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                           decoration: BoxDecoration(
                             color: _followStateOk
                                 ? (following
-                                    ? const Color(0xFFECE9E4)
+                                    ? AppPalette.p.borderSoft
                                     : const Color(0xFF70867A))
                                 : const Color(0xFFC9C4BC),
                             borderRadius:
@@ -785,7 +784,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                             child: Text(_displayName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.w700,
                                     color: _text)),
@@ -826,7 +825,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         child: Text('@$_account',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 13, color: _textHint)),
                       ),
                       // 累积读经时长：位于原阅藏百分比位置（@账号行最右侧）。
@@ -850,7 +849,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   const SizedBox(height: 6),
                   Text(
                     _displayTagline,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 14, color: _textSec, height: 1.4),
                   ),
                 ],
@@ -861,7 +860,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                     '${_joinDateText(_profileJoinTime)}加入',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: _textHint),
+                    style: TextStyle(fontSize: 12, color: _textHint),
                   ),
                 ],
               ],
@@ -897,14 +896,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   Icon(Icons.spa_outlined,
                       size: 48, color: _textHint.withValues(alpha: 0.6)),
                   const SizedBox(height: 14),
-                  const Text('还没有公开分享',
+                  Text('还没有公开分享',
                       style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                           color: _text)),
                   const SizedBox(height: 6),
                   Text('$_displayName 暂未公开发布笔记',
-                      style: const TextStyle(fontSize: 13, color: _textSec)),
+                      style: TextStyle(fontSize: 13, color: _textSec)),
                 ],
               ),
             ),
@@ -934,7 +933,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       });
     }
     if (posts.isEmpty) {
-      return const Center(
+      return Center(
         child: Text('还没有帖子', style: TextStyle(fontSize: 14, color: _textHint)),
       );
     }
@@ -956,7 +955,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget _buildRepliesTab() {
     final replies = _replies;
     if (replies.isEmpty) {
-      return const Center(
+      return Center(
         child: Text('还没有回复', style: TextStyle(fontSize: 14, color: _textHint)),
       );
     }
@@ -975,11 +974,15 @@ class _UserSpacePageState extends State<UserSpacePage> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (index > 0)
-                  const Divider(
+                // 分割线上下各留 8px：与上面帖子、下面帖子的间隔都更宽松。
+                if (index > 0) ...[
+                  const SizedBox(height: 8),
+                  Divider(
                       height: 1,
-                      thickness: 0.6,
-                      color: Color(0xFFE6DAC8)),
+                      thickness: 0.5,
+                      color: AppPalette.p.divider),
+                  const SizedBox(height: 8),
+                ],
                 _buildReplyGroupCard(g.$1, g.$2),
               ],
             );
@@ -1094,7 +1097,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                     Expanded(
                       child: Text(
                         s.title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14.5,
                           fontWeight: FontWeight.w600,
                           color: _text,
@@ -1128,7 +1131,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Align(
+              Align(
                 alignment: Alignment.centerRight,
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1351,7 +1354,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
       child: Text(title,
-          style: const TextStyle(
+          style: TextStyle(
               fontSize: 15, fontWeight: FontWeight.w700, color: _text)),
     );
   }
@@ -1372,7 +1375,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
           const SizedBox(width: 8),
           Expanded(
             child:
-                Text(line, style: const TextStyle(fontSize: 14, color: _text)),
+                Text(line, style: TextStyle(fontSize: 14, color: _text)),
           ),
         ],
       ),
@@ -1395,7 +1398,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
           Row(
             children: [
               Text(g.label,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
               if (g.goal > 0)
@@ -1406,7 +1409,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                       color: _gold.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(12)),
                   child: Text('目标 ${_fmtNum(g.goal)}${g.unit}',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
                           color: _gold,
                           fontWeight: FontWeight.w600)),
@@ -1430,11 +1433,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
           Row(
             children: [
               Text('已累计 ${_fmtNum(g.total)} ${g.unit}',
-                  style: const TextStyle(fontSize: 12, color: _textSec)),
+                  style: TextStyle(fontSize: 12, color: _textSec)),
               const Spacer(),
               if (g.goal > 0)
                 Text('${(progress * 100).toStringAsFixed(0)}%',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: _primary)),
@@ -1457,16 +1460,16 @@ class _UserSpacePageState extends State<UserSpacePage> {
             padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 32),
             child: Column(
               children: [
-                const Icon(Icons.block, size: 48, color: _textHint),
+                Icon(Icons.block, size: 48, color: _textHint),
                 const SizedBox(height: 14),
-                const Text('已屏蔽用户',
+                Text('已屏蔽用户',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: _text)),
                 const SizedBox(height: 6),
-                const Text('如需查看，请取消屏蔽。',
+                Text('如需查看，请取消屏蔽。',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: _textSec)),
               ],
@@ -1494,14 +1497,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 const SizedBox(height: 14),
                 Text(title,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: _text)),
                 const SizedBox(height: 6),
                 Text(subtitle,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 13, color: _textSec)),
+                    style: TextStyle(fontSize: 13, color: _textSec)),
               ],
             ),
           ),
@@ -1700,15 +1703,19 @@ class _UserSpacePageState extends State<UserSpacePage> {
           clipBehavior: Clip.none,
           children: [
             // 连接线：原贴头像底部 → 下面第一个回复头像之间。
-            // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
+            // top:68 = 根帖外层顶内边距(6) + 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
             // bottom:6 = 线下端距 ReplyChain 首个头像 6px。
             Positioned(
               left: 21,
-              top: 62,
+              top: 68,
               bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
-            rootWidget,
+            // 与首页发现流同款 vertical:6 外边距：分割线与帖子边缘的间隔一致。
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: rootWidget,
+            ),
           ],
         ),
         ReplyChain(
@@ -1751,10 +1758,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(note.authorName,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
                 pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
@@ -1809,15 +1816,15 @@ class _UserSpacePageState extends State<UserSpacePage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除帖子',
+        title: Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),

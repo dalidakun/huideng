@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_palette.dart';
 class ReadingPage extends StatefulWidget {
   final String title;
   final String? filePath;
@@ -178,7 +179,7 @@ class _ReadingPageState extends State<ReadingPage> {
                 _saveSettings();
                 Navigator.pop(context);
               },
-              trailing: _fontSize == size ? const Icon(Icons.check, color: Color(0xFF5d4037)) : null,
+              trailing: _fontSize == size ? Icon(Icons.check, color: AppPalette.p.primary) : null,
             );
           }).toList(),
         ),
@@ -535,7 +536,7 @@ class _ReadingPageState extends State<ReadingPage> {
                               curve: Curves.easeInOut,
                             );
                           },
-                          backgroundColor: const Color(0xFF9d5f4b),
+                          backgroundColor: AppPalette.p.accentDeep,
                           elevation: 8,
                           highlightElevation: 12,
                           shape: const CircleBorder(),
@@ -757,7 +758,7 @@ class _ReadingPageState extends State<ReadingPage> {
                             curve: Curves.easeInOut,
                           );
                         },
-                        backgroundColor: const Color(0xFF9d5f4b),
+                        backgroundColor: AppPalette.p.accentDeep,
                         elevation: 8,
                         highlightElevation: 12,
                         shape: const CircleBorder(),

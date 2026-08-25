@@ -20,6 +20,7 @@ import 'sutra_favorites.dart';
 import 'calendar_page.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
+import 'note_stats_center.dart';
 import 'reply_chain.dart';
 import 'my_page.dart';
 import 'user_space_page.dart';
@@ -31,17 +32,20 @@ import 'post_rich_content.dart';
 import 'reading_time_service.dart';
 import 'sutra_downloader.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-const Color _overlay = Color(0xFFFFF5EC);
-
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
+Color get _overlay => AppPalette.p.tintBg;
+/// 素白外观下主页大卡片（精读经文/功课打卡）用纯白底；暖黄保持原浅色块。
+Color get _cardSurface =>
+    AppPalette.instance.isPlain ? Colors.white : _overlay;
 const Map<String, String> _plazaTabMeta = {
   'hot': '发现',
   'discuss': '讨论',
@@ -148,7 +152,6 @@ class StudyHubPageState extends State<StudyHubPage>
   double _topSectionHeight = 0;
   bool _showFab = false;
   int _feedPage = 1;
-  int _feedVersion = 0;
   bool _feedHasMore = true;
   bool _feedInitial = true;
   bool _feedLoading = false;
@@ -180,6 +183,10 @@ class StudyHubPageState extends State<StudyHubPage>
   /// _loadFeed 重入闸门：防止点击「显示X帖子」时双击重入，
   /// 或后台轮询新帖与点击触发的加载同时跑导致请求/状态错乱。
   bool _feedRefreshing = false;
+  /// 刚发布、服务端列表尚未返回的本地回复（回复id → 回复帖）：
+  /// 后台刷新覆盖列表时重新补挂，直到服务端返回该回复（或父帖消失）才清除，
+  /// 保证评论后头像连线不因刷新而闪没。
+  final Map<String, PlazaNote> _pendingLocalReplies = {};
   /// 全局「有新帖未查看」标记：驱动底部「修学」菜单图标上的 70867A 小圆点。
   static final ValueNotifier<int> newPostBadge = ValueNotifier<int>(0);
   static const Duration _newPostCheckInterval = Duration(seconds: 30);
@@ -242,6 +249,8 @@ class StudyHubPageState extends State<StudyHubPage>
     // 登录会话是异步恢复的：首次加载广场时可能还没登录，
     // 等登录态就绪后重新拉取屏蔽列表并刷新，让被屏蔽用户的帖子立即消失。
     AuthService.instance.currentUser.addListener(_onAuthChanged);
+    // 评论发表后的即时连线：监听新回复广播，把回复乐观插入当前流。
+    NoteStatsCenter.instance.lastReplyPosted.addListener(_onLocalReplyPosted);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _measureTopSection();
       precacheImage(_commentIcon, context);
@@ -256,7 +265,9 @@ class StudyHubPageState extends State<StudyHubPage>
     final u = AuthService.instance.currentUser.value;
     final followCache = _cacheFor('follow');
     followCache.initial = true;
-    followCache.notes.clear();
+    // 直接换成新的可变列表：缓存里的列表可能来自 const []（不可变），
+    // 对其 clear() 会抛 Unsupported operation 并在登录流程中炸出错误页。
+    followCache.notes = <PlazaNote>[];
     if (u != null) {
       _loadFeed();
       _refreshFeedInBackground('follow');
@@ -295,6 +306,8 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void dispose() {
     AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    NoteStatsCenter.instance.lastReplyPosted
+        .removeListener(_onLocalReplyPosted);
     WidgetsBinding.instance.removeObserver(this);
     _newPostTimer?.cancel();
     _newPostTimer = null;
@@ -804,7 +817,22 @@ class StudyHubPageState extends State<StudyHubPage>
     return (collected, cur, hasMore);
   }
 
-  /// 加载当前 tab 的笔记流。发现：热度 + 时间衰减排序。
+  /// 把「我刚发布、还没过期」的帖子稳定地提到列表最前（组内保持原有热度序）。
+  /// 只对刚发的这一条生效，历史帖子一律不置顶——否则发帖多的用户
+  /// 一进发现页满屏都是自己的旧帖。仅在整页刷新/后台预取替换列表时应用；
+  /// _loadMoreFeed 追加的分页不重排，避免浏览中列表突然跳动。
+  /// 只影响自己客户端的展示顺序，其他用户看不到。
+  List<PlazaNote> _hoistOwnNotes(List<PlazaNote> list) {
+    if (list.isEmpty) return list;
+    bool fresh(PlazaNote n) =>
+        CloudNotesService.isRecentlyPublished(n.id);
+    final mine = list.where(fresh).toList();
+    if (mine.isEmpty || mine.length == list.length) return list;
+    return [...mine, ...list.where((n) => !fresh(n))];
+  }
+
+  /// 加载当前 tab 的笔记流。发现：热度 + 时间衰减排序，
+  /// 我刚发布的帖子额外短暂置顶（仅自己可见；历史帖不置顶）。
   /// [newestFirst] 为 true 时（点击「显示X条新帖子」），推荐栏也切到最新优先，
   /// 让新帖直接排在列表顶部，而不是被旧热帖压住。
   /// 关注：仅展示已关注同修的笔记。
@@ -823,7 +851,6 @@ class StudyHubPageState extends State<StudyHubPage>
         _feedError = false;
         _feedAuthDead = false;
         _feedNotes.clear();
-        _feedVersion++;
         _feedPage = 1;
         _feedHasMore = true;
         _feedLoading = false;
@@ -852,10 +879,11 @@ class StudyHubPageState extends State<StudyHubPage>
           // 与「关注」栏目同口径兜底：作者 @账号/认证/阅藏进度缺失时按 uid 补齐，
           // 避免发现页同一用户与关注页显示不一致（头像旁无 @账号、无百分比）。
           list = await CloudNotesService.instance.enrichFeedAuthors(list);
+          // 我刚发布的帖子短暂置顶（仅自己可见），其余保持云端热度序。
+          list = _hoistOwnNotes(list);
           if (mounted) {
             setState(() {
               _feedNotes.addAll(list);
-              _feedVersion++;
               _feedPage = nextPage;
               _feedHasMore = hasMore;
               _feedInitial = false;
@@ -870,7 +898,6 @@ class StudyHubPageState extends State<StudyHubPage>
           if (mounted) {
             setState(() {
               _feedNotes.addAll(list);
-              _feedVersion++;
               _feedPage = nextPage;
               _feedHasMore = hasMore;
               _feedInitial = false;
@@ -902,6 +929,11 @@ class StudyHubPageState extends State<StudyHubPage>
           });
         }
       }
+      // 全量重载后补挂刚发布的本地回复：服务端索引延迟还没返回它时，
+      // 保持根帖下方头像连线可见，不因刷新而闪没。
+      if (mounted && _mergePendingLocalReplies()) {
+        setState(() {});
+      }
       _saveFeedToCache(tab);
       // 帖子列表加载后，批量预取作者头像（不阻塞 UI）。
       // UserAvatarCache 内部有 100ms 合并窗口，这里逐个 request 即可，
@@ -916,6 +948,10 @@ class StudyHubPageState extends State<StudyHubPage>
           UserAvatarCache.instance.request(uid);
         }
       }
+    } catch (_) {
+      // 静默：本方法常被 _onAuthChanged 等调用方以「不 await」方式触发，
+      // 若异常外抛会变成未处理异步错误，被全局错误处理器弹成错误页面
+      // （登录刚成功时尤其容易误触发）。失败时下次刷新自会重试。
     } finally {
       _feedRefreshing = false;
     }
@@ -1018,14 +1054,69 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 把某栏目的缓存内容恢复到当前展示状态（不触发网络请求）。
   void _restoreFeedFromCache(String tab) {
     final c = _cacheFor(tab);
+    final deleted = CloudNotesService.instance.locallyDeletedNoteIds;
     _feedNotes
       ..clear()
-      ..addAll(c.notes.where((n) => !_isBlockedContent(n) && !_isBannedNote(n)));
+      ..addAll(c.notes.where((n) =>
+          !_isBlockedContent(n) &&
+          !_isBannedNote(n) &&
+          !deleted.contains(n.id)));
+    _mergePendingLocalReplies();
     _feedPage = c.page;
     _feedHasMore = c.hasMore;
     _feedInitial = c.initial;
     _feedError = c.error;
     _feedLoading = false;
+  }
+
+  /// 评论发表后的即时连线：把广播来的新回复乐观插入当前流，
+  /// 挂到根帖下方让头像连线立即出现，不等后台刷新（云端索引可见性 +
+  /// 网络往返会晚数秒）。根帖不在当前流时不插入，交给刷新后的分组逻辑。
+  /// 父帖评论量就地 +1（替换列表对象，不改顺序），回复就地出现在
+  /// 原帖下方，整条流不因刷新而跳动位置。
+  void _onLocalReplyPosted() {
+    final reply = NoteStatsCenter.instance.lastReplyPosted.value;
+    if (!mounted || reply == null || reply.repostOf.isEmpty) return;
+    final tab = _plazaTabs[_tabIndex];
+    if (tab == 'announce') return;
+    _pendingLocalReplies[reply.id] = reply;
+    final idx = _feedNotes.indexWhere((n) => n.id == reply.repostOf);
+    if (idx < 0) return;
+    PlazaNote? bumped;
+    setState(() {
+      _feedNotes.add(reply);
+      final parent = _feedNotes[idx];
+      bumped = parent.copyWith(commentCount: parent.commentCount + 1);
+      _feedNotes[idx] = bumped!;
+    });
+    // 广播父帖新指标：连线里引用该父帖的节点数字同步刷新。
+    NoteStatsCenter.instance.report(bumped!);
+    _saveFeedToCache(tab);
+  }
+
+  /// 列表被服务端数据覆盖/重载后补挂本地新回复：
+  /// 服务端已返回该回复则清除待定项；父帖已不在列表则同样放弃（无法成组）。
+  /// 返回是否有变更（调用方据此决定是否 setState）。
+  bool _mergePendingLocalReplies() {
+    if (_pendingLocalReplies.isEmpty) return false;
+    final ids = _feedNotes.map((n) => n.id).toSet();
+    var changed = false;
+    final stale = <String>[];
+    for (final entry in _pendingLocalReplies.entries) {
+      final r = entry.value;
+      if (ids.contains(r.id) || !ids.contains(r.repostOf)) {
+        stale.add(entry.key);
+        continue;
+      }
+      if (!_feedNotes.any((n) => n.id == r.id)) {
+        _feedNotes.add(r);
+        changed = true;
+      }
+    }
+    for (final k in stale) {
+      _pendingLocalReplies.remove(k);
+    }
+    return changed;
   }
 
   /// 平滑刷新当前栏目：已有缓存就后台刷新（不闪加载态），首次才全量加载。
@@ -1080,7 +1171,6 @@ class StudyHubPageState extends State<StudyHubPage>
       }
       setState(() {
         _feedNotes.insertAll(0, fresh);
-        _feedVersion++;
         _setNewPostCount(0);
         _showNewPostPill = false;
       });
@@ -1222,6 +1312,8 @@ class StudyHubPageState extends State<StudyHubPage>
         final sort = (tab == 'hot' && !keepNewest) ? 'hot' : 'latest';
         var (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
         list = await CloudNotesService.instance.enrichFeedAuthors(list);
+        // 与 _loadFeed 同款：我刚发布的帖子短暂置顶（仅自己可见）。
+        list = _hoistOwnNotes(list);
         if (!mounted) return;
         c.notes = list;
         c.page = nextPage;
@@ -1247,7 +1339,9 @@ class StudyHubPageState extends State<StudyHubPage>
         await CloudNotesService.instance.refreshFollowStates();
         if (!AuthService.instance.isLoggedIn) {
           if (!mounted) return;
-          c.notes = const [];
+          // 必须是可变列表：_onAuthChanged 会整体替换/清空缓存内容，
+          // 若放入 const []（不可变），后续修改会抛 Unsupported operation。
+          c.notes = <PlazaNote>[];
           c.page = 1;
           c.hasMore = false;
           c.initial = false;
@@ -1356,7 +1450,6 @@ class StudyHubPageState extends State<StudyHubPage>
         if (!mounted) return;
         setState(() {
           _feedNotes.addAll(list);
-          _feedVersion++;
           _feedPage++;
           _feedHasMore = more;
           _feedLoading = false;
@@ -1364,6 +1457,9 @@ class StudyHubPageState extends State<StudyHubPage>
         for (final n in list) {
           if (n.ownerUserId.isNotEmpty) UserAvatarCache.instance.request(n.ownerUserId);
           if (n.repostSourceUserId.isNotEmpty) UserAvatarCache.instance.request(n.repostSourceUserId);
+        }
+        if (_mergePendingLocalReplies()) {
+          setState(() {});
         }
         return;
       }
@@ -1379,7 +1475,6 @@ class StudyHubPageState extends State<StudyHubPage>
       if (!mounted) return;
       setState(() {
         _feedNotes.addAll(list);
-        _feedVersion++;
         _feedPage = nextPage;
         _feedHasMore = hasMore;
         _feedLoading = false;
@@ -1388,6 +1483,10 @@ class StudyHubPageState extends State<StudyHubPage>
       for (final n in list) {
         if (n.ownerUserId.isNotEmpty) UserAvatarCache.instance.request(n.ownerUserId);
         if (n.repostSourceUserId.isNotEmpty) UserAvatarCache.instance.request(n.repostSourceUserId);
+      }
+      // 新加载的页里出现了待定回复的父帖时，把回复补挂成组。
+      if (_mergePendingLocalReplies()) {
+        setState(() {});
       }
     } catch (_) {
       if (!mounted) return;
@@ -1433,13 +1532,13 @@ class StudyHubPageState extends State<StudyHubPage>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('栏目排序',
+                    Text('栏目排序',
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: _text)),
                     const SizedBox(height: 4),
-                    const Text('长按拖动调整栏目顺序',
+                    Text('长按拖动调整栏目顺序',
                         style: TextStyle(fontSize: 12, color: _textSec)),
                     const SizedBox(height: 12),
                     SizedBox(
@@ -1482,13 +1581,13 @@ class StudyHubPageState extends State<StudyHubPage>
                                     const EdgeInsets.symmetric(horizontal: 4),
                                 leading: ReorderableDragStartListener(
                                   index: i,
-                                  child: const Icon(Icons.drag_handle,
+                                  child: Icon(Icons.drag_handle,
                                       color: _textHint),
                                 ),
                                 title: Text(_plazaTabMeta[items[i]] ?? items[i],
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         fontSize: 15, color: _text)),
-                                trailing: const Icon(Icons.unfold_more,
+                                trailing: Icon(Icons.unfold_more,
                                     color: _textHint),
                               ),
                             ),
@@ -1536,21 +1635,10 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   void _openPlazaNote(PlazaNote note) {
-    // 点击回复帖（b 类）进入其原贴（a 类）的详情页并定位到该回复，
-    // 与发现流里回复链节点的跳转行为保持一致（父帖不在列表里时回复帖
-    // 会独立成根帖展示，点击同样回到原贴详情页）。
-    if (note.repostKind == 'reply' && note.repostOf.isNotEmpty) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => NoteDetailPage(
-            noteId: note.repostOf,
-            scrollToReplyId: note.id,
-          ),
-        ),
-      );
-      return;
-    }
+    // 直接打开被点帖子自己的详情页：回复帖（b 类）的详情页本身就是
+    // 「b 贴顶 + 祖先链藏在上方」的布局，无需再跳到原贴。
+    // （旧逻辑跳 repostOf 指向的原贴：原贴刚被删除时会加载失败，
+    // 回主页刷新后才能打开——已废弃。）
     Navigator.push(context,
         MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)));
   }
@@ -1638,7 +1726,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   ],
                 ),
               ),
-              const Divider(height: 1, color: _border),
+              Divider(height: 1, color: _border),
               Flexible(
                 child: ListView(
                   shrinkWrap: true,
@@ -1746,10 +1834,10 @@ class StudyHubPageState extends State<StudyHubPage>
                   ),
                 ),
                 const SizedBox(width: 10),
-                const Text(
+                Text(
                   '功课',
                   style: TextStyle(
-                    color: Color(0xFF5d4037),
+                    color: AppPalette.p.primary,
                     fontSize: 17,
                     fontWeight: FontWeight.w700,
                   ),
@@ -1766,7 +1854,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 const SizedBox(width: 6),
                 Flexible(
                   child: Text(
-                    '燃一盏灯，看见自己，照亮别人',
+                    '燃一盏灯，看见自己，照亮别人。',
                     style: TextStyle(
                       color: Color(0xFF9E9588),
                       fontSize: 12,
@@ -1803,7 +1891,10 @@ class StudyHubPageState extends State<StudyHubPage>
                     MaterialPageRoute(builder: (_) => const NoteEditPage()),
                   ).then((_) => _refreshCurrentSmooth()),
                   heroTag: 'plaza_fab',
-                  backgroundColor: const Color(0xFF71867A),
+                  // 素白外观下改黑色底 + 白色加号；暖黄保持青绿。
+                  backgroundColor: AppPalette.instance.isPlain
+                      ? const Color(0xFF1A1A1A)
+                      : const Color(0xFF71867A),
                   elevation: 8,
                   highlightElevation: 12,
                   shape: const CircleBorder(),
@@ -1877,10 +1968,10 @@ class StudyHubPageState extends State<StudyHubPage>
     if (!_loaded) {
     return Container(
       decoration: BoxDecoration(
-        color: _overlay,
+        color: _cardSurface,
         borderRadius: BorderRadius.circular(16),
       ),
-        child: const Padding(
+        child: Padding(
           padding: EdgeInsets.all(40),
           child: Center(
             child: SizedBox(
@@ -1895,7 +1986,7 @@ class StudyHubPageState extends State<StudyHubPage>
     }
     return Container(
       decoration: BoxDecoration(
-        color: _overlay,
+        color: _cardSurface,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -1908,14 +1999,18 @@ class StudyHubPageState extends State<StudyHubPage>
                 Container(
                   width: 28,
                   height: 28,
+                  // 素白外观去掉灰色底块，只留经书图案。
                   decoration: BoxDecoration(
-                      color: _primary.withValues(alpha: 0.1),
+                      color: AppPalette.instance.isPlain
+                          ? Colors.transparent
+                          : _primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8)),
                   child: Icon(Icons.menu_book_rounded,
                       size: 16, color: const Color(0xFF71867A)),
                 ),
-                const SizedBox(width: 10),
-                const Expanded(
+                // 素白外观下图标与标题间距减半。
+                SizedBox(width: AppPalette.instance.isPlain ? 5 : 10),
+                Expanded(
                   child: Text('精读经文',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1934,15 +2029,18 @@ class StudyHubPageState extends State<StudyHubPage>
                     ),
                   ),
                   const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: () => _toggleReadingShare(!_allowReadingShare),
-                    child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFCDB292),
-                        borderRadius: BorderRadius.circular(11),
-                      ),
+                    GestureDetector(
+                      onTap: () => _toggleReadingShare(!_allowReadingShare),
+                      child: Container(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          // 暖黄：与旁边锁图标同色；素白：与本区块进度条填充色同色。
+                          color: AppPalette.instance.isPlain
+                              ? const Color(0xFF4A4A4A)
+                              : const Color(0xFF71867A),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
                       child: Text(
                         _allowReadingShare ? '已允许' : '未允许',
                         style: const TextStyle(
@@ -1995,13 +2093,18 @@ class StudyHubPageState extends State<StudyHubPage>
                         value: _progress,
                         minHeight: 5,
                         backgroundColor: _border,
-                        valueColor: const AlwaysStoppedAnimation<Color>(_gold),
+                        // 暖黄填充色与经藏页「最近阅读」进度条一致（金棕 accent）；
+                        // 素白保持原深灰。
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                            AppPalette.instance.isPlain
+                                ? const Color(0xFF4A4A4A)
+                                : AppPalette.p.accent),
                       ),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Text('${(_progress * 100).toStringAsFixed(1)}%',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
                           color: _textHint,
                           fontWeight: FontWeight.w500)),
@@ -2010,9 +2113,11 @@ class StudyHubPageState extends State<StudyHubPage>
             ),
             const SizedBox(height: 4),
             Padding(
-              // 左内边距 10 + 徽章内边距 10 = 时钟图标正好落在 x=20，
-              // 与上方进度条/卡片左侧图标起始位置对齐。
-              padding: const EdgeInsets.fromLTRB(10, 0, 20, 0),
+              // 暖黄：左内边距 10 + 徽章内边距 10 = 时钟图标正好落在 x=20，
+              // 与上方进度条/卡片左侧图标起始位置对齐；
+              // 素白：徽章无内边距，直接用左内边距 20 对齐进度条起点。
+              padding: EdgeInsets.fromLTRB(
+                  AppPalette.instance.isPlain ? 20 : 10, 0, 20, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2124,7 +2229,22 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 读经时长徽章：暖色底 + 图标 + 文字。
+  /// 素白外观下不包裹背景色块，直接展示图标与文字。
   Widget _buildTimeBadge(IconData icon, String text) {
+    if (AppPalette.instance.isPlain) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: _primaryLight),
+          const SizedBox(width: 4),
+          Text(text,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: _primaryLight,
+                  fontWeight: FontWeight.w500)),
+        ],
+      );
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       decoration: BoxDecoration(
@@ -2135,7 +2255,7 @@ class StudyHubPageState extends State<StudyHubPage>
           Icon(icon, size: 12, color: _primaryLight),
           const SizedBox(width: 4),
           Text(text,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11,
                   color: _primaryLight,
                   fontWeight: FontWeight.w500)),
@@ -2161,7 +2281,7 @@ class StudyHubPageState extends State<StudyHubPage>
 
     return Container(
       decoration: BoxDecoration(
-        color: _overlay,
+        color: _cardSurface,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -2174,13 +2294,17 @@ class StudyHubPageState extends State<StudyHubPage>
                 Container(
                   width: 30,
                   height: 30,
+                  // 素白外观去掉灰色底块，只留图案。
                   decoration: BoxDecoration(
-                      color: _primary.withValues(alpha: 0.1),
+                      color: AppPalette.instance.isPlain
+                          ? Colors.transparent
+                          : _primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8)),
                   child: Icon(Icons.check_circle_outline,
                       size: 17, color: const Color(0xFF71867A)),
                 ),
-                const SizedBox(width: 10),
+                // 素白外观下图标与标题间距减半。
+                SizedBox(width: AppPalette.instance.isPlain ? 5 : 10),
                 Text('功课打卡',
                     style: TextStyle(
                         fontSize: 16,
@@ -2243,7 +2367,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       value: doneCount / types.length,
                       minHeight: 4,
                       backgroundColor: _border,
-                      valueColor: const AlwaysStoppedAnimation<Color>(_primary),
+                      valueColor: AlwaysStoppedAnimation<Color>(_primary),
                     ),
                   ),
                 ),
@@ -2381,13 +2505,15 @@ if (_feedAuthDead) {
         // 横向内边距放在列表层：分割线随内容缩进、不贴手机边缘（与话题页一致）。
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         sliver: SliverList(
-          key: ValueKey('feed_$_feedVersion'),
+          // 不用 ValueKey('feed_$version')：换 key 会销毁整个列表状态，
+          // 新回复插入/后台刷新时表现为整页跳动。delegate 每次 build
+          // 都会重建子项，无需 key 强制刷新；就地更新不改变滚动位置。
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               final Widget body;
               if (index < feedLen) {
                 final g = feedGroups[index];
-                body = _buildFeedGroupCard(g.$1, g.$2);
+                body = _buildFeedGroupCard(g);
               } else {
                 body = _buildFeedFooter();
               }
@@ -2396,8 +2522,8 @@ if (_feedAuthDead) {
                 children: [
                   // 帖子顶部分割线（首条不画，避免顶部多一条线）。
                   if (index > 0)
-                    const Divider(
-                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8)),
+                    Divider(
+                        height: 1, thickness: 0.5, color: AppPalette.p.divider),
                   body,
                 ],
               );
@@ -2473,7 +2599,7 @@ if (_feedAuthDead) {
         padding: const EdgeInsets.symmetric(vertical: 18),
         child: Center(
           child: Text('— 到底了 —',
-              style: const TextStyle(fontSize: 12, color: _textHint)),
+              style: TextStyle(fontSize: 12, color: _textHint)),
         ),
       );
     }
@@ -2496,7 +2622,7 @@ if (_feedAuthDead) {
               : (isFollowing
                   ? (notLoggedIn ? '登录后关注同修' : '还没有关注同修')
                   : '菩提空间还没有笔记'),
-          style: const TextStyle(
+          style: TextStyle(
               fontSize: 16, fontWeight: FontWeight.w600, color: _text),
         ),
         const SizedBox(height: 6),
@@ -2504,7 +2630,7 @@ if (_feedAuthDead) {
           isDiscuss
               ? '发布带 #话题 或 \$经名 的帖子，就会出现在这里'
               : (isFollowing ? '关注同修后，这里会显示他们的新笔记' : '分享你的修学心得，让大家一起受益'),
-          style: const TextStyle(fontSize: 13, color: _textSec),
+          style: TextStyle(fontSize: 13, color: _textSec),
         ),
         const SizedBox(height: 18),
         if (isFollowing && notLoggedIn)
@@ -2538,7 +2664,7 @@ if (_feedAuthDead) {
             child: ConstrainedBox(
               constraints:
                   BoxConstraints(minHeight: math.max(0.0, viewportH - _headerHeight())),
-              child: const SizedBox(
+              child: SizedBox(
                 width: 24,
                 height: 24,
                 child: CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
@@ -2607,11 +2733,14 @@ if (_feedAuthDead) {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
         child: Container(
-          decoration: BoxDecoration(
-            color: _overlay,
-            borderRadius: BorderRadius.circular(16),
-          ),
+          // 素白外观下去掉包裹色块，仅由内部纯白胶囊承载经文/话题；暖黄保留。
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          decoration: AppPalette.instance.isPlain
+              ? null
+              : BoxDecoration(
+                  color: _overlay,
+                  borderRadius: BorderRadius.circular(16),
+                ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2705,14 +2834,16 @@ if (_feedAuthDead) {
 
   Widget _buildHotChip(HotDiscussionItem it,
       {required bool isSutra, bool showFire = false}) {
-    final color = isSutra ? const Color(0xFF71867A) : const Color(0xFF9A6B3F);
+    final color = isSutra ? const Color(0xFF71867A) : _textSec;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _openHotDiscussion(it, isSutra: isSutra),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.10),
+          color: AppPalette.instance.isPlain
+              ? Colors.white
+              : color.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
@@ -2749,8 +2880,8 @@ if (_feedAuthDead) {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(label,
-                style: const TextStyle(fontSize: 12, color: _textSec)),
-            const Icon(Icons.chevron_right, size: 14, color: _textSec),
+                style: TextStyle(fontSize: 12, color: _textSec)),
+            Icon(Icons.chevron_right, size: 14, color: _textSec),
           ],
         ),
       ),
@@ -2817,39 +2948,39 @@ if (_feedAuthDead) {
                         color: _gold.withValues(alpha: 0.14),
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: const Text('公告',
+                      child: Text('公告',
                           style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w600,
-                              color: Color(0xFF9A6B3F))),
+                              color: AppPalette.p.accentDeep)),
                     ),
                     const Spacer(),
                     Text(_formatTime(item.createdAt),
                         style:
-                            const TextStyle(fontSize: 11, color: _textHint)),
+                            TextStyle(fontSize: 11, color: _textHint)),
                   ],
                 ),
                 const SizedBox(height: 8),
                 Text(
                   item.title,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   item.content,
-                  style: const TextStyle(fontSize: 14, color: _textSec, height: 1.6),
+                  style: TextStyle(fontSize: 14, color: _textSec, height: 1.6),
                 ),
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    const Icon(Icons.forum_outlined,
+                    Icon(Icons.forum_outlined,
                         size: 14, color: _textHint),
                     const SizedBox(width: 4),
                     Text('点击查看评论与互动',
-                        style: const TextStyle(fontSize: 12, color: _textHint)),
+                        style: TextStyle(fontSize: 12, color: _textHint)),
                     const Spacer(),
-                    const Icon(Icons.chevron_right, size: 16, color: _textHint),
+                    Icon(Icons.chevron_right, size: 16, color: _textHint),
                   ],
                 ),
               ],
@@ -2872,15 +3003,15 @@ if (_feedAuthDead) {
             color: _gold.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.campaign_outlined,
-              size: 30, color: Color(0xFF9A6B3F)),
+          child: Icon(Icons.campaign_outlined,
+              size: 30, color: AppPalette.p.accentDeep),
         ),
         const SizedBox(height: 16),
-        const Text('暂无公告',
+        Text('暂无公告',
             style: TextStyle(
                 fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
         const SizedBox(height: 8),
-        const Text('管理员发布的公告将在这里显示',
+        Text('管理员发布的公告将在这里显示',
             style: TextStyle(fontSize: 13, color: _textSec)),
       ],
     );
@@ -2900,11 +3031,11 @@ if (_feedAuthDead) {
         children: [
           Icon(Icons.lock_clock_outlined, size: 52, color: _textHint),
           const SizedBox(height: 14),
-          const Text('登录已失效',
+          Text('登录已失效',
               style: TextStyle(
                   fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           const SizedBox(height: 6),
-          const Text('请退出后重新登录，关注内容才能恢复显示',
+          Text('请退出后重新登录，关注内容才能恢复显示',
               style: TextStyle(fontSize: 13, color: _textSec)),
           const SizedBox(height: 18),
           FilledButton.icon(
@@ -2938,18 +3069,29 @@ if (_feedAuthDead) {
   /// 广场列表只保留自己发出的回复以及自己关注的用户发出的回复：头像连线挂到原帖下；
   /// 其余他人回复一律不展示，统一在笔记详情页按帖查看，
   /// 避免热门帖上百条回复的头像连线刷屏。
-  List<(PlazaNote, List<PlazaNote>)> get _feedGroups {
+  List<_FeedChainGroup> get _feedGroups {
     final me = AuthService.instance.currentUser.value;
     final followed = CloudNotesService.instance.followingUserIds;
     final byId = {for (final n in _feedNotes) n.id: n};
-    final children = <String, List<PlazaNote>>{};
-    final roots = <PlazaNote>[];
+    final groups = <String, _FeedChainGroup>{};
+    final order = <String>[];
+
+    _FeedChainGroup groupFor(String attachId,
+        {PlazaNote? note, bool deletedRoot = false}) {
+      return groups.putIfAbsent(attachId, () {
+        order.add(attachId);
+        return _FeedChainGroup(note: note, deletedRoot: deletedRoot);
+      });
+    }
+
     for (final n in _feedNotes) {
       // 被屏蔽用户的内容（含原贴与被转发来源）一律不展示，避免缓存中残留数据仍可见；
       // 含被管理员删除话题的帖子同样隐藏。
       if (_isBlockedContent(n) || _isBannedNote(n)) continue;
-      if (n.repostKind != 'reply') {
-        roots.add(n);
+      // 带墓碑记录的帖子（父帖被删后服务端转为 quote）仍按回复处理，
+      // 以便在链中插入「这个帖子已删除」占位。
+      if (n.repostKind != 'reply' && n.tombstoneAncestorIds.isEmpty) {
+        groupFor(n.id, note: n);
         continue;
       }
       // 只展示自己发出的回复、以及自己关注的用户发出的回复；他人回复折叠在详情页。
@@ -2961,41 +3103,49 @@ if (_feedAuthDead) {
       final parentId =
           _visibleReplyParent(n, byId, me?.id, followed);
       if (parentId != null) {
-        children.putIfAbsent(parentId, () => []).add(n);
+        // 挂到可见祖先下。其墓碑记录（自上而下）即「祖先与本回复之间」
+        // 被删掉的节点——如 b 删除后 c 重挂到 a：a → [b占位] → c。
+        final g = groupFor(parentId, note: byId[parentId]);
+        for (final t in n.tombstoneAncestorIds.reversed) {
+          if (!g.tombs.contains(t)) g.tombs.add(t);
+        }
+        g.replies.add(n);
       } else if (_repostSourceBlocked(n)) {
         // 评论的原帖作者已被屏蔽：生成「已屏蔽用户」占位根帖，保留自己这条评论。
         final id = n.repostOf;
-        if (!children.containsKey(id)) {
-          roots.add(PlazaNote(
-            id: id,
-            ownerUserId: n.repostSourceUserId,
-            title: '',
-            content: '',
-            authorName: n.repostSourceAuthor,
-            visibility: 'public',
-            status: 'normal',
-            likeCount: 0,
-            commentCount: 0,
-            createdAt: 0,
-            updatedAt: 0,
-          ));
+        final g = groupFor(id, note: PlazaNote(
+          id: id,
+          ownerUserId: n.repostSourceUserId,
+          title: '',
+          content: '',
+          authorName: n.repostSourceAuthor,
+          visibility: 'public',
+          status: 'normal',
+          likeCount: 0,
+          commentCount: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        ));
+        g.replies.add(n);
+      } else if (n.tombstoneAncestorIds.isNotEmpty ||
+          CloudNotesService.instance.locallyDeletedNoteIds
+              .contains(n.repostOf)) {
+        // 挂靠点已删除（服务端墓碑记录，或本机刚删除）：纯占位组，
+        // 墓碑全列自上而下展示（a、b 都删时为 a占位 → b占位 → c）。
+        final attachId = n.tombstoneAncestorIds.isNotEmpty
+            ? n.tombstoneAncestorIds.first
+            : n.repostOf;
+        final g = groupFor(attachId, deletedRoot: true);
+        for (final t in n.tombstoneAncestorIds.reversed) {
+          if (!g.tombs.contains(t)) g.tombs.add(t);
         }
-        children.putIfAbsent(id, () => []).add(n);
+        if (g.tombs.isEmpty) g.tombs.add(attachId);
+        g.replies.add(n);
       } else {
-        roots.add(n);
+        groupFor(n.id, note: n);
       }
     }
-    List<PlazaNote> collect(PlazaNote node) {
-      final subs = children[node.id] ?? const <PlazaNote>[];
-      return [
-        for (final c in subs) c,
-        for (final c in subs) ...collect(c),
-      ];
-    }
-
-    return [
-      for (final r in roots) (r, collect(r)),
-    ];
+    return [for (final id in order) groups[id]!];
   }
 
   /// 回复帖往上找在列表内可见的最近祖先（根帖、自己的回复或关注用户的回复）：
@@ -3018,14 +3168,33 @@ if (_feedAuthDead) {
     return null;
   }
 
-  /// 分组卡片：根帖用「帖子」页同款样式（头像+昵称+指标+三点菜单），
-  /// 其下所有回复用「回复」页同款头像连线串起。
-  Widget _buildFeedGroupCard(PlazaNote root, List<PlazaNote> replies) {
+  /// 分组卡片：根帖用「帖子」页同款样式（头像+昵称+指标+三点菜单），其下按
+  /// 「『这个帖子已删除』占位行 → 回复链」顺序串起（占位行对应根与回复之间
+  /// 被删掉的中间节点）；挂靠点已删除时整组只有占位行与回复。
+  /// 所有连线下端到下一级头像统一留 6px。
+  Widget _buildFeedGroupCard(_FeedChainGroup g) {
     final me = AuthService.instance.currentUser.value;
     // 根帖作者被屏蔽：上方显示「已屏蔽用户」占位，自己的评论仍连线在下方。
-    if (_isBlockedContent(root)) {
-      return _buildBlockedGroupCard(root, replies);
+    if (g.note != null && _isBlockedContent(g.note!)) {
+      return _buildBlockedGroupCard(g.note!, g.replies);
     }
+    // 挂靠点已删除：纯占位组——一串占位行 + 下方回复。
+    if (g.note == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < g.tombs.length; i++)
+            Padding(
+              // 首行留 6px 呼吸；行间零缝：端点间距由行内尾线处理。
+              padding: EdgeInsets.only(top: i == 0 ? 6 : 0),
+              child: _deletedPlaceholderRow(),
+            ),
+          if (g.replies.isNotEmpty) _groupReplyChain(g.replies),
+        ],
+      );
+    }
+    final root = g.note!;
+    final hasBelow = g.tombs.isNotEmpty || g.replies.isNotEmpty;
     final isMine = me != null && root.ownerUserId == me.id;
     final rootWidget = PostFeedRow(
       note: root,
@@ -3039,7 +3208,7 @@ if (_feedAuthDead) {
       // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
       onOpenSelf: widget.onOpenMyPage,
     );
-    if (replies.isEmpty) {
+    if (!hasBelow) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: rootWidget,
@@ -3051,9 +3220,9 @@ if (_feedAuthDead) {
         Stack(
           clipBehavior: Clip.none,
           children: [
-            // 连接线：原贴头像底部 → 下面第一个回复头像之间。
+            // 连接线：原贴头像底部 → 下面第一个节点（占位行/回复）头像之间。
             // top:68 = 根帖外层顶内边距(6) + 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
-            // bottom:6 = 线下端距 ReplyChain 首个头像 6px。
+            // bottom:6 = 线下端距下一节点首个头像 6px。
             Positioned(
               left: 21,
               top: 68,
@@ -3067,20 +3236,69 @@ if (_feedAuthDead) {
             ),
           ],
         ),
-        ReplyChain(
-          replies: replies,
-          parentAccounts: {
-            root.id: root.authorAccount,
-            for (final r in replies) r.id: r.authorAccount,
-          },
-          // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
-          detailNoteId: root.id,
-          onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
-          onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
-          onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
-          onMore: (n) => _showFeedReplyMenu(n),
-          // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
-          onOpenSelf: widget.onOpenMyPage,
+        // 根与回复之间的「已删除」占位行（如 b 删除后：a → b占位 → c）。
+        for (final _ in g.tombs) _deletedPlaceholderRow(),
+        if (g.replies.isNotEmpty) _groupReplyChain(g.replies, root: root),
+      ],
+    );
+  }
+
+  Widget _groupReplyChain(List<PlazaNote> replies, {PlazaNote? root}) {
+    return ReplyChain(
+      replies: replies,
+      parentAccounts: {
+        if (root != null) root.id: root.authorAccount,
+        for (final r in replies) r.id: r.authorAccount,
+      },
+      // 点击回复节点进入该回复自己的详情页（原贴在上），它的直接回复列在下方。
+      onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
+      onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
+      onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
+      onMore: (n) => _showFeedReplyMenu(n),
+      // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
+      onOpenSelf: widget.onOpenMyPage,
+    );
+  }
+
+  /// 「这个帖子已删除」占位行：垃圾桶头像 + 固定长度下延尾线（末端留 6px
+  /// 到下一级头像）+ 与头像顶部对齐的提示框；内容不可见、不可点击。
+  Widget _deletedPlaceholderRow() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: Color(0x1A8B6B5A),
+              child: Icon(Icons.delete_outline, size: 22, color: _textSec),
+            ),
+            // 固定长度下延线段 + 末端 6px：占位卡矮，Expanded 会被压没；
+            // 行间零缝拼接时靠这 6px 保持「线端点—头像」间距。
+            const SizedBox(height: 6),
+            Container(width: 1, height: 20, color: const Color(0xFFC9C9C9)),
+            const SizedBox(height: 6),
+          ],
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              border: Border.all(color: _border),
+              borderRadius: BorderRadius.circular(8),
+              color: _bg,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 16, color: _textSec),
+                const SizedBox(width: 8),
+                Text('这个帖子已删除',
+                    style: TextStyle(fontSize: 14, color: _textSec)),
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -3092,85 +3310,65 @@ if (_feedAuthDead) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // top:58 = 外层顶内边距(6) + 头像上内边距(2) + 头像高(44) + 线上端留白(6)；
-            // bottom:6 = 线下端距 ReplyChain 首个头像 6px（与 _buildFeedGroupCard 一致）。
-            Positioned(
-              left: 21,
-              top: 58,
-              bottom: 6,
-              child: Container(width: 1, color: const Color(0xFFC9C9C9)),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 2),
-                    child: CircleAvatar(
-                      radius: 22,
-                      backgroundColor: Color(0x1A8B6B5A),
-                      child: Icon(Icons.block, size: 22, color: _textSec),
-                    ),
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: Color(0x1A8B6B5A),
+                    child: Icon(Icons.block, size: 22, color: _textSec),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: root.ownerUserId.isNotEmpty
-                          ? () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => UserSpacePage(
-                                    userId: root.ownerUserId,
-                                    userName: root.authorName,
-                                  ),
-                                ),
-                              )
-                          : null,
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: _border),
-                          borderRadius: BorderRadius.circular(8),
-                          color: _bg,
-                        ),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.block, size: 16, color: _textSec),
-                            SizedBox(width: 8),
-                            Text('已屏蔽用户',
-                                style:
-                                    TextStyle(fontSize: 14, color: _textSec)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+                  if (replies.isNotEmpty) ...[
+                    // 固定长度下延线段 + 末端 6px：连向下方 ReplyChain 首个头像
+                    //（占位卡矮，Stack 覆盖线会被压没；端点间距与删除占位一致）。
+                    const SizedBox(height: 6),
+                    Container(width: 1, height: 20, color: const Color(0xFFC9C9C9)),
+                    const SizedBox(height: 6),
+                  ],
                 ],
               ),
-            ),
-          ],
-        ),
-        if (replies.isNotEmpty)
-          ReplyChain(
-            replies: replies,
-            parentAccounts: {
-              root.id: root.authorAccount,
-              for (final r in replies) r.id: r.authorAccount,
-            },
-            // 点击回复节点进入原贴详情页，该回复排到评论列表第一条。
-            detailNoteId: root.id,
-            onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
-            onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
-            onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
-            onMore: (n) => _showFeedReplyMenu(n),
-            // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
-            onOpenSelf: widget.onOpenMyPage,
+              const SizedBox(width: 10),
+              Expanded(
+                child: GestureDetector(
+                  onTap: root.ownerUserId.isNotEmpty
+                      ? () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => UserSpacePage(
+                                userId: root.ownerUserId,
+                                userName: root.authorName,
+                              ),
+                            ),
+                          )
+                      : null,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: _border),
+                      borderRadius: BorderRadius.circular(8),
+                      color: _bg,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.block, size: 16, color: _textSec),
+                        SizedBox(width: 8),
+                        Text('已屏蔽用户',
+                            style:
+                                TextStyle(fontSize: 14, color: _textSec)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
+        ),
+        if (replies.isNotEmpty) _groupReplyChain(replies, root: root),
       ],
     );
   }
@@ -3198,10 +3396,10 @@ if (_feedAuthDead) {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(note.authorName,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -3254,15 +3452,15 @@ if (_feedAuthDead) {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除帖子',
+        title: Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -3278,6 +3476,9 @@ if (_feedAuthDead) {
       await CloudNotesService.instance.deleteCloudNote(note.id);
       if (!mounted) return;
       setState(() => _feedNotes.removeWhere((n) => n.id == note.id));
+      // 同步当前栏目缓存：否则切走再切回时 _restoreFeedFromCache 会把
+      // 已删除的帖子从旧缓存里恢复出来（表现为删了又跳回来）。
+      _saveFeedToCache(_plazaTabs[_tabIndex]);
       _showTopToast('已删除');
     } catch (e) {
       if (mounted) _showTopToast(e.toString());
@@ -3396,7 +3597,7 @@ if (_feedAuthDead) {
         builder: (ctx) => AlertDialog(
           backgroundColor: _card,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('恭喜你完成今天的功课！',
+          title: Text('恭喜你完成今天的功课！',
               style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
@@ -3405,7 +3606,7 @@ if (_feedAuthDead) {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('今天完成的功课如下，是否分享到菩提空间？',
+              Text('今天完成的功课如下，是否分享到菩提空间？',
                   style: TextStyle(fontSize: 13, color: _textSec)),
               const SizedBox(height: 12),
               Container(
@@ -3422,7 +3623,7 @@ if (_feedAuthDead) {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Text(l,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 14, color: _text, height: 1.4)),
                       ),
                   ],
@@ -3433,7 +3634,7 @@ if (_feedAuthDead) {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: _textSec)),
+              child: Text('取消', style: TextStyle(color: _textSec)),
             ),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: _gold),
@@ -3608,7 +3809,7 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
       BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: _bg,
       ),
       child: Align(
@@ -3627,7 +3828,7 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
                 constraints:
                     const BoxConstraints.tightFor(width: 40, height: 40),
                 icon:
-                    const Icon(Icons.menu, color: Color(0xFF8B6B5A), size: 20),
+                    Icon(Icons.menu, color: AppPalette.p.textSec, size: 20),
               ),
             ],
           ),
@@ -3725,6 +3926,18 @@ class _CheckInButtonState extends State<_CheckInButton>
   @override
   Widget build(BuildContext context) {
     final checked = widget.checked;
+    // 素白外观：未点击 #F3F3F3 浅灰底 + 黑图标黑字，点击后 #555555 深灰底 +
+    // 白图标白字；暖黄保持原配色（金棕选中态）。
+    final plain = AppPalette.instance.isPlain;
+    final Color bg;
+    final Color fg;
+    if (plain) {
+      bg = checked ? const Color(0xFF555555) : const Color(0xFFF3F3F3);
+      fg = checked ? Colors.white : const Color(0xFF1A1A1A);
+    } else {
+      bg = checked ? _gold : _card;
+      fg = checked ? _primary : const Color(0xFF71867A);
+    }
     final labelChars = widget.label.characters;
     final label = labelChars.length > 2
         ? '${labelChars.take(2)}…'
@@ -3737,42 +3950,75 @@ class _CheckInButtonState extends State<_CheckInButton>
         animation: _scale,
         builder: (context, child) =>
             Transform.scale(scale: _scale.value, child: child),
-        child: Container(
-          width: 60,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: checked ? _gold : _card,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: checked ? 0.10 : 0.07),
-                blurRadius: checked ? 4 : 6,
-                offset: const Offset(0, 2),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              width: 60,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color:
+                        Colors.black.withValues(alpha: checked ? 0.10 : 0.07),
+                    blurRadius: checked ? 4 : 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (widget.icon != null)
-                Icon(widget.icon,
-                    size: 22,
-                    color: checked ? _primary : const Color(0xFF71867A))
-              else
-                Text(widget.emoji ?? '', style: TextStyle(fontSize: 20)),
-              const SizedBox(height: 4),
-              Text(label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: checked ? _primary : _textSec,
-                    fontWeight: checked ? FontWeight.w600 : FontWeight.w400,
-                  )),
-            ],
-          ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (widget.icon != null)
+                    Icon(widget.icon, size: 22, color: fg)
+                  else
+                    Text(widget.emoji ?? '', style: TextStyle(fontSize: 20)),
+                  const SizedBox(height: 4),
+                  Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: fg,
+                        fontWeight: checked ? FontWeight.w600 : FontWeight.w400,
+                      )),
+                ],
+              ),
+            ),
+            // 已打卡角标：右上角小圆圈（#1A1A1A）包裹白色小对勾。
+            if (checked && plain)
+              Positioned(
+                right: -2,
+                top: -2,
+                child: Container(
+                  width: 13,
+                  height: 13,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1A1A1A),
+                    border: Border.all(color: Colors.white, width: 1),
+                  ),
+                  child: const Icon(Icons.check,
+                      size: 8, color: Colors.white),
+                ),
+              ),
+          ],
         ),
       ),
     );
   }
+}
+
+/// 主页信息流分组视图模型：一个「根帖 + 其下回复链」的挂靠单元。
+/// [note] 为空表示挂靠点本身已删除（纯占位组：只有占位行与回复）；
+/// [tombs] 为根/挂靠点与回复之间被删节点 id（自上而下，渲染为占位行，
+/// 如 b 删除后 c 重挂到 a：a → b占位 → c）；[deletedRoot] 仅作渲染分支标记。
+class _FeedChainGroup {
+  _FeedChainGroup({this.note, this.deletedRoot = false});
+  final PlazaNote? note;
+  final bool deletedRoot;
+  final List<String> tombs = [];
+  final List<PlazaNote> replies = [];
 }

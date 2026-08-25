@@ -2,7 +2,7 @@
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.8+9
+version: 1.1.0+1
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -54,6 +54,8 @@ flutter:
     - assets/images/search.png
     - assets/images/search_selected.png
     - assets/images/splash.png
+    # 米黄外观启动图（素白用 splash.png）。
+    - assets/images/splash1.png
     - assets/images/app_icon.png
     - assets/images/ic_comment.png
     - assets/images/ic_view.png
@@ -62,13 +64,27 @@ flutter:
     - assets/images/star_outline.png
     - assets/images/weixin.png
     - assets/images/zhifubao.png
+    # 素白外观底部导航黑色图标（原文件名 + 1）。
+    - assets/images/study1.png
+    - assets/images/study_selected1.png
+    - assets/images/search1.png
+    - assets/images/search_selected1.png
+    - assets/images/sutra_book1.png
+    - assets/images/sutra_book_selected1.png
+    - assets/images/chat1.png
+    - assets/images/chat_selected1.png
+    - assets/images/my1.png
+    - assets/images/my_selected1.png
     - assets/sutras_catalog.json
     - assets/tool.html
 
 flutter_native_splash:
+  # 原生启动页只保留纯色底（不放图片）：图片由应用内 SplashImagePage
+  # 按当前外观动态展示（米黄 splash1.png / 素白 splash.png），
+  # 避免「先闪一张固定图再换图」。
+  # fullscreen：原生阶段也隐藏状态栏，与应用内全屏启动图无缝衔接。
   color: "#EDEDED"
-  image: assets/images/splash.png
-  fullscreen: false
+  fullscreen: true
 
   android: true
   android_gravity: fill

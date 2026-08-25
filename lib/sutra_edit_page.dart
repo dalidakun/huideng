@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_palette.dart';
 Future<String> editedSutraFilePath(String keyPath) async {
   final dir = await getApplicationDocumentsDirectory();
   final folder = Directory('${dir.path}/edited_sutras');
@@ -73,9 +74,9 @@ class _SutraEditPageState extends State<SutraEditPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5EDE3),
+      backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF5EDE3),
+        backgroundColor: AppPalette.p.bg,
         elevation: 0,
         shadowColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Color(0xFF212121)),
@@ -92,16 +93,16 @@ class _SutraEditPageState extends State<SutraEditPage> {
           if (_hasEdited)
             TextButton(
               onPressed: _restore,
-              child: const Text(
+              child: Text(
                 '恢复原文',
-                style: TextStyle(color: Color(0xFF8B6B5A), fontSize: 13),
+                style: TextStyle(color: AppPalette.p.textSec, fontSize: 13),
               ),
             ),
           TextButton(
             onPressed: _save,
-            child: const Text(
+            child: Text(
               '保存',
-              style: TextStyle(color: Color(0xFF5C4033), fontSize: 14, fontWeight: FontWeight.w600),
+              style: TextStyle(color: AppPalette.p.primary, fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 4),

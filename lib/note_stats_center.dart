@@ -11,6 +11,11 @@ class NoteStatsCenter extends ChangeNotifier {
 
   final Map<String, PlazaNote> _latest = {};
 
+  /// 最近一次新发布的回复帖：发现/关注流监听它，把新回复立即挂到当前列表里的
+  /// 根帖下方，头像连线即时出现，不等列表刷新返回（云端写入到可查询、
+  /// 再加网络往返会有数秒延迟）。
+  final ValueNotifier<PlazaNote?> lastReplyPosted = ValueNotifier<PlazaNote?>(null);
+
   /// 该帖子最近一次广播的指标（无则 null）。
   PlazaNote? latest(String noteId) => _latest[noteId];
 

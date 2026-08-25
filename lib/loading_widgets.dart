@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'app_palette.dart';
 /// 统一的金色主题色，与项目其他页面保持一致
-const Color kLoadingGold = Color(0xFFD4A06A);
-
-/// 带文字提示的加载指示器
+Color get kLoadingGold => AppPalette.p.accent;
 /// 
 /// 用于替代单纯的 CircularProgressIndicator，提升用户体验
 class AppLoadingIndicator extends StatelessWidget {
@@ -228,7 +227,7 @@ class AppLoadMoreIndicator extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
+            SizedBox(
               width: 16,
               height: 16,
               child: CircularProgressIndicator(

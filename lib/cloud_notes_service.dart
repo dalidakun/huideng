@@ -47,6 +47,12 @@ class PlazaNote {
   /// 转发类型：forward / quote / reply（reply 不展示转发角标）。
   final String repostKind;
 
+  /// 已删除祖先链（紧邻父帖在前，nearest-first）。
+  /// 参考 X 的 tombstone_ancestor_ids：删除回复链中间节点时服务端会把
+  /// 子回复重挂到祖父帖，同时把被删 id 记录在此；详情页据此在链路中
+  /// 渲染「已删除帖子」占位并保持连线。普通帖子恒为空。
+  final List<String> tombstoneAncestorIds;
+
   /// 帖子类型：普通帖为空；announcement = 管理员公告（详情页展示「公告」标签）。
   final String kind;
 
@@ -77,6 +83,7 @@ class PlazaNote {
     this.repostSourceAuthor = '',
     this.repostSourceUserId = '',
     this.repostKind = '',
+    this.tombstoneAncestorIds = const [],
     this.kind = '',
     this.quoteContent = '',
     this.quoteOfTitle = '',
@@ -105,6 +112,10 @@ class PlazaNote {
         repostSourceAuthor: json['repostSourceAuthor']?.toString() ?? '',
         repostSourceUserId: json['repostSourceUserId']?.toString() ?? '',
         repostKind: json['repostKind']?.toString() ?? '',
+        tombstoneAncestorIds: (json['tombstoneAncestorIds'] as List<dynamic>?)
+                ?.map((e) => e.toString())
+                .toList(growable: false) ??
+            const [],
         kind: json['kind']?.toString() ?? '',
         quoteContent: json['quoteContent']?.toString() ?? '',
         quoteOfTitle: json['quoteOfTitle']?.toString() ?? '',
@@ -125,6 +136,7 @@ class PlazaNote {
     bool? authorVerified,
     int? canonRead,
     int? canonTotal,
+    int? commentCount,
   }) =>
       PlazaNote(
         id: id,
@@ -139,7 +151,7 @@ class PlazaNote {
         visibility: visibility,
         status: status,
         likeCount: likeCount,
-        commentCount: commentCount,
+        commentCount: commentCount ?? this.commentCount,
         viewCount: viewCount,
         repostCount: repostCount,
         repostOf: repostOf,
@@ -576,6 +588,49 @@ class CloudNotesService {
   final Set<String> bannedTopicNames = {};
   final Map<String, int> bannedTopicAt = {};
 
+  /// 本机已删除的云端笔记 id（墓碑）。
+  ///
+  /// 背景：删除成功后的短时间内（在途请求返回旧数据 / 云端列表查询
+  /// 读到删除前的快照），任何一次列表刷新都可能把刚删的帖子重新带回
+  /// 界面——表现为「删除后立即消失，随即又跳出来，再刷新一次才真正消失」。
+  /// 记录墓碑后所有列表拉取统一过滤，保证本会话内绝不复活；
+  /// 仅存内存，重启后服务端早已一致，无需持久化。
+  final Set<String> locallyDeletedNoteIds = {};
+
+  /// 本次会话内「我刚发布」的内容 id → 发布时间（广场笔记/回复与经书讨论通用）。
+  ///
+  /// 用途：各列表页（发现/话题页/经书讨论页）把我刚发布的帖子短暂置顶，
+  /// 让用户发完立刻能看到；仅对刚发的这一条生效——历史帖子一律不置顶，
+  /// 否则发帖多的用户一进列表满屏都是自己的旧帖。
+  /// 超过 [_recentlyPublishedTtl] 自动失效，回到正常排序；
+  /// 仅存内存，重启即清空。其他用户的客户端没有这些 id，不受影响。
+  static final Map<String, int> _recentlyPublished = {};
+  static const Duration _recentlyPublishedTtl = Duration(minutes: 30);
+
+  /// 记录一条我刚发布的内容（发布成功后调用）。
+  static void markRecentlyPublished(String id) {
+    if (id.isEmpty) return;
+    _recentlyPublished[id] = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// 该内容是否是本次会话里刚发布的（未过期，可短暂置顶展示）。
+  static bool isRecentlyPublished(String id) {
+    if (id.isEmpty) return false;
+    final t = _recentlyPublished[id];
+    if (t == null) return false;
+    if (DateTime.now().millisecondsSinceEpoch - t >
+        _recentlyPublishedTtl.inMilliseconds) {
+      _recentlyPublished.remove(id);
+      return false;
+    }
+    return true;
+  }
+
+  /// 过滤掉已删除（墓碑）笔记；所有返回笔记列表的接口统一调用。
+  List<PlazaNote> _withoutDeleted(Iterable<PlazaNote> notes) => notes
+      .where((n) => !locallyDeletedNoteIds.contains(n.id))
+      .toList(growable: true);
+
   /// 拉取被管理员删除的话题（未登录也返回，用于内容隐藏）。
   Future<void> refreshBannedTopics() async {
     try {
@@ -771,7 +826,9 @@ class CloudNotesService {
       'visibility': 'public',
       'authorName': _authorName,
     });
-    return res['id']?.toString() ?? '';
+    final id = res['id']?.toString() ?? '';
+    markRecentlyPublished(id);
+    return id;
   }
 
   /// 更新已分享笔记的云端副本（标题/内容/可见性）。
@@ -798,18 +855,23 @@ class CloudNotesService {
   }
 
   /// 删除云端笔记及其点赞/评论/举报。
+  /// 成功后记录墓碑：删除后短时间内的列表刷新可能仍返回该笔记
+  /// （在途请求/查询快照），统一过滤避免「删了又跳回来」。
   Future<void> deleteCloudNote(String cloudId) async {
     await _call('deleteNote', params: {'id': cloudId});
+    locallyDeletedNoteIds.add(cloudId);
   }
 
   /// 软删除/隐藏云端笔记（从广场移除，仍可恢复）。
   Future<void> hideCloudNote(String cloudId) async {
     await _call('updateNote', params: {'id': cloudId, 'status': 'hidden'});
+    locallyDeletedNoteIds.add(cloudId);
   }
 
   /// 恢复被软删除的云端笔记（重新在广场展示）。
   Future<void> unhideCloudNote(String cloudId) async {
     await _call('updateNote', params: {'id': cloudId, 'status': 'normal'});
+    locallyDeletedNoteIds.remove(cloudId);
   }
 
   /// 拉取广场笔记流。sort: latest / hot。
@@ -828,7 +890,33 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (list, hasMore);
+    return (_withoutDeleted(list), hasMore);
+  }
+
+  /// 拉取某话题下的帖子（服务端按 #话题 边界精确过滤，不再客户端截断前100条）。
+  /// 排序与「发现」同款：热度衰减分倒序（热帖靠前、随时间下沉给新帖让位）。
+  /// 同时返回话题发起人帖 id——服务端权威查出的最早一条，
+  /// 客户端置顶展示时不受分页截断影响。未登录也可浏览。
+  Future<(List<PlazaNote>, bool hasMore, String firstNoteId)> getTopicNotes(
+    String topic, {
+    int page = 1,
+    int pageSize = 100,
+  }) async {
+    final res = await _call('getPlazaNotes', params: {
+      'page': page,
+      'pageSize': pageSize,
+      'sort': 'hot',
+      'topic': topic,
+    });
+    final list = (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+    return (
+      _withoutDeleted(list),
+      res['hasMore'] == true,
+      res['firstNoteId']?.toString() ?? '',
+    );
   }
 
   /// 拉取关注用户的帖子（服务端按关注列表 + 屏蔽列表过滤）。
@@ -847,7 +935,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (list, hasMore);
+    return (_withoutDeleted(list), hasMore);
   }
 
   /// 兜底补齐笔记列表的作者展示信息（@账号/认证/阅藏进度）。
@@ -922,7 +1010,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final total = (res['total'] as num?)?.toInt() ?? list.length;
-    return (list, total);
+    return (_withoutDeleted(list), total);
   }
 
   /// 广场笔记详情（公开或本人可见）。
@@ -958,7 +1046,9 @@ class CloudNotesService {
       'kind': kind,
       if (quote.trim().isNotEmpty) 'quote': quote.trim(),
     });
-    return res['id']?.toString() ?? '';
+    final id = res['id']?.toString() ?? '';
+    markRecentlyPublished(id);
+    return id;
   }
 
   /// 预取当前登录用户的笔记收藏记录（用于广场/详情展示收藏态）。未登录时清空。
@@ -996,10 +1086,10 @@ class CloudNotesService {
   Future<List<PlazaNote>> getFavoriteNotes() async {
     if (!AuthService.instance.isLoggedIn) return [];
     final res = await _call('getFavoriteNotes');
-    return (res['notes'] as List<dynamic>? ?? [])
+    return _withoutDeleted((res['notes'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
         .map(PlazaNote.fromJson)
-        .toList();
+        .toList());
   }
 
   /// 拉取当前用户点赞过的笔记列表（最新点赞在前）。
@@ -1008,10 +1098,10 @@ class CloudNotesService {
     // 优先新版云函数的 getLikedNotes（带 createdAt 倒序）。
     try {
       final res = await _call('getLikedNotes');
-      return (res['notes'] as List<dynamic>? ?? [])
+      return _withoutDeleted((res['notes'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()
           .map(PlazaNote.fromJson)
-          .toList();
+          .toList());
     } catch (_) {
       // 旧版云函数兜底：getLikedNoteIds 拿 ID 顺序（最新在前），再逐个取详情。
     }
@@ -1021,6 +1111,7 @@ class CloudNotesService {
     // 旧接口无排序，默认按插入顺序返回（旧在前），反转后最新点赞在前。
     for (final id in ids.toList().reversed) {
       try {
+        if (locallyDeletedNoteIds.contains(id)) continue;
         final res = await _call('getNoteById', params: {'id': id});
         final note = res['note'];
         if (note is Map<String, dynamic>) {
@@ -1051,7 +1142,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (notes, hasMore);
+    return (_withoutDeleted(notes), hasMore);
   }
 
   /// 最近一次关注/屏蔽列表刷新是否失败（登录失效/网络异常）。
@@ -1322,7 +1413,9 @@ class CloudNotesService {
       'content': content,
       'authorName': _authorName,
     });
-    return res['id']?.toString() ?? '';
+    final id = res['id']?.toString() ?? '';
+    markRecentlyPublished(id);
+    return id;
   }
 
   /// 云端经书讨论记录 → 页面渲染用的字典结构。
@@ -1398,7 +1491,7 @@ class CloudNotesService {
             .map((e) => PlazaNote.fromJson(e as Map<String, dynamic>))
             .toList()
         : <PlazaNote>[];
-    return (items, res['hasMore'] == true);
+    return (_withoutDeleted(items), res['hasMore'] == true);
   }
 
   // ==================== 消息中心 ====================

@@ -36,6 +36,34 @@ class MainActivity : FlutterActivity() {
                         result.error("MINIMIZE_FAILED", "Failed to minimize app", e.message)
                     }
                 }
+                "restartApp" -> {
+                    try {
+                        // 完全重启：以全新任务栈（CLEAR_TASK）冷启动 launcher Activity。
+                        // 此时 App 仍在前台，系统必定放行启动；旧任务被清空、
+                        // 旧 Flutter 引擎随旧 Activity 销毁，新引擎重新执行 main()，
+                        // 外观等偏好全部从磁盘重读，换肤完全生效。
+                        // 注意：不能杀进程——「杀进程 + 定时拉起」会被部分机型的
+                        // 自启动/后台启动限制吞掉（表现为退出后不重启），且可能
+                        // 恢复出安装页等旧任务 Intent。
+                        val launch = packageManager.getLaunchIntentForPackage(packageName)
+                        if (launch == null) {
+                            result.error("NO_LAUNCH_INTENT", "No launch intent", null)
+                            return@setMethodCallHandler
+                        }
+                        launch.addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        )
+                        if (launch.component == null) {
+                            // 兜底显式指向主 Activity，避免隐式解析到其他入口。
+                            launch.setClassName(packageName, "$packageName.MainActivity")
+                        }
+                        result.success(null)
+                        startActivity(launch)
+                    } catch (e: Exception) {
+                        result.error("RESTART_FAILED", "Failed to restart app", e.message)
+                    }
+                }
                 "getLastUpdateTime" -> {
                     try {
                         val info = packageManager.getPackageInfo(packageName, 0)

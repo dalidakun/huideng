@@ -11,6 +11,7 @@ import 'auth_service.dart';
 import 'image_crop_page.dart';
 import 'settings_widgets.dart';
 
+import 'app_palette.dart';
 /// 账号信息：头像、昵称、签名、绑定手机号。
 class AccountInfoPage extends StatefulWidget {
   const AccountInfoPage({super.key});
@@ -178,7 +179,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: sCard,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('编辑资料', style: TextStyle(color: sText, fontSize: 18, fontWeight: FontWeight.w600)),
+        title: Text('编辑资料', style: TextStyle(color: sText, fontSize: 18, fontWeight: FontWeight.w600)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -186,8 +187,8 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
               controller: nameController,
               autofocus: true,
               maxLength: 12,
-              style: const TextStyle(color: sText),
-              decoration: const InputDecoration(
+              style: TextStyle(color: sText),
+              decoration: InputDecoration(
                 labelText: '昵称',
                 labelStyle: TextStyle(color: sTextSec),
                 hintText: '输入你的昵称',
@@ -198,8 +199,8 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
             TextField(
               controller: taglineController,
               maxLength: 20,
-              style: const TextStyle(color: sText),
-              decoration: const InputDecoration(
+              style: TextStyle(color: sText),
+              decoration: InputDecoration(
                 labelText: '签名',
                 labelStyle: TextStyle(color: sTextSec),
                 hintText: '一句修学感悟',
@@ -209,13 +210,13 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: sTextSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('取消', style: TextStyle(color: sTextSec))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, {
               'nickname': nameController.text.trim(),
               'tagline': taglineController.text.trim(),
             }),
-            child: const Text('保存', style: TextStyle(color: sPrimary, fontWeight: FontWeight.w600)),
+            child: Text('保存', style: TextStyle(color: sPrimary, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -286,10 +287,10 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                   children: [
                     IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back_ios_new, color: sText, size: 20),
+                      icon: Icon(Icons.arrow_back_ios_new, color: sText, size: 20),
                     ),
                     const SizedBox(width: 4),
-                    const Text('账号信息',
+                    Text('账号信息',
                         style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: sText)),
                   ],
                 ),
@@ -306,7 +307,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                       width: double.infinity,
                       height: 160,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFD2C5B3),
+                        color: AppPalette.p.muted,
                         image: _bannerPath != null
                             ? DecorationImage(
                                 image: FileImage(File(_bannerPath!)),
@@ -382,24 +383,24 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(_nickname,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 20, fontWeight: FontWeight.w700, color: sText)),
                           if (phoneDisplay.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             Row(
                               children: [
-                                const Icon(Icons.phone_iphone_outlined,
+                                Icon(Icons.phone_iphone_outlined,
                                     size: 13, color: sTextHint),
                                 const SizedBox(width: 4),
                                 Text(phoneDisplay,
-                                    style: const TextStyle(fontSize: 13, color: sTextHint)),
+                                    style: TextStyle(fontSize: 13, color: sTextHint)),
                               ],
                             ),
                           ],
                           const SizedBox(height: 6),
                           Text(
                             _tagline,
-                            style: const TextStyle(fontSize: 13, color: sTextSec),
+                            style: TextStyle(fontSize: 13, color: sTextSec),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -434,7 +435,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Text(
                       _isLoggedIn ? '昵称与签名修改后会同步到云端。' : '登录后可查看并管理账号信息',
-                      style: const TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
+                      style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
                     ),
                   ),
                 ],

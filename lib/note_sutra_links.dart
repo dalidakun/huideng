@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'sutra_asset_path.dart';
+import 'app_palette.dart';
 
 /// 一部可被 @ 引用的经书。title 为展示名，filePath 为打包的 ASCII 路径。
 class NoteSutraLink {
@@ -172,13 +173,13 @@ class NoteSutraLinks {
     required TextStyle style,
     required Map<String, NoteSutraLink> library,
     required void Function(String title, String filePath) onTap,
-    Color linkColor = const Color(0xFFD4A06A),
+    Color? linkColor,
     int? maxLines,
     TextOverflow overflow = TextOverflow.clip,
   }) {
     WidgetSpan linkSpan(String title, String filePath) {
       final linkStyle = style.copyWith(
-        color: linkColor,
+        color: linkColor ?? AppPalette.p.accent,
         fontWeight: FontWeight.w600,
       );
       return WidgetSpan(

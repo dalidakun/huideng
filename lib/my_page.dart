@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
@@ -35,17 +36,16 @@ import 'reading_badges.dart';
 import 'reading_time_service.dart';
 import 'loading_widgets.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
-/// 从左侧边缘滑入的页面路由。
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 Route<T> slideInFromLeft<T>(Widget page) {
   return PageRouteBuilder<T>(
     transitionDuration: const Duration(milliseconds: 280),
@@ -250,17 +250,22 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   }
 
   /// 读经徽章：读取本地累计时长驱动徽章点亮；首次点亮新徽章时弹恭喜。
+  /// 整体兜底 try/catch：本方法经 _loadData 以 unawaited 方式触发
+  /// （含登录态变化瞬间），异常外抛会成为未处理异步错误、被全局错误
+  /// 处理器弹成错误页面。
   Future<void> _loadReadingBadge() async {
-    await ReadingTimeService.instance.ensureLoaded();
-    if (!mounted) return;
-    final s = ReadingTimeService.instance.totalSeconds.value;
-    setState(() => _readingSeconds = s);
-    if (_isLoggedIn && s > 0) {
-      await maybeCelebrateNewBadge(context, s);
-    }
-    // 刷新本地阅藏进度统计（主页 @账户 行右侧的「阅藏x%」）。
-    await LocalCanonProgress.refresh();
-    if (mounted) setState(() {});
+    try {
+      await ReadingTimeService.instance.ensureLoaded();
+      if (!mounted) return;
+      final s = ReadingTimeService.instance.totalSeconds.value;
+      setState(() => _readingSeconds = s);
+      if (_isLoggedIn && s > 0) {
+        await maybeCelebrateNewBadge(context, s);
+      }
+      // 刷新本地阅藏进度统计（主页 @账户 行右侧的「阅藏x%」）。
+      await LocalCanonProgress.refresh();
+      if (mounted) setState(() {});
+    } catch (_) {}
   }
 
   Future<void> _loadAccountName() async {
@@ -454,7 +459,10 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
               MaterialPageRoute(builder: (_) => const NoteEditPage()),
             ).then((_) => reload()),
             heroTag: 'my_page_plaza_fab',
-            backgroundColor: const Color(0xFF71867A),
+            // 素白外观下改黑色底 + 白色加号；暖黄保持青绿。
+            backgroundColor: AppPalette.instance.isPlain
+                ? const Color(0xFF1A1A1A)
+                : const Color(0xFF71867A),
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
@@ -522,7 +530,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                     width: double.infinity,
                     height: 160,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFD2C5B3),
+                      color: AppPalette.p.muted,
                       image: _bannerPath != null
                           ? DecorationImage(
                               image: FileImage(File(_bannerPath!)),
@@ -558,7 +566,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                         ),
                       ],
                     ),
-                    child: const Text(
+                    child: Text(
                       '编辑个人资料',
                       style: TextStyle(
                         fontSize: 12,
@@ -653,7 +661,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                               child: Text(_nickname,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 20,
                                       fontWeight: FontWeight.w700,
                                       color: _text)),
@@ -688,7 +696,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                         Expanded(
                           // 账号名完整展示：允许换行，不在任何屏幕宽度下截断。
                           child: Text('@$_accountName',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 13, color: _textHint)),
                         ),
                         // 阅藏进度：完成册数 ÷ 总册数（0% 也显示），点击看徽章详情。
@@ -703,7 +711,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                 ] else ...[
                   Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text('未登录',
                             style: TextStyle(
                                 fontSize: 20,
@@ -717,7 +725,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                 const SizedBox(height: 6),
                 Text(
                   _tagline,
-                  style: const TextStyle(fontSize: 13, color: _textSec),
+                  style: TextStyle(fontSize: 13, color: _textSec),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -725,12 +733,12 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      const Icon(Icons.calendar_month_outlined,
+                      Icon(Icons.calendar_month_outlined,
                           size: 14, color: _textHint),
                       const SizedBox(width: 4),
                       Text(
                         _joinedDate,
-                        style: const TextStyle(fontSize: 13, color: _textHint),
+                        style: TextStyle(fontSize: 13, color: _textHint),
                       ),
                       const Spacer(),
                       if (isLoggedIn)
@@ -763,10 +771,10 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(value,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 16, fontWeight: FontWeight.w700, color: _text)),
           const SizedBox(width: 4),
-          Text(label, style: const TextStyle(fontSize: 13, color: _textSec)),
+          Text(label, style: TextStyle(fontSize: 13, color: _textSec)),
         ],
       ),
     );
@@ -1147,14 +1155,22 @@ class _PostBlockState extends State<PostBlock> {
     final noteId = widget.noteId;
     if (noteId == null || content.isEmpty) return;
     try {
-      // 1) 评论原帖：只增加评论量，不在帖子下方内嵌显示。
+      // 双写：评论（评论量/通知）+ 回复帖（头像连线链）。回复帖不计转发量。
       await CloudNotesService.instance.createComment(noteId, content);
-      // 2) 生成新帖子（引用转发样式：回复内容在上、被回复的帖子在下）。
-      final replyId = await CloudNotesService.instance
-          .repostNote(noteId, quote: content, kind: 'reply');
+      var replyId = '';
+      try {
+        replyId = await CloudNotesService.instance
+            .repostNote(noteId, quote: content, kind: 'reply');
+      } catch (_) {}
       if (!mounted) return;
       setState(() => _commentCount++);
-      if (mounted && replyId.isNotEmpty) {
+      if (replyId.isNotEmpty) {
+        // 广播给发现/关注流：回复立即连线挂到原帖下方，不等列表刷新。
+        broadcastReplyPosted(
+          replyId: replyId,
+          parentId: noteId,
+          content: content,
+        );
         showPostPublishedToast(context, replyId);
       }
       if (widget.onReplyPosted != null) {
@@ -1187,7 +1203,7 @@ class _PostBlockState extends State<PostBlock> {
                   style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             postMenuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
             postMenuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
             const SizedBox(height: 8),
@@ -1248,10 +1264,10 @@ class _PostBlockState extends State<PostBlock> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(widget.nickname,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             if (widget.onTogglePin != null)
               postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
                   widget.pinned ? '取消置顶' : '置顶'),
@@ -1345,7 +1361,7 @@ class _PostBlockState extends State<PostBlock> {
                                 child: Text(widget.nickname,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         fontSize: 15,
                                         fontWeight: FontWeight.w600,
                                         color: _text)),
@@ -1437,7 +1453,7 @@ class _PostBlockState extends State<PostBlock> {
                                   horizontal: 10, vertical: 3),
                               decoration: BoxDecoration(
                                 color: _following
-                                    ? const Color(0xFFBDB6AC)
+                                    ? AppPalette.p.muted
                                     : Colors.black,
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -1470,10 +1486,10 @@ class _PostBlockState extends State<PostBlock> {
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.repeat, size: 12, color: _gold),
+                        Icon(Icons.repeat, size: 12, color: _gold),
                         const SizedBox(width: 2),
                         Text(widget.isQuoteRepost ? '引用' : '转发',
-                            style: const TextStyle(fontSize: 11, color: _gold)),
+                            style: TextStyle(fontSize: 11, color: _gold)),
                       ],
                     ),
                   ],
@@ -1620,10 +1636,10 @@ Future<void> showMoreMenu(
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
             child: Text(nickname,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           ),
-          const Divider(height: 1, color: _border),
+          Divider(height: 1, color: _border),
           postMenuItem(ctx, following ? 'unfollow' : 'follow',
               Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
           postMenuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
@@ -1664,7 +1680,7 @@ Widget postMenuItem(
         children: [
           Icon(icon, size: 18, color: _textSec),
           const SizedBox(width: 12),
-          Text(label, style: const TextStyle(fontSize: 15, color: _text)),
+          Text(label, style: TextStyle(fontSize: 15, color: _text)),
         ],
       ),
     ),
@@ -1741,11 +1757,27 @@ Future<void> submitReplyPost(BuildContext parentCtx, PlazaNote target,
     String content, dynamic onPosted) async {
   if (content.isEmpty) return;
   try {
+    // 双写：评论（评论量/通知）+ 回复帖（头像连线链，repostOf 指向被回复帖，
+    // 服务端对 kind='reply' 不计转发量）。回复帖 id 用于广播与「点击查看」。
     await CloudNotesService.instance.createComment(target.id, content);
-    final replyId = await CloudNotesService.instance
-        .repostNote(target.id, quote: content, kind: 'reply');
+    var replyId = '';
+    try {
+      replyId = await CloudNotesService.instance
+          .repostNote(target.id, quote: content, kind: 'reply');
+    } catch (_) {
+      // 回复帖创建失败不影响评论本身；本次不乐观插入。
+    }
     if (parentCtx.mounted && replyId.isNotEmpty) {
+      // 广播给发现/关注流：回复立即连线挂到原帖下方，不等列表刷新。
+      broadcastReplyPosted(
+        replyId: replyId,
+        parentId: target.id,
+        parent: target,
+        content: content,
+      );
       showPostPublishedToast(parentCtx, replyId);
+    } else if (parentCtx.mounted) {
+      showPostPublishedToast(parentCtx, '');
     }
     final dynamic cb = onPosted;
     final r = cb();
@@ -1753,6 +1785,39 @@ Future<void> submitReplyPost(BuildContext parentCtx, PlazaNote target,
   } catch (e) {
     if (parentCtx.mounted) showPostToast(parentCtx, e.toString());
   }
+}
+
+/// 本地构造刚发布的回复帖并广播：发现/关注流收到后立即把它挂到当前列表里的
+/// 根帖下方，头像连线即时出现，不等列表刷新（云端索引可见性 + 网络往返会晚数秒）。
+void broadcastReplyPosted({
+  required String replyId,
+  required String parentId,
+  PlazaNote? parent,
+  required String content,
+}) {
+  if (replyId.isEmpty || parentId.isEmpty) return;
+  final me = AuthService.instance.currentUser.value;
+  final nowMs = DateTime.now().millisecondsSinceEpoch;
+  NoteStatsCenter.instance.lastReplyPosted.value = PlazaNote(
+    id: replyId,
+    ownerUserId: me?.id ?? '',
+    title: '',
+    content: content,
+    authorName: me?.displayName ?? '同修',
+    visibility: 'public',
+    status: 'normal',
+    likeCount: 0,
+    commentCount: 0,
+    repostOf: parentId,
+    repostSourceAuthor: parent?.authorName ?? '',
+    repostSourceUserId: parent?.ownerUserId ?? '',
+    repostKind: 'reply',
+    quoteContent: content,
+    quoteOfTitle: parent?.title ?? '',
+    quoteOfContent: parent?.content ?? '',
+    createdAt: nowMs,
+    updatedAt: nowMs,
+  );
 }
 
 /// 点赞某帖并回调刷新列表。
@@ -1789,7 +1854,7 @@ Future<void> forwardNote(
                 style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           ),
-          const Divider(height: 1, color: _border),
+          Divider(height: 1, color: _border),
           postMenuItem(ctx, 'direct', Icons.repeat_rounded, '直接转发'),
           postMenuItem(ctx, 'quote', Icons.format_quote_rounded, '引用转发'),
           const SizedBox(height: 8),
@@ -2209,15 +2274,15 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除帖子',
+        title: Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -2343,7 +2408,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                   Icon(icon, size: 48, color: _textHint),
                   const SizedBox(height: 12),
                   Text(text,
-                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                      style: TextStyle(fontSize: 14, color: _textHint)),
                 ],
               ),
             ),
@@ -2384,7 +2449,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                   (context, index) {
                     if (index == _notes.length) {
                       if (_hasMore && widget.isLoggedIn) {
-                        return const Padding(
+                        return Padding(
                           padding: EdgeInsets.all(20),
                           child: Center(
                             child: SizedBox(
@@ -2397,8 +2462,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                         );
                       }
                       // 末尾收尾分割线，保证最后一条帖子下方也有分割线（随内容缩进）。
-                      return const Divider(
-                          height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                      return Divider(
+                          height: 1, thickness: 0.5, color: AppPalette.p.divider);
                     }
                     final note = _notes[index];
                     return Column(
@@ -2406,10 +2471,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                       children: [
                         // 帖子顶部分割线（首条不画，避免顶部多一条线）。
                         if (index > 0)
-                          const Divider(
+                          Divider(
                               height: 1,
-                              thickness: 0.6,
-                              color: Color(0xFFE6DAC8)),
+                              thickness: 0.5,
+                              color: AppPalette.p.divider),
                         _buildNoteCard(note),
                       ],
                     );
@@ -2445,10 +2510,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(note.authorName,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
                 _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
@@ -2769,7 +2834,13 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       final list = children[id]!;
       if (list.isEmpty) continue;
       list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      groups.add((roots[id]!, list));
+      // 兜底「根」可能就是本组第一条回复（原贴已被删、云端也取不到时），
+      // 此时把它从回复链里去掉，避免同一条回复在卡片上重复显示两次。
+      final rootNote = roots[id]!;
+      if (rootNote.repostKind == 'reply') {
+        list.removeWhere((n) => n.id == rootNote.id);
+      }
+      groups.add((rootNote, list));
     }
     // 分组按组内最新回复倒序展示。
     groups.sort((a, b) => b.$2.last.createdAt.compareTo(a.$2.last.createdAt));
@@ -2855,15 +2926,15 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除回复',
+        title: Text('删除回复',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后回复将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后回复将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -2910,10 +2981,10 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: Text(note.authorName,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: _border),
             postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
                 _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
@@ -2972,7 +3043,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                   (context, index) {
                     if (index == itemCount) {
                       if (_hasMore) {
-                        return const Padding(
+                        return Padding(
                           padding: EdgeInsets.all(20),
                           child: Center(
                             child: SizedBox(
@@ -2984,8 +3055,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                           ),
                         );
                       }
-                      return const Divider(
-                          height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                      return Divider(
+                          height: 1, thickness: 0.5, color: AppPalette.p.divider);
                     }
                     final Widget body;
                     if (index < _pinnedReplies.length) {
@@ -2999,11 +3070,15 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (index > 0)
-                          const Divider(
+                        // 分割线上下各留 8px：与上面帖子、下面帖子的间隔都更宽松。
+                        if (index > 0) ...[
+                          const SizedBox(height: 8),
+                          Divider(
                               height: 1,
-                              thickness: 0.6,
-                              color: Color(0xFFE6DAC8)),
+                              thickness: 0.5,
+                              color: AppPalette.p.divider),
+                          const SizedBox(height: 8),
+                        ],
                         body,
                       ],
                     );
@@ -3047,7 +3122,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                             child: Text(nickname,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
                                     color: _text)),
@@ -3096,13 +3171,13 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                 Text.rich(
                   TextSpan(
                     children: [
-                      const TextSpan(
+                      TextSpan(
                         text: '回复@',
                         style: TextStyle(fontSize: 14, color: _textSec),
                       ),
                       TextSpan(
                         text: parentAccount.isEmpty ? '同修' : parentAccount,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: _textSec),
@@ -3115,7 +3190,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                 Text(PostFeedRow.plainContent(reply),
                     maxLines: 8,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 15, color: _text, height: 1.6)),
                 // 发布时间：内容与指标行之间。
                 const SizedBox(height: 6),
@@ -3156,25 +3231,29 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
         Stack(
           clipBehavior: Clip.none,
           children: [
-            // top:62 = 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
+            // top:68 = 根帖外层顶内边距(6) + 头像区顶内边距(12) + 头像高(44) + 线上端留白(6)；
             // bottom:6 = 线下端距 ReplyChain 首个头像 6px（等于链内节点间距）。
             Positioned(
               left: 21,
-              top: 62,
+              top: 68,
               bottom: 6,
               child: Container(width: 1, color: const Color(0xFFC9C9C9)),
             ),
-            PostFeedRow(
-              note: root,
-              onReplyPosted: _load,
-              // 分组区域不显示已置顶（已置顶只在顶部置顶卡片展示）。
-              pinned: false,
-              onTogglePin: () => _togglePin(root),
-              onEdit: () => _editNote(root),
-              onDelete: () => _deleteNote(root),
-              onMore: (n) => _showReplyMenu(n),
-              // 回复 Tab 只展示我回复过的帖子，原贴无需显示关注按钮。
-              showFollowButton: false,
+            // 与首页发现流同款 vertical:6 外边距：分割线与帖子边缘的间隔一致。
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: PostFeedRow(
+                note: root,
+                onReplyPosted: _load,
+                // 分组区域不显示已置顶（已置顶只在顶部置顶卡片展示）。
+                pinned: false,
+                onTogglePin: () => _togglePin(root),
+                onEdit: () => _editNote(root),
+                onDelete: () => _deleteNote(root),
+                onMore: (n) => _showReplyMenu(n),
+                // 回复 Tab 只展示我回复过的帖子，原贴无需显示关注按钮。
+                showFollowButton: false,
+              ),
             ),
           ],
         ),
@@ -3216,7 +3295,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 2),
                     child: CircleAvatar(
                       radius: 22,
@@ -3246,7 +3325,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                           borderRadius: BorderRadius.circular(8),
                           color: _bg,
                         ),
-                        child: const Row(
+                        child: Row(
                           children: [
                             Icon(Icons.block, size: 16, color: _textSec),
                             SizedBox(width: 8),
@@ -3310,7 +3389,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                   Icon(icon, size: 48, color: _textHint),
                   const SizedBox(height: 12),
                   Text(text,
-                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                      style: TextStyle(fontSize: 14, color: _textHint)),
                 ],
               ),
             ),
@@ -3402,15 +3481,15 @@ mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除帖子',
+        title: Text('删除帖子',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
+        content: Text('删除后帖子将从菩提空间移除，且无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -3544,8 +3623,8 @@ class _MyLikesTabState extends State<_MyLikesTab>
                 (context, index) {
                   // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
                   if (index == _notes!.length) {
-                    return const Divider(
-                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                    return Divider(
+                        height: 1, thickness: 0.5, color: AppPalette.p.divider);
                   }
                   final note = _notes![index];
                   return Column(
@@ -3553,10 +3632,10 @@ class _MyLikesTabState extends State<_MyLikesTab>
                     children: [
                       // 帖子顶部分割线（首条不画，避免顶部多一条线）。
                       if (index > 0)
-                        const Divider(
+                        Divider(
                             height: 1,
-                            thickness: 0.6,
-                            color: Color(0xFFE6DAC8)),
+                            thickness: 0.5,
+                            color: AppPalette.p.divider),
                       PostFeedRow(
                         note: note,
                         onReplyPosted: _load,
@@ -3613,7 +3692,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
                   Icon(icon, size: 48, color: _textHint),
                   const SizedBox(height: 12),
                   Text(text,
-                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                      style: TextStyle(fontSize: 14, color: _textHint)),
                 ],
               ),
             ),
@@ -3733,8 +3812,8 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
                 (context, index) {
                   // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
                   if (index == _notes!.length) {
-                    return const Divider(
-                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                    return Divider(
+                        height: 1, thickness: 0.5, color: AppPalette.p.divider);
                   }
                   final note = _notes![index];
                   return Column(
@@ -3742,10 +3821,10 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
                     children: [
                       // 帖子顶部分割线（首条不画，避免顶部多一条线）。
                       if (index > 0)
-                        const Divider(
+                        Divider(
                             height: 1,
-                            thickness: 0.6,
-                            color: Color(0xFFE6DAC8)),
+                            thickness: 0.5,
+                            color: AppPalette.p.divider),
                       PostFeedRow(
                         note: note,
                         onReplyPosted: _load,
@@ -3802,7 +3881,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
                   Icon(icon, size: 48, color: _textHint),
                   const SizedBox(height: 12),
                   Text(text,
-                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                      style: TextStyle(fontSize: 14, color: _textHint)),
                 ],
               ),
             ),
@@ -3935,15 +4014,15 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除草稿',
+        title: Text('删除草稿',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: const Text('删除后草稿将无法恢复。确定删除吗？',
+        content: Text('删除后草稿将无法恢复。确定删除吗？',
             style: TextStyle(fontSize: 14, color: _textSec)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _textSec)),
+            child: Text('取消', style: TextStyle(color: _textSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -3991,8 +4070,8 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
                 (context, index) {
                   // 末尾收尾分割线，保证最后一条草稿下方也有分割线（与其他 Tab 一致）。
                   if (index == _notes.length) {
-                    return const Divider(
-                        height: 1, thickness: 0.6, color: Color(0xFFE6DAC8));
+                    return Divider(
+                        height: 1, thickness: 0.5, color: AppPalette.p.divider);
                   }
                   final note = _notes[index];
                   return Column(
@@ -4000,10 +4079,10 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
                     children: [
                       // 草稿顶部分割线（首条不画，避免顶部多一条线）。
                       if (index > 0)
-                        const Divider(
+                        Divider(
                             height: 1,
-                            thickness: 0.6,
-                            color: Color(0xFFE6DAC8)),
+                            thickness: 0.5,
+                            color: AppPalette.p.divider),
                       _DraftRow(
                         note: note,
                         account: _account,
@@ -4055,7 +4134,7 @@ class _MyDraftsTabState extends State<_MyDraftsTab> {
                   Icon(icon, size: 48, color: _textHint),
                   const SizedBox(height: 12),
                   Text(text,
-                      style: const TextStyle(fontSize: 14, color: _textHint)),
+                      style: TextStyle(fontSize: 14, color: _textHint)),
                 ],
               ),
             ),
@@ -4163,7 +4242,7 @@ class _SettingsPageState extends State<_SettingsPage> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
       child: Text(text,
-          style: const TextStyle(
+          style: TextStyle(
               fontSize: 13, fontWeight: FontWeight.w600, color: _textSec)),
     );
   }
@@ -4186,7 +4265,7 @@ class _SettingsPageState extends State<_SettingsPage> {
         leading: const Icon(Icons.logout, size: 20, color: Colors.redAccent),
         title: const Text('退出登录',
             style: TextStyle(fontSize: 15, color: Colors.redAccent)),
-        trailing: const Icon(Icons.chevron_right, color: _textHint, size: 20),
+        trailing: Icon(Icons.chevron_right, color: _textHint, size: 20),
         onTap: _confirmLogout,
       ),
     );
@@ -4198,15 +4277,15 @@ class _SettingsPageState extends State<_SettingsPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('退出登录',
+        title: Text('退出登录',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
         content:
-            const Text('退出后需重新登录才能管理云端笔记', style: TextStyle(color: _textSec)),
+            Text('退出后需重新登录才能管理云端笔记', style: TextStyle(color: _textSec)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: _textSec))),
+              child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('退出',
@@ -4228,11 +4307,11 @@ class _SettingsPageState extends State<_SettingsPage> {
         children: [
           Container(
             width: double.infinity,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+                colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
               ),
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
             ),
@@ -4244,11 +4323,11 @@ class _SettingsPageState extends State<_SettingsPage> {
                   children: [
                     IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back_ios_new,
+                      icon: Icon(Icons.arrow_back_ios_new,
                           color: _text, size: 20),
                     ),
                     const SizedBox(width: 4),
-                    const Text('设置',
+                    Text('设置',
                         style: TextStyle(
                             fontSize: 19,
                             fontWeight: FontWeight.w600,
@@ -4290,13 +4369,7 @@ class _SettingsPageState extends State<_SettingsPage> {
                       _sectionTitle('其他'),
                       SettingsCard(
                         children: [
-                          _SettingsLinkTile(
-                            icon: Icons.info_outline,
-                            iconColor: _primaryLight,
-                            title: '关于我们',
-                            subtitle: '版本 · 介绍 · 版权',
-                            page: const AboutPage(),
-                          ),
+                          const _SettingsAppearanceTile(),
                           const SettingsDivider(),
                           _SettingsLinkTile(
                             icon: Icons.favorite_outline,
@@ -4304,6 +4377,14 @@ class _SettingsPageState extends State<_SettingsPage> {
                             title: '资助',
                             subtitle: '捐款资助服务器运行',
                             page: const DonatePage(),
+                          ),
+                          const SettingsDivider(),
+                          _SettingsLinkTile(
+                            icon: Icons.info_outline,
+                            iconColor: _primaryLight,
+                            title: '关于我们',
+                            subtitle: '版本 · 介绍 · 版权',
+                            page: const AboutPage(),
                           ),
                         ],
                       ),
@@ -4367,7 +4448,7 @@ class _SettingsLinkTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(title,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 16,
                           color: _text,
                           fontWeight: FontWeight.w500)),
@@ -4375,11 +4456,11 @@ class _SettingsLinkTile extends StatelessWidget {
                   Text(subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _textHint)),
+                      style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+            Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
       ),
@@ -4387,10 +4468,205 @@ class _SettingsLinkTile extends StatelessWidget {
   }
 }
 
+/// 「外观」行：点击弹出暖黄/素白选择面板，切换后全局即时换肤。
+class _SettingsAppearanceTile extends StatelessWidget {
+  const _SettingsAppearanceTile();
+
+  void _openSheet(BuildContext context) {
+    final state = context.findAncestorStateOfType<_SettingsPageState>();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppPalette.p.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Row(
+                children: [
+                  Text('外观',
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: AppPalette.p.text)),
+                  const SizedBox(width: 8),
+                  Text('切换后自动记住偏好，重启应用后完全生效',
+                      style: TextStyle(
+                          fontSize: 12, color: AppPalette.p.textHint)),
+                ],
+              ),
+            ),
+            _AppearanceOption(mode: AppearanceMode.warm),
+            Container(
+                height: 0.5,
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                color: AppPalette.p.borderSoft),
+            _AppearanceOption(mode: AppearanceMode.plain),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    ).then((_) {
+      // 弹层关闭后刷新设置页自身（若用户确实改了外观）。
+      state?.reloadForSettings();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => _openSheet(context),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _gold.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child:
+                  Icon(Icons.palette_outlined, color: _gold, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('外观',
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text('当前：${AppPalette.instance.mode.label}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: _textHint)),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: _textHint, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 外观选项行：左侧双色圆片预览 + 名称描述 + 右侧选中勾。
+class _AppearanceOption extends StatelessWidget {
+  final AppearanceMode mode;
+
+  const _AppearanceOption({required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    final palette =
+        mode == AppearanceMode.warm ? AppPalette.warm : AppPalette.plain;
+    final selected = AppPalette.instance.mode == mode;
+    return InkWell(
+      onTap: () async {
+        if (selected) {
+          Navigator.of(context).pop();
+          return;
+        }
+        // 持久化外观偏好后自动重启 App，确保换肤完全生效。
+        await AppPalette.instance.setMode(mode);
+        if (!context.mounted) return;
+        Navigator.of(context).pop();
+        const platform = MethodChannel('app_channel');
+        try {
+          await platform.invokeMethod('restartApp');
+        } catch (_) {
+          // 重启失败时兜底提示：重启应用后可完全生效。
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+            elevation: 0,
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppPalette.p.card,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: AppPalette.p.borderSoft),
+            ),
+            duration: const Duration(seconds: 3),
+            content: Text('外观已切换，重启应用后可完全生效',
+                style: TextStyle(
+                    fontSize: 13, color: AppPalette.p.textSec)),
+          ));
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            // 双色预览：大圆为背景色，右上小圆为主色。
+            SizedBox(
+              width: 40,
+              height: 40,
+              child: Stack(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: palette.bg,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: palette.border, width: 1),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: palette.accent,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: AppPalette.p.card, width: 1.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(mode.label,
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: AppPalette.p.text)),
+                  const SizedBox(height: 2),
+                  Text(mode.desc,
+                      style: TextStyle(
+                          fontSize: 12, color: AppPalette.p.textSec)),
+                ],
+              ),
+            ),
+            if (selected)
+              Icon(Icons.check_circle, color: AppPalette.p.accent, size: 22)
+            else
+              Icon(Icons.radio_button_off,
+                  color: AppPalette.p.textHint, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+}
 /// 打卡提醒行：点击跳转到手机自带闹钟页面设置（最可靠，保证响铃）。
 class _SettingsReminderTile extends StatelessWidget {
   const _SettingsReminderTile();
-
   @override
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_SettingsPageState>()!;
@@ -4414,14 +4690,14 @@ class _SettingsReminderTile extends StatelessWidget {
                 color: _gold.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.alarm_outlined, color: _gold, size: 20),
+              child: Icon(Icons.alarm_outlined, color: _gold, size: 20),
             ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('打卡提醒',
+                  Text('打卡提醒',
                       style: TextStyle(
                           fontSize: 16,
                           color: _text,
@@ -4431,12 +4707,12 @@ class _SettingsReminderTile extends StatelessWidget {
                     '跳转手机闹钟设置',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: _textHint),
+                    style: TextStyle(fontSize: 12, color: _textHint),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+            Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
       ),
@@ -4466,10 +4742,10 @@ class _SettingsAccountTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child:
-                  const Icon(Icons.lock_reset, color: _primaryLight, size: 20),
+                  Icon(Icons.lock_reset, color: _primaryLight, size: 20),
             ),
             const SizedBox(width: 14),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -4484,7 +4760,7 @@ class _SettingsAccountTile extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+            Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
       ),
@@ -4516,11 +4792,11 @@ class _SettingsPhoneTile extends StatelessWidget {
                 color: _primaryLight.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.phone_iphone_outlined,
+              child: Icon(Icons.phone_iphone_outlined,
                   color: _primaryLight, size: 20),
             ),
             const SizedBox(width: 14),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -4535,7 +4811,7 @@ class _SettingsPhoneTile extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+            Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
       ),
@@ -4568,11 +4844,11 @@ class _SettingsExportNotesTile extends StatelessWidget {
                 color: _gold.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.picture_as_pdf_outlined,
+              child: Icon(Icons.picture_as_pdf_outlined,
                   color: _gold, size: 20),
             ),
             const SizedBox(width: 14),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -4587,7 +4863,7 @@ class _SettingsExportNotesTile extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _textHint, size: 20),
+            Icon(Icons.chevron_right, color: _textHint, size: 20),
           ],
         ),
       ),

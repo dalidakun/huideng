@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'cloud_notes_service.dart';
 import 'settings_widgets.dart';
 
+import 'app_palette.dart';
 /// 反馈管理页（仅管理员可见入口，云端也会校验权限）。
 class FeedbackAdminPage extends StatefulWidget {
   const FeedbackAdminPage({super.key});
@@ -156,7 +157,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: sGold));
+      return Center(child: CircularProgressIndicator(color: sGold));
     }
     if (_items.isEmpty) {
       return RefreshIndicator(
@@ -174,12 +175,12 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
                   const SizedBox(height: 14),
                   Text(
                     _status == 'handled' ? '暂无已处理反馈' : '暂无待处理反馈',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: sText)),
                   const SizedBox(height: 6),
-                  const Text('用户提交的反馈会显示在这里',
+                  Text('用户提交的反馈会显示在这里',
                       style: TextStyle(fontSize: 13, color: sTextSec)),
                 ],
               ),
@@ -209,18 +210,18 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
               padding: const EdgeInsets.only(left: 6, right: 6, bottom: 10),
               child: Row(
                 children: [
-                  const Text('共 ',
+                  Text('共 ',
                       style: TextStyle(fontSize: 13, color: sTextSec)),
                   Text('${_items.length} 条',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 13,
                           color: sTextSec,
                           fontWeight: FontWeight.w600)),
                   if (_status == 'new' && _unread > 0) ...[
-                    const Text('  ·  ',
+                    Text('  ·  ',
                         style: TextStyle(fontSize: 13, color: sTextSec)),
                     Text('$_unread 条待处理',
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 13,
                             color: sGold,
                             fontWeight: FontWeight.w600)),
@@ -232,7 +233,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
           final itemIndex = index - 1;
           if (itemIndex >= _items.length) {
             if (_loadingMore) {
-              return const Padding(
+              return Padding(
                 padding: EdgeInsets.all(16),
                 child: Center(
                     child: CircularProgressIndicator(color: sGold, strokeWidth: 2)),
@@ -241,7 +242,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
             if (_hasMore) {
               return const SizedBox(height: 24);
             }
-            return const Padding(
+            return Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Center(
                 child: Text('没有更多了',
@@ -304,7 +305,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
                     Text(
                       _formatTime(item.createdAt),
                       style:
-                          const TextStyle(fontSize: 11, color: sTextHint),
+                          TextStyle(fontSize: 11, color: sTextHint),
                     ),
                   ],
                 ),
@@ -313,7 +314,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
                   item.content,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 14, color: sText, height: 1.5),
                 ),
                 const SizedBox(height: 6),
@@ -323,7 +324,7 @@ class _FeedbackAdminPageState extends State<FeedbackAdminPage> {
                       : (item.userId.isNotEmpty
                           ? '用户 ${item.userId.substring(0, item.userId.length > 8 ? 8 : item.userId.length)}'
                           : '匿名用户'),
-                  style: const TextStyle(fontSize: 11, color: sTextHint),
+                  style: TextStyle(fontSize: 11, color: sTextHint),
                 ),
               ],
             ),
@@ -383,7 +384,7 @@ class _FeedbackDetailSheet extends StatelessWidget {
                   const Spacer(),
                   Text(
                     _detailTime(item.createdAt),
-                    style: const TextStyle(fontSize: 12, color: sTextHint),
+                    style: TextStyle(fontSize: 12, color: sTextHint),
                   ),
                 ],
               ),
@@ -394,13 +395,13 @@ class _FeedbackDetailSheet extends StatelessWidget {
                     : (item.userId.isNotEmpty
                         ? '用户 ${item.userId}'
                         : '匿名用户'),
-                style: const TextStyle(fontSize: 12, color: sTextSec),
+                style: TextStyle(fontSize: 12, color: sTextSec),
               ),
               if (item.contact.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text('联系方式：${item.contact}',
                     style:
-                        const TextStyle(fontSize: 12, color: sTextSec)),
+                        TextStyle(fontSize: 12, color: sTextSec)),
               ],
               const SizedBox(height: 14),
               Container(
@@ -412,7 +413,7 @@ class _FeedbackDetailSheet extends StatelessWidget {
                 ),
                 child: Text(
                   item.content,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 14, color: sText, height: 1.6),
                 ),
               ),
@@ -424,7 +425,7 @@ class _FeedbackDetailSheet extends StatelessWidget {
                       onPressed: () => Navigator.pop(context),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: sTextSec,
-                        side: const BorderSide(color: Color(0xFFEBE1D6)),
+                        side: BorderSide(color: AppPalette.p.border),
                         minimumSize: const Size(0, 44),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),

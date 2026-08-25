@@ -14,26 +14,25 @@ import 'post_time_link.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
+import 'app_palette.dart';
 // ==================== 配色（浅色 / 深色） ====================
 
-const Color _bgLight = Color(0xFFF5EDE3);
+Color get _bgLight => AppPalette.p.bg;
 const Color _bgDark = Color(0xFF14100C);
-const Color _cardLight = Color(0xFFFFFAF5);
+Color get _cardLight => AppPalette.p.card;
 const Color _cardDark = Color(0xFF211B15);
-const Color _textLight = Color(0xFF3E2723);
+Color get _textLight => AppPalette.p.text;
 const Color _textDark = Color(0xFFEFE6DC);
-const Color _textSecLight = Color(0xFF8B6B5A);
+Color get _textSecLight => AppPalette.p.textSec;
 const Color _textSecDark = Color(0xFFB7A99A);
-const Color _textHintLight = Color(0xFFC4B5A8);
+Color get _textHintLight => AppPalette.p.textHint;
 const Color _textHintDark = Color(0xFF8A8177);
-const Color _borderLight = Color(0xFFEBE1D6);
+Color get _borderLight => AppPalette.p.border;
 const Color _borderDark = Color(0xFF383129);
-const Color _unreadTintLight = Color(0xFFF2E7D9);
+Color get _unreadTintLight => AppPalette.p.tintBg;
 const Color _unreadTintDark = Color(0xFF2C241B);
-const Color _primary = Color(0xFF5C4033);
-const Color _gold = Color(0xFFD4A06A);
-
-/// 互动类型图标与配色（各类型用色不同，但保持统一视觉风格）。
+Color get _primary => AppPalette.p.primary;
+Color get _gold => AppPalette.p.accent;
 class _TypeStyle {
   final IconData? icon;
 
@@ -44,12 +43,12 @@ class _TypeStyle {
   const _TypeStyle.icon(this.icon, this.color, this.action) : asset = null;
   const _TypeStyle.asset(this.asset, this.color, this.action) : icon = null;
 
-  static const Map<String, _TypeStyle> _map = {
+  static final Map<String, _TypeStyle> _map = {
     'like_me': _TypeStyle.icon(Icons.favorite_rounded, Color(0xFFE08A8A), '点赞了你的帖子'),
     'reply': _TypeStyle.asset('assets/images/ic_comment.png', Color(0xFF71867A), '评论了你的帖子'),
     'comment_reply':
         _TypeStyle.icon(Icons.reply_rounded, Color(0xFF6F87A0), '回复了你的评论'),
-    'repost_me': _TypeStyle.icon(Icons.repeat_rounded, Color(0xFFD4A06A), '转发了你的帖子'),
+    'repost_me': _TypeStyle.icon(Icons.repeat_rounded, AppPalette.p.accent, '转发了你的帖子'),
     'favorite_me': _TypeStyle.icon(Icons.bookmark_rounded, Color(0xFFC9A227), '收藏了你的帖子'),
     'follow_me': _TypeStyle.icon(Icons.person_add_alt_1_rounded, Color(0xFF5F8A85), '关注了你'),
     'mention': _TypeStyle.icon(Icons.alternate_email_rounded, Color(0xFF9B7FAE), '在评论中@了你'),
@@ -57,34 +56,68 @@ class _TypeStyle {
 
   static _TypeStyle of(String type) =>
       _map[type] ??
-      const _TypeStyle.icon(
-          Icons.notifications_none, Color(0xFF8B6B5A), '与你互动了');
+      _TypeStyle.icon(
+          Icons.notifications_none, AppPalette.p.textSec, '与你互动了');
 }
 
-/// 互动类型图标（评论用帖子默认评论图标，其余用 Material 图标）。
+/// 独立的消息类型图案：与头像分开，置于头像左侧，指示消息类型
+/// （回复/转发/点赞/收藏/关注/@提及等；评论用帖子默认评论图标）。
 class _TypeIcon extends StatelessWidget {
   final _TypeStyle style;
+  final double size;
 
-  const _TypeIcon({required this.style});
+  const _TypeIcon({required this.style, this.size = 20});
 
   @override
   Widget build(BuildContext context) {
-    const size = 38.0;
-    return Container(
+    return SizedBox(
       width: size,
       height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: style.color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-      ),
       child: style.asset != null
-          ? Image.asset(style.asset!, width: size * 0.47, height: size * 0.47,
-              color: style.color)
-          : Icon(style.icon, size: size * 0.53, color: style.color),
+          ? Image.asset(style.asset!,
+              width: size, height: size, color: style.color)
+          : Icon(style.icon, size: size, color: style.color),
     );
   }
 }
+
+/// 类型图案 + 用户头像：类型图案在前（指示消息类型），用户头像在后，两者分开。
+class _TypeIconAndAvatars extends StatelessWidget {
+  final Widget avatars;
+  final _TypeStyle style;
+
+  /// 类型图案尺寸：点赞/转发/收藏/关注类用更大图标（24），其余默认 20。
+  final double iconSize;
+
+  const _TypeIconAndAvatars({
+    required this.avatars,
+    required this.style,
+    this.iconSize = 20,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _TypeIcon(style: style, size: iconSize),
+        const SizedBox(width: _kTypeIconAvatarGap),
+        avatars,
+      ],
+    );
+  }
+}
+
+/// 点赞/转发/收藏/关注卡的较大类型图案尺寸。
+const double _kTypeIconSize = 24;
+
+/// 类型图案与头像之间的间距。
+const double _kTypeIconAvatarGap = 8;
+
+/// 头像左缘相对卡片左缘的偏移 = 类型图案宽 + 图案与头像间距。
+/// 昵称行 / 帖子内容行需与头像左缘对齐（不顶格显示），缩进量取此值。
+const double _kAvatarLeftInset = _kTypeIconSize + _kTypeIconAvatarGap;
 
 class _Palette {
   final Color bg;
@@ -120,7 +153,7 @@ class _Palette {
             unreadTint: _unreadTintDark,
             dark: true,
           )
-        : const _Palette(
+        : _Palette(
             bg: _bgLight,
             card: _cardLight,
             text: _textLight,
@@ -157,6 +190,9 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
   bool _hasMore = true;
   int _page = 0;
   bool _error = false;
+
+  /// 最近一次加载失败的具体错误信息（展示在错误页，便于定位原因）。
+  String _errorMsg = '';
 
   /// 是否已完成一次真正的列表加载（含失败）。用于「首次切到通知页才加载」：
   /// 消息页位于底部 IndexedStack，App 启动时即便用户没看也会被构建；老实现
@@ -274,15 +310,27 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
         _page = 1;
         _hasMore = hasMore;
         _loading = false;
+        _errorMsg = '';
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = true;
+        _errorMsg = _describeError(e);
       });
+      debugPrint('[Notif] load failed: $e');
       _scheduleRetry();
     }
+  }
+
+  /// 把异常转成给用户看的简短文案（保留关键信息便于定位）。
+  String _describeError(Object e) {
+    final s = e.toString();
+    if (s.contains('CloudApiException')) {
+      return s.replaceFirst('CloudApiException', '').replaceAll(RegExp(r'^[:\s]+'), '');
+    }
+    return s;
   }
 
   /// 首次加载失败后延迟自动重试：等待会话恢复完成窗口（_retryRestoreSession
@@ -482,6 +530,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
     }
     if (_error && _groups.isEmpty) {
       return AppLoadError(
+        subtitle: _errorMsg.isNotEmpty ? _errorMsg : '网络似乎不太顺畅',
         onRetry: _load,
       );
     }
@@ -506,7 +555,11 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       color: _gold,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 28),
+        // 素白外观：横向缩进比主页发现流（16）更多一档，信息离屏幕边缘更远；
+        // 条目间分割线与内容同宽对齐。
+        padding: AppPalette.instance.isPlain
+            ? const EdgeInsets.fromLTRB(20, 8, 20, 28)
+            : const EdgeInsets.fromLTRB(12, 8, 12, 28),
         itemCount: _groups.length + 1,
         itemBuilder: (context, index) {
           if (index == _groups.length) {
@@ -515,42 +568,58 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
             return const AppLoadMoreIndicator();
           }
           final g = _groups[index];
-          if (g.type == 'repost_me') {
-            // 转发沿用点赞类卡片格局。
-            return _LikeNotificationCard(
-              key: ValueKey('like:${g.noteId}:${g.latestAt}'),
+          final Widget card;
+          if (g.type == 'like_me' ||
+              g.type == 'repost_me' ||
+              g.type == 'favorite_me') {
+            // 点赞/转发/收藏共用同一卡片格局：头像排列 + 动作文案·时间 + 帖子内容。
+            card = _LikeNotificationCard(
+              key: ValueKey('like:${g.type}:${g.noteId}:${g.latestAt}'),
               group: g,
               palette: p,
               onTap: () => _openGroup(g),
               onLongPress: () => _showActions(g),
             );
-          }
-          if (g.type == 'like_me' || g.type == 'favorite_me' || g.type == 'follow_me') {
-            // 点赞/收藏/关注共用同一卡片格局（头像重叠堆叠）。
-            return _FollowNotificationCard(
-              key: ValueKey('follow-like:${g.type}:${g.noteId}:${g.latestAt}'),
+          } else if (g.type == 'follow_me') {
+            // 关注用独立卡片格局（头像排列 + 关注文案）。
+            card = _FollowNotificationCard(
+              key: ValueKey('follow:${g.noteId}:${g.latestAt}'),
               group: g,
               palette: p,
               onTap: () => _openGroup(g),
               onLongPress: () => _showActions(g),
             );
-          }
-          if (g.type == 'reply' || g.type == 'comment_reply') {
-            return _ReplyNotificationCard(
+          } else if (g.type == 'reply' || g.type == 'comment_reply') {
+            card = _ReplyNotificationCard(
               key: ValueKey('reply:${g.noteId}:${g.latestAt}'),
               group: g,
               palette: p,
               onTap: () => _openGroup(g),
               onLongPress: () => _showActions(g),
             );
+          } else {
+            card = _NotificationCard(
+              key: ValueKey('${g.type}:${g.noteId}:${g.latestAt}'),
+              group: g,
+              palette: p,
+              onTap: () => _openGroup(g),
+              onLongPress: () => _showActions(g),
+            );
           }
-          return _NotificationCard(
-            key: ValueKey('${g.type}:${g.noteId}:${g.latestAt}'),
-            group: g,
-            palette: p,
-            onTap: () => _openGroup(g),
-            onLongPress: () => _showActions(g),
-          );
+          // 素白外观：卡片无底色块，条目之间用主页发现帖同款细分割线分隔
+          // （首条不画，避免顶部多一条线；样式与 study_hub 帖子列表一致）。
+          if (AppPalette.instance.isPlain) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (index > 0)
+                  Divider(
+                      height: 1, thickness: 0.5, color: AppPalette.p.divider),
+                card,
+              ],
+            );
+          }
+          return card;
         },
       ),
     );
@@ -814,6 +883,7 @@ class _NotificationCardState extends State<_NotificationCard>
     final g = widget.group;
     final style = _TypeStyle.of(g.type);
     final p = widget.palette;
+    final plain = AppPalette.instance.isPlain;
     final unread = g.hasUnread;
 
     return AnimatedBuilder(
@@ -842,29 +912,34 @@ class _NotificationCardState extends State<_NotificationCard>
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: unread ? p.unreadTint : p.card,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
+            // 素白外观：去掉通知底色区块，信息直接放在页面底色上，
+            // 由列表内与主页发现帖同款的细分割线分隔（首条不画）。
+            margin: EdgeInsets.only(bottom: plain ? 0 : 10),
+            // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
+            padding: plain
+                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                : const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: plain
+                ? null
+                : BoxDecoration(
+                    color: unread ? p.unreadTint : p.card,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 互动类型图标（评论用帖子默认评论图标，其余用 Material 图标）。
-                _TypeIcon(style: style),
-                const SizedBox(width: 12),
-                // 头像堆叠
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: _AvatarStack(
+                // 类型图案 + 头像行：类型图案在前指示消息类型，用户头像在后。
+                _TypeIconAndAvatars(
+                  style: style,
+                  avatars: _AvatarStack(
                     actors: g.actors,
                     palette: p,
                     expanded: _pressed,
@@ -972,10 +1047,11 @@ class _NotificationCardState extends State<_NotificationCard>
 
 // ==================== 点赞通知卡片 ====================
 
-/// 点赞通知卡片（like_me）：
-/// 第一行：点赞用户头像（单人单头像 / 多人并排、最新点赞在前）；
-/// 第二行：昵称 + 认证标志 + 动作文案 + 点赞时间戳；
-/// 第三行：我的评论/帖子内容。
+/// 点赞/转发/收藏通知卡片（like_me / repost_me / favorite_me），纵向布局：
+/// 第一行：消息类型图案（较大）+ 互动用户头像排列（按时间顺序、最新在前）；
+/// 第二行：最新互动者昵称 + 认证标志 + 和另外N人 + 动作文案 +「·」+ 时间戳；
+/// 第三行：被点赞/转发/收藏的帖子内容（全部显示，超长「显示更多」折叠），
+/// 点击卡片进入帖子详情。
 class _LikeNotificationCard extends StatefulWidget {
   final NotificationGroup group;
   final _Palette palette;
@@ -998,6 +1074,9 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
     with SingleTickerProviderStateMixin {
   bool _pressed = false;
 
+  /// 被点赞帖子内容是否已展开全文（超长内容点「显示更多」）。
+  bool _expanded = false;
+
   late final AnimationController _enter = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 420))
     ..forward();
@@ -1015,6 +1094,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
     final g = widget.group;
     final style = _TypeStyle.of(g.type);
     final p = widget.palette;
+    final plain = AppPalette.instance.isPlain;
     final unread = g.hasUnread;
     final actors = g.actors;
     final isReply = g.type == 'like_me' && g.noteRepostKind == 'reply';
@@ -1045,62 +1125,57 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: unread ? p.unreadTint : p.card,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 互动类型图标。
-                _TypeIcon(style: style),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 第一行：头像。
-                      _LikeAvatarRow(
-                        actors: actors,
-                        palette: p,
-                        onAvatarTap: (a) => _openActorSpace(context, a),
-                      ),
-                      const SizedBox(height: 8),
-                      // 第二行：昵称 + 认证 + 动作文案 + 时间戳。
-                      _buildActionLine(g, p, unread, isReply),
-                      // 第三行：我的评论/帖子内容。
-                      if (g.noteContent.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          g.noteContent,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            // 与回复类内容字号一致。
-                            fontSize: 15,
-                            color: p.text,
-                            height: 1.6,
-                          ),
-                        ),
-                      ],
-                      // 时间戳：内容下方（与帖子/回复卡一致）。
-                      const SizedBox(height: 6),
-                      Text(
-                        _formatLikeTime(g.latestAt),
-                        style: TextStyle(fontSize: 11, color: p.textHint),
+            // 素白外观：去掉通知底色区块，信息直接放在页面底色上，
+            // 由列表内与主页发现帖同款的细分割线分隔（首条不画）。
+            margin: EdgeInsets.only(bottom: plain ? 0 : 10),
+            // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
+            padding: plain
+                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                : const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: plain
+                ? null
+                : BoxDecoration(
+                    color: unread ? p.unreadTint : p.card,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
                       ),
                     ],
                   ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 第一行：类型图案（较大）+ 头像行（类型图案在前指示消息类型，
+                // 用户头像在后，按时间排列、最新互动者在前）。
+                _TypeIconAndAvatars(
+                  style: style,
+                  iconSize: _kTypeIconSize,
+                  avatars: _LikeAvatarRow(
+                    actors: actors,
+                    palette: p,
+                    onAvatarTap: (a) => _openActorSpace(context, a),
+                  ),
                 ),
+                const SizedBox(height: 8),
+                // 第二行：昵称 + 认证 + 和另外N人 + 动作文案 +「·」+ 时间戳。
+                // 与头像左缘对齐（缩进类型图案宽度，不顶格显示）。
+                Padding(
+                  padding: const EdgeInsets.only(left: _kAvatarLeftInset),
+                  child: _buildActionLine(g, p, unread, isReply),
+                ),
+                // 第三行：被点赞/转发/收藏的帖子内容全部显示，超长「显示更多」折叠。
+                // 同样与头像左缘对齐。
+                if (g.noteContent.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Padding(
+                    padding: const EdgeInsets.only(left: _kAvatarLeftInset),
+                    child: _buildExpandableContent(g.noteContent, p),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1109,7 +1184,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
     );
   }
 
-  /// 第二行：昵称（多人时取第一个）+ 认证标志 + 动作文案（时间戳在内容下方）。
+  /// 第一行：昵称（多人时取第一个）+ 认证标志 + 动作文案 +「·」+ 时间戳。
   Widget _buildActionLine(
       NotificationGroup g, _Palette p, bool unread, bool isReply) {
     final actors = g.actors;
@@ -1119,6 +1194,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
     // 点赞/转发/收藏等共用同一格局：动作文案随类型变化。
     final base = isReply ? '喜欢了你的回复' : _TypeStyle.of(g.type).action;
     final action = actors.length <= 1 ? base : '和另外$others人$base';
+    final time = _formatLikeTime(g.latestAt);
 
     final nameStyle = TextStyle(
       fontSize: 14,
@@ -1130,6 +1206,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
       fontWeight: FontWeight.w400,
       color: unread ? p.text : p.textSec,
     );
+    final timeStyle = TextStyle(fontSize: 12, color: p.textHint);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1146,6 +1223,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
               ],
               const SizedBox(width: 1),
               Text(action, style: plainStyle),
+              if (time.isNotEmpty) Text('· $time', style: timeStyle),
             ],
           ),
         ),
@@ -1163,6 +1241,50 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
             ),
           ),
       ],
+    );
+  }
+
+  /// 帖子内容：全部显示；超过 8 行时折叠并出现「显示更多」，点击展开（可再「收起」）。
+  /// 与主页发现页/回复链同款折叠逻辑（LayoutBuilder 测宽 + TextPainter 测溢出）。
+  Widget _buildExpandableContent(String content, _Palette p) {
+    final textStyle = TextStyle(fontSize: 15, color: p.text, height: 1.6);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tp = TextPainter(
+          text: TextSpan(text: content, style: textStyle),
+          maxLines: 8,
+          ellipsis: '…',
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: constraints.maxWidth);
+        final overflow = tp.didExceedMaxLines;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              content,
+              maxLines: _expanded ? null : 8,
+              overflow: _expanded ? null : TextOverflow.ellipsis,
+              style: textStyle,
+            ),
+            if (overflow)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    _expanded ? '收起' : '显示更多',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF70867A),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -1203,7 +1325,7 @@ class _LikeAvatarRow extends StatelessWidget {
     if (actors.isEmpty) {
       return _ActorAvatar(
         actor: const NotificationActor('', '同修'),
-        radius: 18,
+        radius: 14,
         palette: palette,
       );
     }
@@ -1213,23 +1335,23 @@ class _LikeAvatarRow extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 0; i < shown.length; i++) ...[
-          if (i > 0) const SizedBox(width: 5),
+          if (i > 0) const SizedBox(width: 4),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: onAvatarTap == null
                 ? null
                 : () => onAvatarTap!(shown[i]),
-            child: _ActorAvatar(actor: shown[i], radius: 18, palette: palette),
+            child: _ActorAvatar(actor: shown[i], radius: 14, palette: palette),
           ),
         ],
         if (extra > 0) ...[
-          const SizedBox(width: 5),
+          const SizedBox(width: 4),
           Container(
-            width: 36,
-            height: 36,
+            width: 28,
+            height: 28,
             decoration: BoxDecoration(
               color:
-                  palette.dark ? const Color(0xFF3A332B) : const Color(0xFFEDE3D5),
+                  palette.dark ? const Color(0xFF3A332B) : AppPalette.p.borderSoft,
               shape: BoxShape.circle,
               border: Border.all(color: palette.card, width: 1.5),
             ),
@@ -1237,7 +1359,7 @@ class _LikeAvatarRow extends StatelessWidget {
             child: Text(
               '+$extra',
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 10,
                 fontWeight: FontWeight.w700,
                 color: palette.textSec,
               ),
@@ -1249,7 +1371,7 @@ class _LikeAvatarRow extends StatelessWidget {
   }
 }
 
-// ==================== 头像堆叠 ====================
+// ==================== 头像并排（无重叠） ====================
 
 class _AvatarStack extends StatelessWidget {
   final List<NotificationActor> actors;
@@ -1268,62 +1390,46 @@ class _AvatarStack extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 头像大小与点赞卡片统一（radius 18）。
-    const double r = 18;
-    const double d = r * 2;
-    // 重叠率 30%：后续头像左移 d * 0.7；按压时轻微展开（重叠率降为 20%）。
-    final step = d * (expanded ? 0.8 : 0.7);
+    const double r = 14;
+    const double spacing = 4;
     final shown = actors.take(5).toList();
     final extra = actors.length - shown.length;
-    final width = d + step * (shown.length - 1) + (extra > 0 ? step + 22 : 0);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      curve: Curves.easeOut,
-      width: width,
-      height: d,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (var i = 0; i < shown.length; i++)
-            Positioned(
-              left: i * step,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: onAvatarTap == null
-                    ? null
-                    : () => onAvatarTap!(shown[i]),
-                child: _stackAvatar(shown[i], r),
-              ),
-            ),
-          if (extra > 0)
-            Positioned(
-              left: shown.length * step,
-              child: Container(
-                width: d,
-                height: d,
-                decoration: BoxDecoration(
-                  color: palette.dark ? const Color(0xFF3A332B) : const Color(0xFFEDE3D5),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: palette.card, width: 1.5),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  '+$extra',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: palette.textSec,
-                  ),
-                ),
-              ),
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < shown.length; i++) ...[
+          if (i > 0) const SizedBox(width: spacing),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onAvatarTap == null
+                ? null
+                : () => onAvatarTap!(shown[i]),
+            child: _ActorAvatar(actor: shown[i], radius: r, palette: palette),
+          ),
         ],
-      ),
+        if (extra > 0) ...[
+          const SizedBox(width: spacing),
+          Container(
+            width: r * 2,
+            height: r * 2,
+            decoration: BoxDecoration(
+              color: palette.dark ? const Color(0xFF3A332B) : AppPalette.p.borderSoft,
+              shape: BoxShape.circle,
+              border: Border.all(color: palette.card, width: 1.5),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '+$extra',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: palette.textSec,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
-  }
-
-  Widget _stackAvatar(NotificationActor actor, double r) {
-    return _ActorAvatar(actor: actor, radius: r, palette: palette);
   }
 }
 
@@ -1376,8 +1482,9 @@ class _ActorAvatar extends StatelessWidget {
 }
 
 /// 回复类通知卡片（reply / comment_reply）：
-/// 与主页帖子同款样式：头像 + 昵称 + @账号 + 时间 + 三点菜单（关注/屏蔽），
-/// 下方「回复@我的账号」+ 回复内容，底部为 4 个指标（评论/转发/点赞/阅读）。
+/// 开头直接是用户头像（不带类型图案，比其它类型更大、与主页帖子同尺寸），
+/// 右侧第一行昵称等信息、第二行「回复@我的账号」，两行总高与头像相当，
+/// 接下来一行是回复内容，底部为 4 个指标（评论/转发/点赞/阅读）。
 class _ReplyNotificationCard extends StatefulWidget {
   final NotificationGroup group;
   final _Palette palette;
@@ -1440,6 +1547,7 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
   Widget build(BuildContext context) {
     final g = widget.group;
     final p = widget.palette;
+    final plain = AppPalette.instance.isPlain;
     final unread = g.hasUnread;
     final actor = g.actors.isNotEmpty ? g.actors.first : null;
     final name = actor?.name ?? '同修';
@@ -1472,28 +1580,37 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: unread ? p.unreadTint : p.card,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
+            // 素白外观：去掉通知底色区块，信息直接放在页面底色上，
+            // 由列表内与主页发现帖同款的细分割线分隔（首条不画）。
+            margin: EdgeInsets.only(bottom: plain ? 0 : 10),
+            // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
+            padding: plain
+                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                : const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: plain
+                ? null
+                : BoxDecoration(
+                    color: unread ? p.unreadTint : p.card,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 头像在左（与主页帖子同尺寸，去掉回复类型图标让整体左移）。
+                // 回复类不带类型图案，开头直接是用户头像（半径 22，与主页帖子同尺寸，
+                // 与右侧昵称行 +「回复@账号」两行的总高度相当）。
                 if (actor != null) ...[
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => _openUser(actor),
-                    child: _ActorAvatar(actor: actor, radius: 18, palette: p),
+                    child: _ActorAvatar(actor: actor, radius: 22, palette: p),
                   ),
                   const SizedBox(width: 10),
                 ],
@@ -1652,9 +1769,9 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
   }
 }
 
-/// 关注通知卡片（follow_me）：
-/// 第一行 = 头像（单个用户一个头像，多个用户头像排列）；
-/// 第二行 = 最新关注者的昵称 + 关注文案 + 关注时间戳。
+/// 关注通知卡片（follow_me），纵向布局：
+/// 第一行：消息类型图案（较大）+ 用户头像排列（按时间顺序、最新关注在前）；
+/// 第二行：最新关注者优先昵称 + 认证标志 + 和另外N人关注了你 +「·」+ 时间戳。
 class _FollowNotificationCard extends StatefulWidget {
   final NotificationGroup group;
   final _Palette palette;
@@ -1704,19 +1821,17 @@ class _FollowNotificationCardState extends State<_FollowNotificationCard>
   Widget build(BuildContext context) {
     final g = widget.group;
     final p = widget.palette;
+    final plain = AppPalette.instance.isPlain;
     final unread = g.hasUnread;
     final actors = g.actors;
     final single = actors.length <= 1;
     final actor = actors.isNotEmpty ? actors.first : null;
     final name = actor?.name ?? '同修';
     final verified = actor?.verified ?? false;
-    // 关注/点赞/收藏共用同一卡片：动作文案随类型变化。
-    final baseAction = (g.type == 'like_me' && g.noteRepostKind == 'reply')
-        ? '喜欢了你的回复'
-        : _TypeStyle.of(g.type).action;
-    final actionText = single
-        ? ' $baseAction'
-        : ' 和另外 ${g.count - 1} 个人$baseAction';
+    // 关注卡片：动作文案随类型变化（多人时「和另外N人关注了你」）。
+    final baseAction = _TypeStyle.of(g.type).action;
+    final actionText =
+        single ? baseAction : '和另外${g.count - 1}人$baseAction';
     final nameStyle = TextStyle(
       fontSize: 15,
       fontWeight: FontWeight.w700,
@@ -1754,78 +1869,70 @@ class _FollowNotificationCardState extends State<_FollowNotificationCard>
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: unread ? p.unreadTint : p.card,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Row(
+            // 素白外观：去掉通知底色区块，信息直接放在页面底色上，
+            // 由列表内与主页发现帖同款的细分割线分隔（首条不画）。
+            margin: EdgeInsets.only(bottom: plain ? 0 : 10),
+            // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
+            padding: plain
+                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                : const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: plain
+                ? null
+                : BoxDecoration(
+                    color: unread ? p.unreadTint : p.card,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            Colors.black.withValues(alpha: p.dark ? 0.25 : 0.05),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 互动类型图标（关注）。
-                _TypeIcon(style: _TypeStyle.of(g.type)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 第一行：头像（单个 / 多个排列，统一大小、点击进入主页）。
-                      if (actor != null)
-                        single
-                            ? GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () => _openUser(actor),
-                                child: _ActorAvatar(
-                                    actor: actor, radius: 18, palette: p),
-                              )
-                            : _AvatarStack(
-                                actors: actors,
-                                palette: p,
-                                expanded: _pressed,
-                                onAvatarTap: (a) => _openUser(a),
-                              ),
-                      // 第二行：昵称 + 认证（如有）+ 关注文案，时间戳靠右。
-                      const SizedBox(height: 8),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Text.rich(
-                              TextSpan(children: [
-                                TextSpan(text: name, style: nameStyle),
-                                if (verified) ...[
-                                  WidgetSpan(
-                                    alignment: PlaceholderAlignment.middle,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(left: 3),
-                                      child: Icon(Icons.verified,
-                                          size: 14, color: Color(0xFF70867A)),
-                                    ),
-                                  ),
-                                ],
-                                TextSpan(text: actionText, style: plainStyle),
-                              ]),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                // 第一行：类型图案（较大）+ 用户头像排列（按时间顺序、最新关注在前，
+                // 单个 / 多个排列，统一大小、点击进入主页）。
+                if (actor != null) ...[
+                  _TypeIconAndAvatars(
+                    style: _TypeStyle.of(g.type),
+                    iconSize: _kTypeIconSize,
+                    avatars: single
+                        ? GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => _openUser(actor),
+                            child: _ActorAvatar(
+                                actor: actor, radius: 14, palette: p),
+                          )
+                        : _AvatarStack(
+                            actors: actors,
+                            palette: p,
+                            expanded: _pressed,
+                            onAvatarTap: (a) => _openUser(a),
                           ),
-                          if (g.latestAt > 0) ...[
-                            const SizedBox(width: 8),
-                            Text(
-                              _formatNotifTime(g.latestAt),
-                              style: TextStyle(fontSize: 12, color: p.textHint),
-                            ),
-                          ],
-                        ],
-                      ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                // 第二行：昵称 + 认证 + 和另外N人关注了你 +「·」+ 时间戳。
+                // 与头像左缘对齐（缩进类型图案宽度，不顶格显示）。
+                Padding(
+                  padding: const EdgeInsets.only(left: _kAvatarLeftInset),
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 3,
+                    runSpacing: 2,
+                    children: [
+                      Text(name, style: nameStyle),
+                      if (verified)
+                        const Icon(Icons.verified,
+                            size: 15, color: Color(0xFF70867A)),
+                      const SizedBox(width: 1),
+                      Text(actionText, style: plainStyle),
+                      if (g.latestAt > 0)
+                        Text('· ${_formatNotifTime(g.latestAt)}',
+                            style: TextStyle(fontSize: 12, color: p.textHint)),
                     ],
                   ),
                 ),

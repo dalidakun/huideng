@@ -10,93 +10,89 @@ import 'reading_badges.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _border = Color(0xFFEBE1D6);
-const Color _primaryLight = Color(0xFF8B6B5A);
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _border => AppPalette.p.border;
+Color get _primaryLight => AppPalette.p.textSec;
 const Color _connector = Color(0xFFC9C9C9);
 
-/// 回复连贴：原帖在上、回复在下，两侧头像用竖线连接。
-/// 原帖与回复均为完整帖子样式：头像、昵称、@账号、时间戳、内容、四个指标。
-/// 传入 onComment/onLike/onRepost 后，对应指标按钮可点击（回调参数为该节点帖子）。
-/// 传入 onMore 后，回复节点右侧显示三点菜单；pinned=true 时回复节点显示置顶样式
-/// （回复@原帖作者账户 · 时间 + 已置顶标签 + 三点菜单）。
-class ReplyThread extends StatefulWidget {
-  final PlazaNote replyNote;
+/// 连贴中的单个节点：左侧头像（可选向下延伸连接线）+ 昵称行 + 内容 + 指标。
+/// 既由 [ReplyThread] 组合使用，也供详情页拆分布局直接使用
+/// （详情页把原帖节点与回复节点放进 CustomScrollView 的不同 sliver，
+/// 参考 X：祖先只存 id+文本摘要，不作为完整帖子渲染在回复上下文里）。
+class ReplyThreadNode extends StatefulWidget {
+  final PlazaNote note;
+
+  /// 头像下方是否向下延伸连接线（连贴中的非最后节点为 true）。
+  final bool connectDown;
+
+  /// 头像上方是否延伸连接线段（详情页焦点帖用：衔接藏在上方负偏移区的
+  /// 祖先链连线）。与头像同宽居中绘制，和节点自身连线完全同一条 x 直线。
+  final bool connectUp;
+
+  /// 点击上方连接线段的回调（如打开紧邻父帖详情）。
+  final VoidCallback? onConnectUpTap;
+
+  /// 头像上方留出 6px 空隙（无 connectUp 段时用）：上一个节点的连线直达行底，
+  /// 这里撑开连线端点与本节点头像的间距（与首页连线端点风格一致）。
+  final bool spaceAbove;
+
+  /// 是否按「可带三点菜单」的节点处理；同时决定 pinned 时是否使用置顶头部。
+  final bool showMenu;
+
+  /// 是否渲染指标行（评论/转发/点赞/阅读）。详情页回复帖下方统一渲染一排
+  /// 更完整的操作行（含收藏/分享），此时传 false 避免两排指标。
+  final bool showMetrics;
+
+  /// 置顶样式头（回复@账号 · 已置顶标签），仅在 [showMenu] 为 true 时生效。
+  final bool pinned;
+
+  /// 非空时在昵称行下方渲染「回复@账号」紧凑提示行（X 式祖先预览：
+  /// 祖先帖不全渲染时给出的上下文线索），点击走 [onAncestorTap]。
+  final String? ancestorAccount;
+  final VoidCallback? onAncestorTap;
+
   final void Function(PlazaNote note)? onComment;
   final void Function(PlazaNote note)? onLike;
   final void Function(PlazaNote note)? onRepost;
   final void Function(PlazaNote note)? onMore;
-  final bool pinned;
-
-  /// 详情页用于定位到回复节点的 GlobalKey。
-  final GlobalKey? replyNodeKey;
-
-  /// 原帖加载完成（布局就绪）后回调，详情页在此之后滚动定位。
-  final VoidCallback? onReadyToScroll;
 
   /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
   final VoidCallback? onOpenSelf;
-
-  /// 是否渲染指标行（评论/转发/点赞/阅读）。详情页回复帖下方会统一渲染
-  /// 一排更完整的操作行（含收藏/分享），此时传 false 避免出现两排指标。
-  final bool showMetrics;
 
   /// 点击帖子内容时的回调（如跳转到该帖自己的详情页）。为空时内容不可点
   /// （保持外层手势处理，避免与 feed 的整卡点击冲突）。
   final void Function(PlazaNote note)? onOpenDetail;
 
-  const ReplyThread({
+  const ReplyThreadNode({
     super.key,
-    required this.replyNote,
+    required this.note,
+    this.connectDown = false,
+    this.connectUp = false,
+    this.onConnectUpTap,
+    this.spaceAbove = false,
+    this.showMenu = false,
+    this.showMetrics = true,
+    this.pinned = false,
+    this.ancestorAccount,
+    this.onAncestorTap,
     this.onComment,
     this.onLike,
     this.onRepost,
     this.onMore,
-    this.pinned = false,
-    this.replyNodeKey,
-    this.onReadyToScroll,
     this.onOpenSelf,
-    this.showMetrics = true,
     this.onOpenDetail,
   });
 
   @override
-  State<ReplyThread> createState() => _ReplyThreadState();
+  State<ReplyThreadNode> createState() => _ReplyThreadNodeState();
 }
 
-class _ReplyThreadState extends State<ReplyThread> {
-  PlazaNote? _original;
-
-  /// 已点「显示更多」展开全文的节点 id 集合。
+class _ReplyThreadNodeState extends State<ReplyThreadNode> {
+  /// 已点「显示更多」展开全文的节点内容 id。
   final Set<String> _expandedIds = {};
-
-  /// 原帖作者是否已被当前用户屏蔽。
-  bool get _originalBlocked =>
-      _original != null &&
-      CloudNotesService.instance.blockedUserIds.contains(_original!.ownerUserId);
-
-  @override
-  void initState() {
-    super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    try {
-      final n = await CloudNotesService.instance
-          .getNoteById(widget.replyNote.repostOf);
-      if (!mounted) return;
-      setState(() => _original = n);
-    } catch (_) {
-      // 原帖已删除/隐藏：仅显示回复本身。
-    }
-    // 布局就绪（原帖无论是否加载成功）后再通知详情页滚动定位。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.onReadyToScroll?.call();
-    });
-  }
 
   String _time(int ms) {
     if (ms <= 0) return '';
@@ -153,7 +149,7 @@ class _ReplyThreadState extends State<ReplyThread> {
                   child: Text(note.authorName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
                           color: _text)),
@@ -206,8 +202,8 @@ class _ReplyThreadState extends State<ReplyThread> {
             ],
           ),
         ),
-        // 原贴与回复都带三点菜单（提供 onMore 时），尺寸与下方评论行一致。
-        if (widget.onMore != null) ...[
+        // 三点菜单（提供 onMore 且节点声明 showMenu 时），尺寸与下方评论行一致。
+        if (widget.showMenu && widget.onMore != null) ...[
           const SizedBox(width: 4),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -224,7 +220,7 @@ class _ReplyThreadState extends State<ReplyThread> {
 
   /// 置顶回复的头部：`回复@原帖作者账户 + 已置顶标签 + 三点菜单`（时间戳在内容下方）。
   Widget _pinnedHeader(PlazaNote note) {
-    final parentAccount = _original?.authorAccount ?? '';
+    final parentAccount = widget.ancestorAccount ?? '';
     return Row(
       children: [
         Expanded(
@@ -239,7 +235,7 @@ class _ReplyThreadState extends State<ReplyThread> {
                     ),
                     TextSpan(
                       text: parentAccount.isEmpty ? '同修' : parentAccount,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                           color: _textSec),
@@ -327,7 +323,7 @@ class _ReplyThreadState extends State<ReplyThread> {
             fit: BoxFit.scaleDown,
             child: Text(text,
                 maxLines: 1,
-                style: const TextStyle(fontSize: 13, color: _textSec)),
+                style: TextStyle(fontSize: 13, color: _textSec)),
           ),
         ),
       ],
@@ -346,6 +342,7 @@ class _ReplyThreadState extends State<ReplyThread> {
   Widget _body(PlazaNote note,
       {required bool showMenu, required double textMaxWidth}) {
     final content = NoteSutraLinks.plainText(note.content);
+    final pinnedHeader = showMenu && widget.pinned;
     // 内容 + 时间戳整块（昵称行下方到指标行上方）：提供 onOpenDetail 时整块
     // 可点击进入该帖详情页；指标行有各自按钮，不在此区域内。
     final openArea = Column(
@@ -370,10 +367,39 @@ class _ReplyThreadState extends State<ReplyThread> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (showMenu && widget.pinned)
+        if (pinnedHeader)
           _pinnedHeader(note)
         else
           _header(note),
+        // X 式紧凑祖先提示：祖先帖不全渲染时给出「回复@账号」线索。
+        // 置顶头部本身已含「回复@」，不再重复。
+        if (!pinnedHeader && widget.ancestorAccount != null) ...[
+          const SizedBox(height: 3),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onAncestorTap,
+            child: Row(
+              children: [
+                const Text('回复@',
+                    style:
+                        TextStyle(fontSize: 13, color: Color(0xFF8C8C8C))),
+                Flexible(
+                  child: Text(
+                    widget.ancestorAccount!.isEmpty
+                        ? '同修'
+                        : widget.ancestorAccount!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _textSec),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         if (widget.onOpenDetail != null)
           // SizedBox 撑满整行，帖子字数少时点击留白同样可进入。
           SizedBox(
@@ -419,7 +445,7 @@ class _ReplyThreadState extends State<ReplyThread> {
     final tp = TextPainter(
       text: TextSpan(
         text: content,
-        style: const TextStyle(fontSize: 15, color: _text, height: 1.6),
+        style: TextStyle(fontSize: 15, color: _text, height: 1.6),
       ),
       maxLines: 8,
       ellipsis: '…',
@@ -430,7 +456,7 @@ class _ReplyThreadState extends State<ReplyThread> {
       Text(content,
           maxLines: expanded ? null : 8,
           overflow: expanded ? null : TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
+          style: TextStyle(fontSize: 15, color: _text, height: 1.6)),
       if (overflow && !expanded)
         GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -460,103 +486,8 @@ class _ReplyThreadState extends State<ReplyThread> {
     ];
   }
 
-  /// 一个节点：左侧头像 + 竖线（非最后节点向下延伸，两端各留 6px 间距），右侧内容。
-  Widget _nodeRow(PlazaNote note,
-      {required bool connectDown,
-      required bool showMenu,
-      required double textMaxWidth}) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Column(
-            children: [
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => _openUser(note),
-                child: UserAvatar(userId: note.ownerUserId, radius: 22),
-              ),
-              if (connectDown) ...[
-                const SizedBox(height: 6),
-                Expanded(
-                  child: Container(width: 1, color: _connector),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _body(note, showMenu: showMenu, textMaxWidth: textMaxWidth)),
-        ],
-      ),
-    );
-  }
-
-  /// 原帖作者被屏蔽：保留头像连线结构，内容替换为「已屏蔽用户」占位，
-  /// 点击占位可进入该用户主页取消屏蔽。
-  Widget _blockedOriginalNode(PlazaNote original) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Column(
-            children: [
-              const CircleAvatar(
-                radius: 22,
-                backgroundColor: Color(0x1A8B6B5A),
-                child: Icon(Icons.block, size: 22, color: _textSec),
-              ),
-              // 连线通到底，与下方回复头像衔接（线上端距头像 6px）。
-              const SizedBox(height: 6),
-              Expanded(
-                child: Container(width: 1, color: _connector),
-              ),
-            ],
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: GestureDetector(
-                onTap: original.ownerUserId.isNotEmpty
-                    ? () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => UserSpacePage(
-                              userId: original.ownerUserId,
-                              userName: original.authorName,
-                            ),
-                          ),
-                        )
-                    : null,
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: _border),
-                    borderRadius: BorderRadius.circular(8),
-                    color: const Color(0xFFF5EDE3),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.block, size: 16, color: _textSec),
-                      SizedBox(width: 8),
-                      Text('已屏蔽用户',
-                          style: TextStyle(fontSize: 14, color: _textSec)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final original = _original;
     // 顶层 LayoutBuilder 获取本组件可用宽度：节点内头像列宽 44 + 间距 10 = 54，
     // 其余为内容区宽度，用于折叠文本的溢出检测。LayoutBuilder 不能放进
     // IntrinsicHeight（不支持返回固有尺寸），故在此统一测宽再下传。
@@ -564,26 +495,276 @@ class _ReplyThreadState extends State<ReplyThread> {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final textMaxWidth = w.isFinite ? (w < 54 ? 0.0 : w - 54) : 0.0;
-        final replyNode = _nodeRow(widget.replyNote,
-            connectDown: false, showMenu: true, textMaxWidth: textMaxWidth);
-        final replyKey = widget.replyNodeKey;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (original != null)
-              _originalBlocked
-                  ? _blockedOriginalNode(original)
-                  : _nodeRow(original,
-                      connectDown: true, showMenu: false, textMaxWidth: textMaxWidth),
-            // 原帖与回复节点之间留 6px 间距，作为连线底部到回复头像的间隔。
-            if (original != null)
-              const SizedBox(height: 6),
-            replyKey == null
-                ? replyNode
-                : KeyedSubtree(key: replyKey, child: replyNode),
-          ],
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Column(
+                children: [
+                  if (widget.connectUp) ...[
+                    // 上方线段：与头像同宽(44)居中，和 connectDown 线完全同一 x；
+                    // 顶端紧贴上一节点的连线末端（直达行底），底端与头像留 6px。
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: widget.onConnectUpTap,
+                      child: SizedBox(
+                        width: 44,
+                        height: 16,
+                        child:
+                            Center(child: Container(width: 1, color: _connector)),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ] else if (widget.spaceAbove)
+                    // 无线段可衔接时同样保持「线上端点—头像」6px 间距。
+                    const SizedBox(height: 6),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _openUser(widget.note),
+                    child:
+                        UserAvatar(userId: widget.note.ownerUserId, radius: 22),
+                  ),
+                  if (widget.connectDown) ...[
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: Container(width: 1, color: _connector),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _body(widget.note,
+                    showMenu: widget.showMenu, textMaxWidth: textMaxWidth),
+              ),
+            ],
+          ),
         );
       },
+    );
+  }
+}
+
+/// 原帖作者被屏蔽时原帖节点的占位渲染：保留头像连线结构，
+/// 内容替换为「已屏蔽用户」，点击占位可进入该用户主页取消屏蔽。
+Widget blockedOriginalRow(BuildContext context, PlazaNote original) {
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Column(
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: Color(0x1A8B6B5A),
+            child: Icon(Icons.block, size: 22, color: AppPalette.p.textSec),
+          ),
+          // 固定长度下延线段：占位卡只有一行字、比头像列矮，若用 Expanded
+          // 撑满行高会被压缩到不可见；固定高度保证与下一级头像始终有可见连线，
+          // 末端再留 6px 到下一级头像（与首页连线端点风格一致）。
+          const SizedBox(height: 6),
+          Container(width: 1, height: 20, color: _connector),
+          const SizedBox(height: 6),
+        ],
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        // 卡片与头像顶部对齐（不再整体下移）。
+        child: GestureDetector(
+          onTap: original.ownerUserId.isNotEmpty
+              ? () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => UserSpacePage(
+                        userId: original.ownerUserId,
+                        userName: original.authorName,
+                      ),
+                    ),
+                  )
+              : null,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              border: Border.all(color: _border),
+              borderRadius: BorderRadius.circular(8),
+              color: AppPalette.p.bg,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.block, size: 16, color: _textSec),
+                const SizedBox(width: 8),
+                Text('已屏蔽用户',
+                    style: TextStyle(fontSize: 14, color: _textSec)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+/// 祖先帖已被删除时的占位节点：保留头像连线结构（连线下延到下一级回复），
+/// 提示用户这是对一个已删除帖子的回复；内容不可见，不做点击跳转。
+Widget deletedOriginalRow() {
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Column(
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: Color(0x1A8B6B5A),
+            child: Icon(Icons.delete_outline, size: 22, color: AppPalette.p.textSec),
+          ),
+          // 固定长度下延线段：占位卡只有一行字、比头像列矮，若用 Expanded
+          // 撑满行高会被压缩到不可见；固定高度保证与下一级头像始终有可见连线，
+          // 末端再留 6px 到下一级头像（与首页连线端点风格一致）。
+          const SizedBox(height: 6),
+          Container(width: 1, height: 20, color: _connector),
+          const SizedBox(height: 6),
+        ],
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        // 卡片与头像顶部对齐（不再整体下移）。
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            border: Border.all(color: _border),
+            borderRadius: BorderRadius.circular(8),
+            color: AppPalette.p.bg,
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, size: 16, color: _textSec),
+              const SizedBox(width: 8),
+              Text('这个帖子已删除',
+                  style: TextStyle(fontSize: 14, color: _textSec)),
+            ],
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+/// 回复连贴：原帖在上、回复在下，两侧头像用竖线连接。
+/// 原帖与回复均为完整帖子样式：头像、昵称、@账号、时间戳、内容、四个指标。
+/// 传入 onComment/onLike/onRepost 后，对应指标按钮可点击（回调参数为该节点帖子）。
+/// 传入 onMore 后，回复节点右侧显示三点菜单；pinned=true 时回复节点显示置顶样式
+/// （回复@原帖作者账户 · 时间 + 已置顶标签 + 三点菜单）。
+///
+/// 详情页不使用本组件组合：详情页需要「回复节点贴顶、原帖藏在上方负偏移区」
+/// 的拆分布局（见 note_detail_page 的 `_buildReplyThreadBody`），
+/// 直接用 [ReplyThreadNode] 分别构建两个节点放入不同 sliver。
+class ReplyThread extends StatefulWidget {
+  final PlazaNote replyNote;
+  final void Function(PlazaNote note)? onComment;
+  final void Function(PlazaNote note)? onLike;
+  final void Function(PlazaNote note)? onRepost;
+  final void Function(PlazaNote note)? onMore;
+  final bool pinned;
+
+  /// 详情页等场景已预取的原帖数据：传入后不再内部拉取，首帧即「原帖+回复」
+  /// 完整布局。为空时仍走内部拉取。
+  final PlazaNote? initialOriginal;
+
+  /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
+  final VoidCallback? onOpenSelf;
+
+  /// 是否渲染指标行（评论/转发/点赞/阅读）。
+  final bool showMetrics;
+
+  /// 点击帖子内容时的回调（如跳转到该帖自己的详情页）。为空时内容不可点
+  /// （保持外层手势处理，避免与 feed 的整卡点击冲突）。
+  final void Function(PlazaNote note)? onOpenDetail;
+
+  const ReplyThread({
+    super.key,
+    required this.replyNote,
+    this.onComment,
+    this.onLike,
+    this.onRepost,
+    this.onMore,
+    this.pinned = false,
+    this.initialOriginal,
+    this.onOpenSelf,
+    this.showMetrics = true,
+    this.onOpenDetail,
+  });
+
+  @override
+  State<ReplyThread> createState() => _ReplyThreadState();
+}
+
+class _ReplyThreadState extends State<ReplyThread> {
+  PlazaNote? _original;
+
+  @override
+  void initState() {
+    super.initState();
+    // 外部已预取原帖时直接使用，首帧即完整布局。
+    _original = widget.initialOriginal;
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    if (_original == null && widget.replyNote.repostOf.isNotEmpty) {
+      try {
+        final n = await CloudNotesService.instance
+            .getNoteById(widget.replyNote.repostOf);
+        if (!mounted) return;
+        setState(() => _original = n);
+      } catch (_) {
+        // 原帖已删除/隐藏：仅显示回复本身。
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final original = _original;
+    final originalBlocked = original != null &&
+        CloudNotesService.instance.blockedUserIds.contains(original.ownerUserId);
+    final parentAccount = original?.authorAccount ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (original != null)
+          originalBlocked
+              ? blockedOriginalRow(context, original)
+              : ReplyThreadNode(
+                  note: original,
+                  connectDown: true,
+                  // 与旧版一致：原贴与回复节点都可带三点菜单（图标受 onMore 控制）。
+                  showMenu: true,
+                  showMetrics: widget.showMetrics,
+                  onOpenDetail: widget.onOpenDetail,
+                  onOpenSelf: widget.onOpenSelf,
+                ),
+        // 原帖与回复节点之间留 6px 间距，作为连线底部到回复头像的间隔。
+        if (original != null) const SizedBox(height: 6),
+        ReplyThreadNode(
+          note: widget.replyNote,
+          // 与旧版一致：回复节点始终按「可带菜单」处理（图标仍受 onMore 控制），
+          // pinned 样式因此与 onMore 是否提供无关。
+          showMenu: true,
+          showMetrics: widget.showMetrics,
+          pinned: widget.pinned,
+          // 祖先账号仅供置顶头部文案使用；feed 卡片已有连线链路可视化，
+          // 不再额外渲染「回复@」提示行（详情页拆分布局才显式传入）。
+          ancestorAccount:
+              widget.pinned && parentAccount.isNotEmpty ? parentAccount : null,
+          onComment: widget.onComment,
+          onLike: widget.onLike,
+          onRepost: widget.onRepost,
+          onMore: widget.onMore,
+          onOpenSelf: widget.onOpenSelf,
+          onOpenDetail: widget.onOpenDetail,
+        ),
+      ],
     );
   }
 }

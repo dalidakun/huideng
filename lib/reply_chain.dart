@@ -10,9 +10,10 @@ import 'reading_badges.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
+import 'app_palette.dart';
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
 const Color _connector = Color(0xFFC9C9C9);
 
 /// 回复链：原贴下方一串回复，每个节点左侧头像 + 向下竖线（非末尾节点），
@@ -28,10 +29,6 @@ class ReplyChain extends StatefulWidget {
   final Set<String> pinnedIds;
   final Map<String, String> parentAccounts;
 
-  /// 点击回复节点时进入的原贴详情页 id：直接打开该帖笔记详情页，并把
-  /// 这条回复排到评论列表第一条。为空时保持原行为：打开该回复自己的详情页。
-  final String? detailNoteId;
-
   /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
   final VoidCallback? onOpenSelf;
   const ReplyChain({
@@ -43,7 +40,6 @@ class ReplyChain extends StatefulWidget {
     this.onMore,
     this.pinnedIds = const {},
     this.parentAccounts = const {},
-    this.detailNoteId,
     this.onOpenSelf,
   });
 
@@ -133,10 +129,10 @@ class _ReplyChainState extends State<ReplyChain> {
                     ),
                     TextSpan(
                       text: parentAccount.isEmpty ? '同修' : parentAccount,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF8B6B5A)),
+                          color: AppPalette.p.textSec),
                     ),
                   ],
                 ),
@@ -166,16 +162,13 @@ class _ReplyChainState extends State<ReplyChain> {
     );
   }
 
-  /// 点击回复节点进入笔记详情：
-  /// 进入该帖（detailNoteId 指定）的笔记详情页，该回复排到评论列表第一条。
+  /// 点击回复节点内容/时间：进入该回复自己的详情页（原贴在上 + 该回复在下），
+  /// 它的直接回复列在下方——层级清晰：点 b 看 b 的回复（c），点 c 看的是 c 的回复。
   void _openDetail(BuildContext context, PlazaNote note) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => NoteDetailPage(
-          noteId: widget.detailNoteId ?? note.id,
-          scrollToReplyId: note.id,
-        ),
+        builder: (_) => NoteDetailPage(noteId: note.id),
       ),
     );
   }
@@ -211,7 +204,7 @@ class _ReplyChainState extends State<ReplyChain> {
                         child: Text(note.authorName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w600,
                                 color: _text)),
@@ -324,7 +317,7 @@ class _ReplyChainState extends State<ReplyChain> {
     final tp = TextPainter(
       text: TextSpan(
         text: content,
-        style: const TextStyle(fontSize: 15, color: _text, height: 1.6),
+        style: TextStyle(fontSize: 15, color: _text, height: 1.6),
       ),
       maxLines: 8,
       ellipsis: '…',
@@ -335,7 +328,7 @@ class _ReplyChainState extends State<ReplyChain> {
       Text(content,
           maxLines: expanded ? null : 8,
           overflow: expanded ? null : TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 15, color: _text, height: 1.6)),
+          style: TextStyle(fontSize: 15, color: _text, height: 1.6)),
       if (overflow && !expanded)
         GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -417,7 +410,7 @@ class _ReplyChainState extends State<ReplyChain> {
             fit: BoxFit.scaleDown,
             child: Text(text,
                 maxLines: 1,
-                style: const TextStyle(fontSize: 13, color: _textSec)),
+                style: TextStyle(fontSize: 13, color: _textSec)),
           ),
         ),
       ],

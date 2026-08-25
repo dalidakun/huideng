@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'reading_page.dart';
 import 'sutra_downloader.dart';
 
+import 'app_palette.dart';
 class StudyTrackerPage extends StatefulWidget {
   const StudyTrackerPage({super.key});
 
@@ -99,7 +100,7 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
                             value: _progress,
                             minHeight: 8,
                             backgroundColor: const Color(0xFFE0E0E0),
-                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF5D4037)),
+                            valueColor: AlwaysStoppedAnimation<Color>(AppPalette.p.primary),
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -113,7 +114,7 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
                             icon: const Icon(Icons.menu_book),
                             label: const Text('继续阅读'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF5D4037),
+                              backgroundColor: AppPalette.p.primary,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
@@ -140,7 +141,7 @@ class _StudyTrackerPageState extends State<StudyTrackerPage> {
               child: ListTile(
                 leading: const Icon(Icons.history, color: Color(0xFF757575)),
                 title: Text(s['title'] ?? ''),
-                trailing: const Icon(Icons.check_circle_outline, color: Color(0xFF5D4037)),
+                trailing: Icon(Icons.check_circle_outline, color: AppPalette.p.primary),
                 onTap: () => _selectSutra(s['title']!, s['filePath']!),
               ),
             )),

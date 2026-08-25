@@ -7,13 +7,13 @@ import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 import 'reading_badges.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
 class FavoriteNotesPage extends StatefulWidget {
   /// [embedded] 为 true 时不显示自己的 Scaffold/头部，用于嵌入标签页。
   const FavoriteNotesPage({super.key, this.embedded = false});
@@ -95,11 +95,11 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+          colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
         ),
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
@@ -111,12 +111,12 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
             children: [
               IconButton(
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+                icon: Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
               ),
               const SizedBox(width: 4),
-              const Text('书签', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+              Text('书签', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
-              Text('${_notes.length} 篇', style: const TextStyle(fontSize: 13, color: _textSec)),
+              Text('${_notes.length} 篇', style: TextStyle(fontSize: 13, color: _textSec)),
             ],
           ),
         ),
@@ -131,9 +131,9 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
         children: [
           Icon(Icons.bookmark_border_rounded, size: 48, color: _textHint.withValues(alpha: 0.6)),
           const SizedBox(height: 14),
-          const Text('暂无书签笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          Text('暂无书签笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           const SizedBox(height: 6),
-          const Text('在笔记详情中点击收藏，即可在这里查看', style: TextStyle(fontSize: 13, color: _textSec)),
+          Text('在笔记详情中点击收藏，即可在这里查看', style: TextStyle(fontSize: 13, color: _textSec)),
         ],
       ),
     );
@@ -172,7 +172,7 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                 preview,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 14, color: _textSec, height: 1.5),
+                style: TextStyle(fontSize: 14, color: _textSec, height: 1.5),
               ),
               const SizedBox(height: 10),
               Row(
@@ -187,7 +187,7 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                           child: Text(note.authorName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 12, color: _textSec)),
                         ),
                         if (note.authorVerified) ...[
@@ -223,11 +223,11 @@ class _FavoriteNotesPageState extends State<FavoriteNotesPage>
                   const Spacer(),
                   Icon(Icons.visibility_outlined, size: 12, color: _textHint),
                   const SizedBox(width: 3),
-                  Text('${note.viewCount}', style: const TextStyle(fontSize: 12, color: _textHint)),
+                  Text('${note.viewCount}', style: TextStyle(fontSize: 12, color: _textHint)),
                   const SizedBox(width: 10),
                   Icon(Icons.favorite_border, size: 12, color: _textHint),
                   const SizedBox(width: 3),
-                  Text('${note.likeCount}', style: const TextStyle(fontSize: 12, color: _textHint)),
+                  Text('${note.likeCount}', style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
             ],

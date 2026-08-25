@@ -2,16 +2,16 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 class CalendarPage extends StatefulWidget {
   const CalendarPage({super.key});
 
@@ -273,7 +273,7 @@ class _CalendarPageState extends State<CalendarPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('按每日功课的项目填写当天实际完成的量，留空表示该项未做。',
-                    style: const TextStyle(fontSize: 12, color: _textSec, height: 1.5)),
+                    style: TextStyle(fontSize: 12, color: _textSec, height: 1.5)),
                 const SizedBox(height: 12),
                 for (final t in _backfillTypes)
                   Padding(
@@ -286,20 +286,20 @@ class _CalendarPageState extends State<CalendarPage> {
                           child: Text(t['label']!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 14, color: _text, fontWeight: FontWeight.w500)),
+                              style: TextStyle(fontSize: 14, color: _text, fontWeight: FontWeight.w500)),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
                             controller: ctrls[t['key']],
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            style: const TextStyle(color: _text, fontSize: 14),
+                            style: TextStyle(color: _text, fontSize: 14),
                             decoration: InputDecoration(
                               isDense: true,
                               hintText: '0',
                               hintStyle: TextStyle(color: _textHint),
                               suffixText: t['unit'],
-                              suffixStyle: const TextStyle(fontSize: 12, color: _textHint),
+                              suffixStyle: TextStyle(fontSize: 12, color: _textHint),
                               filled: true,
                               fillColor: _bg,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -316,10 +316,10 @@ class _CalendarPageState extends State<CalendarPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('保存', style: TextStyle(color: _primary, fontWeight: FontWeight.w600)),
+            child: Text('保存', style: TextStyle(color: _primary, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -491,13 +491,13 @@ class _CalendarPageState extends State<CalendarPage> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.chevron_left, color: _primaryLight),
+                  icon: Icon(Icons.chevron_left, color: _primaryLight),
                   onPressed: _prevMonth,
                 ),
                 Text('${_currentMonth.year}年${_currentMonth.month}月',
                     style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
                 IconButton(
-                  icon: const Icon(Icons.chevron_right, color: _primaryLight),
+                  icon: Icon(Icons.chevron_right, color: _primaryLight),
                   onPressed: _nextMonth,
                 ),
               ],
@@ -662,7 +662,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             : '$label · ${details.join('·')}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 14, color: _text),
+                        style: TextStyle(fontSize: 14, color: _text),
                       ),
                     ),
                     Text('${_fmt(amount)}$unit',

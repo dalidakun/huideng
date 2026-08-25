@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'reading_time_service.dart';
 
+import 'app_palette.dart';
 /// 修学认证 · 读经徽章系统。
 ///
 /// 依据「累计读经时长」点亮五枚徽章；帖子头部的「阅藏进度」百分比
@@ -17,13 +18,11 @@ const int kCanonTotalBooks = 8982;
 /// 读毕全藏约需时长（秒）：5260 小时。
 const int kCanonTotalSeconds = 5260 * 3600;
 
-const Color _badgeText = Color(0xFF3E2723);
-const Color _badgeTextSec = Color(0xFF8B6B5A);
-const Color _badgeBg = Color(0xFFF5EDE3);
-const Color _badgeCard = Color(0xFFFFFAF5);
-const Color _badgeGold = Color(0xFFD4A06A);
-
-/// 单枚徽章配置。
+Color get _badgeText => AppPalette.p.text;
+Color get _badgeTextSec => AppPalette.p.textSec;
+Color get _badgeBg => AppPalette.p.bg;
+Color get _badgeCard => AppPalette.p.card;
+Color get _badgeGold => AppPalette.p.accent;
 class ReadingBadge {
   final int level;
   final String title;
@@ -47,7 +46,7 @@ class ReadingBadge {
 }
 
 /// 五枚读经徽章：依阅读时长阶梯点亮。
-const List<ReadingBadge> kReadingBadges = [
+final List<ReadingBadge> kReadingBadges = [
   ReadingBadge(
       level: 1, title: '一品', name: '初发心', hours: 10,
       icon: Icons.spa, color: Color(0xFF6FA96F)),
@@ -62,7 +61,7 @@ const List<ReadingBadge> kReadingBadges = [
       icon: Icons.menu_book, color: Color(0xFFB08CD9)),
   ReadingBadge(
       level: 5, title: '五品', name: '通藏', hours: 5260,
-      icon: Icons.auto_awesome, color: Color(0xFFD4A06A)),
+      icon: Icons.auto_awesome, color: AppPalette.p.accent),
 ];
 
 /// 当前已点亮的最高品阶（0 表示尚未点亮任何徽章）。
@@ -221,15 +220,15 @@ class BadgeDot extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: unlocked ? badge.color : const Color(0xFFE9E2D8),
+        color: unlocked ? badge.color : AppPalette.p.borderSoft,
         border: unlocked
             ? null
-            : Border.all(color: const Color(0xFFD4C9BB), width: 1),
+            : Border.all(color: AppPalette.p.muted, width: 1),
       ),
       child: Icon(
         badge.icon,
         size: size * 0.56,
-        color: unlocked ? Colors.white : const Color(0xFFC0B3A2),
+        color: unlocked ? Colors.white : AppPalette.p.muted,
       ),
     );
   }
@@ -250,7 +249,7 @@ class BadgeDetailPage extends StatelessWidget {
         foregroundColor: _badgeText,
         elevation: 0,
         centerTitle: true,
-        title: const Text('修学徽章',
+        title: Text('修学徽章',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _badgeText)),
       ),
@@ -293,7 +292,7 @@ class BadgeDetailPage extends StatelessWidget {
                 badge: b, unlocked: b.level <= level, seconds: seconds),
             const SizedBox(height: 10),
           ],
-          const Text(
+          Text(
             '徽章依「累计读经时长」点亮，无法速成，唯有真实修学才能获得。',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: _badgeTextSec),
@@ -322,10 +321,10 @@ class _TimeStatRow extends StatelessWidget {
         Icon(icon, size: 15, color: const Color(0xFF71867A)),
         const SizedBox(width: 6),
         Text(label,
-            style: const TextStyle(fontSize: 14, color: _badgeTextSec)),
+            style: TextStyle(fontSize: 14, color: _badgeTextSec)),
         const Spacer(),
         Text(text,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
                 color: _badgeText)),
@@ -376,7 +375,7 @@ class _BadgeLevelCard extends StatelessWidget {
                 Row(
                   children: [
                     Text(badge.fullName,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: _badgeText)),
@@ -389,7 +388,7 @@ class _BadgeLevelCard extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   unlocked ? '已点亮 · 累计读经 ${badge.hours} 小时' : '累计读经 ${badge.hours} 小时点亮',
-                  style: const TextStyle(fontSize: 12, color: _badgeTextSec),
+                  style: TextStyle(fontSize: 12, color: _badgeTextSec),
                 ),
                 const SizedBox(height: 8),
                 ClipRRect(
@@ -397,9 +396,9 @@ class _BadgeLevelCard extends StatelessWidget {
                   child: LinearProgressIndicator(
                     value: progress.clamp(0.0, 1.0),
                     minHeight: 4,
-                    backgroundColor: const Color(0xFFEBE1D6),
+                    backgroundColor: AppPalette.p.border,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                        unlocked ? badge.color : const Color(0xFFC4B5A8)),
+                        unlocked ? badge.color : AppPalette.p.textHint),
                   ),
                 ),
               ],
@@ -434,20 +433,20 @@ Future<void> maybeCelebrateNewBadge(BuildContext context, int seconds) async {
           children: [
             BadgeDot(badge: badge, unlocked: true, size: 64),
             const SizedBox(height: 14),
-            const Text('恭喜你获得新的徽章',
+            Text('恭喜你获得新的徽章',
                 style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: _badgeText)),
             const SizedBox(height: 6),
             Text(badge.fullName,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: _badgeGold)),
             const SizedBox(height: 6),
             Text('累计读经 ${badge.hours} 小时点亮，继续精进！',
-                style: const TextStyle(fontSize: 13, color: _badgeTextSec)),
+                style: TextStyle(fontSize: 13, color: _badgeTextSec)),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,

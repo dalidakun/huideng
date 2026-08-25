@@ -147,27 +147,27 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.phone_iphone, size: 18, color: sGold),
+                    Icon(Icons.phone_iphone, size: 18, color: sGold),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text('当前绑定手机号：$phone',
-                          style: const TextStyle(fontSize: 13, color: sTextSec)),
+                          style: TextStyle(fontSize: 13, color: sTextSec)),
                     ),
                   ],
                 ),
               ),
             const SizedBox(height: 20),
-            const Text('新手机号', style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+            Text('新手机号', style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             TextField(
               controller: _phoneController,
               keyboardType: TextInputType.phone,
               maxLength: 11,
-              style: const TextStyle(fontSize: 16, color: sText),
+              style: TextStyle(fontSize: 16, color: sText),
               decoration: InputDecoration(
                 counterText: '',
                 hintText: '请输入新手机号',
-                hintStyle: const TextStyle(color: sTextHint),
+                hintStyle: TextStyle(color: sTextHint),
                 filled: true,
                 fillColor: sCard,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -177,12 +177,12 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: sGold, width: 1.2),
+                  borderSide: BorderSide(color: sGold, width: 1.2),
                 ),
               ),
             ),
             const SizedBox(height: 16),
-            const Text('验证码', style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+            Text('验证码', style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -191,11 +191,11 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                     controller: _codeController,
                     keyboardType: TextInputType.number,
                     maxLength: 6,
-                    style: const TextStyle(fontSize: 16, color: sText),
+                    style: TextStyle(fontSize: 16, color: sText),
                     decoration: InputDecoration(
                       counterText: '',
                       hintText: '6 位验证码',
-                      hintStyle: const TextStyle(color: sTextHint),
+                      hintStyle: TextStyle(color: sTextHint),
                       filled: true,
                       fillColor: sCard,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -205,7 +205,7 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: sGold, width: 1.2),
+                        borderSide: BorderSide(color: sGold, width: 1.2),
                       ),
                     ),
                   ),
@@ -217,7 +217,7 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                     onPressed: (_countdown > 0 || _sending) ? null : _sendCode,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: sPrimary,
-                      side: const BorderSide(color: sGold),
+                      side: BorderSide(color: sGold),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                     ),
@@ -254,9 +254,9 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.info_outline, size: 15, color: sTextHint),
+                Icon(Icons.info_outline, size: 15, color: sTextHint),
                 const SizedBox(width: 6),
-                const Expanded(
+                Expanded(
                   child: Text(
                     '更换手机号不会影响现有账号，云端笔记、收藏与签到记录都会保留。',
                     style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.6),

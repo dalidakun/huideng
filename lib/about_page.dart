@@ -52,11 +52,11 @@ class _AboutPageState extends State<AboutPage> {
                 child: Image.asset('assets/images/app_icon.png', fit: BoxFit.cover),
               ),
               const SizedBox(height: 16),
-              const Text('燃灯', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: sText)),
+              Text('燃灯', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: sText)),
               const SizedBox(height: 6),
-              const Text('版本 1.0.0', style: TextStyle(fontSize: 13, color: sTextHint)),
+              Text('版本 1.0.0', style: TextStyle(fontSize: 13, color: sTextHint)),
               const SizedBox(height: 14),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(horizontal: 40),
                 child: Text(
                   '燃一盏灯，看见自己，照亮别人',
@@ -69,7 +69,7 @@ class _AboutPageState extends State<AboutPage> {
           const SizedBox(height: 32),
           SettingsCard(
             children: [
-              const SettingsTile(
+              SettingsTile(
                 icon: Icons.mail_outline,
                 iconColor: sGold,
                 title: '联系我们',
@@ -84,7 +84,7 @@ class _AboutPageState extends State<AboutPage> {
                 onTap: () => _submitFeedback(context),
               ),
               const SettingsDivider(),
-              const SettingsTile(
+              SettingsTile(
                 icon: Icons.favorite_border,
                 iconColor: sGold,
                 title: '初心',
@@ -146,7 +146,7 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ),
           const SizedBox(height: 28),
-          const Text(
+          Text(
             '© 2026 燃灯 · 保留所有权利',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: sTextHint),

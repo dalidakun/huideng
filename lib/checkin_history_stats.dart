@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-const Color _gold = Color(0xFFD4A06A);
-
-/// 单类功课的历史累计条目。`detail` 为每日功课中的具体内容（如诵了哪些经）。
+import 'app_palette.dart';
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
+Color get _gold => AppPalette.p.accent;
 class CheckInStatEntry {
   final String label;
   final String unit;
@@ -50,22 +49,22 @@ class CheckInHistoryStats extends StatelessWidget {
                   color: _gold.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.timeline,
+                child: Icon(Icons.timeline,
                     size: 15, color: _gold),
               ),
               const SizedBox(width: 8),
-              const Text('历史统计',
+              Text('历史统计',
                   style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                       color: _text)),
               const Spacer(),
-              const Text('自使用以来累计',
+              Text('自使用以来累计',
                   style: TextStyle(fontSize: 11, color: _textHint)),
             ],
           ),
           if (list.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
               child: Center(
                 child: Text('还没有打卡记录',
@@ -93,19 +92,19 @@ class CheckInHistoryStats extends StatelessWidget {
                   : '${e.label} · ${e.detail.join('·')}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, color: _textSec),
+              style: TextStyle(fontSize: 14, color: _textSec),
             ),
           ),
           const SizedBox(width: 10),
           Text(_fmtNum(e.total),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 19,
                   fontWeight: FontWeight.w700,
                   color: _text,
                   height: 1.2)),
           const SizedBox(width: 5),
           Text(e.unit,
-              style: const TextStyle(fontSize: 12, color: _textHint)),
+              style: TextStyle(fontSize: 12, color: _textHint)),
         ],
       ),
     );

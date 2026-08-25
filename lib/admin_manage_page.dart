@@ -6,6 +6,7 @@ import 'note_detail_page.dart';
 import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
 
+import 'app_palette.dart';
 /// 管理员页（仅管理员可见入口，云端也会校验权限）：
 /// 添加 / 移除管理员、发布 / 删除 App 公告。
 class AdminManagePage extends StatefulWidget {
@@ -103,17 +104,17 @@ class _AdminManagePageState extends State<AdminManagePage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: sCard,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('移除管理员', style: TextStyle(fontSize: 17, color: sText)),
+        title: Text('移除管理员', style: TextStyle(fontSize: 17, color: sText)),
         content: Text(
           item.username.isNotEmpty
               ? '确定将「${item.username}」移出管理员吗？'
               : '确定移除这位管理员吗？',
-          style: const TextStyle(fontSize: 14, color: sTextSec),
+          style: TextStyle(fontSize: 14, color: sTextSec),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: sTextSec)),
+            child: Text('取消', style: TextStyle(color: sTextSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -167,15 +168,15 @@ class _AdminManagePageState extends State<AdminManagePage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: sCard,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除公告', style: TextStyle(fontSize: 17, color: sText)),
+        title: Text('删除公告', style: TextStyle(fontSize: 17, color: sText)),
         content: Text(
           '确定删除公告「${item.title}」吗？删除后所有用户将不可见。',
-          style: const TextStyle(fontSize: 14, color: sTextSec),
+          style: TextStyle(fontSize: 14, color: sTextSec),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: sTextSec)),
+            child: Text('取消', style: TextStyle(color: sTextSec)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -202,8 +203,8 @@ class _AdminManagePageState extends State<AdminManagePage> {
       title: '管理员',
       trailing: TextButton.icon(
         onPressed: _addAdmin,
-        icon: const Icon(Icons.person_add_alt_1, size: 18, color: sGold),
-        label: const Text('添加',
+        icon: Icon(Icons.person_add_alt_1, size: 18, color: sGold),
+        label: Text('添加',
             style: TextStyle(color: sGold, fontWeight: FontWeight.w600)),
       ),
       child: _buildBody(),
@@ -212,7 +213,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: sGold));
+      return Center(child: CircularProgressIndicator(color: sGold));
     }
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -223,7 +224,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
             color: sGold.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const Text(
+          child: Text(
             '管理员可查看和回复反馈、发布公告、管理其他管理员。第一位管理员需要在云开发控制台数据库中登记（详见说明）。',
             style: TextStyle(fontSize: 12, color: sTextSec, height: 1.6),
           ),
@@ -237,7 +238,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                 Icon(Icons.admin_panel_settings_outlined,
                     size: 48, color: sTextHint.withValues(alpha: 0.6)),
                 const SizedBox(height: 14),
-                const Text('暂无管理员',
+                Text('暂无管理员',
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -250,7 +251,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
         const SizedBox(height: 28),
         Row(
           children: [
-            const Text('公告管理',
+            Text('公告管理',
                 style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
@@ -282,7 +283,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
               color: sCard,
               borderRadius: BorderRadius.circular(16),
             ),
-            child: const Column(
+            child: Column(
               children: [
                 Icon(Icons.campaign_outlined,
                     size: 36, color: sTextHint),
@@ -335,7 +336,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                         item.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: sText),
@@ -345,13 +346,13 @@ class _AdminManagePageState extends State<AdminManagePage> {
                         item.content,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 13, color: sTextSec, height: 1.5),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         _formatTime(item.createdAt),
-                        style: const TextStyle(fontSize: 11, color: sTextHint),
+                        style: TextStyle(fontSize: 11, color: sTextHint),
                       ),
                     ],
                   ),
@@ -408,7 +409,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                 item.username.isNotEmpty
                     ? item.username.characters.first
                     : '?',
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: sGold),
               ),
             ),
@@ -424,7 +425,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                           name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
                               color: sText),
@@ -439,7 +440,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                             color: sTextHint.withValues(alpha: 0.2),
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: const Text('我',
+                          child: Text('我',
                               style: TextStyle(
                                   fontSize: 10, color: sTextSec)),
                         ),
@@ -453,7 +454,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                         : 'ID ${item.uid}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: sTextHint),
+                    style: TextStyle(fontSize: 11, color: sTextHint),
                   ),
                 ],
               ),
@@ -510,7 +511,7 @@ class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('发布公告',
+              Text('发布公告',
                   style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -520,10 +521,10 @@ class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
                 controller: _titleController,
                 autofocus: true,
                 maxLength: 60,
-                style: const TextStyle(fontSize: 15, color: sText),
+                style: TextStyle(fontSize: 15, color: sText),
                 decoration: InputDecoration(
                   hintText: '公告标题',
-                  hintStyle: const TextStyle(color: sTextHint),
+                  hintStyle: TextStyle(color: sTextHint),
                   filled: true,
                   fillColor: sBg,
                   counterText: '',
@@ -539,10 +540,10 @@ class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
                 maxLength: 2000,
                 minLines: 3,
                 maxLines: 6,
-                style: const TextStyle(fontSize: 14, color: sText),
+                style: TextStyle(fontSize: 14, color: sText),
                 decoration: InputDecoration(
                   hintText: '公告内容…',
-                  hintStyle: const TextStyle(color: sTextHint),
+                  hintStyle: TextStyle(color: sTextHint),
                   filled: true,
                   fillColor: sBg,
                   border: OutlineInputBorder(
@@ -559,7 +560,7 @@ class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
                       onPressed: () => Navigator.pop(context),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: sTextSec,
-                        side: const BorderSide(color: Color(0xFFEBE1D6)),
+                        side: BorderSide(color: AppPalette.p.border),
                         minimumSize: const Size(0, 44),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),

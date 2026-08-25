@@ -14,16 +14,15 @@ import 'cloud_notes_service.dart';
 import 'note_sutra_links.dart';
 import 'settings_widgets.dart';
 
-const Color _enPrimary = Color(0xFF5C4033);
-const Color _enPrimaryLight = Color(0xFF8B6B5A);
-const Color _enText = Color(0xFF3E2723);
-const Color _enTextSec = Color(0xFF8B6B5A);
-const Color _enTextHint = Color(0xFFC4B5A8);
-const Color _enBorder = Color(0xFFEBE1D6);
-const Color _enCard = Color(0xFFFFFAF5);
-const Color _enBg = Color(0xFFF5EDE3);
-
-/// 导出笔记：把当前用户自己发布的帖子按年份汇总导出为 PDF。
+import 'app_palette.dart';
+Color get _enPrimary => AppPalette.p.primary;
+Color get _enPrimaryLight => AppPalette.p.textSec;
+Color get _enText => AppPalette.p.text;
+Color get _enTextSec => AppPalette.p.textSec;
+Color get _enTextHint => AppPalette.p.textHint;
+Color get _enBorder => AppPalette.p.border;
+Color get _enCard => AppPalette.p.card;
+Color get _enBg => AppPalette.p.bg;
 /// 进入时拉取全部帖子并按年份分组，可勾选年份，亦可“全部导出”。
 class ExportNotesPage extends StatefulWidget {
   const ExportNotesPage({super.key});
@@ -154,11 +153,11 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const Icon(Icons.error_outline, size: 48, color: _enPrimaryLight),
+        Icon(Icons.error_outline, size: 48, color: _enPrimaryLight),
         const SizedBox(height: 12),
         Text(_error ?? '',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: _enTextSec)),
+            style: TextStyle(fontSize: 14, color: _enTextSec)),
         const SizedBox(height: 24),
         ElevatedButton(
           onPressed: _load,
@@ -177,7 +176,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
   Widget _buildEmpty() {
     return ListView(
       padding: const EdgeInsets.all(24),
-      children: const [
+      children: [
         SizedBox(height: 40),
         Icon(Icons.menu_book_outlined, size: 56, color: _enTextHint),
         SizedBox(height: 16),
@@ -204,7 +203,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
                 child: Text(
                   '你的笔记都已经保存在云端，账号不丢失，数据就会保存；但如果你想保存到本地，可以选择导出pdf文件，永久保存。',
-                  style: const TextStyle(fontSize: 12, color: _enTextHint),
+                  style: TextStyle(fontSize: 12, color: _enTextHint),
                 ),
               ),
               SettingsCard(
@@ -223,7 +222,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
                         children: [
                           _radioBox(_selectAll),
                           const SizedBox(width: 12),
-                          const Expanded(
+                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -240,7 +239,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
                             ),
                           ),
                           Text('$_totalCount 篇',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 13, color: _enTextSec)),
                         ],
                       ),
@@ -251,7 +250,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
                     padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
                     child: Text(
                       '按年份选择',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
                           color: _enTextSec,
                           fontWeight: FontWeight.w600),
@@ -296,14 +295,14 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
             const SizedBox(width: 12),
             Expanded(
               child: Text('$year 年',
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 16,
                       color: _enText,
                       fontWeight: FontWeight.w500)),
             ),
             Text('$count 篇',
                 style:
-                    const TextStyle(fontSize: 13, color: _enTextSec)),
+                    TextStyle(fontSize: 13, color: _enTextSec)),
           ],
         ),
       ),
@@ -334,7 +333,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
       top: false,
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: _enCard,
           border: Border(top: BorderSide(color: _enBorder, width: 0.5)),
         ),
@@ -345,7 +344,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
                 _selectAll
                     ? '将导出全部 $_totalCount 篇帖子'
                     : '已选 ${_selected.length} 年，共 $_selectedCount 篇',
-                style: const TextStyle(fontSize: 13, color: _enTextSec),
+                style: TextStyle(fontSize: 13, color: _enTextSec),
               ),
             ),
             const SizedBox(width: 12),
@@ -717,7 +716,7 @@ class _PdfViewerPageState extends State<_PdfViewerPage> {
           : _error != null
               ? _buildError()
               : _pages.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text('该 PDF 无可显示内容',
                           style: TextStyle(color: _enTextSec)),
                     )
@@ -760,13 +759,13 @@ class _PdfViewerPageState extends State<_PdfViewerPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.broken_image_outlined,
+            Icon(Icons.broken_image_outlined,
                 size: 48, color: _enTextSec),
             const SizedBox(height: 12),
             Text(_error ?? '',
                 textAlign: TextAlign.center,
                 style:
-                    const TextStyle(fontSize: 14, color: _enTextSec)),
+                    TextStyle(fontSize: 14, color: _enTextSec)),
           ],
         ),
       ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'settings_widgets.dart';
 
+import 'app_palette.dart';
 /// 经文阅读页「使用说明」：告诉用户阅读页的三个实用小技巧。
 class ReadingGuidePage extends StatelessWidget {
   const ReadingGuidePage({super.key});
@@ -52,10 +53,10 @@ class _GuideBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFF3E8DB), Color(0xFFFFF6EC)],
+          colors: [AppPalette.p.gradTop, AppPalette.p.tintBg],
         ),
         borderRadius: BorderRadius.circular(20),
       ),
@@ -75,10 +76,10 @@ class _GuideBanner extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Icon(Icons.menu_book, color: sGold, size: 32),
+            child: Icon(Icons.menu_book, color: sGold, size: 32),
           ),
           const SizedBox(width: 16),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -128,7 +129,7 @@ class _StepTitle extends StatelessWidget {
         const SizedBox(width: 8),
         Text(
           text,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,
             color: sText,
@@ -176,7 +177,7 @@ class _GuideCard extends StatelessWidget {
             width: 34,
             height: 34,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: sGold,
               shape: BoxShape.circle,
             ),
@@ -201,7 +202,7 @@ class _GuideCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                           color: sText,
@@ -213,7 +214,7 @@ class _GuideCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   content,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     color: sTextSec,
                     height: 1.7,
@@ -240,7 +241,7 @@ class _HelpNote extends StatelessWidget {
         color: sGold.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: const Row(
+      child: Row(
         children: [
           Icon(Icons.lightbulb_outline, size: 18, color: sGold),
           SizedBox(width: 10),

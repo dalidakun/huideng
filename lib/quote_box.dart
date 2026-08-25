@@ -8,14 +8,13 @@ import 'reading_badges.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _border = Color(0xFFEBE1D6);
-const Color _primaryLight = Color(0xFF8B6B5A);
-
-/// 被转发/被回复原帖的引用框（列表与详情共用同一样式）：
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _border => AppPalette.p.border;
+Color get _primaryLight => AppPalette.p.textSec;
 /// 线框包裹，内部为头像 + 昵称 + @账号 + 内容（最多3行）+ 时间戳。
 class QuoteBox extends StatefulWidget {
   final PlazaNote note;
@@ -98,7 +97,7 @@ class _QuoteBoxState extends State<QuoteBox> {
             borderRadius: BorderRadius.circular(8),
             color: _bg,
           ),
-          child: const Row(
+          child: Row(
             children: [
               Icon(Icons.block, size: 16, color: _textSec),
               SizedBox(width: 8),
@@ -168,7 +167,7 @@ class _QuoteBoxState extends State<QuoteBox> {
                           child: Text(showName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600,
                                   color: _text)),
@@ -213,7 +212,7 @@ class _QuoteBoxState extends State<QuoteBox> {
               Text(content,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 15, color: _text, height: 1.6)),
             ],
             // 原帖发布时间：内容下方。

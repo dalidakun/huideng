@@ -6,15 +6,14 @@ import 'package:flutter/services.dart';
 import 'auth_service.dart';
 import 'forgot_password_page.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _gold = Color(0xFFD4A06A);
-
-/// 手机号 + 验证码登录/注册页。
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _gold => AppPalette.p.accent;
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -33,6 +32,12 @@ class _LoginPageState extends State<LoginPage> {
   bool _loggingIn = false;
   bool _showPwd = false;
 
+  /// 登录页自身路由：成功后用 removeRoute 精确移除本页。
+  /// 背景：全局未处理异常会把「错误详情」页 push 到登录页之上；
+  /// 若用 Navigator.pop()，弹掉的是压在上面的错误页而非登录页，
+  /// 表现为「闪现错误页 → 自动关闭 → 又回到登录页」，需再点一次登录。
+  ModalRoute? _ownRoute;
+
   /// 登录方式：0 = 手机号验证码，1 = 账号名称 + 密码。
   int _mode = 0;
 
@@ -44,6 +49,20 @@ class _LoginPageState extends State<LoginPage> {
     _accountController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ownRoute ??= ModalRoute.of(context);
+  }
+
+  /// 只移除登录页自身，无论它上面是否压着其它路由（如错误详情页）。
+  void _closeSelf() {
+    final route = _ownRoute;
+    if (route != null && route.isActive) {
+      Navigator.of(context).removeRoute(route);
+    }
   }
 
   String get _phone {
@@ -108,7 +127,7 @@ class _LoginPageState extends State<LoginPage> {
           .loginWithSmsCode(_phone, _codeController.text.trim());
       if (mounted) {
         _showToast('登录成功');
-        Navigator.of(context).pop();
+        _closeSelf();
       }
     } catch (e) {
       final msg = e is AuthException ? e.message : e.toString();
@@ -135,7 +154,7 @@ class _LoginPageState extends State<LoginPage> {
       );
       if (mounted) {
         _showToast(registered ? '注册成功，请牢记账号密码' : '登录成功');
-        Navigator.of(context).pop();
+        _closeSelf();
       }
     } catch (e) {
       final msg = e is AuthException ? e.message : e.toString();
@@ -159,7 +178,7 @@ class _LoginPageState extends State<LoginPage> {
       context,
       MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
     );
-    if (ok == true && mounted) Navigator.of(context).pop();
+    if (ok == true && mounted) _closeSelf();
   }
 
   Future<void> _copyCredentials() async {
@@ -224,7 +243,7 @@ class _LoginPageState extends State<LoginPage> {
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: const Text('登录',
+        title: Text('登录',
             style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: SingleChildScrollView(
@@ -261,7 +280,7 @@ class _LoginPageState extends State<LoginPage> {
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
                 maxLength: 11,
-                style: const TextStyle(fontSize: 16, color: _text),
+                style: TextStyle(fontSize: 16, color: _text),
                 decoration: InputDecoration(
                   counterText: '',
                   hintText: '请输入手机号',
@@ -289,7 +308,7 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _codeController,
                       keyboardType: TextInputType.number,
                       maxLength: 6,
-                      style: const TextStyle(fontSize: 16, color: _text),
+                      style: TextStyle(fontSize: 16, color: _text),
                       decoration: InputDecoration(
                         counterText: '',
                         hintText: '6 位验证码',
@@ -335,7 +354,7 @@ class _LoginPageState extends State<LoginPage> {
               TextField(
                 controller: _accountController,
                 maxLength: 20,
-                style: const TextStyle(fontSize: 16, color: _text),
+                style: TextStyle(fontSize: 16, color: _text),
                 decoration: InputDecoration(
                   counterText: '',
                   hintText: '账号',
@@ -359,7 +378,7 @@ class _LoginPageState extends State<LoginPage> {
                 controller: _passwordController,
                 obscureText: !_showPwd,
                 maxLength: 64,
-                style: const TextStyle(fontSize: 16, color: _text),
+                style: TextStyle(fontSize: 16, color: _text),
                 decoration: InputDecoration(
                   counterText: '',
                   hintText: '密码',
@@ -450,7 +469,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
                     ),
-                    const Text(
+                    Text(
                       ' 到微信收藏，方便保存记忆',
                       style: TextStyle(fontSize: 12, color: _textSec),
                     ),
@@ -471,7 +490,7 @@ class _LoginPageState extends State<LoginPage> {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 6),
-                      child: const Text(
+                      child: Text(
                         '忘记密码？',
                         style: TextStyle(
                           fontSize: 13,

@@ -18,6 +18,11 @@ import 'sutra_favorites.dart';
 import 'favorite_sutras_page.dart';
 import 'recent_sutras_page.dart';
 
+import 'app_palette.dart';
+/// 素白外观下「继续阅读」按钮底色与进度条填充色：比纯黑柔和的深灰，
+/// 避免大面积纯黑压在白底上过于突兀（介于正文 #1C1C1C 与次要文字 #666 之间）。
+const Color _kPlainInkSoft = Color(0xFF4A4A4A);
+
 /// 用于监听路由返回（例如从阅读页 pop 回来时刷新“最近阅读”）。
 final RouteObserver<ModalRoute<void>> routeObserver =
     RouteObserver<ModalRoute<void>>();
@@ -474,7 +479,7 @@ class SutraListPageState extends State<SutraListPage>
               child: const Text('取消'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD4A06A)),
+              style: FilledButton.styleFrom(backgroundColor: AppPalette.p.accent),
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('阅读'),
             ),
@@ -901,10 +906,10 @@ class SutraListPageState extends State<SutraListPage>
   /// 「回到经部」浮动按钮：圆形底色 + 上箭头，与页面暖色调协调。
   Widget _buildScrollToFolderButton() {
     return Material(
-      color: const Color(0xFFD4A06A),
+      color: AppPalette.p.accent,
       shape: const CircleBorder(),
       elevation: 3,
-      shadowColor: const Color(0xFF5d4037).withValues(alpha: 0.3),
+      shadowColor: AppPalette.p.primary.withValues(alpha: 0.3),
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: _scrollToRandomFolder,
@@ -1602,7 +1607,7 @@ class SutraListPageState extends State<SutraListPage>
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: Material(
-        color: const Color(0xFFFFFAF5),
+        color: AppPalette.p.card,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -1617,7 +1622,9 @@ class SutraListPageState extends State<SutraListPage>
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1628,19 +1635,19 @@ class SutraListPageState extends State<SutraListPage>
                     width: 24,
                     height: 24,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF5d4037).withValues(alpha: 0.1),
+                      color: AppPalette.p.primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(7),
                     ),
-                    child: const Icon(Icons.play_circle_fill, color: Color(0xFF5d4037), size: 15),
+                    child: Icon(Icons.play_circle_fill, color: AppPalette.p.primary, size: 15),
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      '继续阅读',
+                      '最近阅读',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Color(0xFF5d4037),
+                        color: AppPalette.p.primary,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1651,23 +1658,34 @@ class SutraListPageState extends State<SutraListPage>
                     onTap: _openLastRead,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      // 素白用柔和深灰底（不用纯黑，避免突兀）；暖黄用本区块
+                      // 进度条「已读填充色」（accent）同款深色，无边框线；
+                      // 文字用深棕保证在金棕底上可读。
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE5A12E),
+                        color: AppPalette.instance.isPlain
+                            ? _kPlainInkSoft
+                            : AppPalette.p.accent,
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            '立即进入',
+                            '继续阅读',
                             style: TextStyle(
-                              color: Color(0xFF3E2723),
+                              color: AppPalette.instance.isPlain
+                                  ? Colors.white
+                                  : AppPalette.p.primary,
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
                           SizedBox(width: 2),
-                          Icon(Icons.arrow_forward, color: Color(0xFF3E2723), size: 12),
+                          Icon(Icons.arrow_forward,
+                              color: AppPalette.instance.isPlain
+                                  ? Colors.white
+                                  : AppPalette.p.primary,
+                              size: 12),
                         ],
                       ),
                     ),
@@ -1680,28 +1698,40 @@ class SutraListPageState extends State<SutraListPage>
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: isRead ? const Color(0xFF71867A) : const Color(0xFF3E2723),
+                  color: isRead ? const Color(0xFF71867A) : AppPalette.p.text,
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(height: 10),
+              // 进度条占满整行；百分比移到其下方、贴区块右下角，
+              // 颜色与顶部「阅藏进度」大百分比一致（素白为深色文字）。
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
                   value: _lastReadProgress.clamp(0.0, 1.0),
                   minHeight: 6,
-                  backgroundColor: const Color(0xFF5d4037).withValues(alpha: 0.16),
-                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFD4A06A)),
+                  backgroundColor:
+                      AppPalette.p.primary.withValues(alpha: 0.16),
+                  // 素白外观下填充用柔和深灰（不用纯黑）；暖黄保持金棕。
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                      AppPalette.instance.isPlain
+                          ? _kPlainInkSoft
+                          : AppPalette.p.accent),
                 ),
               ),
-              const SizedBox(height: 6),
-              Text(
-                '已读 ${pct.toStringAsFixed(1)}%',
-                style: const TextStyle(
-                  color: Color(0xFFB8860B),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '已读 ${pct.toStringAsFixed(1)}%',
+                  style: TextStyle(
+                    color: AppPalette.instance.isPlain
+                        ? AppPalette.p.text
+                        : const Color(0xFFB8860B),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -1742,7 +1772,7 @@ class SutraListPageState extends State<SutraListPage>
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE8E0D5), width: 0.8),
+        border: Border.all(color: AppPalette.p.borderSoft, width: 0.8),
       ),
       child: TextField(
         controller: _searchController,
@@ -1782,19 +1812,35 @@ class SutraListPageState extends State<SutraListPage>
       );
     }
     const milestones = [25, 50, 75, 100];
-    final remainVolumes = total - read;
+    // 素白外观：纯白底 + 深色内容，无渐变无阴影色块；暖黄保持棕金渐变。
+    final isPlain = AppPalette.instance.isPlain;
+    final headColor =
+        isPlain ? AppPalette.p.text : const Color(0xFF4E342E);
+    final pctColor = isPlain ? AppPalette.p.text : Colors.white;
+    final markActive = isPlain ? AppPalette.p.text : Colors.white;
+    final markIdle =
+        isPlain ? AppPalette.p.textHint : Colors.white.withValues(alpha: 0.6);
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF8D6E63), Color(0xFFBCAAA4)],
-        ),
+        gradient: isPlain
+            ? null
+            : const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF8D6E63), Color(0xFFBCAAA4)],
+              ),
+        color: isPlain ? Colors.white : null,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: const Color(0xFF8D6E63).withValues(alpha: 0.25), blurRadius: 10, offset: const Offset(0, 3)),
+          BoxShadow(
+            color: isPlain
+                ? Colors.black.withValues(alpha: 0.04)
+                : const Color(0xFF8D6E63).withValues(alpha: 0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
         ],
       ),
       child: Column(
@@ -1802,14 +1848,18 @@ class SutraListPageState extends State<SutraListPage>
         children: [
           Row(
             children: [
-              const Icon(Icons.auto_stories, color: Color(0xFF4E342E), size: 16),
+              Icon(Icons.auto_stories, color: headColor, size: 16),
               const SizedBox(width: 6),
-              const Text('阅藏进度', style: TextStyle(color: Color(0xFF4E342E), fontSize: 13, fontWeight: FontWeight.w600)),
+              Text('阅藏进度',
+                  style: TextStyle(
+                      color: headColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
               const Spacer(),
               Text(
                 '${pct.toStringAsFixed(2)}%',
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: pctColor,
                   fontSize: 24,
                   fontWeight: FontWeight.w800,
                   height: 1,
@@ -1829,17 +1879,22 @@ class SutraListPageState extends State<SutraListPage>
                   Container(
                     height: 10,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF5d4037).withValues(alpha: 0.16),
+                      color: AppPalette.p.primary.withValues(alpha: 0.16),
                       borderRadius: BorderRadius.circular(5),
                     ),
                   ),
-                  if (pct > 0)
+                  // 进度填充：进度过小（<1%）时不渲染，否则会在左端点
+                  // 呈现一条形似刻度的小竖杠；只保留 25/50/75 三个中间刻度。
+                  if (pct >= 1)
                     FractionallySizedBox(
                       widthFactor: pct / 100,
                       child: Container(
                         height: 10,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFD4A06A),
+                          // 素白外观下填充用柔和深灰（不用纯黑）；暖黄保持金棕。
+                          color: isPlain
+                              ? _kPlainInkSoft
+                              : AppPalette.p.accent,
                           borderRadius: BorderRadius.circular(5),
                         ),
                       ),
@@ -1852,7 +1907,7 @@ class SutraListPageState extends State<SutraListPage>
                         bottom: 2,
                         child: Container(
                           width: 1.5,
-                          color: const Color(0xFF5d4037).withValues(alpha: 0.55),
+                          color: AppPalette.p.primary.withValues(alpha: 0.55),
                         ),
                       ),
                 ],
@@ -1869,23 +1924,34 @@ class SutraListPageState extends State<SutraListPage>
                 child: ClipRect(
                   child: Stack(
                     children: [
+                      // 起点刻度「0%」：贴进度条左端（终点「圆满」对称贴右端），
+                      // 样式与未达成的百分比刻度一致（灰色常规字重）。
+                      Positioned(
+                        left: 0,
+                        top: 1,
+                        child: Text(
+                          '0%',
+                          style: TextStyle(
+                            color: markIdle,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
                       for (final m in milestones)
                         if (m == 100)
                           Positioned(
                             right: 0,
                             top: 1,
                             child: Text(
-                              '圆满',
-                              style: TextStyle(
-                                color: pct >= m
-                                    ? Colors.white
-                                    : Colors.white.withValues(alpha: 0.6),
-                                fontSize: 11,
-                                fontWeight: pct >= m
-                                    ? FontWeight.w700
-                                    : FontWeight.normal,
-                              ),
+                            '圆满',
+                            style: TextStyle(
+                              color: pct >= m ? markActive : markIdle,
+                              fontSize: 11,
+                              fontWeight: pct >= m
+                                  ? FontWeight.w700
+                                  : FontWeight.normal,
                             ),
+                          ),
                           )
                         else
                           Positioned(
@@ -1896,9 +1962,7 @@ class SutraListPageState extends State<SutraListPage>
                               child: Text(
                                 '$m%',
                                 style: TextStyle(
-                                  color: pct >= m
-                                      ? Colors.white
-                                      : Colors.white.withValues(alpha: 0.6),
+                                  color: pct >= m ? markActive : markIdle,
                                   fontSize: 11,
                                   fontWeight: pct >= m
                                       ? FontWeight.w700
@@ -1914,18 +1978,10 @@ class SutraListPageState extends State<SutraListPage>
             },
           ),
           const SizedBox(height: 10),
+          // 统计信息一行显示，与进度条左对齐。
           Text(
-            '已阅 $read 册 · 共 ${_folders.length} 部 · $total 册',
-            style: const TextStyle(color: Color(0xFF4E342E), fontSize: 12),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '已读 $_readDays 天 · 今日已读 $_todayReadCount 册 · 剩余 $remainVolumes 册',
-            style: const TextStyle(
-              color: Color(0xFF5d4037),
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
+            '已阅$read/$total册    已读$_readDays天    今日$_todayReadCount册',
+            style: TextStyle(color: headColor, fontSize: 12),
           ),
         ],
       ),
@@ -1949,10 +2005,10 @@ class SutraListPageState extends State<SutraListPage>
         child: Container(
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [Color(0xFF5d4037), Color(0xFF7a5c4e)],
+              colors: [AppPalette.p.primary, Color(0xFF7a5c4e)],
             ),
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
@@ -1966,8 +2022,8 @@ class SutraListPageState extends State<SutraListPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.emoji_events_rounded,
-                  color: Color(0xFFE8C48A), size: 56),
+              Icon(Icons.emoji_events_rounded,
+                  color: AppPalette.p.accent, size: 56),
               const SizedBox(height: 12),
               const Text(
                 '阅藏圆满',
@@ -1978,10 +2034,10 @@ class SutraListPageState extends State<SutraListPage>
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '功德无量',
                 style: TextStyle(
-                  color: Color(0xFFE8C48A),
+                  color: AppPalette.p.accent,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
@@ -1994,8 +2050,8 @@ class SutraListPageState extends State<SutraListPage>
               const SizedBox(height: 18),
               FilledButton(
                 style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFE8C48A),
-                  foregroundColor: const Color(0xFF5d4037),
+                  backgroundColor: AppPalette.p.accent,
+                  foregroundColor: AppPalette.p.primary,
                 ),
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text(
@@ -2015,15 +2071,24 @@ class SutraListPageState extends State<SutraListPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 24, 14, 12),
+          // 素白外观下黑色图案离屏幕左缘太近，往右移保持整体协调（暖黄不变）。
+          padding: EdgeInsets.fromLTRB(
+              AppPalette.instance.isPlain ? 20 : 14, 24, 14, 12),
           child: Row(
             children: [
-              const Icon(Icons.grid_view_rounded, color: Color(0xFFba8e82), size: 18),
+              Icon(
+                Icons.grid_view_rounded,
+                // 素白外观下图标用黑色，暖黄保持粉棕。
+                color: AppPalette.instance.isPlain
+                    ? const Color(0xFF1A1A1A)
+                    : const Color(0xFFba8e82),
+                size: 18,
+              ),
               const SizedBox(width: 6),
-              const Text(
+              Text(
                 '经典入口',
                 style: TextStyle(
-                  color: Color(0xFF5d4037),
+                  color: AppPalette.p.primary,
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
@@ -2079,7 +2144,7 @@ class SutraListPageState extends State<SutraListPage>
   /// 全部经典通栏窄条：点击展开全部部类浏览。
   Widget _buildAllSutrasBar() {
     return Material(
-      color: const Color(0xFFFFFAF5),
+      color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2095,7 +2160,9 @@ class SutraListPageState extends State<SutraListPage>
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Row(
             children: [
@@ -2103,17 +2170,17 @@ class SutraListPageState extends State<SutraListPage>
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF8B6B5A).withValues(alpha: 0.12),
+                  color: AppPalette.p.textSec.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.menu_book_rounded, size: 16, color: Color(0xFF8B6B5A)),
+                child: Icon(Icons.menu_book_rounded, size: 16, color: AppPalette.p.textSec),
               ),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Text(
                   '全部经典',
                   style: TextStyle(
-                    color: Color(0xFF5d4037),
+                    color: AppPalette.p.primary,
                     fontSize: 13.5,
                     fontWeight: FontWeight.w600,
                   ),
@@ -2124,7 +2191,7 @@ class SutraListPageState extends State<SutraListPage>
                 style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.chevron_right, color: Color(0xFFC4B5A8), size: 16),
+              Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 16),
             ],
           ),
         ),
@@ -2135,7 +2202,7 @@ class SutraListPageState extends State<SutraListPage>
   /// 「换一部」按钮：刷新图标 + 文案，随机轮换一部，将该部经书全部展开显示。
   Widget _buildChangeFolderButton() {
     return Material(
-      color: const Color(0xFFFFFAF5),
+      color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2150,7 +2217,9 @@ class SutraListPageState extends State<SutraListPage>
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -2181,7 +2250,7 @@ class SutraListPageState extends State<SutraListPage>
     return Container(
       key: _randomFolderKey,
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFAF5),
+        color: AppPalette.p.card,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -2196,8 +2265,8 @@ class SutraListPageState extends State<SutraListPage>
                     name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF5d4037),
+                    style: TextStyle(
+                      color: AppPalette.p.primary,
                       fontSize: 13.5,
                       fontWeight: FontWeight.w700,
                     ),
@@ -2210,7 +2279,7 @@ class SutraListPageState extends State<SutraListPage>
               ],
             ),
           ),
-          const Divider(height: 1, thickness: 0.6, color: Color(0xFFEFE6DA)),
+          Divider(height: 1, thickness: 0.6, color: AppPalette.p.borderSoft),
           if (sutras.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 20),
@@ -2232,7 +2301,7 @@ class SutraListPageState extends State<SutraListPage>
   /// 我的收藏宫格：仅入口（跳转收藏列表）。
   Widget _buildFavoriteTile() {
     return Material(
-      color: const Color(0xFFFFFAF5),
+      color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2248,7 +2317,9 @@ class SutraListPageState extends State<SutraListPage>
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Row(
             children: [
@@ -2256,25 +2327,25 @@ class SutraListPageState extends State<SutraListPage>
                 width: 24,
                 height: 24,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFD4A06A).withValues(alpha: 0.15),
+                  color: AppPalette.p.accent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(7),
                 ),
-                child: const Icon(Icons.star_rounded, size: 14, color: Color(0xFFD4A06A)),
+                child: Icon(Icons.star_rounded, size: 14, color: AppPalette.p.accent),
               ),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
                   '我的收藏',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Color(0xFF5d4037),
+                    color: AppPalette.p.primary,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Color(0xFFC4B5A8), size: 14),
+              Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 14),
             ],
           ),
         ),
@@ -2285,7 +2356,7 @@ class SutraListPageState extends State<SutraListPage>
   /// 最近阅读宫格：仅入口（跳转最近阅读列表）。
   Widget _buildRecentTile() {
     return Material(
-      color: const Color(0xFFFFFAF5),
+      color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2301,7 +2372,9 @@ class SutraListPageState extends State<SutraListPage>
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Row(
             children: [
@@ -2309,25 +2382,25 @@ class SutraListPageState extends State<SutraListPage>
                 width: 24,
                 height: 24,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF5d4037).withValues(alpha: 0.1),
+                  color: AppPalette.p.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(7),
                 ),
-                child: const Icon(Icons.history_rounded, size: 14, color: Color(0xFF5d4037)),
+                child: Icon(Icons.history_rounded, size: 14, color: AppPalette.p.primary),
               ),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
                   '最近阅读',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Color(0xFF5d4037),
+                    color: AppPalette.p.primary,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Color(0xFFC4B5A8), size: 14),
+              Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 14),
             ],
           ),
         ),
@@ -2352,7 +2425,7 @@ class SutraListPageState extends State<SutraListPage>
       if (sutra?.size != null && sutra!.size.isNotEmpty) sutra.size,
     ].join(' · ');
     return Material(
-      color: const Color(0xFFFFFAF5),
+      color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2369,7 +2442,9 @@ class SutraListPageState extends State<SutraListPage>
           padding: const EdgeInsets.fromLTRB(12, 10, 10, 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2383,16 +2458,23 @@ class SutraListPageState extends State<SutraListPage>
                       color: const Color(0xFF71867A).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(7),
                     ),
-                    child: const Icon(Icons.casino_rounded, size: 14, color: Color(0xFF71867A)),
+                    child: Icon(
+                      Icons.casino_rounded,
+                      size: 14,
+                      // 素白外观下图标用黑色，暖黄保持青绿。
+                      color: AppPalette.instance.isPlain
+                          ? const Color(0xFF1A1A1A)
+                          : const Color(0xFF71867A),
+                    ),
                   ),
                   const SizedBox(width: 6),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       '随缘读经',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Color(0xFF5d4037),
+                        color: AppPalette.p.primary,
                         fontSize: 12.5,
                         fontWeight: FontWeight.w600,
                       ),
@@ -2434,7 +2516,7 @@ class SutraListPageState extends State<SutraListPage>
                 style: TextStyle(
                   color: sutra != null && sutra.isRead
                       ? const Color(0xFF71867A)
-                      : const Color(0xFF3E2723),
+                      : AppPalette.p.text,
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                   height: 1.4,
@@ -2446,8 +2528,8 @@ class SutraListPageState extends State<SutraListPage>
                   info,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF8B6B5A),
+                  style: TextStyle(
+                    color: AppPalette.p.textSec,
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
                     height: 1.4,
@@ -2462,10 +2544,13 @@ class SutraListPageState extends State<SutraListPage>
                   children: [
                     if (sutra != null) _buildRandomDownloadIndicator(sutra),
                     const SizedBox(width: 6),
-                    const Text(
+                    Text(
                       '开始阅读 ›',
                       style: TextStyle(
-                        color: Color(0xFFE5A12E),
+                        // 素白外观下按钮文字用黑色，暖黄保持金橙。
+                        color: AppPalette.instance.isPlain
+                            ? const Color(0xFF1A1A1A)
+                            : const Color(0xFFE5A12E),
                         fontSize: 11.5,
                         fontWeight: FontWeight.w600,
                       ),
@@ -2513,7 +2598,7 @@ class SutraListPageState extends State<SutraListPage>
     final pct = total == 0 ? 0.0 : read / total * 100;
     final name = _folderDisplayNames[folder] ?? folder;
     return Material(
-      color: const Color(0xFFFFFAF5),
+      color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2534,7 +2619,9 @@ class SutraListPageState extends State<SutraListPage>
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFEFE6DA), width: 0.8),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2549,8 +2636,8 @@ class SutraListPageState extends State<SutraListPage>
                       name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF5d4037),
+                      style: TextStyle(
+                        color: AppPalette.p.primary,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
@@ -2559,8 +2646,8 @@ class SutraListPageState extends State<SutraListPage>
                   const SizedBox(width: 6),
                   Text(
                     '已读 ${pct.toStringAsFixed(0)}%',
-                    style: const TextStyle(
-                      color: Color(0xFFD4A06A),
+                    style: TextStyle(
+                      color: AppPalette.p.accent,
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
@@ -2573,14 +2660,14 @@ class SutraListPageState extends State<SutraListPage>
                 child: LinearProgressIndicator(
                   value: total == 0 ? 0 : read / total,
                   minHeight: 8,
-                  backgroundColor: const Color(0xFFF0E6D8),
-                  color: const Color(0xFFD4A06A),
+                  backgroundColor: AppPalette.p.tintBg,
+                  color: AppPalette.p.accent,
                 ),
               ),
               const SizedBox(height: 8),
               Text(
                 '共 $total 册 · 已阅 $read 册',
-                style: const TextStyle(color: Color(0xFF8B6B5A), fontSize: 11),
+                style: TextStyle(color: AppPalette.p.textSec, fontSize: 11),
               ),
             ],
           ),
@@ -2615,7 +2702,7 @@ class SutraListPageState extends State<SutraListPage>
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFAF5),
+        color: AppPalette.p.card,
         borderRadius: BorderRadius.circular(8),
       ),
       child: ListTile(
@@ -2627,7 +2714,7 @@ class SutraListPageState extends State<SutraListPage>
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: sutra.isRead ? const Color(0xFF71867A) : const Color(0xFF5d4037),
+            color: sutra.isRead ? const Color(0xFF71867A) : AppPalette.p.primary,
             fontSize: 14.5,
             fontWeight: sutra.isRead ? FontWeight.w600 : FontWeight.w500,
           ),
@@ -2659,12 +2746,12 @@ class SutraListPageState extends State<SutraListPage>
             color: const Color(0xFFcec6c3),
             child: Row(
               children: [
-                Icon(icon, color: const Color(0xFF5d4037), size: 20),
+                Icon(icon, color: AppPalette.p.primary, size: 20),
                 const SizedBox(width: 8),
                 Text(
                   '$title (${sutras.length})',
-                  style: const TextStyle(
-                    color: Color(0xFF5d4037),
+                  style: TextStyle(
+                    color: AppPalette.p.primary,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -2740,9 +2827,9 @@ class SutraListPageState extends State<SutraListPage>
     return Stack(
       children: [
         Scaffold(
-          backgroundColor: const Color(0xFFF5EDE3),
+          backgroundColor: AppPalette.p.bg,
           appBar: AppBar(
-            backgroundColor: const Color(0xFFF5EDE3),
+            backgroundColor: AppPalette.p.bg,
             elevation: 0,
             shadowColor: Colors.transparent,
             iconTheme: const IconThemeData(color: Color(0xFF212121)),
@@ -2761,8 +2848,8 @@ class SutraListPageState extends State<SutraListPage>
               children: [
                 Text(
                   _searchActive ? '搜索' : '经藏',
-                  style: const TextStyle(
-                    color: Color(0xFF5d4037),
+                  style: TextStyle(
+                    color: AppPalette.p.primary,
                     fontSize: 17,
                     fontWeight: FontWeight.w700,
                   ),
@@ -2909,12 +2996,12 @@ class SutraListPageState extends State<SutraListPage>
               padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
               child: Row(
                 children: [
-                  const Text(
+                  Text(
                     '经藏',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF5d4037),
+                      color: AppPalette.p.primary,
                     ),
                   ),
                   const Spacer(),
@@ -2956,11 +3043,11 @@ class SutraListPageState extends State<SutraListPage>
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.upload_file, color: Color(0xFF5d4037), size: 20),
-                    title: const Text(
+                    leading: Icon(Icons.upload_file, color: AppPalette.p.primary, size: 20),
+                    title: Text(
                       '导入经书（TXT）',
                       style: TextStyle(
-                        color: Color(0xFF5d4037),
+                        color: AppPalette.p.primary,
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
                       ),
@@ -2971,11 +3058,11 @@ class SutraListPageState extends State<SutraListPage>
                     },
                   ),
                   ListTile(
-                    leading: const Icon(Icons.error_outline, color: Color(0xFF5d4037), size: 20),
-                    title: const Text(
+                    leading: Icon(Icons.error_outline, color: AppPalette.p.primary, size: 20),
+                    title: Text(
                       '缺失经文',
                       style: TextStyle(
-                        color: Color(0xFF5d4037),
+                        color: AppPalette.p.primary,
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
                       ),
@@ -3044,12 +3131,12 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
     final read = _sutras.where((s) => s.isRead).length;
     final downloading = widget.parent._folderDownloadTotal[widget.folderName] != null;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5EDE3),
+      backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF5EDE3),
+        backgroundColor: AppPalette.p.bg,
         elevation: 0,
         shadowColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
+        iconTheme: IconThemeData(color: AppPalette.p.primary),
         actionsPadding: const EdgeInsets.only(right: 24),
         title: Row(
           children: [
@@ -3058,8 +3145,8 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
                 widget.displayName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF5d4037),
+                style: TextStyle(
+                  color: AppPalette.p.primary,
                   fontSize: 16.5,
                   fontWeight: FontWeight.w700,
                 ),
@@ -3147,18 +3234,18 @@ class _AllSutrasPageState extends State<AllSutrasPage> {
   Widget build(BuildContext context) {
     final folders = widget.parent._folders;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5EDE3),
+      backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF5EDE3),
+        backgroundColor: AppPalette.p.bg,
         elevation: 0,
         shadowColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF5d4037)),
+        iconTheme: IconThemeData(color: AppPalette.p.primary),
         title: Row(
           children: [
-            const Text(
+            Text(
               '全部经典',
               style: TextStyle(
-                color: Color(0xFF5d4037),
+                color: AppPalette.p.primary,
                 fontSize: 16.5,
                 fontWeight: FontWeight.w700,
               ),

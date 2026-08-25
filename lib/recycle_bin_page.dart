@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'cloud_notes_service.dart';
 
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _gold = Color(0xFFD4A06A);
-
+import 'app_palette.dart';
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _gold => AppPalette.p.accent;
 class RecycleBinPage extends StatefulWidget {
   const RecycleBinPage({super.key});
 
@@ -67,10 +67,10 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('彻底删除', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('将彻底删除这篇笔记，且不可恢复，确定吗？', style: const TextStyle(color: _textSec)),
+        title: Text('彻底删除', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: Text('将彻底删除这篇笔记，且不可恢复，确定吗？', style: TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
         ],
       ),
@@ -94,10 +94,10 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('清空回收站', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: const Text('回收站中的全部笔记将被彻底删除，且不可恢复，确定吗？', style: TextStyle(color: _textSec)),
+        title: Text('清空回收站', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: Text('回收站中的全部笔记将被彻底删除，且不可恢复，确定吗？', style: TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('清空', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
         ],
       ),
@@ -192,8 +192,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
                                 color: _gold.withValues(alpha: 0.12),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: const Text('菩提空间',
-                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF9A6B3F))),
+                              child: Text('菩提空间',
+                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: AppPalette.p.accentDeep)),
                             ),
                         ],
                       ),
@@ -208,7 +208,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
                             onPressed: _busy ? null : () => _restore(index),
                             tooltip: '还原',
                             visualDensity: VisualDensity.compact,
-                            icon: const Icon(Icons.replay, color: Color(0xFF5D4037), size: 20),
+                            icon: Icon(Icons.replay, color: AppPalette.p.primary, size: 20),
                           ),
                           IconButton(
                             onPressed: _busy ? null : () => _deleteForever(index),

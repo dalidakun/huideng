@@ -192,11 +192,11 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       controller: controller,
       obscureText: obscure,
       maxLength: 64,
-      style: const TextStyle(fontSize: 16, color: sText),
+      style: TextStyle(fontSize: 16, color: sText),
       decoration: InputDecoration(
         counterText: '',
         hintText: hint,
-        hintStyle: const TextStyle(color: sTextHint),
+        hintStyle: TextStyle(color: sTextHint),
         filled: true,
         fillColor: sCard,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -216,7 +216,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: sGold, width: 1.2),
+          borderSide: BorderSide(color: sGold, width: 1.2),
         ),
       ),
     );
@@ -237,7 +237,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 color: sGold.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Row(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(Icons.verified_user_outlined, size: 18, color: sGold),
@@ -250,18 +250,18 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               ),
             ),
             const SizedBox(height: 20),
-            const Text('手机号',
+            Text('手机号',
                 style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             TextField(
               controller: _phoneController,
               keyboardType: TextInputType.phone,
               maxLength: 11,
-              style: const TextStyle(fontSize: 16, color: sText),
+              style: TextStyle(fontSize: 16, color: sText),
               decoration: InputDecoration(
                 counterText: '',
                 hintText: '请输入绑定手机号',
-                hintStyle: const TextStyle(color: sTextHint),
+                hintStyle: TextStyle(color: sTextHint),
                 filled: true,
                 fillColor: sCard,
                 contentPadding:
@@ -272,12 +272,12 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: sGold, width: 1.2),
+                  borderSide: BorderSide(color: sGold, width: 1.2),
                 ),
               ),
             ),
             const SizedBox(height: 16),
-            const Text('验证码',
+            Text('验证码',
                 style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Row(
@@ -287,11 +287,11 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                     controller: _codeController,
                     keyboardType: TextInputType.number,
                     maxLength: 6,
-                    style: const TextStyle(fontSize: 16, color: sText),
+                    style: TextStyle(fontSize: 16, color: sText),
                     decoration: InputDecoration(
                       counterText: '',
                       hintText: '6 位验证码',
-                      hintStyle: const TextStyle(color: sTextHint),
+                      hintStyle: TextStyle(color: sTextHint),
                       filled: true,
                       fillColor: sCard,
                       contentPadding: const EdgeInsets.symmetric(
@@ -302,7 +302,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: sGold, width: 1.2),
+                        borderSide: BorderSide(color: sGold, width: 1.2),
                       ),
                     ),
                   ),
@@ -314,7 +314,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                     onPressed: (_countdown > 0 || _sending) ? null : _sendCode,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: sPrimary,
-                      side: const BorderSide(color: sGold),
+                      side: BorderSide(color: sGold),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -330,7 +330,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               ],
             ),
             const SizedBox(height: 16),
-            const Text('新密码',
+            Text('新密码',
                 style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             _field(
@@ -340,7 +340,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               onToggleObscure: () => setState(() => _showPwd = !_showPwd),
             ),
             const SizedBox(height: 16),
-            const Text('确认新密码',
+            Text('确认新密码',
                 style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             _field(
@@ -376,7 +376,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               ),
             ),
             const SizedBox(height: 20),
-            const Row(
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.info_outline, size: 15, color: sTextHint),

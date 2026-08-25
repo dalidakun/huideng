@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'reader_preferences.dart';
 import 'settings_widgets.dart';
 
+import 'app_palette.dart';
 /// 阅读偏好设置：字号、行距、背景、翻页方式。
 /// 与阅读页共用同一套存储键（reader_preferences.dart），设置即时生效。
 class ReaderSettingsPage extends StatefulWidget {
@@ -37,7 +38,7 @@ class _ReaderSettingsPageState extends State<ReaderSettingsPage> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 6),
       child: Text(text,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: sTextSec)),
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: sTextSec)),
     );
   }
 
@@ -47,7 +48,7 @@ class _ReaderSettingsPageState extends State<ReaderSettingsPage> {
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
       decoration: BoxDecoration(
-        color: _dark ? const Color(0xFF121212) : const Color(0xFFFFF3E0),
+        color: _dark ? const Color(0xFF121212) : AppPalette.p.tintBg,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Text(
@@ -81,10 +82,10 @@ class _ReaderSettingsPageState extends State<ReaderSettingsPage> {
             children: [
               Icon(icon, size: 18, color: sTextSec),
               const SizedBox(width: 8),
-              Text(label, style: const TextStyle(fontSize: 15, color: sText)),
+              Text(label, style: TextStyle(fontSize: 15, color: sText)),
               const Spacer(),
               Text(valueText,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: sGold)),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: sGold)),
             ],
           ),
         ),
@@ -126,7 +127,7 @@ class _ReaderSettingsPageState extends State<ReaderSettingsPage> {
                 ),
               ),
             ),
-            if (selected) const Icon(Icons.check, size: 20, color: sGold),
+            if (selected) Icon(Icons.check, size: 20, color: sGold),
           ],
         ),
       ),

@@ -4,14 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'sync_service.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 class CheckInSettingsPage extends StatefulWidget {
   const CheckInSettingsPage({super.key});
 
@@ -495,7 +495,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: const Text('功课设置', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        title: Text('功课设置', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: _text),
           onPressed: () => Navigator.pop(context),
@@ -545,8 +545,8 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
               value: _allowShareDailyCheckin,
               activeTrackColor: const Color(0xFF71867A),
               activeThumbColor: Colors.white,
-              inactiveTrackColor: const Color(0xFFE8E2DA),
-              inactiveThumbColor: const Color(0xFFBDB6AC),
+              inactiveTrackColor: AppPalette.p.borderSoft,
+              inactiveThumbColor: AppPalette.p.muted,
               trackOutlineColor:
                   WidgetStateProperty.resolveWith((_) => Colors.transparent),
               onChanged: (v) async {
@@ -556,10 +556,10 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                 await SyncService.instance.push();
                 if (mounted) _showShareToast(v);
               },
-              title: const Text('分享每日功课到菩提空间',
+              title: Text('分享每日功课到菩提空间',
                   style: TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
-              subtitle: const Text(
+              subtitle: Text(
                 '开启后，完成当日全部功课时自动以笔记形式分享到菩提空间',
                 style: TextStyle(fontSize: 12, color: _textSec),
               ),

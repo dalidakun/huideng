@@ -5,16 +5,16 @@ import 'cloud_notes_service.dart';
 import 'loading_widgets.dart';
 import 'login_page.dart';
 
-const Color _primary = Color(0xFF5C4033);
-const Color _primaryLight = Color(0xFF8B6B5A);
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
-const Color _border = Color(0xFFEBE1D6);
-
+import 'app_palette.dart';
+Color get _primary => AppPalette.p.primary;
+Color get _primaryLight => AppPalette.p.textSec;
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
+Color get _border => AppPalette.p.border;
 enum UserListMode { following, followers }
 
 /// 关注 / 粉丝 用户列表页。
@@ -128,11 +128,11 @@ class _UserListPageState extends State<UserListPage> {
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+          colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
         ),
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
@@ -144,17 +144,17 @@ class _UserListPageState extends State<UserListPage> {
             children: [
               IconButton(
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back_ios_new,
+                icon: Icon(Icons.arrow_back_ios_new,
                     color: _text, size: 20),
               ),
               const SizedBox(width: 4),
               Text(_title,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
               if (!_loading && _users.isNotEmpty)
                 Text('${_users.length} 位',
-                    style: const TextStyle(fontSize: 13, color: _textSec)),
+                    style: TextStyle(fontSize: 13, color: _textSec)),
             ],
           ),
         ),
@@ -175,11 +175,11 @@ class _UserListPageState extends State<UserListPage> {
           children: [
             Icon(Icons.lock_outline, size: 48, color: _textHint),
             const SizedBox(height: 14),
-            const Text('登录后查看',
+            Text('登录后查看',
                 style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             const SizedBox(height: 6),
-            const Text('登录即可查看你的关注与粉丝',
+            Text('登录即可查看你的关注与粉丝',
                 style: TextStyle(fontSize: 13, color: _textSec)),
             const SizedBox(height: 18),
             FilledButton.icon(
@@ -209,7 +209,7 @@ class _UserListPageState extends State<UserListPage> {
           children: [
             Icon(Icons.wifi_off_outlined, size: 48, color: _textHint),
             const SizedBox(height: 14),
-            const Text('加载失败',
+            Text('加载失败',
                 style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             const SizedBox(height: 12),
@@ -240,11 +240,11 @@ class _UserListPageState extends State<UserListPage> {
                 color: _textHint),
             const SizedBox(height: 14),
             Text(_isFollowing ? '还没有关注同修' : '还没有粉丝',
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             const SizedBox(height: 6),
             Text(_isFollowing ? '关注同修后，这里会显示你关注的同修' : '当同修关注你时，会出现在这里',
-                style: const TextStyle(fontSize: 13, color: _textSec)),
+                style: TextStyle(fontSize: 13, color: _textSec)),
           ],
         ),
       );
@@ -291,7 +291,7 @@ class _UserListPageState extends State<UserListPage> {
                       user.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 15,
                           color: _text,
                           fontWeight: FontWeight.w500),
@@ -325,7 +325,7 @@ class _UserListPageState extends State<UserListPage> {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: following ? _textHint : const Color(0xFF9A6B3F),
+                      color: following ? _textHint : AppPalette.p.accentDeep,
                     ),
                   ),
                 ),

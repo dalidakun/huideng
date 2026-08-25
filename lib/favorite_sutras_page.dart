@@ -8,12 +8,13 @@ import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_list_page.dart';
 
-const Color _gold = Color(0xFFD4A06A);
-const Color _bg = Color(0xFFF5EDE3);
-const Color _card = Color(0xFFFFFAF5);
-const Color _text = Color(0xFF3E2723);
-const Color _textSec = Color(0xFF8B6B5A);
-const Color _textHint = Color(0xFFC4B5A8);
+import 'app_palette.dart';
+Color get _gold => AppPalette.p.accent;
+Color get _bg => AppPalette.p.bg;
+Color get _card => AppPalette.p.card;
+Color get _text => AppPalette.p.text;
+Color get _textSec => AppPalette.p.textSec;
+Color get _textHint => AppPalette.p.textHint;
 const Color _readTeal = Color(0xFF71867A);
 
 class FavoriteSutrasPage extends StatefulWidget {
@@ -173,10 +174,10 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('经文尚未下载', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('《${_displayTitle(sutra.title)}》的正文尚未下载（约 ${sutra.size}），是否现在下载？下载完成即可阅读。', style: const TextStyle(color: _textSec)),
+        title: Text('经文尚未下载', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        content: Text('《${_displayTitle(sutra.title)}》的正文尚未下载（约 ${sutra.size}），是否现在下载？下载完成即可阅读。', style: TextStyle(color: _textSec)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: _textSec))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _gold),
             onPressed: () => Navigator.pop(ctx, true),
@@ -215,7 +216,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
 
   Widget _buildBody() {
     return _loading
-        ? const Center(child: CircularProgressIndicator(color: _gold))
+        ? Center(child: CircularProgressIndicator(color: _gold))
         : _favoriteSutras.isEmpty
             ? _buildEmpty()
             : ListView.builder(
@@ -229,11 +230,11 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFF3E8DB), Color(0xFFF9F1E7)],
+          colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
         ),
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
@@ -245,12 +246,12 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
             children: [
               IconButton(
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+                icon: Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
               ),
               const SizedBox(width: 4),
-              const Text('我的收藏', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+              Text('我的收藏', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
               const Spacer(),
-              Text('${_favoriteSutras.length} 部', style: const TextStyle(fontSize: 13, color: _textSec)),
+              Text('${_favoriteSutras.length} 部', style: TextStyle(fontSize: 13, color: _textSec)),
             ],
           ),
         ),
@@ -265,9 +266,9 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
         children: [
           Icon(Icons.star_border_rounded, size: 48, color: _textHint.withValues(alpha: 0.6)),
           const SizedBox(height: 14),
-          const Text('暂无收藏', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
+          Text('暂无收藏', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
           const SizedBox(height: 6),
-          const Text('在经藏中点击收藏，即可在这里快速阅读', style: TextStyle(fontSize: 13, color: _textSec)),
+          Text('在经藏中点击收藏，即可在这里快速阅读', style: TextStyle(fontSize: 13, color: _textSec)),
         ],
       ),
     );
@@ -298,7 +299,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
               Container(
                 width: 36, height: 36,
                 decoration: BoxDecoration(color: _gold.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.auto_stories_rounded, size: 18, color: _gold),
+                child: Icon(Icons.auto_stories_rounded, size: 18, color: _gold),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -314,13 +315,13 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
                 ),
               ),
               if (sutra.isPinned) ...[
-                const Icon(Icons.push_pin, color: _gold, size: 16),
+                Icon(Icons.push_pin, color: _gold, size: 16),
                 const SizedBox(width: 6),
               ],
               if (widget.parent != null) ...[
                 _buildDownloadState(sutra),
               ],
-              const Icon(Icons.chevron_right, color: _textHint, size: 20),
+              Icon(Icons.chevron_right, color: _textHint, size: 20),
             ],
           ),
         ),

@@ -1,93 +1,107 @@
 import 'package:flutter/material.dart';
 
+import 'app_palette.dart';
+
+/// 应用基线主题。页面级配色直接取 [AppPalette.p]；
+/// 这里的 ThemeData 主要作用于对话框、按钮、输入框等 Material 组件。
 class AppTheme {
   AppTheme._();
 
   static ThemeData get lightTheme {
+    final p = AppPalette.p;
     return ThemeData(
       useMaterial3: true,
-      scaffoldBackgroundColor: const Color(0xFFededed),
-      primaryColor: const Color(0xFF5D4037),
-      
+      scaffoldBackgroundColor: p.bg,
+      primaryColor: p.primary,
+
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF5D4037),
-        primary: const Color(0xFF5D4037),
-        surface: const Color(0xFFFFFFFF),
-        onSurface: const Color(0xFF212121),
+        seedColor: p.primary,
+        primary: p.primary,
+        surface: p.card,
+        onSurface: p.text,
         brightness: Brightness.light,
       ),
-      
+
       textTheme: TextTheme(
-        bodyLarge: const TextStyle(
-          color: Color(0xFF212121),
+        bodyLarge: TextStyle(
+          color: p.text,
           fontSize: 16,
         ),
-        bodyMedium: const TextStyle(
-          color: Color(0xFF212121),
+        bodyMedium: TextStyle(
+          color: p.text,
           fontSize: 14,
         ),
-        titleMedium: const TextStyle(
-          color: Color(0xFF212121),
+        titleMedium: TextStyle(
+          color: p.text,
           fontSize: 16,
           fontWeight: FontWeight.w500,
         ),
       ),
-      
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFFededed),
-        foregroundColor: Color(0xFF212121),
+
+      appBarTheme: AppBarTheme(
+        backgroundColor: p.bg,
+        foregroundColor: p.text,
         elevation: 0,
         centerTitle: false,
         titleTextStyle: TextStyle(
-          color: Color(0xFF212121),
+          color: p.text,
           fontSize: 20,
           fontWeight: FontWeight.w600,
         ),
         iconTheme: IconThemeData(
-          color: Color(0xFF212121),
+          color: p.text,
         ),
       ),
-      
-      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-        backgroundColor: Color(0xFFf7f7f7),
-        selectedItemColor: Color(0xFF5D4037),
-        unselectedItemColor: Color(0xFF424242),
-        selectedLabelStyle: TextStyle(
+
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        backgroundColor: p.card,
+        selectedItemColor: p.accent,
+        unselectedItemColor: p.textSec,
+        selectedLabelStyle: const TextStyle(
           fontWeight: FontWeight.bold,
         ),
         showUnselectedLabels: true,
         elevation: 0,
         type: BottomNavigationBarType.fixed,
       ),
-      
+
       cardTheme: CardThemeData(
-        color: Colors.white,
+        color: p.card,
         elevation: 1.5,
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
         ),
       ),
-      
-      dividerTheme: const DividerThemeData(
-        color: Color(0xFFBDBDBD),
+
+      dividerTheme: DividerThemeData(
+        color: p.divider,
         thickness: 0.5,
         space: 1,
       ),
-      
-      listTileTheme: const ListTileThemeData(
-        contentPadding: EdgeInsets.all(16),
+
+      listTileTheme: ListTileThemeData(
+        contentPadding: const EdgeInsets.all(16),
         titleTextStyle: TextStyle(
-          color: Color(0xFF212121),
+          color: p.text,
           fontSize: 16,
           fontWeight: FontWeight.w500,
         ),
         subtitleTextStyle: TextStyle(
-          color: Color(0xFF424242),
+          color: p.textSec,
           fontSize: 14,
         ),
       ),
-      
+
+      dialogTheme: DialogThemeData(
+        backgroundColor: p.card,
+        titleTextStyle: TextStyle(
+          color: p.text,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
     );

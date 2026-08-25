@@ -127,7 +127,7 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
                 child: Column(
                   children: [
-                    const Text('每日提醒时间',
+                    Text('每日提醒时间',
                         style: TextStyle(fontSize: 14, color: sTextSec)),
                     const SizedBox(height: 12),
                     InkWell(
@@ -143,11 +143,11 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.schedule, size: 22, color: sGold),
+                            Icon(Icons.schedule, size: 22, color: sGold),
                             const SizedBox(width: 8),
                             Text(
                               _time,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 32,
                                 fontWeight: FontWeight.w700,
                                 color: sText,
@@ -159,7 +159,7 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Text('点击时间可修改', style: const TextStyle(fontSize: 12, color: sTextHint)),
+                    Text('点击时间可修改', style: TextStyle(fontSize: 12, color: sTextHint)),
                   ],
                 ),
               ),
@@ -181,10 +181,10 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                         color: sGold.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.notifications_active_outlined, size: 20, color: sGold),
+                      child: Icon(Icons.notifications_active_outlined, size: 20, color: sGold),
                     ),
                     const SizedBox(width: 14),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -226,10 +226,10 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                         color: sGold.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.alarm_on, size: 20, color: sGold),
+                      child: Icon(Icons.alarm_on, size: 20, color: sGold),
                     ),
                     const SizedBox(width: 14),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -325,7 +325,7 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                   children: [
                     Icon(Icons.info_outline, size: 15, color: sTextHint),
                     const SizedBox(width: 6),
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         '提醒由手机系统按时弹出，不需要打开 App 也能收到。',
                         style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
@@ -340,7 +340,7 @@ class _CheckinReminderPageState extends State<CheckinReminderPage> {
                     children: [
                       Icon(Icons.lightbulb_outline, size: 15, color: sGold),
                       const SizedBox(width: 6),
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           '提示：开启打卡提醒会自动打开「消息通知」；也可在设置页单独管理消息通知总开关。',
                           style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
