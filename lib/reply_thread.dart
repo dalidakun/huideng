@@ -238,7 +238,7 @@ class _ReplyThreadNodeState extends State<ReplyThreadNode> {
                       style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: _textSec),
+                          color: Color(0xFF8C8C8C)),
                     ),
                   ],
                 ),
@@ -390,10 +390,8 @@ class _ReplyThreadNodeState extends State<ReplyThreadNode> {
                         : widget.ancestorAccount!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _textSec),
+                    style:
+                        TextStyle(fontSize: 13, color: Color(0xFF8C8C8C)),
                   ),
                 ),
               ],
@@ -412,9 +410,11 @@ class _ReplyThreadNodeState extends State<ReplyThreadNode> {
         else
           openArea,
         const SizedBox(height: 8),
-        if (widget.showMetrics) _metrics(note),
-        // 头像连线上下帖子之间留出间距，与 ReplyChain 保持一致。
-        const SizedBox(height: 14),
+        if (widget.showMetrics) ...[
+          _metrics(note),
+          // 头像连线上下帖子之间留出间距，与 ReplyChain 保持一致。
+          const SizedBox(height: 14),
+        ],
       ],
     );
   }
@@ -534,8 +534,13 @@ class _ReplyThreadNodeState extends State<ReplyThreadNode> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _body(widget.note,
-                    showMenu: widget.showMenu, textMaxWidth: textMaxWidth),
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    top: widget.connectUp ? 22.0 : (widget.spaceAbove ? 6.0 : 0.0),
+                  ),
+                  child: _body(widget.note,
+                      showMenu: widget.showMenu, textMaxWidth: textMaxWidth),
+                ),
               ),
             ],
           ),

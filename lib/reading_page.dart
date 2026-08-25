@@ -911,15 +911,21 @@ class _ReadingPageState extends State<ReadingPage>
                           children: [
                             Expanded(
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(3),
+                                borderRadius: BorderRadius.circular(
+                                    AppPalette.instance.isPlain && !_isDarkMode ? 2 : 3),
                                 child: LinearProgressIndicator(
                                   value: _scrollProgress,
                                   minHeight: 5,
                                   backgroundColor: _isDarkMode
                                       ? Colors.white.withOpacity(0.15)
-                                      : const Color(0xFFE8D9C4),
+                                      : AppPalette.instance.isPlain
+                                          ? AppPalette.p.border
+                                          : const Color(0xFFE8D9C4),
                                   valueColor:
-                                      AlwaysStoppedAnimation<Color>(AppPalette.p.accent),
+                                      AlwaysStoppedAnimation<Color>(!_isDarkMode &&
+                                              AppPalette.instance.isPlain
+                                          ? const Color(0xFF4A4A4A)
+                                          : AppPalette.p.accent),
                                 ),
                               ),
                             ),

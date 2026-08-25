@@ -91,7 +91,12 @@ class UpdateService {
     _checked = true;
     final info = await check();
     if (info == null) return;
-    await _showUpdateDialog(context, info);
+    await prompt(context, info);
+  }
+
+  /// 展示更新弹窗（供「关于我们」页手动检查更新后调用）。
+  static Future<void> prompt(BuildContext context, UpdateInfo info) {
+    return _showUpdateDialog(context, info);
   }
 
   static Future<void> _showUpdateDialog(

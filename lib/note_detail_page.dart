@@ -1176,7 +1176,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         row = ReplyThreadNode(
           note: anc,
           connectDown: true,
-          showMetrics: false,
+          showMetrics: true,
           spaceAbove: prevFlushLine,
           onMore: _showUserMenu,
           onOpenDetail: _openThreadNoteDetail,

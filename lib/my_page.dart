@@ -1166,7 +1166,7 @@ class _PostBlockState extends State<PostBlock> {
       setState(() => _commentCount++);
       if (replyId.isNotEmpty) {
         // 广播给发现/关注流：回复立即连线挂到原帖下方，不等列表刷新。
-        broadcastReplyPosted(
+        await broadcastReplyPosted(
           replyId: replyId,
           parentId: noteId,
           content: content,
@@ -1769,7 +1769,7 @@ Future<void> submitReplyPost(BuildContext parentCtx, PlazaNote target,
     }
     if (parentCtx.mounted && replyId.isNotEmpty) {
       // 广播给发现/关注流：回复立即连线挂到原帖下方，不等列表刷新。
-      broadcastReplyPosted(
+      await broadcastReplyPosted(
         replyId: replyId,
         parentId: target.id,
         parent: target,
@@ -1789,21 +1789,34 @@ Future<void> submitReplyPost(BuildContext parentCtx, PlazaNote target,
 
 /// 本地构造刚发布的回复帖并广播：发现/关注流收到后立即把它挂到当前列表里的
 /// 根帖下方，头像连线即时出现，不等列表刷新（云端索引可见性 + 网络往返会晚数秒）。
-void broadcastReplyPosted({
+/// 作者展示字段（@账号/认证/阅藏进度）从本地缓存补齐，否则乐观插入的回复
+/// 头部只剩昵称，要等下次列表刷新才显示完整。
+Future<void> broadcastReplyPosted({
   required String replyId,
   required String parentId,
   PlazaNote? parent,
   required String content,
-}) {
+}) async {
   if (replyId.isEmpty || parentId.isEmpty) return;
   final me = AuthService.instance.currentUser.value;
   final nowMs = DateTime.now().millisecondsSinceEpoch;
+  var account = '';
+  var verified = false;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    account = prefs.getString('user_account_name') ?? '';
+    verified = prefs.getBool('user_verified') ?? false;
+  } catch (_) {}
   NoteStatsCenter.instance.lastReplyPosted.value = PlazaNote(
     id: replyId,
     ownerUserId: me?.id ?? '',
     title: '',
     content: content,
     authorName: me?.displayName ?? '同修',
+    authorAccount: account,
+    authorVerified: verified,
+    canonRead: LocalCanonProgress.loaded ? LocalCanonProgress.read : 0,
+    canonTotal: LocalCanonProgress.loaded ? LocalCanonProgress.total : 0,
     visibility: 'public',
     status: 'normal',
     likeCount: 0,
@@ -2840,6 +2853,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       if (rootNote.repostKind == 'reply') {
         list.removeWhere((n) => n.id == rootNote.id);
       }
+      if (list.isEmpty) continue;
       groups.add((rootNote, list));
     }
     // 分组按组内最新回复倒序展示。

@@ -40,3 +40,4 @@ lib/temp_*.dart
 
 # IDE
 .vscode/
+__pycache__/

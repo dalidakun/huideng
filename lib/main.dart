@@ -22,6 +22,7 @@ import 'user_avatar_cache.dart';
 import 'update_service.dart';
 
 import 'app_palette.dart';
+import 'agreements.dart';
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
@@ -31,17 +32,27 @@ void main() async {
   await AppPalette.instance.load();
   // 预加载磁盘缓存的头像到内存（不阻塞启动，下次 request() 即可命中）。
   unawaited(UserAvatarCache.instance.loadFromDisk());
-  runApp(const MyApp());
-  // 后台静默恢复登录会话（不阻塞启动，登录态通过 ValueNotifier 广播）。
+  // 隐私合规：先读本地协议同意状态（纯本地读取，无网络）。用户首次启动
+  // 会看到《用户协议》/《隐私政策》弹窗；在同意之前不得发起任何联网采集，
+  // 因此登录恢复、云同步、通知调度等服务统一延迟到 [startBackgroundServices]。
+  final agreed = await PrivacyConsent.isAgreed();
+  runApp(MyApp(privacyAgreed: agreed));
+  if (!agreed) return;
+  startBackgroundServices();
+}
+
+/// 启动全部后台服务（含联网请求）。必须且只能在用户同意《隐私政策》之后调用：
+/// - 后台静默恢复登录会话（不阻塞启动，登录态通过 ValueNotifier 广播）；
+/// - 本地数据云同步：监听登录态变化 + 定时推送 + 生命周期冲刷；
+/// - 本地通知（打卡提醒）初始化与调度恢复；
+/// - App 回到前台时重新挂起打卡提醒（国产 ROM 常在后台清掉闹钟任务），
+///   并先续期登录会话：后台停留超过 2 小时（access token 有效期）回来后
+///   token 已过期，先修复会话再让界面刷新，避免带着过期 token 的云调用
+///   被网关 401 拦截导致帖子全部加载失败（本地兜底缺作者信息）。
+void startBackgroundServices() {
   unawaited(AuthService.instance.restoreSession());
-  // 本地数据云同步：监听登录态变化 + 定时推送 + 生命周期冲刷。
   SyncService.instance.init();
-  // 本地通知（打卡提醒）初始化与调度恢复。
   unawaited(NotificationService.instance.init());
-  // App 回到前台时重新挂起打卡提醒（国产 ROM 常在后台清掉闹钟任务），
-  // 并先续期登录会话：后台停留超过 2 小时（access token 有效期）回来后
-  // token 已过期，先修复会话再让界面刷新，避免带着过期 token 的云调用
-  // 被网关 401 拦截导致帖子全部加载失败（本地兜底缺作者信息）。
   AppLifecycleListener(
     onResume: () {
       NotificationService.instance.onAppResumed();
@@ -51,16 +62,28 @@ void main() async {
 }
 
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  /// 用户是否已同意《用户协议》与《隐私政策》（启动时读自本地存储）。
+  final bool privacyAgreed;
+
+  const MyApp({super.key, required this.privacyAgreed});
 
   @override
   State<MyApp> createState() => _MyAppState();
 }
 
 class _MyAppState extends State<MyApp> {
+  late bool _agreed = widget.privacyAgreed;
+
   // 监听外观切换：调色板变化时重建整棵树，所有页面即时换肤（无需重启）。
   void _onPaletteChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// 首次启动用户在同意页点了「同意并继续」：记录状态并启动后台服务。
+  void _onPrivacyAgreed() {
+    if (!mounted) return;
+    setState(() => _agreed = true);
+    startBackgroundServices();
   }
 
   @override
@@ -93,7 +116,10 @@ class _MyAppState extends State<MyApp> {
           ],
         );
       },
-      home: PopScope(
+      // 未同意协议前，根页面是隐私同意页（不进入应用、后台服务也未启动）。
+      home: !_agreed
+          ? PrivacyConsentPage(onAgreed: _onPrivacyAgreed)
+          : PopScope(
         // 根路由不允许直接 pop（否则系统会直接退出应用）：所有返回意图都
         // 统一在 onPopInvokedWithResult 里处理（收起面板 → 依次返回 → 最小化）。
         // 不能用已废弃的 WillPopScope：Android 14+ 预测性返回（targetSdk 34+
@@ -134,7 +160,7 @@ class _MyAppState extends State<MyApp> {
           }
         },
         child: const _AppEntry(),
-      ),
+          ),
     );
   }
 }

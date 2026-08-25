@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
+import 'agreements.dart';
+import 'app_palette.dart';
 import 'cloud_notes_service.dart';
 import 'admin_manage_page.dart';
 import 'feedback_admin_page.dart';
 import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
+import 'update_service.dart';
 
-/// 关于我们：应用简介、版本信息。
+/// 关于我们：应用简介、版本信息、协议入口。
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
 
@@ -16,11 +20,23 @@ class AboutPage extends StatefulWidget {
 
 class _AboutPageState extends State<AboutPage> {
   bool _isAdmin = false;
+  String _version = '';
+  bool _checkingUpdate = false;
 
   @override
   void initState() {
     super.initState();
     _checkAdmin();
+    _loadVersion();
+  }
+
+  /// 从包信息读取真实版本号（pubspec.yaml 的 version），不再硬编码。
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() => _version = info.version);
+    } catch (_) {}
   }
 
   Future<void> _checkAdmin() async {
@@ -29,44 +45,69 @@ class _AboutPageState extends State<AboutPage> {
     setState(() => _isAdmin = ok);
   }
 
+  /// 手动检查更新：与启动时的静默检查不同，这里给出明确结果反馈。
+  Future<void> _manualCheckUpdate() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final info = await UpdateService.check();
+    if (!mounted) return;
+    setState(() => _checkingUpdate = false);
+    if (info != null) {
+      await UpdateService.prompt(context, info);
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('当前已是最新版本'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SettingsPageScaffold(
       title: '关于我们',
       child: ListView(
-        padding: const EdgeInsets.only(top: 40, bottom: 40),
+        padding: const EdgeInsets.only(top: 20, bottom: 40),
         children: [
-          Column(
+          SettingsCard(
             children: [
-              Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: sCard,
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 3)),
-                  ],
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Image.asset('assets/images/app_icon.png', fit: BoxFit.cover),
-              ),
-              const SizedBox(height: 16),
-              Text('燃灯', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: sText)),
-              const SizedBox(height: 6),
-              Text('版本 1.0.0', style: TextStyle(fontSize: 13, color: sTextHint)),
-              const SizedBox(height: 14),
               Padding(
-                padding: EdgeInsets.symmetric(horizontal: 40),
-                child: Text(
-                  '燃一盏灯，看见自己，照亮别人',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14, color: sTextSec, height: 1.7),
+                padding: const EdgeInsets.symmetric(vertical: 28),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 88,
+                      height: 88,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppPalette.p.tintBg,
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Image.asset('assets/images/app_icon.png', fit: BoxFit.cover),
+                    ),
+                    const SizedBox(height: 16),
+                    Text('燃灯', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: sText)),
+                    const SizedBox(height: 6),
+                    Text(_version.isEmpty ? '' : '版本 $_version',
+                        style: TextStyle(fontSize: 13, color: sTextHint)),
+                    const SizedBox(height: 14),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 40),
+                      child: Text(
+                        '燃一盏灯，看见自己，照亮别人',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 14, color: sTextSec, height: 1.7),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 24),
           SettingsCard(
             children: [
               SettingsTile(
@@ -120,6 +161,41 @@ class _AboutPageState extends State<AboutPage> {
               ],
             ],
           ),
+          // 协议入口：应用商店审核要求协议可在应用内随时再次查看。
+          const SizedBox(height: 24),
+          SettingsCard(
+            children: [
+              SettingsTile(
+                icon: Icons.description_outlined,
+                iconColor: sGold,
+                title: '用户服务协议',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AgreementViewerPage(
+                      title: '用户服务协议',
+                      assetPath: 'assets/agreements/user_agreement.md',
+                    ),
+                  ),
+                ),
+              ),
+              const SettingsDivider(),
+              SettingsTile(
+                icon: Icons.privacy_tip_outlined,
+                iconColor: sGold,
+                title: '隐私政策',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AgreementViewerPage(
+                      title: '隐私政策',
+                      assetPath: 'assets/agreements/privacy_policy.md',
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 20),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -127,21 +203,23 @@ class _AboutPageState extends State<AboutPage> {
               width: double.infinity,
               height: 48,
               child: ElevatedButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('当前已是最新版本'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                },
+                onPressed: _checkingUpdate ? null : _manualCheckUpdate,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: sGold,
                   foregroundColor: Colors.white,
                   elevation: 0,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                child: const Text('升级', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                child: _checkingUpdate
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('检查更新', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               ),
             ),
           ),

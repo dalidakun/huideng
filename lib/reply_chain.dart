@@ -266,10 +266,12 @@ class _ReplyChainState extends State<ReplyChain> {
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () => widget.onMore!(note),
+                  // 与原贴 PostBlock 头部同款（Padding 2 + 图标 18）：
+                  // 行高一致，昵称行到正文的间距才与原贴相同。
                   child: const Padding(
-                    padding: EdgeInsets.all(4),
+                    padding: EdgeInsets.all(2),
                     child: Icon(Icons.more_horiz,
-                        size: 22, color: Color(0xFF8C8C8C)),
+                        size: 18, color: Color(0xFF8C8C8C)),
                   ),
                 ),
               ],

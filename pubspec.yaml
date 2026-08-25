@@ -2,7 +2,7 @@
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.1.0+1
+version: 1.0.9+9
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -77,6 +77,9 @@ flutter:
     - assets/images/my_selected1.png
     - assets/sutras_catalog.json
     - assets/tool.html
+    # 《用户协议》与《隐私政策》全文（首次启动弹窗与应用内「关于我们」共用）。
+    - assets/agreements/user_agreement.md
+    - assets/agreements/privacy_policy.md
 
 flutter_native_splash:
   # 原生启动页只保留纯色底（不放图片）：图片由应用内 SplashImagePage
