@@ -975,6 +975,7 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
                 ),
               ),
               // 展开时右下角的收起按钮（与阅读页 AI 按钮同位）。
+              // 不在聊天页时显示返回按钮，回到聊天页后换回 AI 按钮。
               if (t > 0.5)
                 Positioned(
                   right: 16,
@@ -982,21 +983,34 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
                   child: SizedBox(
                     width: 36,
                     height: 36,
-                    child: FloatingActionButton(
-                      heroTag: 'sutra_ai_assistant_overlay',
-                      onPressed: () => assistantVisible.value = false,
-                      backgroundColor: const Color(0xFFf7f7f7),
-                      elevation: 8,
-                      highlightElevation: 12,
-                      shape: const CircleBorder(),
-                      child: Text(
-                        'AI',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppPalette.p.primary,
-                        ),
-                      ),
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: AssistantSession.instance.isOnChatPage,
+                      builder: (context, onChat, _) {
+                        return FloatingActionButton(
+                          heroTag: 'sutra_ai_assistant_overlay',
+                          onPressed: onChat
+                              ? () => assistantVisible.value = false
+                              : () => AssistantSession.instance.goBackToChat(),
+                          backgroundColor: const Color(0xFFf7f7f7),
+                          elevation: 8,
+                          highlightElevation: 12,
+                          shape: const CircleBorder(),
+                          child: onChat
+                              ? Text(
+                                  'AI',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppPalette.p.primary,
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.arrow_back,
+                                  size: 18,
+                                  color: AppPalette.p.primary,
+                                ),
+                        );
+                      },
                     ),
                   ),
                 ),

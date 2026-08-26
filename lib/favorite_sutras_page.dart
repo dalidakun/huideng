@@ -15,7 +15,7 @@ Color get _card => AppPalette.p.card;
 Color get _text => AppPalette.p.text;
 Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
-const Color _readTeal = Color(0xFF71867A);
+const Color _readTeal = Color(0xFFcf9e66);
 
 class FavoriteSutrasPage extends StatefulWidget {
   /// [embedded] 为 true 时不显示自己的 Scaffold/头部，用于嵌入标签页。
@@ -77,15 +77,6 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
 
   Future<void> _loadFavorites() async {
     try {
-      if (widget.parent != null) {
-        final sutras = List<Sutra>.from(widget.parent!.getFavoriteSutras());
-        if (!mounted) return;
-        setState(() {
-          _favoriteSutras = sutras;
-          _loading = false;
-        });
-        return;
-      }
       final docs = await getApplicationDocumentsDirectory();
       final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
       if (!await file.exists()) {

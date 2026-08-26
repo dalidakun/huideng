@@ -64,6 +64,11 @@ flutter:
     - assets/images/star_outline.png
     - assets/images/weixin.png
     - assets/images/zhifubao.png
+    - assets/images/01.png
+    - assets/images/02.png
+    - assets/images/03.png
+    - assets/images/04.png
+    - assets/images/fire.png
     # 素白外观底部导航黑色图标（原文件名 + 1）。
     - assets/images/study1.png
     - assets/images/study_selected1.png

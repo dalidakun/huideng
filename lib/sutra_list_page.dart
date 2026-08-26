@@ -16,7 +16,7 @@ import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_favorites.dart';
 import 'favorite_sutras_page.dart';
-import 'recent_sutras_page.dart';
+import 'popular_sutras_page.dart';
 
 import 'app_palette.dart';
 /// 素白外观下「继续阅读」按钮底色与进度条填充色：比纯黑柔和的深灰，
@@ -30,6 +30,7 @@ final RouteObserver<ModalRoute<void>> routeObserver =
 class Sutra {
   final String title;
   final String size;
+  final int charCount;
   final bool isPinned;
   final bool isRead;
   final bool isFavorite;
@@ -38,12 +39,13 @@ class Sutra {
   final DateTime? favoriteTime; // 收藏时间
   final DateTime? readTime; // 标记已读时间
 
-  Sutra(this.title, this.size, {this.isPinned = false, this.isRead = false, this.isFavorite = false, this.filePath, this.folder, this.favoriteTime, this.readTime});
+  Sutra(this.title, this.size, {this.charCount = 0, this.isPinned = false, this.isRead = false, this.isFavorite = false, this.filePath, this.folder, this.favoriteTime, this.readTime});
 
   Map<String, dynamic> toJson() {
     return {
       'title': title,
       'size': size,
+      'charCount': charCount,
       'isPinned': isPinned,
       'isRead': isRead,
       'isFavorite': isFavorite,
@@ -58,6 +60,7 @@ class Sutra {
     return Sutra(
       json['title'] as String,
       json['size'] as String,
+      charCount: json['charCount'] as int? ?? 0,
       isPinned: json['isPinned'] as bool? ?? false,
       isRead: json['isRead'] as bool? ?? false,
       isFavorite: json['isFavorite'] as bool? ?? false,
@@ -157,8 +160,6 @@ class SutraListPageState extends State<SutraListPage>
   String? _lastReadTitle;
   String? _lastReadFilePath;
   double _lastReadProgress = 0.0;
-  int _readDays = 0;
-  int _todayReadCount = 0;
   List<Map<String, String>> _recentSutras = [];
 
   /// 随缘读经预览用的随机经书（保持稳定，避免每次重建都换）。
@@ -954,6 +955,7 @@ class SutraListPageState extends State<SutraListPage>
         final loaded = await _parseSutraListFile(file);
         if (loaded.isNotEmpty) {
           _applySutraList(loaded);
+          await _enrichCharCounts();
           await _maybeRestoreDefaultsAfterApkUpdate();
           await _applyRestoredSutraStates();
           return;
@@ -973,6 +975,7 @@ class SutraListPageState extends State<SutraListPage>
       await _writeSutraListFile(loaded);
       await prefs.remove('sutras');
       _applySutraList(loaded);
+      await _enrichCharCounts();
       await _maybeRestoreDefaultsAfterApkUpdate();
       await _applyRestoredSutraStates();
       return;
@@ -1151,6 +1154,7 @@ class SutraListPageState extends State<SutraListPage>
         return Sutra(
           m['t'] as String,
           m['s'] as String,
+          charCount: m['c'] as int? ?? 0,
           folder: m['f'] as String?,
         );
       }).toList();
@@ -1494,27 +1498,7 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   /// 阅读统计：已读天数与今日已读册数（依据每日诵经历史）。
-  Future<void> _loadReadingStats() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('daily_sutra_history') ?? '{}';
-    var readDays = 0;
-    var todayCount = 0;
-    try {
-      final history = jsonDecode(raw);
-      if (history is Map) {
-        readDays = history.length;
-        final now = DateTime.now();
-        final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-        final todayList = history[today];
-        if (todayList is List) todayCount = todayList.length;
-      }
-    } catch (_) {}
-    if (!mounted) return;
-    setState(() {
-      _readDays = readDays;
-      _todayReadCount = todayCount;
-    });
-  }
+  Future<void> _loadReadingStats() async {}
 
   /// 最近阅读记录（来自 recent_sutras）。
   Future<void> _loadRecentSutras() async {
@@ -1698,7 +1682,7 @@ class SutraListPageState extends State<SutraListPage>
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: isRead ? const Color(0xFF71867A) : AppPalette.p.text,
+                  color: isRead ? const Color(0xFFcf9e66) : AppPalette.p.text,
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                 ),
@@ -1805,6 +1789,8 @@ class SutraListPageState extends State<SutraListPage>
   Widget _buildProgressCard() {
     final total = _allSutras.length;
     final read = _allSutras.where((s) => s.isRead).length;
+    final totalChars = _allSutras.fold<int>(0, (sum, s) => sum + s.charCount);
+    final readChars = _allSutras.where((s) => s.isRead).fold<int>(0, (sum, s) => sum + s.charCount);
     final pct = total == 0 ? 0.0 : read / total * 100;
     if (pct >= 100) {
       WidgetsBinding.instance.addPostFrameCallback(
@@ -1980,12 +1966,46 @@ class SutraListPageState extends State<SutraListPage>
           const SizedBox(height: 10),
           // 统计信息一行显示，与进度条左对齐。
           Text(
-            '已阅$read/$total册    已读$_readDays天    今日$_todayReadCount册',
+            '已完成$read/$total册    已阅读${_formatCharCount(readChars)}/${_formatCharCount(totalChars)}',
             style: TextStyle(color: headColor, fontSize: 12),
           ),
         ],
       ),
     );
+  }
+
+  /// 从目录补充 charCount（本地持久化文件可能不含此字段）。
+  Future<void> _enrichCharCounts() async {
+    try {
+      final raw = await rootBundle.loadString('assets/sutras_catalog.json');
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      final map = <String, int>{};
+      for (final e in decoded) {
+        final m = e as Map<String, dynamic>;
+        map[m['t'] as String] = m['c'] as int? ?? 0;
+      }
+      var changed = false;
+      for (var i = 0; i < _allSutras.length; i++) {
+        final s = _allSutras[i];
+        if (s.charCount == 0 && map.containsKey(s.title)) {
+          _allSutras[i] = Sutra(s.title, s.size,
+              charCount: map[s.title]!, isPinned: s.isPinned, isRead: s.isRead,
+              isFavorite: s.isFavorite, filePath: s.filePath, folder: s.folder,
+              favoriteTime: s.favoriteTime, readTime: s.readTime);
+          changed = true;
+        }
+      }
+      if (changed && mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  /// 格式化字数为万字单位，如 12345 → "1.23万字"，800 → "0.08万字"，50 → "0万字"。
+  String _formatCharCount(int chars) {
+    final wan = chars / 10000;
+    if (wan >= 10) return '${wan.toStringAsFixed(0)}万字';
+    if (wan >= 1) return '${wan.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '')}万字';
+    if (wan >= 0.01) return '${wan.toStringAsFixed(2)}万字';
+    return '0万字';
   }
 
   bool _completionDialogShown = false;
@@ -2107,9 +2127,9 @@ class SutraListPageState extends State<SutraListPage>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(child: _buildFavoriteTile()),
-                      const SizedBox(height: 10),
                       Expanded(child: _buildRecentTile()),
+                      const SizedBox(height: 10),
+                      Expanded(child: _buildFavoriteTile()),
                     ],
                   ),
                 ),
@@ -2353,7 +2373,7 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 最近阅读宫格：仅入口（跳转最近阅读列表）。
+  /// 大家都在读宫格：入口（跳转大家都在读列表）。
   Widget _buildRecentTile() {
     return Material(
       color: AppPalette.p.card,
@@ -2364,7 +2384,7 @@ class SutraListPageState extends State<SutraListPage>
           _dismissKeyboard();
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => RecentSutrasPage(parent: this)),
+            MaterialPageRoute(builder: (_) => PopularSutrasPage(parent: this)),
           );
         },
         child: Container(
@@ -2382,15 +2402,15 @@ class SutraListPageState extends State<SutraListPage>
                 width: 24,
                 height: 24,
                 decoration: BoxDecoration(
-                  color: AppPalette.p.primary.withValues(alpha: 0.1),
+                  color: AppPalette.p.accent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(7),
                 ),
-                child: Icon(Icons.history_rounded, size: 14, color: AppPalette.p.primary),
+                child: Icon(Icons.trending_up_rounded, size: 14, color: AppPalette.p.accent),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '最近阅读',
+                  '大家都在读',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2515,7 +2535,7 @@ class SutraListPageState extends State<SutraListPage>
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: sutra != null && sutra.isRead
-                      ? const Color(0xFF71867A)
+                      ? const Color(0xFFcf9e66)
                       : AppPalette.p.text,
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
@@ -2714,7 +2734,7 @@ class SutraListPageState extends State<SutraListPage>
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: sutra.isRead ? const Color(0xFF71867A) : AppPalette.p.primary,
+            color: sutra.isRead ? const Color(0xFFcf9e66) : AppPalette.p.primary,
             fontSize: 14.5,
             fontWeight: sutra.isRead ? FontWeight.w600 : FontWeight.w500,
           ),
@@ -2788,7 +2808,7 @@ class SutraListPageState extends State<SutraListPage>
                           fontSize: 15,
                           height: 1.2,
                           color: sutra.isRead
-                              ? const Color(0xFF71867A)
+                              ? const Color(0xFFcf9e66)
                               : const Color(0xFF616161),
                         ),
                         overflow: TextOverflow.ellipsis,

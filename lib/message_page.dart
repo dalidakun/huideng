@@ -920,7 +920,9 @@ class _NotificationCardState extends State<_NotificationCard>
                 ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
-                ? null
+                ? (unread
+                    ? BoxDecoration(color: p.unreadTint)
+                    : null)
                 : BoxDecoration(
                     color: unread ? p.unreadTint : p.card,
                     borderRadius: BorderRadius.circular(16),
@@ -1133,7 +1135,9 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
                 ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
-                ? null
+                ? (unread
+                    ? BoxDecoration(color: p.unreadTint)
+                    : null)
                 : BoxDecoration(
                     color: unread ? p.unreadTint : p.card,
                     borderRadius: BorderRadius.circular(16),
@@ -1588,7 +1592,9 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
                 ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
-                ? null
+                ? (unread
+                    ? BoxDecoration(color: p.unreadTint)
+                    : null)
                 : BoxDecoration(
                     color: unread ? p.unreadTint : p.card,
                     borderRadius: BorderRadius.circular(16),
@@ -1877,7 +1883,9 @@ class _FollowNotificationCardState extends State<_FollowNotificationCard>
                 ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
-                ? null
+                ? (unread
+                    ? BoxDecoration(color: p.unreadTint)
+                    : null)
                 : BoxDecoration(
                     color: unread ? p.unreadTint : p.card,
                     borderRadius: BorderRadius.circular(16),

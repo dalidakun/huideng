@@ -12,11 +12,11 @@ import 'app_palette.dart';
 ///
 /// 依据「累计读经时长」点亮五枚徽章；帖子头部的「阅藏进度」百分比
 /// 直接采用经藏页右上角「阅藏进度」的算法：标记完成阅读的经书册数 ÷ 全藏总册数。
-/// 全藏共 8982 本、约 9463 万字，按常速研读 300 字/分钟约需 5260 小时。
+/// 全藏共 8982 本、约 9463 万字，按常速研读 300 字/分钟约需 10000 小时。
 const int kCanonTotalBooks = 8982;
 
-/// 读毕全藏约需时长（秒）：5260 小时。
-const int kCanonTotalSeconds = 5260 * 3600;
+/// 读毕全藏约需时长（秒）：10000 小时。
+const int kCanonTotalSeconds = 10000 * 3600;
 
 Color get _badgeText => AppPalette.p.text;
 Color get _badgeTextSec => AppPalette.p.textSec;
@@ -48,19 +48,19 @@ class ReadingBadge {
 /// 五枚读经徽章：依阅读时长阶梯点亮。
 final List<ReadingBadge> kReadingBadges = [
   ReadingBadge(
-      level: 1, title: '一品', name: '初发心', hours: 10,
+      level: 1, title: '一品', name: '初发心', hours: 20,
       icon: Icons.spa, color: Color(0xFF6FA96F)),
   ReadingBadge(
-      level: 2, title: '二品', name: '闻薰', hours: 100,
+      level: 2, title: '二品', name: '闻薰', hours: 200,
       icon: Icons.local_florist, color: Color(0xFF5FA8C8)),
   ReadingBadge(
-      level: 3, title: '三品', name: '思惟', hours: 500,
+      level: 3, title: '三品', name: '思惟', hours: 1000,
       icon: Icons.wb_sunny, color: Color(0xFF7C8FE0)),
   ReadingBadge(
-      level: 4, title: '四品', name: '行持', hours: 2000,
+      level: 4, title: '四品', name: '行持', hours: 5000,
       icon: Icons.menu_book, color: Color(0xFFB08CD9)),
   ReadingBadge(
-      level: 5, title: '五品', name: '通藏', hours: 5260,
+      level: 5, title: '五品', name: '通藏', hours: 10000,
       icon: Icons.auto_awesome, color: AppPalette.p.accent),
 ];
 

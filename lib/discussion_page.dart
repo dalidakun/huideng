@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'app_palette.dart';
 import 'assistant_session.dart';
 
 /// 全局 AI 助手（DeepSeek）展示面。
@@ -50,16 +51,39 @@ class _DiscussionPageState extends State<DiscussionPage> {
           color: const Color(0xFFf0f3f8),
           child: Stack(
             children: [
-              GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onDoubleTap: () => AssistantSession.instance.reload(),
-                child: WebViewWidget(controller: controller),
-              ),
+              WebViewWidget(controller: controller),
               ValueListenableBuilder<bool>(
                 valueListenable: AssistantSession.instance.isLoading,
                 builder: (context, loading, _) {
                   if (!loading) return const SizedBox.shrink();
                   return const Center(child: CircularProgressIndicator());
+                },
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: AssistantSession.instance.isOnChatPage,
+                builder: (context, onChat, _) {
+                  if (onChat) return const SizedBox.shrink();
+                  return Positioned(
+                    right: 16,
+                    bottom: 111,
+                    child: SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: FloatingActionButton(
+                        heroTag: 'assistant_back_to_chat',
+                        onPressed: () => AssistantSession.instance.goBackToChat(),
+                        backgroundColor: const Color(0xFFf7f7f7),
+                        elevation: 8,
+                        highlightElevation: 12,
+                        shape: const CircleBorder(),
+                        child: Icon(
+                          Icons.arrow_back,
+                          size: 18,
+                          color: AppPalette.p.primary,
+                        ),
+                      ),
+                    ),
+                  );
                 },
               ),
             ],

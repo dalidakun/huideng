@@ -206,10 +206,9 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
           ),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Row(
+          child: Row(
           children: [
-            const Icon(Icons.local_fire_department,
-                size: 34, color: Color(0xFFD93B28)),
+            Image.asset('assets/images/fire.png', width: 34, height: 34),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -232,40 +231,22 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     );
   }
 
-  /// 名次牌：第 1 名仅一枚金色奖杯（无底框、无文字），第 2/3 名金色胶囊「NO.2/NO.3」，
-  /// 第 4 名起灰色数字。
+  /// 名次牌：第 1/2/3 名用字符01/02/03，颜色#6F877A，字号递减。第 4 名起灰色数字。
   Widget _rankBadge(int index) {
-    final gold =
-        LinearGradient(colors: [AppPalette.p.accent, AppPalette.p.accent]);
-    if (index == 0) {
-      // 与下方灰色数字同宽居中，保证各名次名称起始位置接近对齐。
-      // 榜首奖杯放大展示，突出第一名；红金渐变（与火把同红色系）。
+    if (index < 3) {
+      final fontSize = index == 0 ? 26.0 : (index == 1 ? 22.0 : 19.0);
       return SizedBox(
         width: 34,
-        child: ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFFF8A5C), Color(0xFFD93B28)],
-          ).createShader(bounds),
-          child: const Icon(Icons.emoji_events_rounded,
-              size: 34, color: Colors.white),
+        child: Text(
+          _rankLabel(index),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w700,
+            color: const Color(0xFF6F877A),
+            letterSpacing: 1,
+          ),
         ),
-      );
-    }
-    if (index < 3) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          gradient: gold,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text('NO.${index + 1}',
-            style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-                letterSpacing: 0.5)),
       );
     }
     return SizedBox(
@@ -276,6 +257,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               fontSize: 15, fontWeight: FontWeight.w500, color: _textHint)),
     );
   }
+
+  String _rankLabel(int index) => (index + 1).toString().padLeft(2, '0');
 
   /// 前三名：渐变底色卡片（无边线），名次奖牌 + 名称 + 火把 + 箭头。
   Widget _buildTopCard(HotDiscussionItem it, int index) {
@@ -314,7 +297,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
-                        color: _accent),
+                        color: widget.isSutra ? _accent : _textSec),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -353,7 +336,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                 style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: _accent),
+                    color: widget.isSutra ? _accent : _textSec),
               ),
             ),
             const SizedBox(width: 8),

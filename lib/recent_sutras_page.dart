@@ -9,7 +9,7 @@ Color get _card => AppPalette.p.card;
 Color get _text => AppPalette.p.text;
 Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
-const Color _readTeal = Color(0xFF71867A);
+const Color _readTeal = Color(0xFFcf9e66);
 
 /// 最近阅读页：展示最近读过的经书，点击进入阅读，长按可收藏/置顶等。
 class RecentSutrasPage extends StatefulWidget {

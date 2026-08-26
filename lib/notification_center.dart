@@ -216,9 +216,7 @@ class NotificationCenter {
   }
 
   /// 补齐帖子内容摘要：帖子摘要为空且帖子还在时拉取正文；失败保留原样。
-  /// 一页最多 20 个通知组，老实现一次性并发 20 个 getNoteById 云调用，
-  /// 冷启动/弱网下互相拖慢甚至超时。这里按小批量（≤4）串行补齐，
-  /// 既不阻塞首屏渲染、也不会把云函数并发打满。
+  /// 一页最多 20 个通知组，按批量（≤8）串行补齐；利用笔记缓存避免重复拉取。
   Future<void> _attachNotePreviews(List<NotificationGroup> groups) async {
     final pending = groups.where((g) {
       if (g.type == 'follow_me') return false;
@@ -227,15 +225,26 @@ class NotificationCenter {
       if (g.type == 'like_me' && g.noteRepostKind.isEmpty) return true;
       return false;
     }).where((g) => g.noteId.isNotEmpty).toList();
-    const batchSize = 4;
-    for (var i = 0; i < pending.length; i += batchSize) {
-      final batch = pending.sublist(
-          i, math.min(i + batchSize, pending.length));
+    // 按 noteId 去重：多个通知组可能指向同一篇帖子，只需拉一次。
+    final seen = <String>{};
+    final unique = <NotificationGroup>[];
+    for (final g in pending) {
+      if (seen.add(g.noteId)) unique.add(g);
+    }
+    const batchSize = 8;
+    for (var i = 0; i < unique.length; i += batchSize) {
+      final batch = unique.sublist(
+          i, math.min(i + batchSize, unique.length));
       await Future.wait(batch.map((g) async {
         try {
           final note = await CloudNotesService.instance.getNoteById(g.noteId);
-          if (g.noteContent.isEmpty) g.noteContent = note.content;
-          if (g.noteRepostKind.isEmpty) g.noteRepostKind = note.repostKind;
+          // 回写所有指向同 noteId 的组。
+          for (final gg in groups) {
+            if (gg.noteId == g.noteId) {
+              if (gg.noteContent.isEmpty) gg.noteContent = note.content;
+              if (gg.noteRepostKind.isEmpty) gg.noteRepostKind = note.repostKind;
+            }
+          }
         } catch (_) {}
       }));
     }

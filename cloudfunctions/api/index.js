@@ -106,6 +106,8 @@ const app = cloudbase.init(buildInitOptions());
 
 // 热门讨论聚合结果缓存（内存级，仅热实例间共享）：15 分钟内不重复全表扫描。
 let hotDiscussionsCache = null;
+// 大家都在读：全平台锁定精读经书热度缓存。
+let popularSutrasCache = null;
 
 async function resolveUid(event, context) {
   // 1) 客户端显式传入的 access token → 官方接口解析调用者
@@ -1165,6 +1167,54 @@ exports.main = async (event, context) => {
         return ok(data);
       }
 
+      case "getPopularSutras": {
+        const nowMs = Date.now();
+        if (popularSutrasCache && nowMs - popularSutrasCache.at < 15 * 60 * 1000) {
+          return ok({ ...popularSutrasCache.data, cached: true });
+        }
+        const sutraCounts = new Map(); // title -> count
+        const sutraPaths = new Map();  // title -> most common filePath
+        const cap = 5000;
+        let scanned = 0;
+        let skip = 0;
+        while (scanned < cap) {
+          const r = await userData.orderBy("createdAt", "desc").skip(skip).limit(1000).get();
+          const batch = r.data || [];
+          if (batch.length === 0) break;
+          for (const row of batch) {
+            if (++scanned > cap) break;
+            const prefs = (row.payload && row.payload.prefs) || {};
+            const locked = prefs.locked_sutras;
+            if (!Array.isArray(locked)) continue;
+            const seen = new Set();
+            for (const e of locked) {
+              const s = String(e || "");
+              if (!s) continue;
+              const idx = s.indexOf("|||");
+              const title = idx > 0 ? s.slice(0, idx) : s;
+              const filePath = idx > 0 ? s.slice(idx + 3) : "";
+              if (seen.has(title)) continue;
+              seen.add(title);
+              sutraCounts.set(title, (sutraCounts.get(title) || 0) + 1);
+              if (filePath && !sutraPaths.has(title)) sutraPaths.set(title, filePath);
+            }
+          }
+          if (batch.length < 1000 || scanned >= cap) break;
+          skip += 1000;
+        }
+        const top = [...sutraCounts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 50)
+          .map(([title, count]) => ({
+            title,
+            count,
+            filePath: sutraPaths.get(title) || "",
+          }));
+        const pdata = { sutras: top, updatedAt: nowMs };
+        popularSutrasCache = { at: nowMs, data: pdata };
+        return ok(pdata);
+      }
+
       case "getNoteById": {
         const id = String(event.id || "");
         const { data } = await notes.doc(id).get();
@@ -2065,10 +2115,11 @@ exports.main = async (event, context) => {
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
 
-        // 单次查询：拉取用户所有活动（最多 500 条），内存中过滤通知类型。
+        // 单次查询：拉取用户所有活动（最多 200 条），内存中过滤通知类型。
         // 比逐个类型查询快 10 倍以上，避免云函数超时。
+        // 按 pageSize 的 5 倍预取（覆盖非通知活动被过滤后仍够分页），最少 60 条。
         const receivedSet = new Set(receivedTypes);
-        const fetchLimit = Math.max(page * pageSize, 200);
+        const fetchLimit = Math.min(Math.max(page * pageSize * 5, 60), 200);
         const res = await activities
           .where({ userId: uid })
           .orderBy("createdAt", "desc")
@@ -2340,6 +2391,7 @@ exports.main = async (event, context) => {
           record.createdAt = nowMs;
           await userData.add(record);
         }
+        popularSutrasCache = null;
         return ok({ updatedAt: record.updatedAt });
       }
 

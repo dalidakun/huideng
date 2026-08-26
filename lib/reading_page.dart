@@ -58,6 +58,7 @@ class _ReadingPageState extends State<ReadingPage>
   bool _isDownloading = false;
   double _downloadProgress = 0;
   bool _isFavorite = false;
+  bool _isRead = false;
   double? _savedPosition;
   double? _savedProgress;
   int _restoreAttempts = 0;
@@ -89,6 +90,7 @@ class _ReadingPageState extends State<ReadingPage>
     _loadSavedScrollState();
     _loadContent();
     _loadFavoriteState();
+    _loadReadState();
   }
 
   /// 把任意形式的经书路径规范化为打包资产路径（assets/sutras_ascii/...）：
@@ -995,6 +997,16 @@ class _ReadingPageState extends State<ReadingPage>
                               onTap: _toggleFavorite,
                             ),
                             _buildMoreMenuItem(
+                              icon: Icon(
+                                _isRead
+                                    ? Icons.mark_chat_read
+                                    : Icons.mark_chat_unread,
+                                size: 18,
+                              ),
+                              label: _isRead ? '取消完成' : '标记完成',
+                              onTap: _toggleRead,
+                            ),
+                            _buildMoreMenuItem(
                               icon: const Icon(Icons.help_outline, size: 18),
                               label: '使用说明',
                               onTap: _openUsageGuide,
@@ -1114,6 +1126,73 @@ class _ReadingPageState extends State<ReadingPage>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(nowFav ? '已收藏，可在「我的收藏」中查看' : '已取消收藏'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// 加载当前经书阅读完成状态。
+  Future<void> _loadReadState() async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final f = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+      if (!await f.exists()) return;
+      final list = (jsonDecode(await f.readAsString()) as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      final title = widget.title;
+      final idx = list.indexWhere((e) => e['title'] == title);
+      if (idx >= 0 && list[idx]['isRead'] == true) {
+        if (mounted) setState(() => _isRead = true);
+      }
+    } catch (_) {}
+  }
+
+  /// 标记完成 / 取消标记完成当前经书。
+  Future<void> _toggleRead() async {
+    final title = widget.title;
+    final docs = await getApplicationDocumentsDirectory();
+    final f = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+    var list = <Map<String, dynamic>>[];
+    if (await f.exists()) {
+      try {
+        list = (jsonDecode(await f.readAsString()) as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
+    final idx = list.indexWhere((e) => e['title'] == title);
+    final wasRead = idx >= 0 && list[idx]['isRead'] == true;
+    final newRead = !wasRead;
+    if (idx >= 0) {
+      list[idx]['isRead'] = newRead;
+      list[idx]['readTime'] =
+          newRead ? DateTime.now().toIso8601String() : null;
+    } else {
+      list.add({
+        'title': title,
+        'size': '',
+        'charCount': 0,
+        'isPinned': false,
+        'isRead': true,
+        'isFavorite': false,
+        'filePath': _resolvedFilePath ?? widget.filePath,
+        'folder': null,
+        'favoriteTime': null,
+        'readTime': DateTime.now().toIso8601String(),
+      });
+    }
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(jsonEncode(list), flush: true);
+    if (await f.exists()) await f.delete();
+    await tmp.rename(f.path);
+    await SutraFavorites.syncStatePref(title);
+    if (!mounted) return;
+    setState(() {
+      _showMoreMenu = false;
+      _isRead = newRead;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(newRead ? '已标记完成阅读' : '已取消完成阅读标记'),
         duration: const Duration(seconds: 2),
       ),
     );

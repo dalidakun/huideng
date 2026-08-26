@@ -2073,8 +2073,8 @@ class StudyHubPageState extends State<StudyHubPage>
                                   ? FontWeight.w600
                                   : FontWeight.w500,
                               color: _currentRead
-                                  ? const Color(0xFF71867A)
-                                  : _textSec,
+                                   ? const Color(0xFFcf9e66)
+                                   : _textSec,
                               height: 1.4)),
                     ),
                   ],

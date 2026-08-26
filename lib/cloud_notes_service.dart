@@ -187,6 +187,26 @@ class HotDiscussionItem {
       );
 }
 
+/// 大家都在读：某部经书被多少用户锁定精读。
+class PopularSutraItem {
+  final String title;
+  final int count;
+  final String filePath;
+
+  const PopularSutraItem({
+    required this.title,
+    this.count = 0,
+    this.filePath = '',
+  });
+
+  factory PopularSutraItem.fromJson(Map<String, dynamic> e) =>
+      PopularSutraItem(
+        title: e['title']?.toString() ?? '',
+        count: (e['count'] as num?)?.toInt() ?? 0,
+        filePath: e['filePath']?.toString() ?? '',
+      );
+}
+
 /// 广场评论。
 class PlazaComment {
   final String id;
@@ -597,6 +617,11 @@ class CloudNotesService {
   /// 仅存内存，重启后服务端早已一致，无需持久化。
   final Set<String> locallyDeletedNoteIds = {};
 
+  /// 笔记详情缓存：noteId → PlazaNote。避免通知页/回复卡等场景
+  /// 重复调用 getNoteById（每次都是独立云函数调用，弱网下极慢）。
+  /// 仅存内存，不持久化；写操作（编辑/删除）后主动清除对应条目。
+  final Map<String, PlazaNote> _noteCache = {};
+
   /// 本次会话内「我刚发布」的内容 id → 发布时间（广场笔记/回复与经书讨论通用）。
   ///
   /// 用途：各列表页（发现/话题页/经书讨论页）把我刚发布的帖子短暂置顶，
@@ -860,18 +885,21 @@ class CloudNotesService {
   Future<void> deleteCloudNote(String cloudId) async {
     await _call('deleteNote', params: {'id': cloudId});
     locallyDeletedNoteIds.add(cloudId);
+    _noteCache.remove(cloudId);
   }
 
   /// 软删除/隐藏云端笔记（从广场移除，仍可恢复）。
   Future<void> hideCloudNote(String cloudId) async {
     await _call('updateNote', params: {'id': cloudId, 'status': 'hidden'});
     locallyDeletedNoteIds.add(cloudId);
+    _noteCache.remove(cloudId);
   }
 
   /// 恢复被软删除的云端笔记（重新在广场展示）。
   Future<void> unhideCloudNote(String cloudId) async {
     await _call('updateNote', params: {'id': cloudId, 'status': 'normal'});
     locallyDeletedNoteIds.remove(cloudId);
+    _noteCache.remove(cloudId);
   }
 
   /// 拉取广场笔记流。sort: latest / hot。
@@ -994,6 +1022,15 @@ class CloudNotesService {
     return (parse('topics'), parse('sutras'));
   }
 
+  /// 获取全平台热门经书（按锁定精读用户数排序，最多 50 条）。
+  Future<List<PopularSutraItem>> getPopularSutras() async {
+    final res = await _call('getPopularSutras');
+    return (res['sutras'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PopularSutraItem.fromJson)
+        .toList();
+  }
+
   /// 拉取某帖子的回复帖列表（repostOf == noteId，最早在前），供详情页折叠展示。
   Future<(List<PlazaNote>, int total)> getNoteReplies(
     String noteId, {
@@ -1015,12 +1052,17 @@ class CloudNotesService {
 
   /// 广场笔记详情（公开或本人可见）。
   Future<PlazaNote> getNoteById(String id) async {
+    // 通知页/回复卡等场景会重复调用此方法，用缓存避免多次云函数调用。
+    final cached = _noteCache[id];
+    if (cached != null) return cached;
     final res = await _call('getNoteById', params: {'id': id});
     final note = res['note'];
     if (note is! Map<String, dynamic>) {
       throw const CloudApiException('笔记不存在');
     }
-    return PlazaNote.fromJson(note);
+    final plazaNote = PlazaNote.fromJson(note);
+    _noteCache[id] = plazaNote;
+    return plazaNote;
   }
 
   /// 阅读量 +1（打开详情页时调用）。返回最新阅读量。
