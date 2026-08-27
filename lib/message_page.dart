@@ -558,7 +558,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
         // 素白外观：横向缩进比主页发现流（16）更多一档，信息离屏幕边缘更远；
         // 条目间分割线与内容同宽对齐。
         padding: AppPalette.instance.isPlain
-            ? const EdgeInsets.fromLTRB(20, 8, 20, 28)
+            ? const EdgeInsets.fromLTRB(0, 8, 0, 28)
             : const EdgeInsets.fromLTRB(12, 8, 12, 28),
         itemCount: _groups.length + 1,
         itemBuilder: (context, index) {
@@ -613,8 +613,8 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (index > 0)
-                  Divider(
-                      height: 1, thickness: 0.5, color: AppPalette.p.divider),
+          Divider(
+              height: 1, thickness: 0.5, color: AppPalette.p.divider),
                 card,
               ],
             );
@@ -917,7 +917,7 @@ class _NotificationCardState extends State<_NotificationCard>
             margin: EdgeInsets.only(bottom: plain ? 0 : 10),
             // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
             padding: plain
-                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                ? const EdgeInsets.fromLTRB(16, 18, 16, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
                 ? (unread
@@ -1132,7 +1132,7 @@ class _LikeNotificationCardState extends State<_LikeNotificationCard>
             margin: EdgeInsets.only(bottom: plain ? 0 : 10),
             // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
             padding: plain
-                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                ? const EdgeInsets.fromLTRB(16, 18, 16, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
                 ? (unread
@@ -1589,7 +1589,7 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
             margin: EdgeInsets.only(bottom: plain ? 0 : 10),
             // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
             padding: plain
-                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                ? const EdgeInsets.fromLTRB(16, 18, 16, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
                 ? (unread
@@ -1880,7 +1880,7 @@ class _FollowNotificationCardState extends State<_FollowNotificationCard>
             margin: EdgeInsets.only(bottom: plain ? 0 : 10),
             // 素白：无卡片边界，上下内边距加大让相邻通知的间隔更宽松。
             padding: plain
-                ? const EdgeInsets.fromLTRB(0, 18, 0, 18)
+                ? const EdgeInsets.fromLTRB(16, 18, 16, 18)
                 : const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: plain
                 ? (unread

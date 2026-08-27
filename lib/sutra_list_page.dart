@@ -12,6 +12,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'reading_page.dart';
 import 'auth_service.dart';
+import 'cloud_notes_service.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_favorites.dart';
@@ -82,7 +83,8 @@ int _sutraVolumeOf(String title) {
   return m == null ? 0 : int.tryParse(m.group(1)!) ?? 0;
 }
 
-/// 数字转中文卷名：1->「卷一」、10->「卷十」、21->「卷二十一」、120->「卷一百二十」。
+/// 数字转中文卷名：1->「卷一」、10->「卷十」、21->「卷二十一」、
+/// 105->「卷一百零五」、110->「卷一百一十」、120->「卷一百二十」。
 String _volumeLabel(int n) {
   const digits = '零一二三四五六七八九';
   if (n <= 0) return '';
@@ -96,9 +98,106 @@ String _volumeLabel(int n) {
   if (n < 1000) {
     final hundreds = n ~/ 100;
     final rest = n % 100;
-    return '卷${digits[hundreds]}百${rest == 0 ? '' : _volumeLabel(rest).substring(1)}';
+    final head = '卷${digits[hundreds]}百';
+    if (rest == 0) return head;
+    if (rest < 10) return '$head零${digits[rest]}';
+    final tens = rest ~/ 10;
+    final ones = rest % 10;
+    return '$head${digits[tens]}十${ones == 0 ? '' : digits[ones]}';
   }
   return '卷$n';
+}
+
+/// 经名末尾的中文卷标（如「地藏菩萨本愿经卷一」中的「卷一」）。
+final RegExp chineseVolumeSuffixRe = RegExp(r'卷[零一二三四五六七八九十百千]+$');
+
+/// 中文卷标前缀匹配（用于在正文中识别紧跟经名的「卷X」，无结尾锚定）。
+final RegExp chineseVolumePrefixRe = RegExp(r'卷[零一二三四五六七八九十百千]+');
+
+/// 基础经名：去掉经名末尾的 CBETA 编号（如「地藏菩萨本愿经T13n0412_001」->「地藏菩萨本愿经」）。
+String sutraBaseTitle(String title) =>
+    title.replaceAll(_sutraIdSuffixRe, '').trim();
+
+/// 历史脏数据：早期目录曾把空的卷号占位「第卷」写进多卷经书经名
+/// （如「大般若波罗蜜多经第卷第卷T05n0220_001」）。合法经名不含「第卷」
+/// （「第」后必跟数字），可安全移除。
+final RegExp _legacyTitleGarbageRe = RegExp(r'(第卷)+');
+
+/// 移除经名中的历史「第卷」占位脏字符；无脏数据时原样返回。
+String repairLegacySutraTitle(String title) =>
+    title.contains('第卷') ? title.replaceAll(_legacyTitleGarbageRe, '') : title;
+
+/// 修复列表中历史遗留的「第卷」脏标题；修复后若与已有条目重复
+/// （如 APK 更新时已补入干净条目），合并双方状态（已读/收藏/置顶取并集），
+/// 保持原有顺序。无脏数据时原样返回 [sutras]。
+List<Sutra> repairLegacySutraList(List<Sutra> sutras) {
+  var changed = false;
+  final indexByTitle = <String, int>{};
+  final result = <Sutra>[];
+  for (final s in sutras) {
+    final t = repairLegacySutraTitle(s.title);
+    if (t != s.title) changed = true;
+    final exist = indexByTitle[t];
+    if (exist != null) {
+      changed = true;
+      final e = result[exist];
+      result[exist] = Sutra(
+        t,
+        e.size,
+        charCount: e.charCount > 0 ? e.charCount : s.charCount,
+        isPinned: e.isPinned || s.isPinned,
+        isRead: e.isRead || s.isRead,
+        isFavorite: e.isFavorite || s.isFavorite,
+        filePath: e.filePath ?? s.filePath,
+        folder: e.folder ?? s.folder,
+        favoriteTime: e.favoriteTime ?? s.favoriteTime,
+        readTime: e.readTime ?? s.readTime,
+      );
+      continue;
+    }
+    indexByTitle[t] = result.length;
+    result.add(t == s.title
+        ? s
+        : Sutra(
+            t,
+            s.size,
+            charCount: s.charCount,
+            isPinned: s.isPinned,
+            isRead: s.isRead,
+            isFavorite: s.isFavorite,
+            filePath: s.filePath,
+            folder: s.folder,
+            favoriteTime: s.favoriteTime,
+            readTime: s.readTime,
+          ));
+  }
+  return changed ? result : sutras;
+}
+
+/// 归一化热门经文名称：先去掉 CBETA 编号后缀，再去掉末尾中文卷标，
+/// 得到基础经名（「地藏菩萨本愿经卷一」/「地藏菩萨本愿经T13n0412_001」->「地藏菩萨本愿经」），
+/// 使带卷标与不带卷标的引用能归并到同一条目。
+String normalizeHotSutraName(String name) => name
+    .replaceAll(_sutraIdSuffixRe, '')
+    .replaceAll(chineseVolumeSuffixRe, '')
+    .trim();
+
+/// 按基础经名归并热门经文条目：「XX经卷一」与「XX经」合并为一条
+/// （posts/score 累加），保证多卷经书在热度榜上只出现一次。
+List<HotDiscussionItem> mergeHotSutraItems(List<HotDiscussionItem> items) {
+  final byBase = <String, HotDiscussionItem>{};
+  for (final it in items) {
+    final base = normalizeHotSutraName(it.name);
+    if (base.isEmpty) continue;
+    final cur = byBase[base];
+    byBase[base] = cur == null
+        ? HotDiscussionItem(name: base, posts: it.posts, score: it.score)
+        : HotDiscussionItem(
+            name: base,
+            posts: cur.posts + it.posts,
+            score: cur.score + it.score);
+  }
+  return byBase.values.toList();
 }
 
 /// 统计同名（基础经名）出现多次的集合，即多卷经书的基础经名。
@@ -122,6 +221,108 @@ String sutraDisplayTitle(String title, {Set<String>? multiVolumeBases}) {
   if (multiVolumeBases == null || !multiVolumeBases.contains(base)) return base;
   final volume = _sutraVolumeOf(title);
   return volume <= 0 ? base : '$base${_volumeLabel(volume)}';
+}
+
+/// 转换经名为显示格式。
+/// 当 [multiVolumeBases] 非空时，仅多卷经书显示卷标（如「高僧传卷五」），
+/// 单卷经书直接显示基础名（如「金刚经」）。
+/// 当 [multiVolumeBases] 为 null 时，只要有卷号后缀就显示卷标。
+String sutraDisplayNameWithVolume(String title,
+    {Set<String>? multiVolumeBases}) {
+  final base = title.replaceAll(_sutraIdSuffixRe, '').trim();
+  final volume = _sutraVolumeOf(title);
+  if (volume <= 0) return base;
+  // 有卷号后缀但未传 multiVolumeBases 时，默认显示卷标。
+  if (multiVolumeBases == null) return '$base${_volumeLabel(volume)}';
+  // 传了 multiVolumeBases 时，仅多卷经书才显示卷标。
+  return multiVolumeBases.contains(base)
+      ? '$base${_volumeLabel(volume)}'
+      : base;
+}
+
+/// 「标题 + 可选路径」条目的展示名：标题本身不带卷号后缀时（如从 $引用、
+/// 讨论页跳转进入，标题只有基础经名），尝试从 [filePath] 中提取规范 ID
+/// 补齐卷号，保证卷标与实际打开的卷一致。
+String sutraDisplayTitleWithPath(String title,
+    {String? filePath, Set<String>? multiVolumeBases}) {
+  var t = title;
+  if (_sutraVolumeOf(t) <= 0) {
+    final id = SutraDownloader.extractId(null, filePath);
+    if (id != null) t = '$t$id';
+  }
+  return sutraDisplayNameWithVolume(t, multiVolumeBases: multiVolumeBases);
+}
+
+/// 聚合场景（经书讨论页、热门榜等）的展示名：标题带卷号后缀时显示具体卷标；
+/// 仅有基础经名且为多卷经书时统一补「卷一」卷标（按基础经名聚合、无具体卷信息）。
+String sutraAggregatedDisplayName(String title,
+    {required Set<String> multiVolumeBases}) {
+  final display =
+      sutraDisplayNameWithVolume(title, multiVolumeBases: multiVolumeBases);
+  if (_sutraVolumeOf(title) <= 0 && multiVolumeBases.contains(display)) {
+    return '$display卷一';
+  }
+  return display;
+}
+
+/// 从本地 sutras_list.json 加载多卷经书的基础经名集合。
+Future<Set<String>> loadLocalMultiVolumeBases() async {
+  try {
+    final docs = await getApplicationDocumentsDirectory();
+    final file =
+        File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+    if (!await file.exists()) return const {};
+    final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+    return collectMultiVolumeBases(
+        decoded.map((e) => Sutra.fromJson(e as Map<String, dynamic>)));
+  } catch (_) {
+    return const {};
+  }
+}
+
+/// 为热门经文列表构建经名显示映射表：从本地 sutras_list.json 查找 CBETA 完整标题，
+/// 将云端返回的基础经名（如「高僧传」）映射到带卷标的显示名。
+/// 热门榜按基础经名聚合、无具体卷信息，多卷经书统一取第一卷卷标（如「高僧传卷一」）。
+/// 单卷经书（如「金刚经」）映射为自身，不加卷标。
+/// 仅对 [isSutra] 为 true 时构建映射，话题列表返回空映射。
+/// 返回的 Map key 为 HotDiscussionItem.name（基础经名，用于导航），
+/// value 为应显示的名称（含卷标），UI 层用此 map 替换显示文本。
+Future<Map<String, String>> buildSutraDisplayNameMap(
+  List<HotDiscussionItem> items, {
+  required bool isSutra,
+}) async {
+  if (!isSutra || items.isEmpty) return const {};
+  try {
+    final docs = await getApplicationDocumentsDirectory();
+    final file =
+        File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+    if (!await file.exists()) return const {};
+    final decoded = jsonDecode(await file.readAsString()) as List<dynamic>;
+    final sutras =
+        decoded.map((e) => Sutra.fromJson(e as Map<String, dynamic>)).toList();
+    final mvBases = collectMultiVolumeBases(sutras);
+    // 基础经名 → CBETA 完整标题（含卷号后缀）
+    final titleLookup = <String, String>{};
+    for (final s in sutras) {
+      final base = s.title.replaceAll(_sutraIdSuffixRe, '').trim();
+      if (base.isNotEmpty && !titleLookup.containsKey(base)) {
+        titleLookup[base] = s.title;
+      }
+    }
+    final result = <String, String>{};
+    for (final it in items) {
+      final fullTitle = titleLookup[it.name];
+      if (fullTitle == null) continue;
+      final displayName =
+          sutraDisplayNameWithVolume(fullTitle, multiVolumeBases: mvBases);
+      if (displayName != it.name) {
+        result[it.name] = displayName;
+      }
+    }
+    return result;
+  } catch (_) {
+    return const {};
+  }
 }
 
 class SutraListPage extends StatefulWidget {
@@ -954,7 +1155,12 @@ class SutraListPageState extends State<SutraListPage>
       if (await file.exists()) {
         final loaded = await _parseSutraListFile(file);
         if (loaded.isNotEmpty) {
-          _applySutraList(loaded);
+          final repaired = repairLegacySutraList(loaded);
+          if (!identical(repaired, loaded)) {
+            await _writeSutraListFile(repaired);
+            await _repairLegacyTitlePrefs();
+          }
+          _applySutraList(repaired);
           await _enrichCharCounts();
           await _maybeRestoreDefaultsAfterApkUpdate();
           await _applyRestoredSutraStates();
@@ -969,11 +1175,12 @@ class SutraListPageState extends State<SutraListPage>
     final prefs = await SharedPreferences.getInstance();
     final sutraJsonList = prefs.getStringList('sutras');
     if (sutraJsonList != null && sutraJsonList.isNotEmpty) {
-      final loaded = sutraJsonList
+      final loaded = repairLegacySutraList(sutraJsonList
           .map((jsonStr) => Sutra.fromJson(jsonDecode(jsonStr)))
-          .toList();
+          .toList());
       await _writeSutraListFile(loaded);
       await prefs.remove('sutras');
+      await _repairLegacyTitlePrefs();
       _applySutraList(loaded);
       await _enrichCharCounts();
       await _maybeRestoreDefaultsAfterApkUpdate();
@@ -990,6 +1197,60 @@ class SutraListPageState extends State<SutraListPage>
     await _applyRestoredSutraStates();
   }
 
+  /// 一次性修复 SharedPreferences 中历史遗留的「第卷」脏经名：
+  /// current_sutra_title / last_read_title / recent_sutras /
+  /// sutra_states / daily_sutra_history，与经书列表修复保持一致。
+  Future<void> _repairLegacyTitlePrefs() async {
+    if (kIsWeb) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in const ['current_sutra_title', 'last_read_title']) {
+        final v = prefs.getString(key);
+        if (v != null && v.contains('第卷')) {
+          await prefs.setString(key, repairLegacySutraTitle(v));
+        }
+      }
+      final recent = prefs.getStringList('recent_sutras');
+      if (recent != null && recent.any((e) => e.contains('第卷'))) {
+        await prefs.setStringList(
+            'recent_sutras',
+            recent.map((e) {
+              final i = e.indexOf('|||');
+              if (i < 0) return repairLegacySutraTitle(e);
+              return '${repairLegacySutraTitle(e.substring(0, i))}${e.substring(i)}';
+            }).toList());
+      }
+      final rawStates = prefs.getString('sutra_states');
+      if (rawStates != null && rawStates.contains('第卷')) {
+        final states = jsonDecode(rawStates);
+        if (states is Map && states.isNotEmpty) {
+          final fixed = <String, dynamic>{};
+          states.forEach((k, v) {
+            fixed.putIfAbsent(repairLegacySutraTitle(k.toString()), () => v);
+          });
+          await prefs.setString('sutra_states', jsonEncode(fixed));
+        }
+      }
+      final rawHistory = prefs.getString('daily_sutra_history');
+      if (rawHistory != null && rawHistory.contains('第卷')) {
+        final history = jsonDecode(rawHistory);
+        if (history is Map) {
+          history.forEach((_, dayList) {
+            if (dayList is! List) return;
+            for (final e in dayList) {
+              if (e is Map && e['title'] is String) {
+                e['title'] = repairLegacySutraTitle(e['title'] as String);
+              }
+            }
+          });
+          await prefs.setString('daily_sutra_history', jsonEncode(history));
+        }
+      }
+    } catch (_) {
+      // 修复失败不影响正常加载。
+    }
+  }
+
   /// 将云端同步下来的经书状态（已读/收藏/置顶/时间）合并进本地列表。
   /// 以标题匹配，采用并集（OR）语义：本地缺失的状态补上，已有状态绝不覆盖。
   /// 幂等：重复合并不会产生副作用。
@@ -999,8 +1260,15 @@ class SutraListPageState extends State<SutraListPage>
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('sutra_states');
       if (raw == null || raw.isEmpty) return;
-      final states = jsonDecode(raw);
-      if (states is! Map || states.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map || decoded.isEmpty) return;
+      // 云端可能仍存着历史脏经名（「第卷」占位），归一化后再匹配。
+      final states = raw.contains('第卷')
+          ? <String, dynamic>{
+              for (final e in decoded.entries)
+                repairLegacySutraTitle(e.key.toString()): e.value,
+            }
+          : decoded;
 
       var changed = false;
       final list = List<Sutra>.from(_allSutras);
@@ -1023,6 +1291,7 @@ class SutraListPageState extends State<SutraListPage>
         list[i] = Sutra(
           s.title,
           s.size,
+          charCount: s.charCount,
           isPinned: s.isPinned || p,
           isRead: s.isRead || r,
           isFavorite: s.isFavorite || f,
@@ -1152,7 +1421,7 @@ class SutraListPageState extends State<SutraListPage>
       final list = decoded.map((e) {
         final m = e as Map<String, dynamic>;
         return Sutra(
-          m['t'] as String,
+          repairLegacySutraTitle(m['t'] as String),
           m['s'] as String,
           charCount: m['c'] as int? ?? 0,
           folder: m['f'] as String?,
@@ -1367,6 +1636,7 @@ class SutraListPageState extends State<SutraListPage>
       _allSutras[index] = Sutra(
         _allSutras[index].title,
         _allSutras[index].size,
+        charCount: _allSutras[index].charCount,
         isPinned: !_allSutras[index].isPinned,
         isRead: _allSutras[index].isRead,
         isFavorite: _allSutras[index].isFavorite,
@@ -1384,6 +1654,7 @@ class SutraListPageState extends State<SutraListPage>
       _allSutras[index] = Sutra(
         _allSutras[index].title,
         _allSutras[index].size,
+        charCount: _allSutras[index].charCount,
         isPinned: _allSutras[index].isPinned,
         isRead: _allSutras[index].isRead,
         isFavorite: !_allSutras[index].isFavorite,
@@ -1403,6 +1674,7 @@ class SutraListPageState extends State<SutraListPage>
       _allSutras[index] = Sutra(
         _allSutras[index].title,
         _allSutras[index].size,
+        charCount: _allSutras[index].charCount,
         isPinned: _allSutras[index].isPinned,
         isRead: !_allSutras[index].isRead,
         isFavorite: _allSutras[index].isFavorite,
@@ -1987,9 +2259,10 @@ class SutraListPageState extends State<SutraListPage>
       var changed = false;
       for (var i = 0; i < _allSutras.length; i++) {
         final s = _allSutras[i];
-        if (s.charCount == 0 && map.containsKey(s.title)) {
+        final cc = map[s.title];
+        if (cc != null && cc != s.charCount) {
           _allSutras[i] = Sutra(s.title, s.size,
-              charCount: map[s.title]!, isPinned: s.isPinned, isRead: s.isRead,
+              charCount: cc, isPinned: s.isPinned, isRead: s.isRead,
               isFavorite: s.isFavorite, filePath: s.filePath, folder: s.folder,
               favoriteTime: s.favoriteTime, readTime: s.readTime);
           changed = true;

@@ -29,6 +29,9 @@ class NoteSutraCatalog {
 
   static List<NoteSutraLink>? _cache;
 
+  /// 多卷经书的基础经名集合（目录中出现多次的基础经名），与目录同生命周期缓存。
+  static Set<String>? _multiVolumeBases;
+
   static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
 
   static Future<List<NoteSutraLink>> _load() async {
@@ -37,11 +40,13 @@ class NoteSutraCatalog {
     final raw = await rootBundle.loadString('assets/sutras_catalog.json');
     final decoded = jsonDecode(raw) as List<dynamic>;
     final byTitle = <String, NoteSutraLink>{};
+    final counts = <String, int>{};
     for (final e in decoded) {
       final m = e as Map<String, dynamic>;
       final rawTitle = (m['t'] as String?) ?? '';
       final title = rawTitle.replaceAll(_idSuffixRe, '');
       if (title.isEmpty) continue;
+      counts[title] = (counts[title] ?? 0) + 1;
       if (byTitle.containsKey(title)) continue; // 多卷经书只保留第一部
       final path = SutraAssetPath.resolve(title: rawTitle);
       if (!path.startsWith('assets/')) continue;
@@ -54,6 +59,10 @@ class NoteSutraCatalog {
     }
     final list = byTitle.values.toList();
     _cache = list;
+    _multiVolumeBases = {
+      for (final e in counts.entries)
+        if (e.value > 1) e.key,
+    };
     return list;
   }
 
@@ -84,6 +93,11 @@ class NoteSutraCatalog {
     if (c == null) return null;
     return {for (final s in c) s.title: s};
   }
+
+  /// 目录已加载时，返回多卷经书的基础经名集合（用于给 $引用/热门榜补「卷X」卷标）；
+  /// 未加载时返回空集合。
+  static Set<String> get cachedMultiVolumeBases =>
+      _multiVolumeBases ?? const {};
 
   /// 经书名 -> 经书的映射，用于点击 @经书 时定位正文路径。
   static Future<Map<String, NoteSutraLink>> titleMap() async {

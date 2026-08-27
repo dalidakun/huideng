@@ -4,6 +4,7 @@ import 'cloud_notes_service.dart';
 import 'loading_widgets.dart';
 import 'note_sutra_links.dart';
 import 'post_rich_content.dart';
+import 'sutra_list_page.dart';
 
 import 'app_palette.dart';
 Color get _bg => AppPalette.p.bg;
@@ -32,6 +33,8 @@ class HotDiscussionListPage extends StatefulWidget {
 class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   late List<HotDiscussionItem> _items;
   bool _isAdmin = false;
+  // 热门经文的基础经名 → 显示名（含卷标），用于榜单显示。
+  Map<String, String> _displayNames = const {};
   // 每页 50 条，用户点击「查看更多」再展示下一页 50 条，
   // 直到全部展示完。避免一次性渲染超长榜单。
   static const int _pageStep = 50;
@@ -44,14 +47,22 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     // 按热度分从高到低排列：越靠上的热度越大，火把越多。
     // 已被管理员删除的话题直接剔除，避免热门榜残留展示。
     final bans = CloudNotesService.instance.bannedTopicNames;
-    _items = (bans.isEmpty
-            ? widget.items
-            : widget.items.where((it) => !bans.contains(it.name)))
+    // 经文榜先按基础经名归一化合并：「XX经卷一」与「XX经」并入同一条目。
+    final source =
+        widget.isSutra ? mergeHotSutraItems(widget.items) : widget.items;
+    final raw = (bans.isEmpty
+            ? source
+            : source.where((it) => !bans.contains(it.name)))
         .toList()
       ..sort((a, b) => b.score.compareTo(a.score));
+    _items = raw;
     NoteSutraCatalog.load();
     CloudNotesService.instance.isAdmin().then((ok) {
       if (mounted) setState(() => _isAdmin = ok);
+    });
+    // 初始列表也构建卷标映射，避免 _refresh 完成前短暂显示无卷标名称。
+    buildSutraDisplayNameMap(raw, isSutra: widget.isSutra).then((names) {
+      if (mounted) setState(() => _displayNames = names);
     });
     // 主动重新拉取热门榜：父页传来的 widget.items 可能是旧快照
     // （刚发布带新 #话题/$经名的帖子，父页还没刷新），这里拉一次保证
@@ -65,7 +76,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     try {
       final (topics, sutras) =
           await CloudNotesService.instance.getHotDiscussions();
-      final all = widget.isSutra ? sutras : topics;
+      // 经文榜按基础经名归一化合并，话题榜保持原样。
+      final all = widget.isSutra ? mergeHotSutraItems(sutras) : topics;
       // 经文榜要再过一遍经书目录白名单（与 study_hub_page 同款），
       // 话题榜要剔掉管理员已删除的话题。
       final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
@@ -76,9 +88,12 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               ? all
               : all.where((t) => !bans.contains(t.name)).toList())
         ..sort((a, b) => b.score.compareTo(a.score));
+      final enhanced =
+          await buildSutraDisplayNameMap(valid, isSutra: widget.isSutra);
       if (!mounted) return;
       setState(() {
         _items = valid;
+        _displayNames = enhanced;
         _refreshing = false;
       });
     } catch (_) {
@@ -119,7 +134,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
 
   Color get _accent => widget.isSutra
       ? const Color(0xFF71867A)
-      : AppPalette.p.accentDeep;
+      : const Color(0xFFcf9e66);
 
   String get _prefix => widget.isSutra ? r'$' : '#';
 
@@ -291,13 +306,13 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    '$_prefix${it.name}',
+                    '$_prefix${_displayNames[it.name] ?? it.name}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
-                        color: widget.isSutra ? _accent : _textSec),
+                        color: widget.isSutra ? _accent : const Color(0xFFcf9e66)),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -330,13 +345,13 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                '$_prefix${it.name}',
+                '$_prefix${_displayNames[it.name] ?? it.name}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: widget.isSutra ? _accent : _textSec),
+                    color: widget.isSutra ? _accent : const Color(0xFFcf9e66)),
               ),
             ),
             const SizedBox(width: 8),

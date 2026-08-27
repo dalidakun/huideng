@@ -11,10 +11,12 @@ import 'cloud_notes_service.dart';
 import 'loading_widgets.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
+import 'note_sutra_links.dart';
 import 'post_rich_content.dart';
 import 'reading_badges.dart';
 import 'reading_time_service.dart';
 import 'reply_chain.dart';
+import 'sutra_list_page.dart' show sutraAggregatedDisplayName;
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
 
@@ -240,6 +242,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
     super.initState();
     _loadPinnedIds();
     _load();
+    // 经书目录未缓存时预加载：精读列表的「卷X」卷标渲染依赖多卷经名集合。
+    if (NoteSutraCatalog.cachedTitleMap == null) {
+      NoteSutraCatalog.load().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   /// 从本地读取置顶帖/回复 id 列表（与「我的」页共用同一份记录）。
@@ -794,16 +802,6 @@ class _UserSpacePageState extends State<UserSpacePage> {
                             const Icon(Icons.verified,
                                 size: 17, color: Color(0xFF70867A)),
                           ],
-                          // 已点亮的修学徽章：紧挨昵称/认证依次显示，
-                          // 只显示点亮的（无点亮不展示）。
-                          if (_profileReadingSeconds > 0) ...[
-                            const SizedBox(width: 8),
-                            ReadingBadgesRow(
-                              seconds: _profileReadingSeconds,
-                              size: 20,
-                              showLocked: false,
-                            ),
-                          ],
                         ],
                       ),
                     ),
@@ -1096,7 +1094,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        s.title,
+                        sutraAggregatedDisplayName(s.title,
+                            multiVolumeBases:
+                                NoteSutraCatalog.cachedMultiVolumeBases),
                         style: TextStyle(
                           fontSize: 14.5,
                           fontWeight: FontWeight.w600,
@@ -1676,7 +1676,34 @@ class _UserSpacePageState extends State<UserSpacePage> {
     final isMine = _isOwn(note.ownerUserId);
     return PostFeedRow(
       note: note,
-      onReplyPosted: _load,
+      onReplyPosted: (replyNote) {
+        // 乐观插入：回复帖子立即出现在列表中，不等云端索引完成；不刷新整个页面。
+        if (replyNote.id.isNotEmpty) {
+          setState(() {
+            _notes.insert(0, replyNote);
+            // 原帖评论量 +1（与云端双写口径一致）。
+            final idx = _notes.indexWhere((n) => n.id == replyNote.repostOf);
+            if (idx >= 0) {
+              final orig = _notes[idx];
+              _notes[idx] = PlazaNote(
+                id: orig.id, ownerUserId: orig.ownerUserId, title: orig.title,
+                content: orig.content, authorName: orig.authorName,
+                authorAccount: orig.authorAccount, authorVerified: orig.authorVerified,
+                canonRead: orig.canonRead, canonTotal: orig.canonTotal,
+                visibility: orig.visibility, status: orig.status,
+                likeCount: orig.likeCount, commentCount: orig.commentCount + 1,
+                viewCount: orig.viewCount, repostCount: orig.repostCount,
+                repostOf: orig.repostOf, repostSourceAuthor: orig.repostSourceAuthor,
+                repostSourceUserId: orig.repostSourceUserId, repostKind: orig.repostKind,
+                tombstoneAncestorIds: orig.tombstoneAncestorIds, kind: orig.kind,
+                quoteContent: orig.quoteContent, quoteOfTitle: orig.quoteOfTitle,
+                quoteOfContent: orig.quoteOfContent,
+                createdAt: orig.createdAt, updatedAt: orig.updatedAt,
+              );
+            }
+          });
+        }
+      },
       onTap: () => _openNote(note),
       pinned: _pinnedIds.contains(note.id),
       onTogglePin: isMine ? () => _togglePin(note) : null,
@@ -1725,9 +1752,34 @@ class _UserSpacePageState extends State<UserSpacePage> {
             root.id: root.authorAccount,
             for (final r in replies) r.id: r.authorAccount,
           },
-          onComment: (n) => replyToNote(context, n, _load),
-          onLike: (n) => likeTargetNote(context, n, _load),
-          onRepost: (n) => forwardNote(context, n, _load),
+          onComment: (n) => replyToNote(context, n, (replyNote) {
+            if (replyNote.id.isNotEmpty) {
+              setState(() {
+                _notes.insert(0, replyNote);
+                final idx = _notes.indexWhere((m) => m.id == replyNote.repostOf);
+                if (idx >= 0) {
+                  final orig = _notes[idx];
+                  _notes[idx] = PlazaNote(
+                    id: orig.id, ownerUserId: orig.ownerUserId, title: orig.title,
+                    content: orig.content, authorName: orig.authorName,
+                    authorAccount: orig.authorAccount, authorVerified: orig.authorVerified,
+                    canonRead: orig.canonRead, canonTotal: orig.canonTotal,
+                    visibility: orig.visibility, status: orig.status,
+                    likeCount: orig.likeCount, commentCount: orig.commentCount + 1,
+                    viewCount: orig.viewCount, repostCount: orig.repostCount,
+                    repostOf: orig.repostOf, repostSourceAuthor: orig.repostSourceAuthor,
+                    repostSourceUserId: orig.repostSourceUserId, repostKind: orig.repostKind,
+                    tombstoneAncestorIds: orig.tombstoneAncestorIds, kind: orig.kind,
+                    quoteContent: orig.quoteContent, quoteOfTitle: orig.quoteOfTitle,
+                    quoteOfContent: orig.quoteOfContent,
+                    createdAt: orig.createdAt, updatedAt: orig.updatedAt,
+                  );
+                }
+              });
+            }
+          }),
+          onLike: (n) => likeTargetNote(context, n, (_) => _load()),
+          onRepost: (n) => forwardNote(context, n, (_) => _load()),
           onMore: (n) => _showNoteMenu(n),
         ),
       ],

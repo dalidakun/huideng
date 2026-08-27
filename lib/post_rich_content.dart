@@ -16,6 +16,7 @@ import 'post_time_link.dart';
 import 'reading_badges.dart';
 import 'reading_page.dart';
 import 'sutra_downloader.dart';
+import 'sutra_list_page.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
 import 'user_space_page.dart';
@@ -41,6 +42,10 @@ double discussionHotScore(int createdAt, int engagement) {
 }
 /// `[@账号](user:用户ID)` 提及用户、`$经书名` 引用经文、`#话题名` 话题；
 /// 兼容旧式 `[@经名](路径)` 与 `@经书名`。
+///
+/// [multiVolumeBases] 为多卷经书的基础经名集合：$引用只写了基础经名时，
+/// 多卷经书统一补显「卷一」卷标（与热门榜/胶囊一致）；引用后紧跟的中文卷标
+/// （如「$高僧传卷五」）会整体并入链接显示。
 Widget buildPostRichText(
   String text, {
   required TextStyle style,
@@ -50,6 +55,7 @@ Widget buildPostRichText(
   required void Function(String topic) onTopicTap,
   Color linkColor = const Color(0xFF70867A),
   Color? topicColor,
+  Set<String>? multiVolumeBases,
   int? maxLines,
   TextOverflow? overflow,
 }) {
@@ -120,9 +126,20 @@ Widget buildPostRichText(
       final t = sutraTitleAt(i);
       if (t != null) {
         flushLit();
-        spans.add(
-            linkSpan(text[i] + t, () => onSutraTap(t, library[t]!.filePath)));
-        i += 1 + t.length;
+        // 引用后紧跟中文卷标（如「$高僧传卷五」）：整体并入链接显示；
+        // 只写基础经名的多卷经书：统一补显「卷一」（与热门榜/胶囊一致）。
+        final after = i + 1 + t.length;
+        final volMatch = after < text.length
+            ? chineseVolumePrefixRe.matchAsPrefix(text, after)
+            : null;
+        final trailing = volMatch?.group(0) ?? '';
+        final supplement =
+            trailing.isEmpty && (multiVolumeBases?.contains(t) ?? false)
+                ? '卷一'
+                : '';
+        spans.add(linkSpan(text[i] + t + trailing + supplement,
+            () => onSutraTap(t, library[t]!.filePath)));
+        i += 1 + t.length + trailing.length;
         litStart = i;
         continue;
       }
@@ -133,12 +150,8 @@ Widget buildPostRichText(
       if (m != null && m.group(1)!.isNotEmpty) {
         flushLit();
         final topic = m.group(1)!;
-        // 素白外观下 accent 是近黑色，#话题 用中灰更协调；暖黄保持金棕。
         spans.add(linkSpan('#$topic', () => onTopicTap(topic),
-            color: topicColor ??
-                (AppPalette.instance.isPlain
-                    ? const Color(0xFF666666)
-                    : AppPalette.p.accent)));
+            color: topicColor ?? const Color(0xFFcf9e66)));
         i = m.end;
         litStart = i;
         continue;
@@ -216,7 +229,15 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     _newPostTimer =
         Timer.periodic(_newPostCheckInterval, (_) => _checkNewPosts());
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopSection());
+    // 确保经书目录（含多卷经名集合）就绪后刷新头部卷标显示。
+    NoteSutraCatalog.load().then((_) {
+      if (mounted) setState(() {});
+    });
   }
+
+  /// 经书展示名：带卷号后缀显示具体卷标；仅基础经名的多卷经书统一补「卷一」。
+  String get _displayTitle => sutraAggregatedDisplayName(widget.title,
+      multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -384,7 +405,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
         title: Text('经文尚未下载',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('《${widget.title}》的正文尚未下载，是否现在下载？下载完成即可阅读。',
+        content: Text('《$_displayTitle》的正文尚未下载，是否现在下载？下载完成即可阅读。',
             style: TextStyle(color: _textSec)),
         actions: [
           TextButton(
@@ -598,7 +619,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: Text('${widget.title} · 讨论',
+        title: Text('$_displayTitle · 讨论',
             style: TextStyle(
                 color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
       ),
@@ -645,7 +666,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                                   ),
                                   const SizedBox(width: 10),
                                   Expanded(
-                                    child: Text(widget.title,
+                                    child: Text(_displayTitle,
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
@@ -1100,6 +1121,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                     style: TextStyle(
                         fontSize: 15, color: _text, height: 1.6),
                     library: _sutraLibrary,
+                    multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
                     maxLines: 4,
                     overflow: TextOverflow.ellipsis,
                     onUserTap: (uid) {
@@ -1818,7 +1840,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
         elevation: 0,
         title: Text('#${widget.topic}',
             style: TextStyle(
-                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+                color: const Color(0xFFcf9e66), fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       // 底部输入框：直接发布带 #话题 的帖子（与经书讨论页同款）。
       body: Column(

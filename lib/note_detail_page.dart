@@ -961,6 +961,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                           color: _text,
                                           height: 1.75),
                                       library: _sutraLib,
+                                      multiVolumeBases: NoteSutraCatalog
+                                          .cachedMultiVolumeBases,
                                       onUserTap: (uid) {
                                         if (uid.isNotEmpty) {
                                           Navigator.push(
@@ -1780,8 +1782,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           likeCount: n.likeCount,
           viewCount: n.viewCount,
           liked: liked,
-          onComment: () => replyToNote(context, n, _loadReplies),
-          onRepost: () => forwardNote(context, n, _loadReplies),
+          onComment: () => replyToNote(context, n, (_) => _loadReplies()),
+          onRepost: () => forwardNote(context, n, (_) => _loadReplies()),
           onLike: () => _toggleReplyLike(n),
         );
       },
@@ -1811,7 +1813,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   void replyToThisNote() {
     final note = _note;
     if (note == null) return;
-    replyToNote(context, note, () async {
+    replyToNote(context, note, (_) async {
       await _loadReplies();
       // 本帖评论量 +1（回复双写会增加评论量），同步刷新指标行。
       if (!mounted) return;

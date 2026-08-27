@@ -8,10 +8,12 @@ ASSETS_ROOT = ROOT / "assets" / "sutras_ascii"
 CATALOG = ROOT / "assets" / "sutras_catalog.json"
 
 def count_chars(filepath: Path) -> int:
-    """Count non-whitespace characters in a sutra text file."""
+    """Count Chinese characters only (no punctuation, no numbers, no letters),
+    excluding the ~300-char CBETA metadata at the end of each file."""
     try:
         text = filepath.read_text(encoding="utf-8", errors="replace")
-        return sum(1 for ch in text if not ch.isspace())
+        total = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+        return max(0, total - 300)
     except Exception:
         return 0
 

@@ -519,14 +519,17 @@ exports.main = async (event, context) => {
           }));
           const actCountRes = await activities.where({ userId: uid }).count();
           myActivityCount = actCountRes.total;
-          // 按类型统计通知数（单次查询 + 内存过滤，避免 14 次查询超时）
-          const receivedSet = new Set(receivedTypes);
+          // 兼容旧数据：查所有活动，内存过滤通知类型
           const allActRes = await activities
             .where({ userId: uid })
             .orderBy("createdAt", "desc")
             .limit(200)
             .get();
-          const allNotifActs = (allActRes.data || []).filter((a) => receivedSet.has(a.type));
+          const allNotifActs = (allActRes.data || []).filter((a) => {
+            if (a.direction === "in") return true;
+            if (!a.direction && receivedTypes.includes(a.type)) return true;
+            return false;
+          });
           myNotifCount = allNotifActs.length;
           for (const a of allNotifActs) {
             notifByType[a.type] = (notifByType[a.type] || 0) + 1;
@@ -574,6 +577,7 @@ exports.main = async (event, context) => {
         await activities.add({
           userId: uid,
           type: "share",
+          direction: "out",
           noteId: res.id,
           noteTitle: String(event.title || "无标题").slice(0, 100),
           content: String(event.content || ""),
@@ -935,13 +939,19 @@ exports.main = async (event, context) => {
           visibility: "public",
           status: "normal",
           kind: _.neq("announcement"),
+          // 关注页不显示回复帖子（发现页已经展示了）
+          repostKind: _.neq("reply"),
         });
         const res = await base
           .orderBy("createdAt", "desc")
           .skip((page - 1) * pageSize)
           .limit(pageSize)
           .get();
-        const filtered = filterBlocked(res.data);
+        // 关注页只显示：直接发的帖子、转发、引用转发
+        // 不显示回复帖子（发现页已经展示了）
+        const filtered = filterBlocked(res.data).filter(
+          (n) => n.repostKind !== 'reply'
+        );
         const { total } = await base.count();
         await attachAuthorAccounts(filtered);
         await attachAuthorVerified(filtered);
@@ -1307,6 +1317,7 @@ exports.main = async (event, context) => {
         await activities.add({
           userId: uid,
           type: "repost",
+          direction: "out",
           noteId: res.id,
           noteTitle: newTitle,
           sourceTitle: String(src.title || "无标题").slice(0, 100),
@@ -1319,6 +1330,7 @@ exports.main = async (event, context) => {
           await activities.add({
             userId: src.ownerUserId,
             type: "repost_me",
+            direction: "in",
             noteId: res.id,
             noteTitle: newTitle,
             sourceTitle: String(src.title || "无标题").slice(0, 100),
@@ -1363,13 +1375,32 @@ exports.main = async (event, context) => {
           for (const a of fActs.data || []) {
             await activities.doc(a._id).remove();
           }
+          // 同时删除我收藏的"out"记录
+          const myFavActs = await activities
+            .where({ userId: uid, type: "favorite", noteId })
+            .limit(100)
+            .get();
+          for (const a of myFavActs.data || []) {
+            await activities.doc(a._id).remove();
+          }
           return ok({ favorited: false });
         }
         await favorites.add({ noteId, userId: uid, createdAt: now() });
+        // 记录我收藏了别人的帖子（用于"我的动态"）
+        await activities.add({
+          userId: uid,
+          type: "favorite",
+          direction: "out",
+          noteId,
+          noteTitle: String(note.title || "无标题").slice(0, 100),
+          viewed: false,
+          createdAt: now(),
+        });
         if (note.ownerUserId && note.ownerUserId !== uid) {
           await activities.add({
             userId: note.ownerUserId,
             type: "favorite_me",
+            direction: "in",
             noteId,
             noteTitle: String(note.title || "无标题").slice(0, 100),
             contentPreview: previewText(note.content),
@@ -1714,6 +1745,14 @@ exports.main = async (event, context) => {
           for (const a of fActs.data || []) {
             await activities.doc(a._id).remove();
           }
+          // 同时删除我关注的"out"记录
+          const myFollowActs = await activities
+            .where({ userId: uid, type: "follow" })
+            .limit(100)
+            .get();
+          for (const a of myFollowActs.data || []) {
+            await activities.doc(a._id).remove();
+          }
           return ok({ following: false });
         }
         await follows.add({
@@ -1721,9 +1760,20 @@ exports.main = async (event, context) => {
           followeeId: target,
           createdAt: now(),
         });
+        // 记录我关注了别人（用于"我的动态"）
+        await activities.add({
+          userId: uid,
+          type: "follow",
+          direction: "out",
+          noteId: "",
+          noteTitle: "",
+          viewed: false,
+          createdAt: now(),
+        });
         await activities.add({
           userId: target,
           type: "follow_me",
+          direction: "in",
           noteId: "",
           noteTitle: "",
           contentPreview: "",
@@ -1817,13 +1867,32 @@ exports.main = async (event, context) => {
           for (const a of likeActs.data || []) {
             await activities.doc(a._id).remove();
           }
+          // 同时删除我点赞的"out"记录
+          const myLikeActs = await activities
+            .where({ userId: uid, type: "like", noteId })
+            .limit(100)
+            .get();
+          for (const a of myLikeActs.data || []) {
+            await activities.doc(a._id).remove();
+          }
         } else {
           await likes.add({ noteId, userId: uid, createdAt: now() });
           likeCount = (note.likeCount || 0) + 1;
+          // 记录我点赞了别人的帖子（用于"我的动态"）
+          await activities.add({
+            userId: uid,
+            type: "like",
+            direction: "out",
+            noteId,
+            noteTitle: String(note.title || "无标题").slice(0, 100),
+            viewed: false,
+            createdAt: now(),
+          });
           if (note.ownerUserId && note.ownerUserId !== uid) {
             await activities.add({
               userId: note.ownerUserId,
               type: "like_me",
+              direction: "in",
               noteId,
               noteTitle: String(note.title || "无标题").slice(0, 100),
               content: "",
@@ -1869,6 +1938,7 @@ exports.main = async (event, context) => {
         await activities.add({
           userId: uid,
           type: "comment",
+          direction: "out",
           noteId,
           noteTitle,
           content,
@@ -1882,6 +1952,7 @@ exports.main = async (event, context) => {
           await activities.add({
             userId: note.ownerUserId,
             type: "reply",
+            direction: "in",
             noteId,
             noteTitle,
             content,
@@ -1921,6 +1992,7 @@ exports.main = async (event, context) => {
           await activities.add({
             userId: acc.uid,
             type,
+            direction: "in",
             noteId,
             noteTitle,
             content,
@@ -1928,6 +2000,20 @@ exports.main = async (event, context) => {
             commentId: res.id,
             actorId: uid,
             actorName,
+            viewed: false,
+            createdAt: now(),
+          });
+        }
+        // 记录我在评论中@了别人（用于"我的动态"）
+        if (mentioned.length > 0) {
+          await activities.add({
+            userId: uid,
+            type: "mention_out",
+            direction: "out",
+            noteId,
+            noteTitle,
+            content,
+            commentId: res.id,
             viewed: false,
             createdAt: now(),
           });
@@ -1941,25 +2027,38 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
-        const res = await activities
-          .where({ userId: uid })
-          .orderBy("createdAt", "desc")
-          .skip((page - 1) * pageSize)
-          .limit(pageSize)
-          .get();
-        // 拉取到的「收到的互动」视为已查看。
-        const received = ["reply", "repost_me", "like_me"];
-        const toMark = (res.data || []).filter(
-          (a) => received.includes(a.type) && a.viewed !== true
-        );
-        await Promise.all(
-          toMark.map((a) => activities.doc(a._id).update({ viewed: true }))
-        );
-        const { total } = await activities.where({ userId: uid }).count();
+        // 分批拉取：每批1000条活动，内存过滤出"我的动态"，直到凑够当前页所需数量。
+        const needed = page * pageSize;
+        const allMy = [];
+        let skip = 0;
+        const batchSize = 1000;
+        const maxBatches = 3;
+
+        for (let i = 0; i < maxBatches && allMy.length < needed; i++) {
+          const res = await activities
+            .where({ userId: uid })
+            .orderBy("createdAt", "desc")
+            .skip(skip)
+            .limit(batchSize)
+            .get();
+          const rows = res.data || [];
+          const batch = rows.filter((a) => {
+            if (a.direction === "out") return true;
+            if (!a.direction && !receivedTypes.includes(a.type)) return true;
+            return false;
+          });
+          allMy.push(...batch);
+          skip += batchSize;
+          if (rows.length < batchSize) break;
+        }
+
+        const total = allMy.length;
+        const start = (page - 1) * pageSize;
+        const items = allMy.slice(start, start + pageSize);
         return ok({
-          activities: res.data,
+          activities: items,
           total,
-          hasMore: (page - 1) * pageSize + res.data.length < total,
+          hasMore: start + items.length < total,
         });
       }
 
@@ -2107,32 +2206,47 @@ exports.main = async (event, context) => {
 
       // 拉取「收到的互动」通知列表（分页，最新在前）。不自动标记已读，
       // 只有用户真正查看对应通知或执行「全部标记已读」后未读数才减少。
-      // 注意：CloudBase SDK 的 _.in() 对 type 字段可能不生效，
-      // 但逐个类型查询（14 次数据库调用）会导致云函数超时。
-      // 改为单次查询 userId 的所有活动，内存中过滤 receivedTypes 类型。
+      // 按 direction:"in" 从数据库直接过滤，拉到的全部是有效通知。
       case "getNotifications": {
         if (!uid) return fail("unauthorized");
         const page = Math.max(1, Number(event.page) || 1);
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
 
-        // 单次查询：拉取用户所有活动（最多 200 条），内存中过滤通知类型。
-        // 比逐个类型查询快 10 倍以上，避免云函数超时。
-        // 按 pageSize 的 5 倍预取（覆盖非通知活动被过滤后仍够分页），最少 60 条。
-        const receivedSet = new Set(receivedTypes);
-        const fetchLimit = Math.min(Math.max(page * pageSize * 5, 60), 200);
-        const res = await activities
-          .where({ userId: uid })
-          .orderBy("createdAt", "desc")
-          .limit(fetchLimit)
-          .get();
-        const allNotif = (res.data || []).filter((a) => receivedSet.has(a.type));
+        // 分批拉取：每批1000条活动，内存过滤出通知，直到凑够当前页所需数量。
+        // 解决"我的动态"太多导致1000条里通知只覆盖最近1-2天的问题。
+        // 通常1-2批就够（第1页只需20条通知），不会明显变慢。
+        const needed = page * pageSize;
+        const allNotif = [];
+        let skip = 0;
+        const batchSize = 1000;
+        const maxBatches = 3; // 最多拉3批（3000条活动），平衡速度和覆盖范围
+
+        for (let i = 0; i < maxBatches && allNotif.length < needed; i++) {
+          const res = await activities
+            .where({ userId: uid })
+            .orderBy("createdAt", "desc")
+            .skip(skip)
+            .limit(batchSize)
+            .get();
+          const rows = res.data || [];
+          const batch = rows.filter((a) => {
+            if (a.direction === "in") return true;
+            if (!a.direction && receivedTypes.includes(a.type)) return true;
+            return false;
+          });
+          allNotif.push(...batch);
+          skip += batchSize;
+          // 这批返回不足1000条，说明没有更多数据了
+          if (rows.length < batchSize) break;
+        }
+
         const total = allNotif.length;
 
         // 内存分页
         const start = (page - 1) * pageSize;
         const items = allNotif.slice(start, start + pageSize);
 
-        console.log(`[api/getNotifications] uid=${uid} page=${page} returned=${items.length} total=${total} fetched=${(res.data || []).length}`);
+        console.log(`[api/getNotifications] uid=${uid} page=${page} returned=${items.length} total=${total}`);
         // 拉取互动用户头像（base64，存于 userData.payload.files.avatar）、
         // 账号名与认证状态，消息页直接展示真实头像而非默认 App 图标。
         const actorIds = [...new Set(items.map((a) => a.actorId).filter(Boolean))];
@@ -2195,7 +2309,9 @@ exports.main = async (event, context) => {
       // 消息中心未读数（覆盖点赞/评论/回复评论/转发/收藏/关注/@提及）。
       case "getNotificationUnreadCount": {
         if (!uid) return ok({ unread: 0 });
-        // 并行查询 7 种类型，总耗时约等于 1 次查询。
+        // 兼容旧数据：旧记录没有 direction 字段。
+        // receivedTypes 只含通知类型（like_me/reply/...），新"out"记录用不同类型名（like/favorite/...），
+        // 所以不加 direction 过滤也不会误计"我的动态"。
         const counts = await Promise.all(
           receivedTypes.map((t) =>
             activities.where({ userId: uid, type: t, viewed: false }).count()
@@ -2210,10 +2326,15 @@ exports.main = async (event, context) => {
       case "markNotificationsRead": {
         if (!uid) return fail("unauthorized");
         if (event.all === true) {
-          // 单次更新所有未读活动（含自己发的 share/comment 等，无副作用）。
-          await activities
-            .where({ userId: uid, viewed: false })
-            .update({ viewed: true });
+          // 兼容旧数据：标记所有通知类型未读记录为已读。
+          // receivedTypes 只含通知类型，新"out"记录用不同类型名，不会误标。
+          await Promise.all(
+            receivedTypes.map((t) =>
+              activities
+                .where({ userId: uid, type: t, viewed: false })
+                .update({ viewed: true })
+            )
+          );
           return ok({});
         }
         const ids = (Array.isArray(event.ids) ? event.ids : [])

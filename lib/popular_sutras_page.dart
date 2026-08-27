@@ -87,7 +87,9 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
   }
 
   String _displayTitle(String title) =>
-      widget.parent?.displayTitle(title) ?? sutraDisplayTitle(title);
+      widget.parent?.displayTitle(title) ??
+      sutraDisplayNameWithVolume(title,
+          multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
 
   static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
   String _stripIdSuffix(String title) => title.replaceAll(_idSuffixRe, '');

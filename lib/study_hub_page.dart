@@ -132,6 +132,8 @@ class StudyHubPageState extends State<StudyHubPage>
   bool _currentRead = false;
   /// 多卷经书的基础经名集合，用于显示「卷X」卷标。
   Set<String> _multiVolumeBases = const {};
+  /// 热门经文的基础经名 → 显示名（含卷标），用于热门榜胶囊显示。
+  Map<String, String> _hotSutraDisplayNames = const {};
   /// 是否允许他人在主页查看我的「精读」（在读经书）。
   bool _allowReadingShare = false;
   List<Map<String, dynamic>> _customTypes = [];
@@ -995,8 +997,14 @@ class StudyHubPageState extends State<StudyHubPage>
       final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
       final now = DateTime.now();
       final daySeed = now.year * 10000 + now.month * 100 + now.day;
-      final validSutras =
-          sutras.where((s) => titleMap.containsKey(s.name)).toList();
+      // 按基础经名归一化合并：「$XX经卷一」与「$XX经」并入同一条目，
+      // 多卷经书在榜单上只出现一次。
+      final validSutras = mergeHotSutraItems(sutras)
+          .where((s) => titleMap.containsKey(s.name))
+          .toList();
+      // 从本地经书列表构建卷标显示映射（如「高僧传」→「高僧传卷一」）
+      final sutraDisplayNames =
+          await buildSutraDisplayNameMap(validSutras, isSutra: true);
       // 已被管理员删除的话题直接剔除，确保热门卡片/「更多」榜都不再展示。
       final bans = CloudNotesService.instance.bannedTopicNames;
       final validTopics = bans.isEmpty
@@ -1007,6 +1015,7 @@ class StudyHubPageState extends State<StudyHubPage>
         // 经文两行 4+4（top14 内轮换）、话题一行 4 个（top10 内轮换），全量榜留给「更多」页。
         _hotTopics = _pickHotItems(validTopics.take(10).toList(), 4, daySeed);
         _hotSutras = _pickHotItems(validSutras.take(14).toList(), 8, daySeed);
+        _hotSutraDisplayNames = sutraDisplayNames;
         _hotTopicAll = validTopics;
         _hotSutraAll = validSutras;
       });
@@ -1751,7 +1760,7 @@ class StudyHubPageState extends State<StudyHubPage>
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(title,
+                                  Text(_displayTitle(title),
                                       style: TextStyle(
                                           fontSize: 15,
                                           fontWeight: FontWeight.w500,
@@ -2834,7 +2843,7 @@ if (_feedAuthDead) {
 
   Widget _buildHotChip(HotDiscussionItem it,
       {required bool isSutra, bool showFire = false}) {
-    final color = isSutra ? const Color(0xFF71867A) : _textSec;
+    final color = isSutra ? const Color(0xFF71867A) : const Color(0xFFcf9e66);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _openHotDiscussion(it, isSutra: isSutra),
@@ -2856,7 +2865,7 @@ if (_feedAuthDead) {
               Text(isSutra ? '\$' : '#',
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: color)),
-            Text(it.name,
+            Text(_hotSutraDisplayNames[it.name] ?? it.name,
                 style: TextStyle(
                     fontSize: 13, fontWeight: FontWeight.w600, color: color)),
           ],
@@ -3198,7 +3207,7 @@ if (_feedAuthDead) {
     final isMine = me != null && root.ownerUserId == me.id;
     final rootWidget = PostFeedRow(
       note: root,
-      onReplyPosted: _refreshCurrentSmooth,
+      onReplyPosted: (_) => _refreshCurrentSmooth(),
       onTap: () => _openPlazaNote(root),
       onEdit: isMine ? () => _editFeedNote(root) : null,
       onDelete: isMine ? () => _deleteFeedNote(root) : null,
@@ -3251,9 +3260,9 @@ if (_feedAuthDead) {
         for (final r in replies) r.id: r.authorAccount,
       },
       // 点击回复节点进入该回复自己的详情页（原贴在上），它的直接回复列在下方。
-      onComment: (n) => replyToNote(context, n, _refreshCurrentSmooth),
-      onLike: (n) => likeTargetNote(context, n, _refreshCurrentSmooth),
-      onRepost: (n) => forwardNote(context, n, _refreshCurrentSmooth),
+      onComment: (n) => replyToNote(context, n, (_) => _refreshCurrentSmooth()),
+      onLike: (n) => likeTargetNote(context, n, (_) => _refreshCurrentSmooth()),
+      onRepost: (n) => forwardNote(context, n, (_) => _refreshCurrentSmooth()),
       onMore: (n) => _showFeedReplyMenu(n),
       // 点击自己的头像/昵称：与主页右上角头像一致，打开「我的」页。
       onOpenSelf: widget.onOpenMyPage,

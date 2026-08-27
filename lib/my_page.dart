@@ -982,7 +982,7 @@ class PostBlock extends StatefulWidget {
   final int repostCount;
   final int commentCount;
   final int viewCount;
-  final VoidCallback? onReplyPosted;
+  final FutureOr<void> Function(PlazaNote note)? onReplyPosted;
   final Widget? quoteBox;
   final bool pinned;
   final bool isRepost;
@@ -1043,6 +1043,12 @@ class _PostBlockState extends State<PostBlock> {
     super.initState();
     // 实时同步指标：详情页点赞/评论/转发/阅读后，这里的数字立即更新。
     NoteStatsCenter.instance.addListener(_onStatsChanged);
+    // 经书目录未缓存时预加载：$引用链接与多卷「卷X」卷标渲染依赖它。
+    if (NoteSutraCatalog.cachedTitleMap == null) {
+      NoteSutraCatalog.load().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   @override
@@ -1175,8 +1181,14 @@ class _PostBlockState extends State<PostBlock> {
       }
       if (widget.onReplyPosted != null) {
         try {
-          final dynamic cb = widget.onReplyPosted!;
-          final r = cb();
+          final cb = widget.onReplyPosted!;
+          final r = cb(PlazaNote(
+            id: replyId, ownerUserId: AuthService.instance.currentUser.value?.id ?? '',
+            title: '', content: content, authorName: AuthService.instance.currentUser.value?.displayName ?? '同修',
+            createdAt: DateTime.now().millisecondsSinceEpoch, updatedAt: DateTime.now().millisecondsSinceEpoch,
+            repostKind: 'reply', repostOf: noteId ?? '', quoteContent: content,
+            visibility: 'public', status: 'normal', likeCount: 0, commentCount: 0,
+          ));
           if (r is Future) await r.catchError((_) {});
         } catch (_) {}
       }
@@ -1240,8 +1252,12 @@ class _PostBlockState extends State<PostBlock> {
       showPostToast(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
       if (widget.onReplyPosted != null) {
         try {
-          final dynamic cb = widget.onReplyPosted!;
-          final r = cb();
+          final cb = widget.onReplyPosted!;
+          final r = cb(PlazaNote(
+            id: '', ownerUserId: '', title: '', content: '', authorName: '',
+            createdAt: 0, updatedAt: 0, repostKind: 'forward', repostOf: noteId ?? '',
+            visibility: 'public', status: 'normal', likeCount: 0, commentCount: 0,
+          ));
           if (r is Future) await r.catchError((_) {});
         } catch (_) {}
       }
@@ -1521,6 +1537,8 @@ class _PostBlockState extends State<PostBlock> {
                                   height: 1.6),
                               library:
                                   NoteSutraCatalog.cachedTitleMap ?? const {},
+                              multiVolumeBases:
+                                  NoteSutraCatalog.cachedMultiVolumeBases,
                               maxLines: _expanded ? null : 8,
                               overflow:
                                   _expanded ? null : TextOverflow.ellipsis,
@@ -1779,8 +1797,37 @@ Future<void> submitReplyPost(BuildContext parentCtx, PlazaNote target,
     } else if (parentCtx.mounted) {
       showPostPublishedToast(parentCtx, '');
     }
+    final me = AuthService.instance.currentUser.value;
+    var myAccount = '';
+    var myVerified = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      myAccount = prefs.getString('user_account_name') ?? '';
+      myVerified = prefs.getBool('user_verified') ?? false;
+    } catch (_) {}
+    final PlazaNote replyNote = PlazaNote(
+      id: replyId,
+      ownerUserId: me?.id ?? '',
+      title: '',
+      content: content,
+      authorName: me?.displayName ?? '同修',
+      authorAccount: myAccount,
+      authorVerified: myVerified,
+      canonRead: LocalCanonProgress.loaded ? LocalCanonProgress.read : 0,
+      canonTotal: LocalCanonProgress.loaded ? LocalCanonProgress.total : 0,
+      visibility: 'public',
+      status: 'normal',
+      likeCount: 0,
+      commentCount: 0,
+      repostOf: target.id,
+      repostSourceAuthor: target.authorName,
+      repostKind: 'reply',
+      quoteContent: content,
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    );
     final dynamic cb = onPosted;
-    final r = cb();
+    final r = cb(replyNote);
     if (r is Future) await r.catchError((_) {});
   } catch (e) {
     if (parentCtx.mounted) showPostToast(parentCtx, e.toString());
@@ -1840,7 +1887,7 @@ Future<void> likeTargetNote(
     await CloudNotesService.instance.toggleLike(target.id);
     if (onPosted != null) {
       final dynamic cb = onPosted;
-      final r = cb();
+      final r = cb(target);
       if (r is Future) await r.catchError((_) {});
     }
   } catch (e) {
@@ -1903,7 +1950,7 @@ Future<void> forwardNote(
     showPostToast(context, quote.isEmpty ? '已转发到菩提空间' : '已引用转发到菩提空间');
     if (onPosted != null) {
       final dynamic cb = onPosted;
-      final r = cb();
+      final r = cb(target);
       if (r is Future) await r.catchError((_) {});
     }
   } catch (e) {
@@ -1915,7 +1962,7 @@ Future<void> forwardNote(
 /// 头像+用户名/时间 → 内容预览（最多8行，可展开）→ 统计数据行。
 class PostFeedRow extends StatelessWidget {
   final PlazaNote note;
-  final VoidCallback? onReplyPosted;
+  final FutureOr<void> Function(PlazaNote note)? onReplyPosted;
   final VoidCallback? onTap;
   final bool pinned;
   final VoidCallback? onTogglePin;
@@ -2553,7 +2600,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   Widget _buildNoteCard(PlazaNote note) {
     return PostFeedRow(
       note: note,
-      onReplyPosted: _load,
+      onReplyPosted: (_) => _load(),
       pinned: _pinnedIds.contains(note.id),
       onTogglePin: () => _togglePin(note),
       onEdit: () => _editNote(note),
@@ -3220,9 +3267,9 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                   viewCount: reply.viewCount,
                   liked: CloudNotesService.instance.likedNoteIds
                       .contains(reply.id),
-                  onComment: () => replyToNote(context, reply, _load),
-                  onRepost: () => forwardNote(context, reply, _load),
-                  onLike: () => likeTargetNote(context, reply, _load),
+                  onComment: () => replyToNote(context, reply, (_) => _load()),
+                  onRepost: () => forwardNote(context, reply, (_) => _load()),
+                  onLike: () => likeTargetNote(context, reply, (_) => _load()),
                 ),
               ],
             ),
@@ -3258,7 +3305,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: PostFeedRow(
                 note: root,
-                onReplyPosted: _load,
+                onReplyPosted: (_) => _load(),
                 // 分组区域不显示已置顶（已置顶只在顶部置顶卡片展示）。
                 pinned: false,
                 onTogglePin: () => _togglePin(root),
@@ -3278,9 +3325,9 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             root.id: root.authorAccount,
             for (final r in replies) r.id: r.authorAccount,
           },
-          onComment: (n) => replyToNote(context, n, _load),
-          onLike: (n) => likeTargetNote(context, n, _load),
-          onRepost: (n) => forwardNote(context, n, _load),
+          onComment: (n) => replyToNote(context, n, (_) => _load()),
+          onLike: (n) => likeTargetNote(context, n, (_) => _load()),
+          onRepost: (n) => forwardNote(context, n, (_) => _load()),
           onMore: (n) => _showReplyMenu(n),
         ),
       ],
@@ -3362,9 +3409,9 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             root.id: root.authorAccount,
             for (final r in replies) r.id: r.authorAccount,
           },
-          onComment: (n) => replyToNote(context, n, _load),
-          onLike: (n) => likeTargetNote(context, n, _load),
-          onRepost: (n) => forwardNote(context, n, _load),
+          onComment: (n) => replyToNote(context, n, (_) => _load()),
+          onLike: (n) => likeTargetNote(context, n, (_) => _load()),
+          onRepost: (n) => forwardNote(context, n, (_) => _load()),
           onMore: (n) => _showReplyMenu(n),
         ),
       ],
@@ -3652,7 +3699,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
                             color: AppPalette.p.divider),
                       PostFeedRow(
                         note: note,
-                        onReplyPosted: _load,
+                        onReplyPosted: (_) => _load(),
                         pinned: isSharedPinned(note),
                         onTogglePin: () => toggleSharedPin(note),
                         onEdit: () => editSharedNote(note),
@@ -3841,7 +3888,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
                             color: AppPalette.p.divider),
                       PostFeedRow(
                         note: note,
-                        onReplyPosted: _load,
+                        onReplyPosted: (_) => _load(),
                         pinned: isSharedPinned(note),
                         onTogglePin: () => toggleSharedPin(note),
                         onEdit: () => editSharedNote(note),

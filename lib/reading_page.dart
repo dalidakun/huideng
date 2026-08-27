@@ -15,7 +15,12 @@ import 'app_state.dart';
 import 'reader_preferences.dart';
 import 'note_edit_page.dart';
 import 'reading_time_service.dart';
-import 'sutra_list_page.dart' show routeObserver;
+import 'sutra_list_page.dart'
+    show
+        routeObserver,
+        sutraDisplayTitleWithPath,
+        sutraBaseTitle,
+        loadLocalMultiVolumeBases;
 import 'reading_guide_page.dart';
 
 import 'app_palette.dart';
@@ -72,6 +77,23 @@ class _ReadingPageState extends State<ReadingPage>
   /// 顶部标题双击回到顶部：记录上次点击时间。
   DateTime? _lastTitleTap;
 
+  /// 顶部标题展示名（含「卷X」卷标）：异步加载多卷集合后计算；
+  /// 加载完成前先显示去掉 CBETA 编号的基础经名。
+  String? _displayTitle;
+
+  /// 当前展示标题：卷标就绪前兜底为基础经名，避免标题栏闪现 CBETA 编号。
+  String get _titleShown => _displayTitle ?? sutraBaseTitle(widget.title);
+
+  Future<void> _loadDisplayTitle() async {
+    final mvBases = await loadLocalMultiVolumeBases();
+    if (!mounted) return;
+    setState(() {
+      _displayTitle = sutraDisplayTitleWithPath(widget.title,
+          filePath: _resolvedFilePath ?? widget.filePath,
+          multiVolumeBases: mvBases);
+    });
+  }
+
   /// 是否已订阅路由生命周期（用于读经计时）。
   bool _subscribed = false;
 
@@ -91,6 +113,7 @@ class _ReadingPageState extends State<ReadingPage>
     _loadContent();
     _loadFavoriteState();
     _loadReadState();
+    _loadDisplayTitle();
   }
 
   /// 把任意形式的经书路径规范化为打包资产路径（assets/sutras_ascii/...）：
@@ -397,7 +420,7 @@ class _ReadingPageState extends State<ReadingPage>
     } else {
       if (mounted) {
         setState(() {
-          _content = '这是《${widget.title}》的预览内容。\n\n暂无实际文件，请添加本地文件。';
+          _content = '这是《$_titleShown》的预览内容。\n\n暂无实际文件，请添加本地文件。';
           _isLoadingContent = false;
         });
       }
@@ -513,7 +536,7 @@ class _ReadingPageState extends State<ReadingPage>
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => SutraEditPage(
-          title: widget.title,
+          title: _titleShown,
           content: _content,
           keyPath: filePath,
         ),
@@ -535,13 +558,14 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   /// 打开笔记编辑页：预填「$经书名」在顶部，可写笔记并发布到菩提空间。
-  void _openNoteEditor() {
-    final readable = widget.title
-        .replaceAll(RegExp(r'T\d+n[0-9A-Za-z]+_\d+$'), '')
-        .trim();
+  /// 引用统一用基础经名（不带卷标）：广场渲染时多卷经书会自动补显「卷一」，
+  /// 热度榜也按基础经名聚合，避免同一部经拆成多个名字。
+  void _openNoteEditor() async {
+    final display = sutraBaseTitle(widget.title);
+    if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => NoteEditPage(presetContent: '\$$readable '),
+        builder: (_) => NoteEditPage(presetContent: '\$$display '),
       ),
     );
   }
@@ -695,7 +719,7 @@ class _ReadingPageState extends State<ReadingPage>
                   }
                 },
                 onLongPress: () {
-                  Clipboard.setData(ClipboardData(text: widget.title));
+                  Clipboard.setData(ClipboardData(text: _titleShown));
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('已复制到剪贴板'),
@@ -707,7 +731,7 @@ class _ReadingPageState extends State<ReadingPage>
                   children: [
                     Flexible(
                       child: Text(
-                        widget.title,
+                        _titleShown,
                         style: TextStyle(
                           color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
                           fontSize: 16,

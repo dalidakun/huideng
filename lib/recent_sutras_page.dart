@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'note_sutra_links.dart';
 import 'sutra_downloader.dart';
 import 'sutra_list_page.dart';
 
@@ -87,7 +88,9 @@ class _RecentSutrasPageState extends State<RecentSutrasPage>
   }
 
   String _displayTitle(String title) =>
-      widget.parent?.displayTitle(title) ?? sutraDisplayTitle(title);
+      widget.parent?.displayTitle(title) ??
+      sutraDisplayNameWithVolume(title,
+          multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
 
   @override
   Widget build(BuildContext context) {
