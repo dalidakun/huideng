@@ -16,13 +16,13 @@ import 'cloud_notes_service.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_favorites.dart';
+import 'sutra_read_later.dart';
 import 'favorite_sutras_page.dart';
 import 'popular_sutras_page.dart';
+import 'hot_ranking_page.dart';
+import 'note_sutra_links.dart';
 
 import 'app_palette.dart';
-/// 素白外观下「继续阅读」按钮底色与进度条填充色：比纯黑柔和的深灰，
-/// 避免大面积纯黑压在白底上过于突兀（介于正文 #1C1C1C 与次要文字 #666 之间）。
-const Color _kPlainInkSoft = Color(0xFF4A4A4A);
 
 /// 用于监听路由返回（例如从阅读页 pop 回来时刷新“最近阅读”）。
 final RouteObserver<ModalRoute<void>> routeObserver =
@@ -35,12 +35,14 @@ class Sutra {
   final bool isPinned;
   final bool isRead;
   final bool isFavorite;
+  final bool isReadLater;
   final String? filePath;
   final String? folder;
   final DateTime? favoriteTime; // 收藏时间
   final DateTime? readTime; // 标记已读时间
+  final DateTime? readLaterTime; // 标记稍后阅读时间
 
-  Sutra(this.title, this.size, {this.charCount = 0, this.isPinned = false, this.isRead = false, this.isFavorite = false, this.filePath, this.folder, this.favoriteTime, this.readTime});
+  Sutra(this.title, this.size, {this.charCount = 0, this.isPinned = false, this.isRead = false, this.isFavorite = false, this.isReadLater = false, this.filePath, this.folder, this.favoriteTime, this.readTime, this.readLaterTime});
 
   Map<String, dynamic> toJson() {
     return {
@@ -50,10 +52,12 @@ class Sutra {
       'isPinned': isPinned,
       'isRead': isRead,
       'isFavorite': isFavorite,
+      'isReadLater': isReadLater,
       'filePath': filePath,
       'folder': folder,
       'favoriteTime': favoriteTime?.toIso8601String(),
       'readTime': readTime?.toIso8601String(),
+      'readLaterTime': readLaterTime?.toIso8601String(),
     };
   }
 
@@ -65,10 +69,12 @@ class Sutra {
       isPinned: json['isPinned'] as bool? ?? false,
       isRead: json['isRead'] as bool? ?? false,
       isFavorite: json['isFavorite'] as bool? ?? false,
+      isReadLater: json['isReadLater'] as bool? ?? false,
       filePath: json['filePath'] as String?,
       folder: json['folder'] as String?,
       favoriteTime: json['favoriteTime'] != null ? DateTime.parse(json['favoriteTime'] as String) : null,
       readTime: json['readTime'] != null ? DateTime.parse(json['readTime'] as String) : null,
+      readLaterTime: json['readLaterTime'] != null ? DateTime.parse(json['readLaterTime'] as String) : null,
     );
   }
 }
@@ -83,29 +89,53 @@ int _sutraVolumeOf(String title) {
   return m == null ? 0 : int.tryParse(m.group(1)!) ?? 0;
 }
 
-/// 数字转中文卷名：1->「卷一」、10->「卷十」、21->「卷二十一」、
-/// 105->「卷一百零五」、110->「卷一百一十」、120->「卷一百二十」。
-String _volumeLabel(int n) {
-  const digits = '零一二三四五六七八九';
-  if (n <= 0) return '';
-  if (n <= 10) return '卷${n == 10 ? '十' : digits[n]}';
-  if (n < 20) return '卷十${digits[n - 10]}';
-  if (n < 100) {
-    final tens = n ~/ 10;
-    final ones = n % 10;
-    return '卷${digits[tens]}十${ones == 0 ? '' : digits[ones]}';
+/// [ _sutraVolumeOf ] 的公开版本：提取经名末尾 CBETA 卷次编号，无卷次返回 0。
+int sutraVolumeOf(String title) => _sutraVolumeOf(title);
+
+/// 数字转中文卷名：实现见 [sutraVolumeLabel]（note_sutra_links.dart）。
+String _volumeLabel(int n) => sutraVolumeLabel(n);
+
+/// 中文卷标解析为阿拉伯数字：「卷十一」->11、「卷一百零五」->105、
+/// 「卷四百零三」->403、「卷六百」->600；也接受纯数字（「11」->11）。
+/// 无法解析返回 0。
+int parseChineseVolumeNumber(String label) {
+  var s = label.trim();
+  if (s.startsWith('卷')) s = s.substring(1);
+  if (s.isEmpty) return 0;
+  final asInt = int.tryParse(s);
+  if (asInt != null) return asInt;
+  const digits = {
+    '零': 0,
+    '一': 1,
+    '二': 2,
+    '三': 3,
+    '四': 4,
+    '五': 5,
+    '六': 6,
+    '七': 7,
+    '八': 8,
+    '九': 9,
+  };
+  var total = 0;
+  var num = 0;
+  for (final ch in s.split('')) {
+    final d = digits[ch];
+    if (d != null) {
+      num = d;
+    } else if (ch == '十') {
+      total += (num == 0 ? 1 : num) * 10;
+      num = 0;
+    } else if (ch == '百') {
+      total += (num == 0 ? 1 : num) * 100;
+      num = 0;
+    } else if (ch == '千') {
+      total += (num == 0 ? 1 : num) * 1000;
+      num = 0;
+    } else {
+      return 0;
+    }
   }
-  if (n < 1000) {
-    final hundreds = n ~/ 100;
-    final rest = n % 100;
-    final head = '卷${digits[hundreds]}百';
-    if (rest == 0) return head;
-    if (rest < 10) return '$head零${digits[rest]}';
-    final tens = rest ~/ 10;
-    final ones = rest % 10;
-    return '$head${digits[tens]}十${ones == 0 ? '' : digits[ones]}';
-  }
-  return '卷$n';
+  return total + num;
 }
 
 /// 经名末尾的中文卷标（如「地藏菩萨本愿经卷一」中的「卷一」）。
@@ -148,10 +178,12 @@ List<Sutra> repairLegacySutraList(List<Sutra> sutras) {
         isPinned: e.isPinned || s.isPinned,
         isRead: e.isRead || s.isRead,
         isFavorite: e.isFavorite || s.isFavorite,
+        isReadLater: e.isReadLater || s.isReadLater,
         filePath: e.filePath ?? s.filePath,
         folder: e.folder ?? s.folder,
         favoriteTime: e.favoriteTime ?? s.favoriteTime,
         readTime: e.readTime ?? s.readTime,
+        readLaterTime: e.readLaterTime ?? s.readLaterTime,
       );
       continue;
     }
@@ -165,10 +197,12 @@ List<Sutra> repairLegacySutraList(List<Sutra> sutras) {
             isPinned: s.isPinned,
             isRead: s.isRead,
             isFavorite: s.isFavorite,
+            isReadLater: s.isReadLater,
             filePath: s.filePath,
             folder: s.folder,
             favoriteTime: s.favoriteTime,
             readTime: s.readTime,
+            readLaterTime: s.readLaterTime,
           ));
   }
   return changed ? result : sutras;
@@ -182,22 +216,99 @@ String normalizeHotSutraName(String name) => name
     .replaceAll(chineseVolumeSuffixRe, '')
     .trim();
 
-/// 按基础经名归并热门经文条目：「XX经卷一」与「XX经」合并为一条
-/// （posts/score 累加），保证多卷经书在热度榜上只出现一次。
-List<HotDiscussionItem> mergeHotSutraItems(List<HotDiscussionItem> items) {
-  final byBase = <String, HotDiscussionItem>{};
-  for (final it in items) {
-    final base = normalizeHotSutraName(it.name);
-    if (base.isEmpty) continue;
-    final cur = byBase[base];
-    byBase[base] = cur == null
-        ? HotDiscussionItem(name: base, posts: it.posts, score: it.score)
+/// 将热门经文名解析为「目录真实经名 + 卷号」。
+///
+/// 云端按 `$`/`@` 标记贪心提取经名，名字可能粘连尾部正文
+/// （如「$金刚经真好」提取出「金刚经真好」）。先去掉 CBETA 编号后缀，
+/// 按目录做最长前缀匹配得到真实基础经名；经名后紧跟的中文卷标
+/// （「$地藏菩萨本愿经卷二」「$地藏菩萨本愿经卷二真好」）解析为卷号，
+/// 无卷标返回 0。无法归一到目录经名返回 null（调用方应丢弃）——与讨论页
+/// 筛选相关帖子的口径保持一致，保证榜单「讨论X个」与点进去看到的条数一致。
+(String, int)? resolveHotSutraBaseAndVolume(
+    String name, Set<String> catalogNames) {
+  final s = name.replaceAll(_sutraIdSuffixRe, '').trim();
+  if (s.isEmpty) return null;
+  String? base;
+  for (final c in catalogNames) {
+    if (s.startsWith(c) && (base == null || c.length > base.length)) base = c;
+  }
+  if (base == null) return null;
+  final remainder = s.substring(base.length);
+  final vm = chineseVolumePrefixRe.matchAsPrefix(remainder);
+  final volume = vm == null ? 0 : parseChineseVolumeNumber(vm.group(0)!);
+  return (base, volume);
+}
+
+/// 将热门经文名解析为目录中的真实经名（基础经名，不含卷号）。
+/// 见 [resolveHotSutraBaseAndVolume]；无法归一返回 null。
+String? resolveHotSutraName(String name, Set<String> catalogNames) =>
+    resolveHotSutraBaseAndVolume(name, catalogNames)?.$1;
+
+/// 拆分热门经文名为「基础经名 + 卷号」：末尾带中文卷标（「地藏菩萨本愿经卷二」）
+/// 时解析出卷号，否则卷号为 0。用于从榜单条目定位到具体卷的讨论页/正文路径。
+(String, int) splitHotSutraName(String name) {
+  final m = chineseVolumeSuffixRe.firstMatch(name);
+  if (m == null || m.start == 0) return (name, 0);
+  final base = name.substring(0, m.start).trim();
+  if (base.isEmpty) return (name, 0);
+  return (base, parseChineseVolumeNumber(m.group(0)!));
+}
+
+/// 热门榜单条目（可能为「基础经名」或「基础经名+卷X」）对应的打开目标：
+/// 返回基础经名与该卷正文路径。多卷经书的具体卷优先取该卷路径，
+/// 无对应卷或单卷时回退到目录里该经的首卷路径。
+(String, String) resolveHotSutraTarget(String name) {
+  final (base, volume) = splitHotSutraName(name);
+  final entry = NoteSutraCatalog.cachedTitleMap?[base];
+  final path =
+      (volume > 0 ? NoteSutraCatalog.cachedVolumePath(base, volume) : null) ??
+          entry?.filePath ??
+          '';
+  return (base, path);
+}
+
+/// 归并热门经文条目。
+///
+/// 默认（不传 [multiVolumeBases]）按基础经名归并：「XX经卷一」与「XX经」合并为
+/// 一条（posts/score 累加），多卷经书在榜上只出现一次——用于按整部经书排行的场景。
+///
+/// 传入 [multiVolumeBases]（多卷经书基础经名集合）时按卷拆分：多卷经书每一卷单独
+/// 一条（「XX经卷一」「XX经卷二」），卷拆分之前的历史讨论与不带卷标的引用并入卷一，
+/// 使榜单「讨论X个」与点进对应卷讨论页看到的条数一致。单卷经书仍按基础经名归并。
+///
+/// 传入 [catalogNames]（经书目录经名集合）时额外做目录归一：云端贪心提取的
+/// 「经名+粘连文字」按最长前缀归一到真实经名，无法归一的条目丢弃。
+List<HotDiscussionItem> mergeHotSutraItems(List<HotDiscussionItem> items,
+    {Set<String>? catalogNames, Set<String>? multiVolumeBases}) {
+  final byKey = <String, HotDiscussionItem>{};
+  void add(String key, HotDiscussionItem it) {
+    final cur = byKey[key];
+    byKey[key] = cur == null
+        ? HotDiscussionItem(name: key, posts: it.posts, score: it.score)
         : HotDiscussionItem(
-            name: base,
+            name: key,
             posts: cur.posts + it.posts,
             score: cur.score + it.score);
   }
-  return byBase.values.toList();
+
+  for (final it in items) {
+    if (catalogNames == null) {
+      final base = normalizeHotSutraName(it.name);
+      if (base.isEmpty) continue;
+      add(base, it);
+      continue;
+    }
+    final resolved = resolveHotSutraBaseAndVolume(it.name, catalogNames);
+    if (resolved == null) continue;
+    final (base, volume) = resolved;
+    if (multiVolumeBases != null && multiVolumeBases.contains(base)) {
+      // 多卷经书按卷拆分；不带卷标的历史讨论/引用并入卷一（与讨论页口径一致）。
+      add('$base${_volumeLabel(volume > 0 ? volume : 1)}', it);
+    } else {
+      add(base, it);
+    }
+  }
+  return byKey.values.toList();
 }
 
 /// 统计同名（基础经名）出现多次的集合，即多卷经书的基础经名。
@@ -265,6 +376,51 @@ String sutraAggregatedDisplayName(String title,
   return display;
 }
 
+/// 经书讨论页等「按基础经名聚合、但可能带具体卷路径」场景的展示名：
+/// 标题本身无卷号后缀时，优先从 [filePath] 提取卷号显示具体卷标
+/// （如从「$高僧传卷十一」链接进入时显示「高僧传卷十一」而非「卷一」）；
+/// 无法定位具体卷时按聚合规则（多卷经书补「卷一」）。
+String sutraDiscussionDisplayName(String title,
+    {String? filePath, required Set<String> multiVolumeBases}) {
+  if (_sutraVolumeOf(title) <= 0 && filePath != null && filePath.isNotEmpty) {
+    final id = SutraDownloader.extractId(null, filePath);
+    if (id != null) {
+      final withId = '$title$id';
+      if (_sutraVolumeOf(withId) > 0) {
+        return sutraDisplayNameWithVolume(withId,
+            multiVolumeBases: multiVolumeBases);
+      }
+    }
+  }
+  return sutraAggregatedDisplayName(title, multiVolumeBases: multiVolumeBases);
+}
+
+/// 判断正文是否引用了 [baseTitle] 经书的第 [volume] 卷
+/// （供按卷拆分的经书讨论页筛选相关帖子）。
+/// 带中文卷标的引用（「$高僧传卷十一」）卷号相等才匹配；
+/// 只写基础经名的引用（「$高僧传」）按约定视为卷一，仅 [volume] == 1 时匹配；
+/// 旧式 [@经名](路径) 同样视为不带卷标的引用。
+bool referencesSutraVolume(String text, String baseTitle, int volume) {
+  if (baseTitle.isEmpty || volume <= 0) return false;
+  final t = RegExp.escape(baseTitle);
+  // 更旧式 [@经名](路径)：排除 user: 用户提及，视为不带卷标的引用（卷一）。
+  if (volume == 1 &&
+      RegExp(r'\[@' + t + r'\]\((?![^)]*user:)[^)]+\)').hasMatch(text)) {
+    return true;
+  }
+  final re = RegExp(r'[@$]' + t);
+  for (final m in re.allMatches(text)) {
+    final before = m.start > 0 ? text[m.start - 1] : '';
+    if (RegExp(r'[0-9A-Za-z\u4e00-\u9fa5]').hasMatch(before)) continue;
+    final afterIdx = m.start + m.group(0)!.length;
+    if (text.startsWith('](user:', afterIdx)) continue;
+    final vm = chineseVolumePrefixRe.matchAsPrefix(text, afterIdx);
+    final refVolume = vm == null ? 1 : parseChineseVolumeNumber(vm.group(0)!);
+    if (refVolume == volume) return true;
+  }
+  return false;
+}
+
 /// 从本地 sutras_list.json 加载多卷经书的基础经名集合。
 Future<Set<String>> loadLocalMultiVolumeBases() async {
   try {
@@ -326,20 +482,24 @@ Future<Map<String, String>> buildSutraDisplayNameMap(
 }
 
 class SutraListPage extends StatefulWidget {
-  /// 底部 Tab 索引变化通知。当切换回经藏页（索引值变化）时刷新“最近阅读”。
+  /// 底部 Tab 索引变化通知。当切换回经藏页（索引值变化）时刷新"最近阅读"。
   final ValueListenable<int>? activeTab;
-
-  /// 搜索激活/退出状态回调（供底部「搜索」菜单同步高亮）。
-  final ValueChanged<bool>? onSearchModeChanged;
 
   /// 右上角「助手」入口点击回调。
   final VoidCallback? onOpenAssistant;
 
+  /// 阅读统计入口点击回调。
+  final VoidCallback? onOpenReadingStats;
+
+  /// 阅读记录入口点击回调。
+  final VoidCallback? onOpenReadingHistory;
+
   const SutraListPage({
     super.key,
     this.activeTab,
-    this.onSearchModeChanged,
     this.onOpenAssistant,
+    this.onOpenReadingStats,
+    this.onOpenReadingHistory,
   });
 
   @override
@@ -540,7 +700,7 @@ class SutraListPageState extends State<SutraListPage>
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
-  /// 底部「搜索」菜单：进入搜索激活状态，弹出搜索框并拉起键盘。
+  /// 「经典入口」右侧搜索框：进入搜索激活状态，弹出搜索框并拉起键盘。
   void activateSearch() {
     if (!mounted) return;
     if (_drawerOpen) _closeDrawer();
@@ -548,10 +708,16 @@ class SutraListPageState extends State<SutraListPage>
       _searchActive = true;
       _showScrollToFolderButton = false;
     });
-    widget.onSearchModeChanged?.call(true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocusNode.requestFocus();
     });
+  }
+
+  /// 处于搜索模式时退出搜索并返回 true（侧滑返回手势/切换菜单前调用）。
+  bool exitSearchIfActive() {
+    if (!mounted || !_searchActive) return false;
+    _exitSearch();
+    return true;
   }
 
   /// 底部菜单切换：退出搜索激活状态。
@@ -569,14 +735,13 @@ class SutraListPageState extends State<SutraListPage>
     });
   }
 
-  /// 页内清空按钮：退出搜索激活状态并通知主页面。
+  /// 页内清空按钮：退出搜索激活状态。
   void _exitSearch() {
     _searchController.clear();
     _searchFocusNode.unfocus();
     setState(() {
       _searchActive = false;
     });
-    widget.onSearchModeChanged?.call(false);
     _dismissKeyboard();
     // 退出搜索后滚动视图重建、位置归零，需重新评估按钮显隐。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -935,7 +1100,7 @@ class SutraListPageState extends State<SutraListPage>
   bool _isReadExpanded = false;
   bool _isFavoriteExpanded = false;
 
-  /// 是否处于搜索激活状态（底部「搜索」菜单进入，页内清空退出）。
+  /// 是否处于搜索激活状态（「经典入口」右侧搜索框进入，页内清空退出）。
   bool _searchActive = false;
 
   static const String _kDownloadedIdsKey = 'downloaded_sutra_ids';
@@ -1010,6 +1175,10 @@ class SutraListPageState extends State<SutraListPage>
   void initState() {
     super.initState();
     _initFolders();
+    // 默认显示最后一个部类（最近的部类）
+    if (_folders.isNotEmpty) {
+      _randomFolder = _folders.last;
+    }
     _loadSutras();
     _loadLastRead();
     _loadReadingStats();
@@ -1279,13 +1448,16 @@ class SutraListPageState extends State<SutraListPage>
         final r = st['r'] == true;
         final f = st['f'] == true;
         final p = st['p'] == true;
+        final rl = st['rl'] == true;
         final rt = st['rt']?.toString();
         final ft = st['ft']?.toString();
-        if (!r && !f && !p && rt == null && ft == null) continue;
+        final rlt = st['rlt']?.toString();
+        if (!r && !f && !p && !rl && rt == null && ft == null && rlt == null) continue;
         final timeSame =
             (rt == null || s.readTime?.toIso8601String() == rt) &&
-                (ft == null || s.favoriteTime?.toIso8601String() == ft);
-        if (r == s.isRead && f == s.isFavorite && p == s.isPinned && timeSame) {
+                (ft == null || s.favoriteTime?.toIso8601String() == ft) &&
+                (rlt == null || s.readLaterTime?.toIso8601String() == rlt);
+        if (r == s.isRead && f == s.isFavorite && p == s.isPinned && rl == s.isReadLater && timeSame) {
           continue;
         }
         list[i] = Sutra(
@@ -1295,11 +1467,13 @@ class SutraListPageState extends State<SutraListPage>
           isPinned: s.isPinned || p,
           isRead: s.isRead || r,
           isFavorite: s.isFavorite || f,
+          isReadLater: s.isReadLater || rl,
           filePath: s.filePath,
           folder: s.folder,
           favoriteTime:
               (s.favoriteTime != null || ft == null) ? s.favoriteTime : DateTime.tryParse(ft),
           readTime: (s.readTime != null || rt == null) ? s.readTime : DateTime.tryParse(rt),
+          readLaterTime: (s.readLaterTime != null || rlt == null) ? s.readLaterTime : DateTime.tryParse(rlt),
         );
         changed = true;
       }
@@ -1330,19 +1504,36 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   /// 按当前搜索框内容过滤 [list]，空查询返回全量。
+  /// 结果按匹配度排序：完全相同 > 书名开头匹配 > 书名包含（位置越靠前越优先）
+  /// > 仅部类名匹配；同一档位内置顶优先，其余保持原列表顺序。
   List<Sutra> _filterListBySearch(List<Sutra> list) {
     final q = _searchController.text.trim();
     if (q.isEmpty) return list;
-    final filtered = list.where((sutra) {
-      if (sutra.title.contains(q)) return true;
-      return (_folderDisplayNames[sutra.folder] ?? '').contains(q);
-    }).toList();
-    filtered.sort((a, b) {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return 0;
+    final hits = <(int, int, int, int, Sutra)>[];
+    for (var i = 0; i < list.length; i++) {
+      final s = list[i];
+      final idx = s.title.indexOf(q);
+      final folderHit = (_folderDisplayNames[s.folder] ?? '').contains(q);
+      if (idx < 0 && !folderHit) continue;
+      final int rank;
+      if (idx < 0) {
+        rank = 3;
+      } else if (s.title == q) {
+        rank = 0;
+      } else if (idx == 0) {
+        rank = 1;
+      } else {
+        rank = 2;
+      }
+      hits.add((rank, s.isPinned ? 0 : 1, idx < 0 ? 0 : idx, i, s));
+    }
+    hits.sort((a, b) {
+      if (a.$1 != b.$1) return a.$1.compareTo(b.$1);
+      if (a.$2 != b.$2) return a.$2.compareTo(b.$2);
+      if (a.$3 != b.$3) return a.$3.compareTo(b.$3);
+      return a.$4.compareTo(b.$4);
     });
-    return filtered;
+    return [for (final h in hits) h.$5];
   }
 
   /// 默认在「全部经典」下方随机展示一部（与随缘读经一致），优先恢复上次展示的部类。
@@ -1525,9 +1716,24 @@ class SutraListPageState extends State<SutraListPage>
                   String? msg;
                   if (idx >= 0) {
                     final wasFav = _allSutras[idx].isFavorite;
-                    // 先完整持久化再关闭弹窗，避免弹窗关闭触发的 reload 读到旧文件把状态覆盖掉。
                     await _toggleFavorite(idx);
                     msg = wasFav ? '已取消收藏' : '已收藏';
+                  }
+                  if (!context.mounted) return;
+                  Navigator.pop(context);
+                  if (msg != null) _showToast(msg);
+                },
+              ),
+              _buildMenuItem(
+                icon: current.isReadLater ? Icons.bookmark : Icons.bookmark_border,
+                title: current.isReadLater ? '取消稍后阅读' : '稍后阅读',
+                onTap: () async {
+                  final idx = resolveIndex();
+                  String? msg;
+                  if (idx >= 0) {
+                    final wasRL = _allSutras[idx].isReadLater;
+                    await _toggleReadLater(idx);
+                    msg = wasRL ? '已取消稍后阅读' : '已标记稍后阅读';
                   }
                   if (!context.mounted) return;
                   Navigator.pop(context);
@@ -1596,6 +1802,12 @@ class SutraListPageState extends State<SutraListPage>
   /// 供子页面读取收藏列表（置顶优先）。
   List<Sutra> getFavoriteSutras() => _getFavoriteSutras();
 
+  /// 供子页面读取全部经书列表。
+  List<Sutra> get allSutras => List.unmodifiable(_allSutras);
+
+  /// 供子页面读取部类显示名映射。
+  Map<String, String> get folderDisplayNames => _folderDisplayNames;
+
   /// 供子页面查询某本经书当前的下载进度（null 表示未在下载）。
   double? downloadProgressOf(String id) => _downloadProgress[id];
 
@@ -1640,8 +1852,10 @@ class SutraListPageState extends State<SutraListPage>
         isPinned: !_allSutras[index].isPinned,
         isRead: _allSutras[index].isRead,
         isFavorite: _allSutras[index].isFavorite,
+        isReadLater: _allSutras[index].isReadLater,
         filePath: _allSutras[index].filePath,
         folder: _allSutras[index].folder,
+        readLaterTime: _allSutras[index].readLaterTime,
       );
       _filterSutras();
     });
@@ -1658,10 +1872,12 @@ class SutraListPageState extends State<SutraListPage>
         isPinned: _allSutras[index].isPinned,
         isRead: _allSutras[index].isRead,
         isFavorite: !_allSutras[index].isFavorite,
+        isReadLater: _allSutras[index].isReadLater,
         filePath: _allSutras[index].filePath,
         folder: _allSutras[index].folder,
         favoriteTime: !_allSutras[index].isFavorite ? DateTime.now() : null,
         readTime: _allSutras[index].readTime,
+        readLaterTime: _allSutras[index].readLaterTime,
       );
       _filterSutras();
     });
@@ -1678,15 +1894,39 @@ class SutraListPageState extends State<SutraListPage>
         isPinned: _allSutras[index].isPinned,
         isRead: !_allSutras[index].isRead,
         isFavorite: _allSutras[index].isFavorite,
+        isReadLater: _allSutras[index].isReadLater,
         filePath: _allSutras[index].filePath,
         folder: _allSutras[index].folder,
         favoriteTime: _allSutras[index].favoriteTime,
         readTime: !_allSutras[index].isRead ? DateTime.now() : null,
+        readLaterTime: _allSutras[index].readLaterTime,
       );
       _filterSutras();
     });
     await _saveSutras();
     await SutraFavorites.syncStatePref(_allSutras[index].title);
+  }
+
+  Future<void> _toggleReadLater(int index) async {
+    setState(() {
+      _allSutras[index] = Sutra(
+        _allSutras[index].title,
+        _allSutras[index].size,
+        charCount: _allSutras[index].charCount,
+        isPinned: _allSutras[index].isPinned,
+        isRead: _allSutras[index].isRead,
+        isFavorite: _allSutras[index].isFavorite,
+        isReadLater: !_allSutras[index].isReadLater,
+        filePath: _allSutras[index].filePath,
+        folder: _allSutras[index].folder,
+        favoriteTime: _allSutras[index].favoriteTime,
+        readTime: _allSutras[index].readTime,
+        readLaterTime: !_allSutras[index].isReadLater ? DateTime.now() : null,
+      );
+      _filterSutras();
+    });
+    await _saveSutras();
+    await SutraReadLater.syncStatePref(_allSutras[index].title);
   }
 
   Future<void> _pickFile() async {
@@ -1786,15 +2026,32 @@ class SutraListPageState extends State<SutraListPage>
     });
   }
 
-  String _displayTitle(String title) =>
-      sutraDisplayTitle(title, multiVolumeBases: _multiVolumeBases);
+  String _displayTitle(String title, {String? filePath}) =>
+      sutraDisplayTitleWithPath(title,
+          filePath: filePath, multiVolumeBases: _multiVolumeBases);
 
   /// 供子页面（收藏/最近阅读/功课等）复用统一的经名展示逻辑。
-  String displayTitle(String title) => _displayTitle(title);
+  /// 标题不带 CBETA 编号时（如从笔记链接进入阅读后记录的经名），
+  /// 可传 [filePath] 从路径补齐卷号，保证多卷经书显示「卷X」。
+  String displayTitle(String title, {String? filePath}) =>
+      _displayTitle(title, filePath: filePath);
 
   Sutra? _findSutra(String title) {
     for (final s in _allSutras) {
       if (s.title == title) return s;
+    }
+    return null;
+  }
+
+  /// 按标题精确查找；标题只有基础经名（如从笔记链接进入阅读后记录的经名）时，
+  /// 用标题或路径里的 CBETA 编号回退匹配，保证能定位到具体卷。
+  Sutra? _resolveSutraByTitleOrPath(String title, String? filePath) {
+    final byTitle = _findSutra(title);
+    if (byTitle != null) return byTitle;
+    final id = SutraDownloader.extractId(title, filePath);
+    if (id == null) return null;
+    for (final s in _allSutras) {
+      if (s.title.contains(id)) return s;
     }
     return null;
   }
@@ -1858,142 +2115,159 @@ class SutraListPageState extends State<SutraListPage>
     final title = _lastReadTitle;
     if (title == null) return const SizedBox.shrink();
     final pct = (_lastReadProgress * 100).clamp(0.0, 100.0);
-    final sutra = _findSutra(title);
+    final sutra = _resolveSutraByTitleOrPath(title, _lastReadFilePath);
     final isRead = sutra?.isRead == true;
+    final folderName = sutra != null
+        ? (_folderDisplayNames[sutra.folder] ?? sutra.folder)
+        : null;
+    final meta = [
+      if (folderName != null && folderName.isNotEmpty) folderName,
+      if (sutra != null && sutra.charCount > 0) '${sutra.charCount} 字',
+    ].join(' · ');
+    final isPlain = AppPalette.instance.isPlain;
+    final accentColor = AppPalette.p.readingAccent;
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Material(
         color: AppPalette.p.card,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: _openLastRead,
-        onLongPress: () {
-          final sutra = _findSutra(title);
-          if (sutra != null) {
-            _showBottomSheet(context, sutra);
-          }
-        },
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: AppPalette.instance.isPlain
-                ? null
-                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: AppPalette.p.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(7),
-                    ),
-                    child: Icon(Icons.play_circle_fill, color: AppPalette.p.primary, size: 15),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '最近阅读',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.p.primary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _openLastRead,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      // 素白用柔和深灰底（不用纯黑，避免突兀）；暖黄用本区块
-                      // 进度条「已读填充色」（accent）同款深色，无边框线；
-                      // 文字用深棕保证在金棕底上可读。
+          borderRadius: BorderRadius.circular(12),
+          onTap: _openLastRead,
+          onLongPress: () {
+            final sutra = _resolveSutraByTitleOrPath(title, _lastReadFilePath);
+            if (sutra != null) {
+              _showBottomSheet(context, sutra);
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: isPlain
+                  ? null
+                  : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    // 书籍图标
+                    Container(
+                      width: 48,
+                      height: 48,
                       decoration: BoxDecoration(
-                        color: AppPalette.instance.isPlain
-                            ? _kPlainInkSoft
-                            : AppPalette.p.accent,
-                        borderRadius: BorderRadius.circular(16),
+                        color: accentColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      child: Icon(Icons.menu_book_rounded, color: accentColor, size: 26),
+                    ),
+                    const SizedBox(width: 12),
+                    // 标题
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '继续阅读',
+                            '最近阅读',
                             style: TextStyle(
-                              color: AppPalette.instance.isPlain
-                                  ? Colors.white
-                                  : AppPalette.p.primary,
+                              color: AppPalette.p.textSec,
                               fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _displayTitle(title, filePath: _lastReadFilePath),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: isRead ? const Color(0xFFcf9e66) : AppPalette.p.text,
+                              fontSize: 14,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
-                          SizedBox(width: 2),
-                          Icon(Icons.arrow_forward,
-                              color: AppPalette.instance.isPlain
-                                  ? Colors.white
-                                  : AppPalette.p.primary,
-                              size: 12),
                         ],
                       ),
                     ),
+                    // 继续阅读按钮
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _openLastRead,
+                      child: Container(
+                        padding: isPlain
+                            ? const EdgeInsets.symmetric(horizontal: 8, vertical: 5)
+                            : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isPlain
+                              ? accentColor.withValues(alpha: 0.12)
+                              : accentColor,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '继续阅读',
+                              style: TextStyle(
+                                color: isPlain ? accentColor : Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            Icon(Icons.arrow_forward,
+                                color: isPlain ? accentColor : Colors.white, size: 12),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // 进度条
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: _lastReadProgress.clamp(0.0, 1.0),
+                    minHeight: 6,
+                    backgroundColor: accentColor.withValues(alpha: 0.12),
+                    valueColor: AlwaysStoppedAnimation<Color>(accentColor),
                   ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                _displayTitle(title),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isRead ? const Color(0xFFcf9e66) : AppPalette.p.text,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
                 ),
-              ),
-              const SizedBox(height: 10),
-              // 进度条占满整行；百分比移到其下方、贴区块右下角，
-              // 颜色与顶部「阅藏进度」大百分比一致（素白为深色文字）。
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: _lastReadProgress.clamp(0.0, 1.0),
-                  minHeight: 6,
-                  backgroundColor:
-                      AppPalette.p.primary.withValues(alpha: 0.16),
-                  // 素白外观下填充用柔和深灰（不用纯黑）；暖黄保持金棕。
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                      AppPalette.instance.isPlain
-                          ? _kPlainInkSoft
-                          : AppPalette.p.accent),
+                const SizedBox(height: 6),
+                // 元信息（左侧）和进度百分比（右侧）
+                Row(
+                  children: [
+                    if (meta.isNotEmpty)
+                      Expanded(
+                        child: Text(
+                          meta,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppPalette.p.textSec,
+                            fontSize: 12,
+                          ),
+                        ),
+                      )
+                    else
+                      const Spacer(),
+                    Text(
+                      '已读 ${pct.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        color: accentColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 4),
-              Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  '已读 ${pct.toStringAsFixed(1)}%',
-                  style: TextStyle(
-                    color: AppPalette.instance.isPlain
-                        ? AppPalette.p.text
-                        : const Color(0xFFB8860B),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -2058,6 +2332,46 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
+  /// 搜索入口栏：横跨标题下方全部空间，圆角搜索框样式。
+  Widget _buildSearchEntryField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Material(
+        color: AppPalette.p.bg,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: activateSearch,
+          child: Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppPalette.p.border, width: 0.8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.search, color: AppPalette.p.textHint, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '搜索经文',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppPalette.p.textHint,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildProgressCard() {
     final total = _allSutras.length;
     final read = _allSutras.where((s) => s.isRead).length;
@@ -2070,34 +2384,22 @@ class SutraListPageState extends State<SutraListPage>
       );
     }
     const milestones = [25, 50, 75, 100];
-    // 素白外观：纯白底 + 深色内容，无渐变无阴影色块；暖黄保持棕金渐变。
     final isPlain = AppPalette.instance.isPlain;
-    final headColor =
-        isPlain ? AppPalette.p.text : const Color(0xFF4E342E);
-    final pctColor = isPlain ? AppPalette.p.text : Colors.white;
-    final markActive = isPlain ? AppPalette.p.text : Colors.white;
-    final markIdle =
-        isPlain ? AppPalette.p.textHint : Colors.white.withValues(alpha: 0.6);
+    final accentColor = AppPalette.p.readingAccent;
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
       decoration: BoxDecoration(
-        gradient: isPlain
-            ? null
-            : const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF8D6E63), Color(0xFFBCAAA4)],
-              ),
-        color: isPlain ? Colors.white : null,
+        color: AppPalette.p.card,
         borderRadius: BorderRadius.circular(12),
+        border: isPlain
+            ? null
+            : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
         boxShadow: [
           BoxShadow(
-            color: isPlain
-                ? Colors.black.withValues(alpha: 0.04)
-                : const Color(0xFF8D6E63).withValues(alpha: 0.25),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -2106,18 +2408,18 @@ class SutraListPageState extends State<SutraListPage>
         children: [
           Row(
             children: [
-              Icon(Icons.auto_stories, color: headColor, size: 16),
+              Icon(Icons.auto_stories, color: accentColor, size: 18),
               const SizedBox(width: 6),
-              Text('阅藏进度',
+              Text('阅读进度',
                   style: TextStyle(
-                      color: headColor,
-                      fontSize: 13,
+                      color: AppPalette.p.text,
+                      fontSize: 15,
                       fontWeight: FontWeight.w600)),
               const Spacer(),
               Text(
                 '${pct.toStringAsFixed(2)}%',
                 style: TextStyle(
-                  color: pctColor,
+                  color: accentColor,
                   fontSize: 24,
                   fontWeight: FontWeight.w800,
                   height: 1,
@@ -2125,50 +2427,45 @@ class SutraListPageState extends State<SutraListPage>
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           LayoutBuilder(
             builder: (context, constraints) {
               return SizedBox(
                 width: constraints.maxWidth,
-                height: 10,
+                height: 6,
                 child: Stack(
                   alignment: Alignment.centerLeft,
                   children: [
-                  Container(
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: AppPalette.p.primary.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(5),
-                    ),
-                  ),
-                  // 进度填充：进度过小（<1%）时不渲染，否则会在左端点
-                  // 呈现一条形似刻度的小竖杠；只保留 25/50/75 三个中间刻度。
-                  if (pct >= 1)
-                    FractionallySizedBox(
-                      widthFactor: pct / 100,
-                      child: Container(
-                        height: 10,
-                        decoration: BoxDecoration(
-                          // 素白外观下填充用柔和深灰（不用纯黑）；暖黄保持金棕。
-                          color: isPlain
-                              ? _kPlainInkSoft
-                              : AppPalette.p.accent,
-                          borderRadius: BorderRadius.circular(5),
-                        ),
+                    Container(
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(3),
                       ),
                     ),
-                  for (final m in milestones)
-                    if (m < 100)
+                    if (pct >= 1)
+                      FractionallySizedBox(
+                        widthFactor: pct / 100,
+                        child: Container(
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: accentColor,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                        ),
+                      ),
+                    // 25%/50%/75% 竖杠刻度
+                    for (final m in [25, 50, 75])
                       Positioned(
                         left: constraints.maxWidth * m / 100 - 0.75,
-                        top: 2,
-                        bottom: 2,
+                        top: 0,
+                        bottom: 0,
                         child: Container(
                           width: 1.5,
-                          color: AppPalette.p.primary.withValues(alpha: 0.55),
+                          color: accentColor.withValues(alpha: 0.45),
                         ),
                       ),
-                ],
+                  ],
                 ),
               );
             },
@@ -2182,15 +2479,13 @@ class SutraListPageState extends State<SutraListPage>
                 child: ClipRect(
                   child: Stack(
                     children: [
-                      // 起点刻度「0%」：贴进度条左端（终点「圆满」对称贴右端），
-                      // 样式与未达成的百分比刻度一致（灰色常规字重）。
                       Positioned(
                         left: 0,
                         top: 1,
                         child: Text(
                           '0%',
                           style: TextStyle(
-                            color: markIdle,
+                            color: AppPalette.p.textHint,
                             fontSize: 11,
                           ),
                         ),
@@ -2201,15 +2496,15 @@ class SutraListPageState extends State<SutraListPage>
                             right: 0,
                             top: 1,
                             child: Text(
-                            '圆满',
-                            style: TextStyle(
-                              color: pct >= m ? markActive : markIdle,
-                              fontSize: 11,
-                              fontWeight: pct >= m
-                                  ? FontWeight.w700
-                                  : FontWeight.normal,
+                              '100%',
+                              style: TextStyle(
+                                color: pct >= m ? accentColor : AppPalette.p.textHint,
+                                fontSize: 11,
+                                fontWeight: pct >= m
+                                    ? FontWeight.w700
+                                    : FontWeight.normal,
+                              ),
                             ),
-                          ),
                           )
                         else
                           Positioned(
@@ -2220,7 +2515,7 @@ class SutraListPageState extends State<SutraListPage>
                               child: Text(
                                 '$m%',
                                 style: TextStyle(
-                                  color: pct >= m ? markActive : markIdle,
+                                  color: pct >= m ? accentColor : AppPalette.p.textHint,
                                   fontSize: 11,
                                   fontWeight: pct >= m
                                       ? FontWeight.w700
@@ -2236,10 +2531,18 @@ class SutraListPageState extends State<SutraListPage>
             },
           ),
           const SizedBox(height: 10),
-          // 统计信息一行显示，与进度条左对齐。
-          Text(
-            '已完成$read/$total册    已阅读${_formatCharCount(readChars)}/${_formatCharCount(totalChars)}',
-            style: TextStyle(color: headColor, fontSize: 12),
+          Row(
+            children: [
+              Text(
+                '已完成 $read / $total 册',
+                style: TextStyle(color: AppPalette.p.textSec, fontSize: 12),
+              ),
+              const Spacer(),
+              Text(
+                '已阅读 ${_formatCharCount(readChars)} / ${_formatCharCount(totalChars)}',
+                style: TextStyle(color: AppPalette.p.textSec, fontSize: 12),
+              ),
+            ],
           ),
         ],
       ),
@@ -2263,8 +2566,10 @@ class SutraListPageState extends State<SutraListPage>
         if (cc != null && cc != s.charCount) {
           _allSutras[i] = Sutra(s.title, s.size,
               charCount: cc, isPinned: s.isPinned, isRead: s.isRead,
-              isFavorite: s.isFavorite, filePath: s.filePath, folder: s.folder,
-              favoriteTime: s.favoriteTime, readTime: s.readTime);
+              isFavorite: s.isFavorite, isReadLater: s.isReadLater,
+              filePath: s.filePath, folder: s.folder,
+              favoriteTime: s.favoriteTime, readTime: s.readTime,
+              readLaterTime: s.readLaterTime);
           changed = true;
         }
       }
@@ -2359,19 +2664,163 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
+  Widget _buildQuickAccessRow() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildQuickAccessTile(
+              icon: Icons.people_outline,
+              title: '大家都在学',
+              onTap: () {
+                _dismissKeyboard();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => PopularSutrasPage(parent: this)),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildQuickAccessTile(
+              icon: Icons.leaderboard_outlined,
+              title: '热门榜单',
+              onTap: () {
+                _dismissKeyboard();
+                _openHotDiscussionList();
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildQuickAccessTile(
+              icon: Icons.favorite_border,
+              title: '我的收藏',
+              iconImage: 'assets/images/like.png',
+              onTap: () {
+                _dismissKeyboard();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => FavoriteSutrasPage(parent: this)),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildQuickAccessTile(
+              icon: Icons.bookmark_border,
+              title: '稍后阅读',
+              onTap: widget.onOpenReadingHistory,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openHotDiscussionList() async {
+    try {
+      await NoteSutraCatalog.load();
+      final (_, sutras) = await CloudNotesService.instance.getHotDiscussions();
+      final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
+      final validSutras = mergeHotSutraItems(sutras,
+              catalogNames: titleMap.keys.toSet())
+          .where((s) => titleMap.containsKey(s.name))
+          .toList()
+        ..sort((a, b) => b.posts.compareTo(a.posts));
+      final displayNames =
+          await buildSutraDisplayNameMap(validSutras, isSutra: true);
+      final subtitles = <String, String>{};
+      for (final it in validSutras) {
+        final link = titleMap[it.name];
+        if (link == null) continue;
+        final parts = <String>[];
+        final dept = link.folder.replaceAll(RegExp(r'^T\d+'), '').trim();
+        if (dept.isNotEmpty) parts.add(dept);
+        final vols = NoteSutraCatalog.cachedVolumeCount(it.name);
+        if (vols > 1) parts.add('共$vols卷');
+        // 全书总字数（多卷经书为各卷之和），如「大集部 · 共2卷 · 12345字」。
+        final chars = NoteSutraCatalog.cachedCharCount(it.name);
+        if (chars > 0) parts.add('$chars字');
+        if (parts.isNotEmpty) subtitles[it.name] = parts.join(' · ');
+      }
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => HotRankingPage(
+            items: validSutras,
+            displayNames: displayNames,
+            subtitles: subtitles,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
+  Widget _buildQuickAccessTile({
+    required IconData icon,
+    required String title,
+    required VoidCallback? onTap,
+    String? iconImage,
+  }) {
+    final accentColor = AppPalette.p.readingAccent;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Column(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: iconImage != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Image.asset(
+                        iconImage,
+                        color: accentColor,
+                        width: 24,
+                        height: 24,
+                      ),
+                    )
+                  : Icon(icon, color: accentColor, size: 24),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              style: TextStyle(
+                color: AppPalette.p.text,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildQuickGrid() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          // 素白外观下黑色图案离屏幕左缘太近，往右移保持整体协调（暖黄不变）。
           padding: EdgeInsets.fromLTRB(
               AppPalette.instance.isPlain ? 20 : 14, 24, 14, 12),
           child: Row(
             children: [
               Icon(
                 Icons.grid_view_rounded,
-                // 素白外观下图标用黑色，暖黄保持粉棕。
                 color: AppPalette.instance.isPlain
                     ? const Color(0xFF1A1A1A)
                     : const Color(0xFFba8e82),
@@ -2434,164 +2883,6 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 全部经典通栏窄条：点击展开全部部类浏览。
-  Widget _buildAllSutrasBar() {
-    return Material(
-      color: AppPalette.p.card,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () {
-          _dismissKeyboard();
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => AllSutrasPage(parent: this)),
-          );
-        },
-        child: Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: AppPalette.instance.isPlain
-                ? null
-                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: AppPalette.p.textSec.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.menu_book_rounded, size: 16, color: AppPalette.p.textSec),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  '全部经典',
-                  style: TextStyle(
-                    color: AppPalette.p.primary,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Text(
-                '${_folders.length} 个部类',
-                style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
-              ),
-              const SizedBox(width: 4),
-              Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 16),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 「换一部」按钮：刷新图标 + 文案，随机轮换一部，将该部经书全部展开显示。
-  Widget _buildChangeFolderButton() {
-    return Material(
-      color: AppPalette.p.card,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () {
-          _dismissKeyboard();
-          setState(() {
-            _randomFolder = _rollRandomFolder();
-          });
-        },
-        child: Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: AppPalette.instance.isPlain
-                ? null
-                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.autorenew, color: Color(0xFF71867A), size: 14),
-              const SizedBox(width: 3),
-              const Text(
-                '换一部',
-                style: TextStyle(
-                  color: Color(0xFF71867A),
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 随机选中部类的全部经书列表：展示在该部类下全部经书，供逐一阅读。
-  Widget _buildRandomFolderSection() {
-    final folder = _randomFolder;
-    if (folder == null) return const SizedBox.shrink();
-    final sutras = _getAllSutrasInFolder(folder);
-    final name = _folderDisplayNames[folder] ?? folder;
-    return Container(
-      key: _randomFolderKey,
-      decoration: BoxDecoration(
-        color: AppPalette.p.card,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppPalette.p.primary,
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                Text(
-                  '共 ${sutras.length} 册',
-                  style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          Divider(height: 1, thickness: 0.6, color: AppPalette.p.borderSoft),
-          if (sutras.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Center(
-                child: Text(
-                  '暂无内容',
-                  style: TextStyle(color: Color(0xFF999999), fontSize: 12),
-                ),
-              ),
-            )
-          else
-            ...sutras.map((s) => _buildSutraTile(context, s)),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-
-  /// 我的收藏宫格：仅入口（跳转收藏列表）。
   Widget _buildFavoriteTile() {
     return Material(
       color: AppPalette.p.card,
@@ -2646,7 +2937,6 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 大家都在读宫格：入口（跳转大家都在读列表）。
   Widget _buildRecentTile() {
     return Material(
       color: AppPalette.p.card,
@@ -2683,7 +2973,7 @@ class SutraListPageState extends State<SutraListPage>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '大家都在读',
+                  '大家都在学',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2701,9 +2991,7 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 随缘读经宫格：标题 + 随机经书信息（书名 + 部类 + 大小，可点书名阅读、点「换一本」重抽）。
   Widget _buildRandomTile() {
-    // 解析到当前列表对象，保证收藏/已读等状态在长按操作后即时反映。
     var sutra = _randomSutra;
     if (sutra != null) {
       final st = sutra;
@@ -2754,7 +3042,6 @@ class SutraListPageState extends State<SutraListPage>
                     child: Icon(
                       Icons.casino_rounded,
                       size: 14,
-                      // 素白外观下图标用黑色，暖黄保持青绿。
                       color: AppPalette.instance.isPlain
                           ? const Color(0xFF1A1A1A)
                           : const Color(0xFF71867A),
@@ -2788,7 +3075,7 @@ class SutraListPageState extends State<SutraListPage>
                           Icon(Icons.autorenew, color: Color(0xFF71867A), size: 13),
                           SizedBox(width: 2),
                           Text(
-                            '换一册',
+                            '换一本',
                             style: TextStyle(
                               color: Color(0xFF71867A),
                               fontSize: 11.5,
@@ -2803,7 +3090,7 @@ class SutraListPageState extends State<SutraListPage>
               ),
               const SizedBox(height: 8),
               Text(
-                sutra != null ? _displayTitle(sutra.title) : '随机一部经典',
+                sutra != null ? _displayTitle(sutra.title) : '随机一部经书',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -2838,9 +3125,8 @@ class SutraListPageState extends State<SutraListPage>
                     if (sutra != null) _buildRandomDownloadIndicator(sutra),
                     const SizedBox(width: 6),
                     Text(
-                      '开始阅读 ›',
+                      '开始阅读 →',
                       style: TextStyle(
-                        // 素白外观下按钮文字用黑色，暖黄保持金橙。
                         color: AppPalette.instance.isPlain
                             ? const Color(0xFF1A1A1A)
                             : const Color(0xFFE5A12E),
@@ -2858,9 +3144,47 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 随缘读经卡片「开始阅读」前的下载状态标记：
-  /// 下载中显示进度小圆圈（刚启动还没收到字节时转圈动画，避免看起来像卡住），
-  /// 已下载显示「下载完成」图标。
+  Widget _buildChangeFolderButton() {
+    return Material(
+      color: AppPalette.p.card,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          setState(() {
+            _randomFolder = _rollRandomFolder();
+          });
+        },
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.autorenew, color: Color(0xFF71867A), size: 14),
+              const SizedBox(width: 3),
+              const Text(
+                '换一部',
+                style: TextStyle(
+                  color: Color(0xFF71867A),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildRandomDownloadIndicator(Sutra sutra) {
     final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
     if (id == null) return const SizedBox.shrink();
@@ -2870,18 +3194,352 @@ class SutraListPageState extends State<SutraListPage>
         width: 16,
         height: 16,
         child: CircularProgressIndicator(
-          // 尚未收到任何进度时用 null 走转圈动画，收到进度后显示具体百分比弧。
           value: p > 0 ? p : null,
           strokeWidth: 2,
           color: const Color(0xFF71867A),
-          backgroundColor: const Color(0xFF71867A).withValues(alpha: 0.12),
         ),
       );
     }
     if (_downloadedIds.contains(id)) {
-      return const Icon(Icons.check_circle, size: 16, color: Color(0xFF8FBC8F));
+      return const Icon(Icons.download_done_rounded, size: 14, color: Color(0xFF71867A));
     }
     return const SizedBox.shrink();
+  }
+
+  /// 全部经典通栏窄条：点击展开全部部类浏览。
+  Widget _buildAllSutrasBar() {
+    final accentColor = AppPalette.p.readingAccent;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Material(
+              color: AppPalette.p.card,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () {
+                  _dismissKeyboard();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => AllSutrasPage(parent: this)),
+                  );
+                },
+                child: Container(
+                  height: 48,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: AppPalette.instance.isPlain
+                        ? null
+                        : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: accentColor.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(Icons.menu_book_rounded, size: 16, color: accentColor),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '全部经典',
+                          style: TextStyle(
+                            color: AppPalette.p.primary,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${_folders.length} 个部类',
+                        style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Material(
+            color: AppPalette.p.card,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                _dismissKeyboard();
+                setState(() {
+                  _randomFolder = _rollRandomFolder();
+                });
+              },
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: AppPalette.instance.isPlain
+                      ? null
+                      : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.autorenew, color: Color(0xFF71867A), size: 14),
+                    const SizedBox(width: 3),
+                    const Text(
+                      '换一部',
+                      style: TextStyle(
+                        color: Color(0xFF71867A),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 随机选中部类的全部经书列表：展示在该部类下全部经书，供逐一阅读。
+  Widget _buildRandomFolderSection() {
+    final folder = _randomFolder;
+    if (folder == null) return const SizedBox.shrink();
+    final sutras = _getAllSutrasInFolder(folder);
+    final name = _folderDisplayNames[folder] ?? folder;
+    return Container(
+      key: _randomFolderKey,
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      decoration: BoxDecoration(
+        color: AppPalette.p.card,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppPalette.p.primary,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Text(
+                  '共 ${sutras.length} 册',
+                  style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, thickness: 0.6, color: AppPalette.p.borderSoft),
+          if (sutras.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text(
+                  '暂无内容',
+                  style: TextStyle(color: Color(0xFF999999), fontSize: 12),
+                ),
+              ),
+            )
+          else
+            ...sutras.map((s) => _buildSutraTile(context, s)),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRandomSection() {
+    var sutra = _randomSutra;
+    if (sutra != null) {
+      final st = sutra;
+      final idx = _allSutras.indexWhere((s) => s.title == st.title);
+      if (idx >= 0) sutra = _allSutras[idx];
+    }
+    final folderName = sutra != null
+        ? (_folderDisplayNames[sutra.folder] ?? sutra.folder)
+        : null;
+    final info = [
+      if (folderName != null && folderName.isNotEmpty) folderName,
+      if (sutra != null && sutra.charCount > 0) '${sutra.charCount} 字',
+    ].join(' · ');
+    final isPlain = AppPalette.instance.isPlain;
+    final accentColor = AppPalette.p.readingAccent;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Material(
+        color: AppPalette.p.card,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () {
+            _dismissKeyboard();
+            if (_randomSutra != null) _openSutra(_randomSutra!);
+          },
+          onLongPress: () {
+            _dismissKeyboard();
+            final s = _randomSutra;
+            if (s != null) _showBottomSheet(context, s);
+          },
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: isPlain
+                  ? null
+                  : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Image.asset(
+                      'assets/images/leaf-sharp.png',
+                      width: 18,
+                      height: 18,
+                      color: accentColor,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '随缘读经',
+                        style: TextStyle(
+                          color: AppPalette.p.text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _randomSutra = _rollRandomSutra();
+                        });
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.autorenew, color: accentColor, size: 14),
+                            const SizedBox(width: 2),
+                            Text(
+                              '换一册',
+                              style: TextStyle(
+                                color: accentColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '随机选择，一切皆是因缘',
+                    style: TextStyle(
+                      color: AppPalette.p.textHint,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  sutra != null ? _displayTitle(sutra.title) : '随机一部经典',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: sutra != null && sutra.isRead
+                        ? const Color(0xFFcf9e66)
+                        : AppPalette.p.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    height: 1.4,
+                  ),
+                ),
+                if (info.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    info,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppPalette.p.textSec,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (sutra != null) _buildRandomDownloadIndicator(sutra),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: isPlain
+                            ? const EdgeInsets.symmetric(horizontal: 8, vertical: 5)
+                            : const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isPlain
+                              ? accentColor.withValues(alpha: 0.12)
+                              : accentColor,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '开始阅读',
+                              style: TextStyle(
+                                color: isPlain ? accentColor : Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            Icon(Icons.arrow_forward,
+                                color: isPlain ? accentColor : Colors.white, size: 12),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildFolderCard(String folder) {
@@ -2890,6 +3548,10 @@ class SutraListPageState extends State<SutraListPage>
     final read = list.where((s) => s.isRead).length;
     final pct = total == 0 ? 0.0 : read / total * 100;
     final name = _folderDisplayNames[folder] ?? folder;
+    // 全部经典页部类卡：素白外观强调色改为 5d7c5a，米黄外观保持原样。
+    final isPlain = AppPalette.instance.isPlain;
+    final folderAccent =
+        isPlain ? const Color(0xFF5d7c5a) : AppPalette.p.accent;
     return Material(
       color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
@@ -2922,7 +3584,13 @@ class SutraListPageState extends State<SutraListPage>
             children: [
               Row(
                 children: [
-                  const Icon(Icons.menu_book, color: Color(0xFFba8e82), size: 15),
+                  Icon(
+                    Icons.menu_book,
+                    color: isPlain
+                        ? const Color(0xFF5d7c5a)
+                        : const Color(0xFFba8e82),
+                    size: 15,
+                  ),
                   const SizedBox(width: 5),
                   Expanded(
                     child: Text(
@@ -2940,7 +3608,7 @@ class SutraListPageState extends State<SutraListPage>
                   Text(
                     '已读 ${pct.toStringAsFixed(0)}%',
                     style: TextStyle(
-                      color: AppPalette.p.accent,
+                      color: folderAccent,
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
@@ -2953,8 +3621,10 @@ class SutraListPageState extends State<SutraListPage>
                 child: LinearProgressIndicator(
                   value: total == 0 ? 0 : read / total,
                   minHeight: 8,
-                  backgroundColor: AppPalette.p.tintBg,
-                  color: AppPalette.p.accent,
+                  backgroundColor: isPlain
+                      ? folderAccent.withValues(alpha: 0.12)
+                      : AppPalette.p.tintBg,
+                  color: folderAccent,
                 ),
               ),
               const SizedBox(height: 8),
@@ -3181,7 +3851,9 @@ class SutraListPageState extends State<SutraListPage>
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     icon: Image.asset(
-                      'assets/images/assistant.png',
+                      AppPalette.instance.isPlain
+                          ? 'assets/images/assistant.png'
+                          : 'assets/images/assistant000.png',
                       width: 18,
                       height: 18,
                     ),
@@ -3201,9 +3873,19 @@ class SutraListPageState extends State<SutraListPage>
                         padding: const EdgeInsets.only(bottom: 40),
                         child: Column(
                           children: [
+                            _buildSearchEntryField(),
                             _buildProgressCard(),
                             _buildContinueReadingCard(),
-                            _buildQuickGrid(),
+                            if (AppPalette.instance.isPlain) ...[
+                              _buildQuickAccessRow(),
+                              _buildRandomSection(),
+                              _buildAllSutrasBar(),
+                              if (_randomFolder != null) ...[
+                                _buildRandomFolderSection(),
+                              ],
+                            ] else ...[
+                              _buildQuickGrid(),
+                            ],
                           ],
                         ),
                       ),
@@ -3252,15 +3934,7 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   void _openDrawer() {
-    if (_searchActive) {
-      _searchController.clear();
-      _searchFocusNode.unfocus();
-      setState(() {
-        _searchActive = false;
-      });
-      widget.onSearchModeChanged?.call(false);
-      _dismissKeyboard();
-    }
+    exitSearchIfActive();
     setState(() {
       _drawerOpen = true;
     });
@@ -3423,6 +4097,7 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
     final total = _sutras.length;
     final read = _sutras.where((s) => s.isRead).length;
     final downloading = widget.parent._folderDownloadTotal[widget.folderName] != null;
+    final isPlain = AppPalette.instance.isPlain;
     return Scaffold(
       backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
@@ -3448,8 +4123,10 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
             const SizedBox(width: 8),
             Text(
               '已读 $read/$total 册',
-              style: const TextStyle(
-                color: Color(0xFFba8e82),
+              style: TextStyle(
+                color: isPlain
+                    ? const Color(0xFF5d7c5a)
+                    : const Color(0xFFba8e82),
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
               ),
@@ -3526,6 +4203,7 @@ class _AllSutrasPageState extends State<AllSutrasPage> {
   @override
   Widget build(BuildContext context) {
     final folders = widget.parent._folders;
+    final isPlain = AppPalette.instance.isPlain;
     return Scaffold(
       backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
@@ -3546,8 +4224,10 @@ class _AllSutrasPageState extends State<AllSutrasPage> {
             const SizedBox(width: 8),
             Text(
               '${folders.length} 个部类',
-              style: const TextStyle(
-                color: Color(0xFFba8e82),
+              style: TextStyle(
+                color: isPlain
+                    ? const Color(0xFF5d7c5a)
+                    : const Color(0xFFba8e82),
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),

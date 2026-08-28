@@ -9,6 +9,7 @@ import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
+import 'note_stats_center.dart';
 import 'notification_center.dart';
 import 'post_time_link.dart';
 import 'user_avatar.dart';
@@ -224,8 +225,8 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
     AuthService.instance.currentUser.addListener(_onAuthChanged);
     widget.activeTab?.addListener(_onTabChanged);
     _prevUnread = NotificationCenter.instance.unread.value;
-    // 首次可见时才加载（activeTab==3 或独立页面无 Tab）；否则切到该页时再拉。
-    if (widget.activeTab == null || widget.activeTab!.value == 3) {
+    // 首次可见时才加载（activeTab==4 或独立页面无 Tab）；否则切到该页时再拉。
+    if (widget.activeTab == null || widget.activeTab!.value == 4) {
       _load();
     }
   }
@@ -265,7 +266,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       });
     } else if (_loadedOnce ||
         widget.activeTab == null ||
-        widget.activeTab!.value == 3) {
+        widget.activeTab!.value == 4) {
       // 只有看过的页面才在登录态变化时后台刷新；从未看过的 Tab 保持延迟加载，
       // 避免冷启动会话恢复一完成就替用户打通知请求（与首页预取叠加成风暴）。
       _load();
@@ -274,7 +275,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
 
   void _onTabChanged() {
     if (!mounted) return;
-    if (widget.activeTab?.value == 3) {
+    if (widget.activeTab?.value == 4) {
       _pageFade.forward(from: 0);
       // 切回通知页时顺带刷新未读数，并静默拉取最新通知列表。
       NotificationCenter.instance.refreshUnread();
@@ -1715,37 +1716,101 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
 
   /// 底部指标行：评论/转发/点赞/阅读 带数字。
   /// 与主页帖子同款：第一个指标与正文左对齐，其余固定间距，数字较多时等比缩小。
+  /// 评论/转发/点赞可直接在本页操作（弹层输入/转发到菩提空间/点赞），
+  /// 完成后本地即时更新数字并广播，不刷新整页。
   Widget _buildMetricsRow(_Palette p) {
     final nid = widget.group.noteId;
-    final note = _note;
-    final liked = nid.isNotEmpty &&
-        CloudNotesService.instance.likedNoteIds.contains(nid);
-    final sec = p.textSec;
-    return Row(
-      children: [
-        _metricCell(Image.asset('assets/images/ic_comment.png',
-            width: 16, height: 16), sec, '${note?.commentCount ?? 0}'),
-        const SizedBox(width: 48),
-        _metricCell(Icon(Icons.repeat_rounded,
-            size: 16, color: sec), sec, '${note?.repostCount ?? 0}'),
-        const SizedBox(width: 48),
-        _metricCell(
-            Icon(liked
-                ? Icons.favorite_rounded
-                : Icons.favorite_border_rounded,
-                size: 16,
-                color: liked ? _gold : sec),
-            liked ? _gold : sec,
-            '${note?.likeCount ?? 0}'),
-        const SizedBox(width: 48),
-        _metricCell(Image.asset('assets/images/ic_view.png',
-            width: 16, height: 16), sec, '${note?.viewCount ?? 0}'),
-      ],
+    return ListenableBuilder(
+      listenable: NoteStatsCenter.instance,
+      builder: (context, _) {
+        final note = _resolvedNote();
+        final liked = nid.isNotEmpty &&
+            CloudNotesService.instance.likedNoteIds.contains(nid);
+        final sec = p.textSec;
+        return Row(
+          children: [
+            _metricCell(
+                Image.asset('assets/images/ic_comment.png',
+                    width: 16, height: 16),
+                sec,
+                '${note?.commentCount ?? 0}',
+                onTap: note == null ? null : () => _onCommentTap(note)),
+            const SizedBox(width: 48),
+            _metricCell(
+                Icon(Icons.repeat_rounded, size: 16, color: sec),
+                sec,
+                '${note?.repostCount ?? 0}',
+                onTap: note == null ? null : () => _onRepostTap(note)),
+            const SizedBox(width: 48),
+            _metricCell(
+                Icon(
+                    liked
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
+                    size: 16,
+                    color: liked ? _gold : sec),
+                liked ? _gold : sec,
+                '${note?.likeCount ?? 0}',
+                onTap: note == null ? null : () => _onLikeTap(note)),
+            const SizedBox(width: 48),
+            _metricCell(Image.asset('assets/images/ic_view.png',
+                width: 16, height: 16), sec, '${note?.viewCount ?? 0}'),
+          ],
+        );
+      },
     );
   }
 
-  Widget _metricCell(Widget icon, Color color, String text) {
-    return Row(
+  /// 指标行展示用的帖子：优先取全局指标广播里的最新版本（其它页面操作后同步），
+  /// 其次用本卡拉取的帖子。
+  PlazaNote? _resolvedNote() {
+    final nid = widget.group.noteId;
+    if (nid.isNotEmpty) {
+      final latest = NoteStatsCenter.instance.latest(nid);
+      if (latest != null) return latest;
+    }
+    return _note;
+  }
+
+  /// 点击评论指标：屏幕下方滑出评论输入框，发表后评论量本地 +1，不刷新页面。
+  void _onCommentTap(PlazaNote note) {
+    replyToNote(context, note, (_) {
+      if (!mounted) return;
+      final cur = _resolvedNote() ?? note;
+      final updated = cur.copyWith(commentCount: cur.commentCount + 1);
+      setState(() => _note = updated);
+      NoteStatsCenter.instance.report(updated);
+    });
+  }
+
+  /// 点击转发指标：转发到菩提空间（直接转发/引用转发），完成后转发量本地 +1，
+  /// 不刷新页面。
+  void _onRepostTap(PlazaNote note) {
+    forwardNote(context, note, (_) {
+      if (!mounted) return;
+      final cur = _resolvedNote() ?? note;
+      final updated = cur.copyWith(repostCount: cur.repostCount + 1);
+      setState(() => _note = updated);
+      NoteStatsCenter.instance.report(updated);
+    });
+  }
+
+  /// 点击点赞指标：本地点赞/取消点赞，数字与红心即时切换，不刷新页面。
+  void _onLikeTap(PlazaNote note) {
+    likeTargetNote(context, note, (_) {
+      if (!mounted) return;
+      final cur = _resolvedNote() ?? note;
+      final liked = CloudNotesService.instance.likedNoteIds.contains(cur.id);
+      final count = cur.likeCount + (liked ? 1 : -1);
+      final updated = cur.copyWith(likeCount: count < 0 ? 0 : count);
+      setState(() => _note = updated);
+      NoteStatsCenter.instance.report(updated);
+    });
+  }
+
+  Widget _metricCell(Widget icon, Color color, String text,
+      {VoidCallback? onTap}) {
+    final cell = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(width: 16, height: 16, child: icon),
@@ -1761,6 +1826,15 @@ class _ReplyNotificationCardState extends State<_ReplyNotificationCard>
           ),
         ],
       ],
+    );
+    if (onTap == null) return cell;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+        child: cell,
+      ),
     );
   }
 

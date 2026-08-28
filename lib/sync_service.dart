@@ -539,17 +539,22 @@ class SyncService with WidgetsBindingObserver {
         final r = e['isRead'] == true;
         final fv = e['isFavorite'] == true;
         final p = e['isPinned'] == true;
+        final rl = e['isReadLater'] == true;
         final rt = e['readTime']?.toString();
         final ft = e['favoriteTime']?.toString();
+        final rlt = e['readLaterTime']?.toString();
         final hasRt = rt != null && rt.isNotEmpty;
         final hasFt = ft != null && ft.isNotEmpty;
-        if (!r && !fv && !p && !hasRt && !hasFt) continue;
+        final hasRlt = rlt != null && rlt.isNotEmpty;
+        if (!r && !fv && !p && !rl && !hasRt && !hasFt && !hasRlt) continue;
         states[title] = {
           if (r) 'r': true,
           if (fv) 'f': true,
           if (p) 'p': true,
+          if (rl) 'rl': true,
           if (hasRt) 'rt': rt,
           if (hasFt) 'ft': ft,
+          if (hasRlt) 'rlt': rlt,
         };
       }
       return states.isEmpty ? null : jsonEncode(states);

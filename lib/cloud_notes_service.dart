@@ -137,6 +137,8 @@ class PlazaNote {
     int? canonRead,
     int? canonTotal,
     int? commentCount,
+    int? likeCount,
+    int? repostCount,
   }) =>
       PlazaNote(
         id: id,
@@ -150,14 +152,15 @@ class PlazaNote {
         canonTotal: canonTotal ?? this.canonTotal,
         visibility: visibility,
         status: status,
-        likeCount: likeCount,
+        likeCount: likeCount ?? this.likeCount,
         commentCount: commentCount ?? this.commentCount,
         viewCount: viewCount,
-        repostCount: repostCount,
+        repostCount: repostCount ?? this.repostCount,
         repostOf: repostOf,
         repostSourceAuthor: repostSourceAuthor,
         repostSourceUserId: repostSourceUserId,
         repostKind: repostKind,
+        tombstoneAncestorIds: tombstoneAncestorIds,
         kind: kind,
         quoteContent: quoteContent,
         quoteOfTitle: quoteOfTitle,
@@ -1020,6 +1023,17 @@ class CloudNotesService {
         .map(HotDiscussionItem.fromJson)
         .toList();
     return (parse('topics'), parse('sutras'));
+  }
+
+  /// 菩提空间热门经文榜：最近 30 天内被提及的经文（广场帖正文的 $经名 引用 +
+  /// 经书讨论页发布的讨论），同一帖子多次提及只算一次；提及次数即热度分，
+  /// 次数越多越靠前，有 1 次提及即入榜。
+  Future<List<HotDiscussionItem>> getHotSutraMentions() async {
+    final res = await _call('getHotSutraMentions');
+    return (res['sutras'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(HotDiscussionItem.fromJson)
+        .toList();
   }
 
   /// 获取全平台热门经书（按锁定精读用户数排序，最多 50 条）。

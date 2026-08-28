@@ -11,6 +11,7 @@ import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart';
 import 'sutra_favorites.dart';
+import 'sutra_read_later.dart';
 import 'app_state.dart';
 import 'reader_preferences.dart';
 import 'note_edit_page.dart';
@@ -64,6 +65,7 @@ class _ReadingPageState extends State<ReadingPage>
   double _downloadProgress = 0;
   bool _isFavorite = false;
   bool _isRead = false;
+  bool _isReadLater = false;
   double? _savedPosition;
   double? _savedProgress;
   int _restoreAttempts = 0;
@@ -113,6 +115,7 @@ class _ReadingPageState extends State<ReadingPage>
     _loadContent();
     _loadFavoriteState();
     _loadReadState();
+    _loadReadLaterState();
     _loadDisplayTitle();
   }
 
@@ -558,10 +561,10 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   /// 打开笔记编辑页：预填「$经书名」在顶部，可写笔记并发布到菩提空间。
-  /// 引用统一用基础经名（不带卷标）：广场渲染时多卷经书会自动补显「卷一」，
-  /// 热度榜也按基础经名聚合，避免同一部经拆成多个名字。
+  /// 经名带当前卷标（与顶部标题栏一致，如「$地藏菩萨本愿经卷一」）；
+  /// 广场渲染时卷标会整体并入链接显示，热度榜仍按基础经名聚合。
   void _openNoteEditor() async {
-    final display = sutraBaseTitle(widget.title);
+    final display = _titleShown;
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -1022,6 +1025,16 @@ class _ReadingPageState extends State<ReadingPage>
                             ),
                             _buildMoreMenuItem(
                               icon: Icon(
+                                _isReadLater
+                                    ? Icons.bookmark
+                                    : Icons.bookmark_border,
+                                size: 18,
+                              ),
+                              label: _isReadLater ? '取消稍后阅读' : '稍后阅读',
+                              onTap: _toggleReadLater,
+                            ),
+                            _buildMoreMenuItem(
+                              icon: Icon(
                                 _isRead
                                     ? Icons.mark_chat_read
                                     : Icons.mark_chat_unread,
@@ -1150,6 +1163,34 @@ class _ReadingPageState extends State<ReadingPage>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(nowFav ? '已收藏，可在「我的收藏」中查看' : '已取消收藏'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// 加载当前经书稍后阅读状态。
+  Future<void> _loadReadLaterState() async {
+    final rl = await SutraReadLater.isReadLater(
+        widget.title, _resolvedFilePath ?? widget.filePath);
+    if (mounted) {
+      setState(() {
+        _isReadLater = rl;
+      });
+    }
+  }
+
+  /// 标记 / 取消稍后阅读当前经书。
+  Future<void> _toggleReadLater() async {
+    final nowRL = await SutraReadLater.toggle(
+        widget.title, _resolvedFilePath ?? widget.filePath);
+    if (!mounted) return;
+    setState(() {
+      _showMoreMenu = false;
+      _isReadLater = nowRL;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(nowRL ? '已标记稍后阅读' : '已取消稍后阅读'),
         duration: const Duration(seconds: 2),
       ),
     );

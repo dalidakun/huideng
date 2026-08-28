@@ -134,7 +134,7 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      '大家都在读',
+                      '大家都在学',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: _inkBlack, letterSpacing: 1.2),
                     ),
                     const SizedBox(height: 3),

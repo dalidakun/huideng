@@ -157,4 +157,193 @@ void main() {
       expect(disp(fixed), '大般若波罗蜜多经卷四百零三');
     });
   });
+
+  group('中文卷标解析', () {
+    test('parseChineseVolumeNumber 各种卷数', () {
+      expect(parseChineseVolumeNumber('卷一'), 1);
+      expect(parseChineseVolumeNumber('卷十'), 10);
+      expect(parseChineseVolumeNumber('卷十一'), 11);
+      expect(parseChineseVolumeNumber('卷二十一'), 21);
+      expect(parseChineseVolumeNumber('卷一百'), 100);
+      expect(parseChineseVolumeNumber('卷一百零五'), 105);
+      expect(parseChineseVolumeNumber('卷一百一十'), 110);
+      expect(parseChineseVolumeNumber('卷四百零三'), 403);
+      expect(parseChineseVolumeNumber('卷六百'), 600);
+      expect(parseChineseVolumeNumber('11'), 11);
+      expect(parseChineseVolumeNumber(''), 0);
+      expect(parseChineseVolumeNumber('卷'), 0);
+    });
+
+    test('讨论页展示名：filePath 能定位具体卷时优先显示具体卷标', () {
+      final bases = {'高僧传'};
+      expect(
+        sutraDiscussionDisplayName('高僧传',
+            filePath: 'assets/sutras_ascii/T50/T50n2059_011.txt',
+            multiVolumeBases: bases),
+        '高僧传卷十一',
+      );
+      expect(
+        sutraDiscussionDisplayName('高僧传', filePath: '', multiVolumeBases: bases),
+        '高僧传卷一',
+      );
+      expect(
+        sutraDiscussionDisplayName('高僧传T50n2059_005',
+            filePath: '', multiVolumeBases: bases),
+        '高僧传卷五',
+      );
+      expect(
+        sutraDiscussionDisplayName('金刚般若波罗蜜经',
+            filePath: 'assets/sutras_ascii/T08/T08n0236_001.txt',
+            multiVolumeBases: bases),
+        '金刚般若波罗蜜经',
+      );
+    });
+  });
+
+  group('讨论页按卷拆分：相关帖子筛选', () {
+    test('带卷标引用只匹配对应卷', () {
+      const text = '今天读，\$高僧传卷十一有感';
+      expect(referencesSutraVolume(text, '高僧传', 11), true);
+      expect(referencesSutraVolume(text, '高僧传', 1), false);
+      expect(referencesSutraVolume(text, '高僧传', 5), false);
+    });
+
+    test('只写基础经名的引用视为卷一', () {
+      const text = '\$高僧传，今天读了一点';
+      expect(referencesSutraVolume(text, '高僧传', 1), true);
+      expect(referencesSutraVolume(text, '高僧传', 11), false);
+    });
+
+    test('百位卷标解析', () {
+      const text = '\$大般若波罗蜜多经卷四百零三';
+      expect(referencesSutraVolume(text, '大般若波罗蜜多经', 403), true);
+      expect(referencesSutraVolume(text, '大般若波罗蜜多经', 43), false);
+    });
+
+    test('旧式 [@经名](路径) 视为卷一引用', () {
+      const text = '[@高僧传](assets/sutras_ascii/T50/T50n2059_001.txt)';
+      expect(referencesSutraVolume(text, '高僧传', 1), true);
+      expect(referencesSutraVolume(text, '高僧传', 2), false);
+    });
+
+    test('长经名前缀不误匹配', () {
+      const text = '\$续高僧传卷一';
+      expect(referencesSutraVolume(text, '高僧传', 1), false);
+    });
+  });
+
+  group('热门经文目录归一（榜单计数与讨论页口径一致）', () {
+    const catalog = {'金刚经', '心经', '大般若波罗蜜多经', '高僧传'};
+
+    test('直接命中目录原样返回（含卷标/编号归一）', () {
+      expect(resolveHotSutraName('金刚经', catalog), '金刚经');
+      expect(resolveHotSutraName('金刚经卷一', catalog), '金刚经');
+      expect(resolveHotSutraName('金刚经T08n0236_001', catalog), '金刚经');
+    });
+
+    test('尾部粘连文字按最长前缀归一到真实经名', () {
+      expect(resolveHotSutraName('金刚经真好', catalog), '金刚经');
+      expect(resolveHotSutraName('金刚经》很好', catalog), '金刚经');
+      expect(resolveHotSutraName('大般若波罗蜜多经真言', catalog), '大般若波罗蜜多经');
+    });
+
+    test('最长前缀优先更长的经名', () {
+      const c2 = {'金刚经', '金刚般若波罗蜜经'};
+      expect(resolveHotSutraName('金刚般若波罗蜜经注', c2), '金刚般若波罗蜜经');
+      expect(resolveHotSutraName('金刚经注疏', c2), '金刚经');
+    });
+
+    test('无法归一返回 null（丢弃）', () {
+      expect(resolveHotSutraName('随便聊聊', catalog), isNull);
+      expect(resolveHotSutraName('某经真好', catalog), isNull);
+    });
+
+    test('mergeHotSutraItems 传目录：粘连名并入真实经名、无效名丢弃', () {
+      final merged = mergeHotSutraItems(const [
+        HotDiscussionItem(name: '金刚经', posts: 2, score: 4),
+        HotDiscussionItem(name: '金刚经真好', posts: 1, score: 2),
+        HotDiscussionItem(name: '心经卷一', posts: 3, score: 6),
+        HotDiscussionItem(name: '随便聊聊', posts: 9, score: 99),
+      ], catalogNames: catalog);
+      final byName = {for (final e in merged) e.name: e};
+      expect(byName.keys, {'金刚经', '心经'});
+      expect(byName['金刚经']!.posts, 3);
+      expect(byName['金刚经']!.score, 6);
+      expect(byName['心经']!.posts, 3);
+    });
+
+    test('mergeHotSutraItems 不传目录保持旧行为', () {
+      final merged = mergeHotSutraItems(const [
+        HotDiscussionItem(name: '金刚经真好', posts: 1, score: 2),
+      ]);
+      expect(merged.length, 1);
+      expect(merged[0].name, '金刚经真好');
+    });
+  });
+
+  group('热门经文按卷拆分（榜单计数与分卷讨论页一致）', () {
+    const catalog = {'地藏菩萨本愿经', '金刚经', '高僧传'};
+    const mvBases = {'地藏菩萨本愿经', '高僧传'};
+
+    test('多卷经书按卷分开：基础名/裸引用并入卷一，各卷独立', () {
+      final merged = mergeHotSutraItems(const [
+        HotDiscussionItem(name: '地藏菩萨本愿经', posts: 2, score: 4),
+        HotDiscussionItem(name: '地藏菩萨本愿经卷一', posts: 3, score: 6),
+        HotDiscussionItem(name: '地藏菩萨本愿经卷二', posts: 5, score: 10),
+      ], catalogNames: catalog, multiVolumeBases: mvBases);
+      final byName = {for (final e in merged) e.name: e};
+      expect(byName.keys, {'地藏菩萨本愿经卷一', '地藏菩萨本愿经卷二'});
+      expect(byName['地藏菩萨本愿经卷一']!.posts, 5);
+      expect(byName['地藏菩萨本愿经卷二']!.posts, 5);
+    });
+
+    test('单卷经书仍按基础经名归并', () {
+      final merged = mergeHotSutraItems(const [
+        HotDiscussionItem(name: '金刚经', posts: 2, score: 4),
+        HotDiscussionItem(name: '金刚经卷一', posts: 1, score: 2),
+      ], catalogNames: catalog, multiVolumeBases: mvBases);
+      final byName = {for (final e in merged) e.name: e};
+      expect(byName.keys, {'金刚经'});
+      expect(byName['金刚经']!.posts, 3);
+    });
+
+    test('粘连名按卷归一：卷二粘连文字计入卷二，裸引用计入卷一', () {
+      final merged = mergeHotSutraItems(const [
+        HotDiscussionItem(name: '高僧传卷二真好', posts: 1, score: 2),
+        HotDiscussionItem(name: '高僧传', posts: 2, score: 4),
+      ], catalogNames: catalog, multiVolumeBases: mvBases);
+      final byName = {for (final e in merged) e.name: e};
+      expect(byName.keys, {'高僧传卷一', '高僧传卷二'});
+      expect(byName['高僧传卷一']!.posts, 2);
+      expect(byName['高僧传卷二']!.posts, 1);
+    });
+
+    test('不传 multiVolumeBases 保持整部归并（经文总榜旧行为）', () {
+      final merged = mergeHotSutraItems(const [
+        HotDiscussionItem(name: '地藏菩萨本愿经', posts: 2, score: 4),
+        HotDiscussionItem(name: '地藏菩萨本愿经卷一', posts: 3, score: 6),
+        HotDiscussionItem(name: '地藏菩萨本愿经卷二', posts: 5, score: 10),
+      ], catalogNames: catalog);
+      final byName = {for (final e in merged) e.name: e};
+      expect(byName.keys, {'地藏菩萨本愿经'});
+      expect(byName['地藏菩萨本愿经']!.posts, 10);
+    });
+
+    test('splitHotSutraName 拆分基础名与卷号', () {
+      expect(splitHotSutraName('地藏菩萨本愿经卷二'), ('地藏菩萨本愿经', 2));
+      expect(splitHotSutraName('地藏菩萨本愿经'), ('地藏菩萨本愿经', 0));
+      expect(splitHotSutraName('高僧传卷十一'), ('高僧传', 11));
+      expect(splitHotSutraName('金刚经'), ('金刚经', 0));
+    });
+
+    test('resolveHotSutraBaseAndVolume 解析经名与卷号', () {
+      expect(resolveHotSutraBaseAndVolume('地藏菩萨本愿经卷二', catalog),
+          ('地藏菩萨本愿经', 2));
+      expect(resolveHotSutraBaseAndVolume('地藏菩萨本愿经', catalog),
+          ('地藏菩萨本愿经', 0));
+      expect(resolveHotSutraBaseAndVolume('高僧传卷十一真好', catalog),
+          ('高僧传', 11));
+      expect(resolveHotSutraBaseAndVolume('随便聊聊', catalog), isNull);
+    });
+  });
 }

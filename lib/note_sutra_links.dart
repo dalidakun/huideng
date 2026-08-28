@@ -21,6 +21,31 @@ class NoteSutraLink {
   });
 }
 
+/// 数字转中文卷名：1->「卷一」、10->「卷十」、21->「卷二十一」、
+/// 105->「卷一百零五」、110->「卷一百一十」、600->「卷六百」。
+String sutraVolumeLabel(int n) {
+  const digits = '零一二三四五六七八九';
+  if (n <= 0) return '';
+  if (n <= 10) return '卷${n == 10 ? '十' : digits[n]}';
+  if (n < 20) return '卷十${digits[n - 10]}';
+  if (n < 100) {
+    final tens = n ~/ 10;
+    final ones = n % 10;
+    return '卷${digits[tens]}十${ones == 0 ? '' : digits[ones]}';
+  }
+  if (n < 1000) {
+    final hundreds = n ~/ 100;
+    final rest = n % 100;
+    final head = '卷${digits[hundreds]}百';
+    if (rest == 0) return head;
+    if (rest < 10) return '$head零${digits[rest]}';
+    final tens = rest ~/ 10;
+    final ones = rest % 10;
+    return '$head${digits[tens]}十${ones == 0 ? '' : digits[ones]}';
+  }
+  return '卷$n';
+}
+
 /// 经书目录加载与检索（@经书 功能）。
 ///
 /// 目录来源与经藏页一致：assets/sutras_catalog.json（约九千部）。
@@ -32,7 +57,17 @@ class NoteSutraCatalog {
   /// 多卷经书的基础经名集合（目录中出现多次的基础经名），与目录同生命周期缓存。
   static Set<String>? _multiVolumeBases;
 
+  /// 基础经名 ->（卷号 -> 该卷正文路径）：供带卷标的 $引用定位到具体卷。
+  static Map<String, Map<int, String>>? _volumePaths;
+
+  /// 基础经名 -> 全书总字数（多卷经书为各卷之和），与目录同生命周期缓存。
+  static Map<String, int>? _charCounts;
+
   static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
+  static final RegExp _volumeOfRe = RegExp(r'T\d+n[0-9A-Za-z]+_(\d+)$');
+
+  /// 历史脏数据防御：早期目录曾把空的「第卷」占位写进经名。
+  static final RegExp _legacyGarbageRe = RegExp(r'(第卷)+');
 
   static Future<List<NoteSutraLink>> _load() async {
     final cached = _cache;
@@ -41,15 +76,26 @@ class NoteSutraCatalog {
     final decoded = jsonDecode(raw) as List<dynamic>;
     final byTitle = <String, NoteSutraLink>{};
     final counts = <String, int>{};
+    final volumePaths = <String, Map<int, String>>{};
+    final charCounts = <String, int>{};
     for (final e in decoded) {
       final m = e as Map<String, dynamic>;
-      final rawTitle = (m['t'] as String?) ?? '';
+      final rawTitle =
+          ((m['t'] as String?) ?? '').replaceAll(_legacyGarbageRe, '');
       final title = rawTitle.replaceAll(_idSuffixRe, '');
       if (title.isEmpty) continue;
       counts[title] = (counts[title] ?? 0) + 1;
-      if (byTitle.containsKey(title)) continue; // 多卷经书只保留第一部
+      // 字数按基础经名累加：多卷经书得到全书总字数。
+      charCounts[title] =
+          (charCounts[title] ?? 0) + ((m['c'] as num?)?.toInt() ?? 0);
       final path = SutraAssetPath.resolve(title: rawTitle);
       if (!path.startsWith('assets/')) continue;
+      final vm = _volumeOfRe.firstMatch(rawTitle);
+      if (vm != null) {
+        final vol = int.tryParse(vm.group(1)!) ?? 0;
+        if (vol > 0) (volumePaths[title] ??= {})[vol] = path;
+      }
+      if (byTitle.containsKey(title)) continue; // 多卷经书只保留第一部
       byTitle[title] = NoteSutraLink(
         title: title,
         size: (m['s'] as String?) ?? '',
@@ -59,6 +105,8 @@ class NoteSutraCatalog {
     }
     final list = byTitle.values.toList();
     _cache = list;
+    _volumePaths = volumePaths;
+    _charCounts = charCounts;
     _multiVolumeBases = {
       for (final e in counts.entries)
         if (e.value > 1) e.key,
@@ -67,8 +115,10 @@ class NoteSutraCatalog {
   }
 
   /// 检索以 query 开头的经书；结果不足时补充包含匹配。最多返回 30 部。
+  /// 多卷经书按卷展开检索（「地藏菩萨本愿经卷一」「卷二」各成一条），
+  /// 选中后插入带卷标的引用，与讨论页/热度榜的卷标口径一致。
   static Future<List<NoteSutraLink>> search(String query) async {
-    final all = await load();
+    final all = await _loadExpanded();
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return const [];
     final prefix = <NoteSutraLink>[];
@@ -82,6 +132,36 @@ class NoteSutraCatalog {
       }
     }
     return [...prefix, ...contains].take(30).toList();
+  }
+
+  /// 多卷经书按卷展开后的目录（$ 引用面板检索用）：
+  /// 「地藏菩萨本愿经」展开为「地藏菩萨本愿经卷一」「卷二」…独立条目，
+  /// 路径指向各卷正文；单卷经书保持基础经名原样。与目录同生命周期缓存。
+  static List<NoteSutraLink>? _expandedCache;
+
+  static Future<List<NoteSutraLink>> _loadExpanded() async {
+    final cached = _expandedCache;
+    if (cached != null) return cached;
+    final all = await _load();
+    final expanded = <NoteSutraLink>[];
+    for (final s in all) {
+      final volumes = _volumePaths?[s.title];
+      if (volumes == null || volumes.length <= 1) {
+        expanded.add(s);
+        continue;
+      }
+      final vols = volumes.keys.toList()..sort();
+      for (final v in vols) {
+        expanded.add(NoteSutraLink(
+          title: '${s.title}${sutraVolumeLabel(v)}',
+          size: s.size,
+          folder: s.folder,
+          filePath: volumes[v] ?? s.filePath,
+        ));
+      }
+    }
+    _expandedCache = expanded;
+    return expanded;
   }
 
   /// 加载全部经书（已按经书去重），带缓存。
@@ -98,6 +178,21 @@ class NoteSutraCatalog {
   /// 未加载时返回空集合。
   static Set<String> get cachedMultiVolumeBases =>
       _multiVolumeBases ?? const {};
+
+  /// 目录已加载时，返回基础经名 [base] 第 [volume] 卷的正文路径；
+  /// 未加载或无对应卷时返回 null（调用方回退到第一部路径）。
+  static String? cachedVolumePath(String base, int volume) {
+    if (volume <= 0) return null;
+    return _volumePaths?[base]?[volume];
+  }
+
+  /// 目录已加载时，返回基础经名 [base] 的总卷数；未加载或无记录返回 0。
+  static int cachedVolumeCount(String base) =>
+      _volumePaths?[base]?.length ?? 0;
+
+  /// 目录已加载时，返回基础经名 [base] 的总字数（多卷经书为各卷之和）；
+  /// 未加载或无记录返回 0。
+  static int cachedCharCount(String base) => _charCounts?[base] ?? 0;
 
   /// 经书名 -> 经书的映射，用于点击 @经书 时定位正文路径。
   static Future<Map<String, NoteSutraLink>> titleMap() async {

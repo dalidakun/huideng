@@ -8,10 +8,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 enum AppearanceMode { warm, plain }
 
 extension AppearanceModeLabel on AppearanceMode {
-  String get label => this == AppearanceMode.warm ? '暖黄经典' : '素白简洁';
+  String get label => this == AppearanceMode.warm ? '暖黄经典' : '素白清新';
 
   String get desc =>
-      this == AppearanceMode.warm ? '米黄底 · 青绿点缀' : '纯白底 · 黑色点缀';
+      this == AppearanceMode.warm ? '米黄底 · 青绿点缀' : '纯白底 · 绿色点缀';
 }
 
 /// 一套完整的界面调色板。
@@ -32,6 +32,8 @@ class PaletteData {
   final Color muted;
   final Color gradTop;
   final Color gradBot;
+  /// 阅藏页面强调色：素白外观用绿色，暖黄外观用主色。
+  final Color readingAccent;
 
   const PaletteData({
     required this.primary,
@@ -49,6 +51,7 @@ class PaletteData {
     required this.muted,
     required this.gradTop,
     required this.gradBot,
+    this.readingAccent = const Color(0xFF5B7D5A),
   });
 }
 
@@ -87,13 +90,14 @@ class AppPalette extends ChangeNotifier {
     muted: Color(0xFFD2C5B3),
     gradTop: Color(0xFFF3E8DB),
     gradBot: Color(0xFFF9F1E7),
+    readingAccent: Color(0xFF5C4033),
   );
 
-  /// 素白简洁：白底黑字的单色调风格。
+  /// 素白清新：白底配绿色点缀。
   static const plain = PaletteData(
     primary: Color(0xFF1A1A1A),
-    accent: Color(0xFF1A1A1A),
-    accentDeep: Color(0xFF000000),
+    accent: Color(0xFF5D7C5A),
+    accentDeep: Color(0xFF3D5C3A),
     bg: Color(0xFFFBFBFB),
     card: Color(0xFFFFFFFF),
     text: Color(0xFF1C1C1C),
@@ -107,6 +111,7 @@ class AppPalette extends ChangeNotifier {
     muted: Color(0xFFD6D6D6),
     gradTop: Color(0xFFFFFFFF),
     gradBot: Color(0xFFF2F2F2),
+    readingAccent: Color(0xFF5B7D5A),
   );
 
   /// 启动时读取用户保存的外观偏好（main 里 runApp 前调用）。

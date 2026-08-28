@@ -10,6 +10,7 @@ import 'sutra_list_page.dart';
 import 'discussion_page.dart';
 import 'splash_image_page.dart';
 import 'study_hub_page.dart';
+import 'bodhi_space_page.dart';
 import 'my_page.dart';
 import 'message_page.dart';
 import 'app_state.dart';
@@ -20,6 +21,8 @@ import 'notification_service.dart';
 import 'notification_center.dart';
 import 'user_avatar_cache.dart';
 import 'update_service.dart';
+import 'reading_badges.dart';
+import 'recent_sutras_page.dart';
 
 import 'app_palette.dart';
 import 'agreements.dart';
@@ -73,6 +76,9 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   late bool _agreed = widget.privacyAgreed;
+
+  /// 主页状态引用：侧滑返回时检查经藏页是否处于搜索模式（先退出搜索）。
+  final _mainPageKey = GlobalKey<_MainPageState>();
 
   // 监听外观切换：调色板变化时重建整棵树，所有页面即时换肤（无需重启）。
   void _onPaletteChanged() {
@@ -146,6 +152,11 @@ class _MyAppState extends State<MyApp> {
             nav.pop();
             return;
           }
+          // 经藏页处于搜索模式时，侧滑返回先退出搜索、回到经藏页面，
+          // 而不是直接最小化应用。
+          if (_mainPageKey.currentState?.exitSutraSearchIfActive() ?? false) {
+            return;
+          }
           // 最小化应用到后台，模拟从底部滑动的行为
           if (Platform.isAndroid) {
             const platform = MethodChannel('app_channel');
@@ -159,14 +170,17 @@ class _MyAppState extends State<MyApp> {
             SystemNavigator.pop();
           }
         },
-        child: const _AppEntry(),
+        child: _AppEntry(mainPageKey: _mainPageKey),
           ),
     );
   }
 }
 
 class _AppEntry extends StatefulWidget {
-  const _AppEntry();
+  const _AppEntry({required this.mainPageKey});
+
+  /// 主页状态引用：供根路由侧滑返回时检查/退出经藏搜索模式。
+  final GlobalKey<_MainPageState> mainPageKey;
 
   @override
   State<_AppEntry> createState() => _AppEntryState();
@@ -195,7 +209,7 @@ class _AppEntryState extends State<_AppEntry> {
             : 'assets/images/splash1.png',
       );
     }
-    return const MainPage();
+    return MainPage(key: widget.mainPageKey);
   }
 }
 
@@ -209,12 +223,12 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   int _currentIndex = 0;
-  bool _searchMode = false;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
+  final _bodhiKey = GlobalKey<BodhiSpacePageState>();
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
   late final ValueNotifier<int> _tabIndex;
-  late final List<Widget> _pages;
+  List<Widget> _pages = [];
   // 底部菜单自动隐藏动画：value 0=完全显示，1=完全隐藏。
   // 惰性初始化，避免热重载后旧实例字段未赋值导致红屏。
   late final AnimationController _navCtrl = AnimationController(
@@ -224,30 +238,13 @@ class _MainPageState extends State<MainPage>
   // 上一帧滚动偏移与最近一次方向判定后的滚动方向（1=向下，-1=向上）。
   double _lastScrollPixels = 0;
   int _scrollDir = 0;
-  // 修学菜单图标最近一次点击时间戳：无新帖时用于判定双击回到顶部。
-  int _lastStudyTabTap = 0;
+  // 菩提空间菜单图标最近一次点击时间戳：无新帖时用于判定双击回到顶部。
+  int _lastBodhiTabTap = 0;
 
   @override
   void initState() {
     super.initState();
     _tabIndex = ValueNotifier<int>(0);
-    _pages = [
-      StudyHubPage(
-        key: _studyHubKey,
-        onOpenMyPage: _openMyPage,
-        onSutraStateChanged: () =>
-            unawaited(_sutraListKey.currentState?.reload()),
-      ),
-      SutraListPage(
-        key: _sutraListKey,
-        activeTab: _tabIndex,
-        onSearchModeChanged: _onSearchModeChanged,
-        onOpenAssistant: _openAssistantPage,
-      ),
-      _AssistantTabPage(),
-      MessagePage(onOpenMyPage: _openMyPage, activeTab: _tabIndex),
-      MyPage(key: _myKey),
-    ];
     WidgetsBinding.instance.addObserver(this);
     SyncService.instance.dataVersion.addListener(_onCloudDataChanged);
     // 外观切换时刷新底部导航图标（素白用黑色版本）。
@@ -280,6 +277,7 @@ class _MainPageState extends State<MainPage>
   void _onCloudDataChanged() {
     if (!mounted) return;
     _studyHubKey.currentState?.reload();
+    _bodhiKey.currentState?.reload();
     _myKey.currentState?.reload();
     unawaited(_sutraListKey.currentState?.reload());
   }
@@ -314,7 +312,7 @@ class _MainPageState extends State<MainPage>
       final shouldSwitchToSutra = prefs.getBool('switch_to_sutra');
       if (shouldSwitchToSutra == true) {
         setState(() {
-          _currentIndex = 1;
+          _currentIndex = 2;
         });
         prefs.setBool('switch_to_sutra', false);
       }
@@ -322,7 +320,7 @@ class _MainPageState extends State<MainPage>
       final shouldSwitchToAssistant = prefs.getBool('switch_to_assistant');
       if (shouldSwitchToAssistant == true) {
         setState(() {
-          _currentIndex = 2;
+          _currentIndex = 3;
         });
         prefs.setBool('switch_to_assistant', false);
       }
@@ -332,7 +330,7 @@ class _MainPageState extends State<MainPage>
 
   /// 助手 Tab 是否处于选中态，同步给共享 WebView 会话。
   void _syncAssistantTab() {
-    AssistantSession.instance.setTabActive(_currentIndex == 2);
+    AssistantSession.instance.setTabActive(_currentIndex == 3);
   }
 
   @override
@@ -349,24 +347,23 @@ class _MainPageState extends State<MainPage>
   /// 每次构建重新取值，外观切换后立即换图。
   List<BottomNavigationBarItem> get _bottomNavItems => [
     BottomNavigationBarItem(
-      // 不用 const：保证外观切换时图标子树会重建、及时换黑色版本。
-      icon: _StudyTabIcon(active: false),
-      activeIcon: _StudyTabIcon(active: true),
+      icon: Image.asset(navIconAsset('assets/images/study.png'),
+          width: 24, height: 24),
+      activeIcon: Image.asset(navIconAsset('assets/images/study_selected.png'),
+          width: 24, height: 24),
       label: '',
     ),
     BottomNavigationBarItem(
-      icon: Image.asset(navIconAsset('assets/images/search.png'),
-          width: 24, height: 24),
-      activeIcon: Image.asset(navIconAsset('assets/images/search_selected.png'),
-          width: 24, height: 24),
+      icon: _BodhiTabIcon(active: false),
+      activeIcon: _BodhiTabIcon(active: true),
       label: '',
     ),
     BottomNavigationBarItem(
       icon: Image.asset(navIconAsset('assets/images/sutra_book.png'),
-          width: 27, height: 27),
+          width: 23, height: 23),
       activeIcon:
           Image.asset(navIconAsset('assets/images/sutra_book_selected.png'),
-              width: 27, height: 27),
+              width: 23, height: 23),
       label: '',
     ),
     BottomNavigationBarItem(
@@ -383,73 +380,70 @@ class _MainPageState extends State<MainPage>
     ),
   ];
 
-  /// 经藏页搜索模式变化（页内退出搜索时同步菜单高亮）。
-  void _onSearchModeChanged(bool active) {
-    if (!mounted || _searchMode == active) return;
-    setState(() {
-      _searchMode = active;
-    });
-  }
-
-  /// 当前页面索引 → 底部菜单索引（搜索是模式入口；助手无菜单项，不高亮）。
+  /// 当前页面索引 → 底部菜单索引（助手无菜单项，不高亮）。
   int _navIndexForCurrent() {
-    if (_searchMode) return 1;
     switch (_currentIndex) {
-      case 0: // 修学
+      case 0: // 首页
         return 0;
-      case 1: // 经藏
+      case 1: // 菩提空间
+        return 1;
+      case 2: // 经藏
         return 2;
-      case 2: // 助手（入口在经藏页右上角）
+      case 3: // 助手（入口在经藏页右上角）
         return -1;
-      case 3: // 消息
+      case 4: // 消息
         return 3;
       default: // 我的
         return 4;
     }
   }
 
+  /// 经藏页处于搜索模式时退出搜索（根路由侧滑返回调用）。返回是否消费了本次返回。
+  bool exitSutraSearchIfActive() {
+    if (_currentIndex != 2) return false;
+    return _sutraListKey.currentState?.exitSearchIfActive() ?? false;
+  }
+
   void _switchToTab(int index) {
-    if (index == 1) {
-      // 底部「搜索」：进入/退出经藏搜索激活状态。
-      if (_searchMode) {
-        _searchMode = false;
-        setState(() {
-          _currentIndex = 1;
-        });
-        _sutraListKey.currentState?.deactivateSearch();
-      } else {
-        _searchMode = true;
-        _tabIndex.value = 1;
-        setState(() {
-          _currentIndex = 1;
-        });
-        _sutraListKey.currentState?.activateSearch();
-      }
+    // 已停留在经藏页再次点击经藏菜单图标：处于搜索模式则先退出搜索。
+    if (index == 2 && _currentIndex == 2) {
+      _sutraListKey.currentState?.exitSearchIfActive();
+      _tabIndex.value = 2;
+      _syncAssistantTab();
+      _revealNavBar();
       return;
     }
-    if (_searchMode) {
-      _searchMode = false;
+    // 离开经藏页时退出搜索模式，保证回来时是正常页面。
+    if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    final pageIndex = index == 4
-        ? 4
-        : (index == 3 ? 3 : (index == 2 ? 1 : 0));
-    // 已停留在修学页再次点击修学菜单图标：
+    // 底部菜单索引 → 页面索引：消息(3)→4、我的(4)→5，助手页无菜单项。
+    final pageIndex = index >= 3 ? index + 1 : index;
+    // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
+    if (pageIndex == 0 && _currentIndex == 0) {
+      _studyHubKey.currentState?.reload();
+      _studyHubKey.currentState?.scrollToTop();
+      _tabIndex.value = 0;
+      _syncAssistantTab();
+      _revealNavBar();
+      return;
+    }
+    // 已停留在菩提空间再次点击其菜单图标：
     // - 有新帖（角标 > 0）：保持原 reload 行为，刷出新帖。
     // - 无新帖：检测双击，第二次点击则回到页面最顶部。
-    if (pageIndex == 0 && _currentIndex == 0) {
-      if (StudyHubPageState.newPostBadge.value > 0) {
-        _studyHubKey.currentState?.reload();
+    if (pageIndex == 1 && _currentIndex == 1) {
+      if (BodhiSpacePageState.newPostBadge.value > 0) {
+        _bodhiKey.currentState?.reload();
       } else {
         final now = DateTime.now().millisecondsSinceEpoch;
-        if (now - _lastStudyTabTap < 350) {
-          _studyHubKey.currentState?.scrollToTop();
-          _lastStudyTabTap = 0;
+        if (now - _lastBodhiTabTap < 350) {
+          _bodhiKey.currentState?.scrollToTop();
+          _lastBodhiTabTap = 0;
         } else {
-          _lastStudyTabTap = now;
+          _lastBodhiTabTap = now;
         }
       }
-      _tabIndex.value = 0;
+      _tabIndex.value = 1;
       _syncAssistantTab();
       _revealNavBar();
       return;
@@ -461,6 +455,7 @@ class _MainPageState extends State<MainPage>
     _syncAssistantTab();
     _revealNavBar();
     if (pageIndex == 0) _studyHubKey.currentState?.reload();
+    if (pageIndex == 1) _bodhiKey.currentState?.reload();
   }
 
   /// 经藏页右上角助手入口：以圆形展开/缩回动画开关全屏 DeepSeek 面板。
@@ -470,17 +465,42 @@ class _MainPageState extends State<MainPage>
 
   /// 修学页左上角头像入口：打开「我的」页面。
   void _openMyPage() {
-    if (_searchMode) {
-      _searchMode = false;
+    if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    _tabIndex.value = 4;
+    _tabIndex.value = 5;
     setState(() {
-      _currentIndex = 4;
+      _currentIndex = 5;
     });
     _syncAssistantTab();
     _revealNavBar();
     _myKey.currentState?.reload();
+  }
+
+  /// 阅读统计入口：打开阅读统计页面。
+  void _openReadingStats() {
+    if (_currentIndex == 2) {
+      _sutraListKey.currentState?.deactivateSearch();
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const BadgeDetailPage(),
+      ),
+    );
+  }
+
+  /// 稍后阅读入口：打开稍后阅读页面。
+  void _openReadingHistory() {
+    if (_currentIndex == 2) {
+      _sutraListKey.currentState?.deactivateSearch();
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RecentSutrasPage(parent: _sutraListKey.currentState),
+      ),
+    );
   }
 
   /// 切页时立即弹回菜单并重置滚动方向跟踪。
@@ -535,6 +555,29 @@ class _MainPageState extends State<MainPage>
 
   @override
   Widget build(BuildContext context) {
+    // 外观切换时重建页面列表，确保各子页面的 build() 能读取最新的 AppPalette.p 值。
+    _pages = [
+      StudyHubPage(
+        key: _studyHubKey,
+        onOpenMyPage: _openMyPage,
+        onSutraStateChanged: () =>
+            unawaited(_sutraListKey.currentState?.reload()),
+      ),
+      BodhiSpacePage(
+        key: _bodhiKey,
+        onOpenMyPage: _openMyPage,
+      ),
+      SutraListPage(
+        key: _sutraListKey,
+        activeTab: _tabIndex,
+        onOpenAssistant: _openAssistantPage,
+        onOpenReadingStats: _openReadingStats,
+        onOpenReadingHistory: _openReadingHistory,
+      ),
+      _AssistantTabPage(),
+      MessagePage(onOpenMyPage: _openMyPage, activeTab: _tabIndex),
+      MyPage(key: _myKey),
+    ];
     // 关闭键盘自适应压缩：WebView（助手/DeepSeek）在 adjustResize 下会被键盘
     // 压成小视口，页面在消息区与输入框之间露出大片空白遮挡内容。
     // 改为不压缩，由 DeepSeek 页面自身处理键盘重叠，输入框保持在键盘上方。
@@ -666,29 +709,30 @@ class _BottomNavBar extends StatelessWidget {
   }
 }
 
-/// 底部「通知」标签图标：右上角显示未读角标（Badge）。
-/// - 圆形（1~9）/ 胶囊形（>9），背景 #70867A，白字，圆角 999，超出图标边界。
-/// - 收到新通知时 Scale 0→1.15→1 弹性动画，数字平滑递增；
-///   全部已读后淡出并缩小消失。
-class _StudyTabIcon extends StatelessWidget {
+/// 底部「菩提空间」标签图标：米黄外观用 mi1/mi2，素白外观用 su1/su2；
+/// 有新帖未查看时右上角显示 70867A 小圆点。
+class _BodhiTabIcon extends StatelessWidget {
   final bool active;
-  const _StudyTabIcon({required this.active});
+  const _BodhiTabIcon({required this.active});
 
   @override
   Widget build(BuildContext context) {
-    // 修学广场有新帖未查看时（顶部「显示X帖子」提醒可见），右上角显示 70867A 小圆点。
     return ValueListenableBuilder<int>(
-      valueListenable: StudyHubPageState.newPostBadge,
+      valueListenable: BodhiSpacePageState.newPostBadge,
       builder: (context, count, _) {
         return Stack(
           clipBehavior: Clip.none,
           children: [
             Image.asset(
-              navIconAsset(active
-                  ? 'assets/images/study_selected.png'
-                  : 'assets/images/study.png'),
-              width: 24,
-              height: 24,
+              AppPalette.instance.isPlain
+                  ? (active
+                      ? 'assets/images/su2.png'
+                      : 'assets/images/su1.png')
+                  : (active
+                      ? 'assets/images/mi2.png'
+                      : 'assets/images/mi1.png'),
+              width: 26,
+              height: 26,
             ),
             if (count > 0)
               Positioned(
@@ -762,8 +806,8 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
           navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
               : 'assets/images/chat.png'),
-          width: 23,
-          height: 23,
+          width: 24,
+          height: 24,
         ),
         Positioned(
           top: -6,

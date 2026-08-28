@@ -103,7 +103,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _loadData();
     _loadCounts();
     AuthService.instance.currentUser.addListener(_onAuthChanged);
@@ -497,12 +497,11 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                   child: _MyRepliesTab(
                       isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
               _TabContent(
-                  child: _MyLikesTab(
+                  child: _MyRepostsTab(
                       isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
               _TabContent(
                   child: _MyBookmarksTab(
                       isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
-              _TabContent(child: _MyDraftsTab(reloadNotifier: _reloadNotifier)),
             ],
           ),
         ),
@@ -886,11 +885,10 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
         unselectedLabelStyle:
             const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
         tabs: const [
-          Tab(text: '帖子'),
+          Tab(text: '笔记'),
           Tab(text: '回复'),
-          Tab(text: '喜欢'),
+          Tab(text: '转发'),
           Tab(text: '书签'),
-          Tab(text: '草稿'),
         ],
       ),
     );
@@ -987,6 +985,9 @@ class PostBlock extends StatefulWidget {
   final bool pinned;
   final bool isRepost;
   final bool isQuoteRepost;
+
+  /// 转发时被转发的原帖数据：用于 X 式直接展示原帖（头像/昵称/内容/指标）。
+  final PlazaNote? repostNote;
   final VoidCallback? onTogglePin;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -1016,6 +1017,7 @@ class PostBlock extends StatefulWidget {
     this.pinned = false,
     this.isRepost = false,
     this.isQuoteRepost = false,
+    this.repostNote,
     this.onTogglePin,
     this.onEdit,
     this.onDelete,
@@ -1029,18 +1031,29 @@ class PostBlock extends StatefulWidget {
 
 class _PostBlockState extends State<PostBlock> {
   bool _expanded = false;
-  late int _likeCount = widget.likeCount;
-  late int _repostCount = widget.repostCount;
-  late int _commentCount = widget.commentCount;
-  late int _viewCount = widget.viewCount;
-  late bool _liked = widget.noteId != null &&
-      CloudNotesService.instance.likedNoteIds.contains(widget.noteId);
-  late bool _following = widget.ownerUserId != null &&
-      CloudNotesService.instance.followingUserIds.contains(widget.ownerUserId);
+  late int _likeCount;
+  late int _repostCount;
+  late int _commentCount;
+  late int _viewCount;
+  late bool _liked;
+  late bool _following;
 
   @override
   void initState() {
     super.initState();
+    // X 式转发：用 repostNote 数据初始化指标。
+    final rn = widget.repostNote;
+    final bool useOriginal = widget.isRepost && rn != null;
+    _likeCount = useOriginal ? rn.likeCount : widget.likeCount;
+    _repostCount = useOriginal ? rn.repostCount : widget.repostCount;
+    _commentCount = useOriginal ? rn.commentCount : widget.commentCount;
+    _viewCount = useOriginal ? rn.viewCount : widget.viewCount;
+    final noteId = useOriginal ? rn.id : widget.noteId;
+    _liked = noteId != null &&
+        CloudNotesService.instance.likedNoteIds.contains(noteId);
+    final ownerId = useOriginal ? rn.ownerUserId : widget.ownerUserId;
+    _following = ownerId != null &&
+        CloudNotesService.instance.followingUserIds.contains(ownerId);
     // 实时同步指标：详情页点赞/评论/转发/阅读后，这里的数字立即更新。
     NoteStatsCenter.instance.addListener(_onStatsChanged);
     // 经书目录未缓存时预加载：$引用链接与多卷「卷X」卷标渲染依赖它。
@@ -1074,7 +1087,10 @@ class _PostBlockState extends State<PostBlock> {
   /// 自己的头像/昵称在提供 onOpenSelf 时走回调（如切换到「我的」页，与修学主页
   /// 左上角头像一致）；否则仍进个人主页空间。
   void _openUserSpace() {
-    final uid = widget.ownerUserId;
+    final rn = widget.repostNote;
+    final bool useOriginal = widget.isRepost && rn != null;
+    final uid = useOriginal ? rn.ownerUserId : widget.ownerUserId;
+    final uname = useOriginal ? rn.authorName : widget.nickname;
     if (uid == null || uid.isEmpty) return;
     final me = AuthService.instance.currentUser.value;
     final cachedUid = AuthService.instance.cachedUserId;
@@ -1088,7 +1104,7 @@ class _PostBlockState extends State<PostBlock> {
       context,
       MaterialPageRoute(
           builder: (_) =>
-              UserSpacePage(userId: uid, userName: widget.nickname)),
+              UserSpacePage(userId: uid, userName: uname)),
     );
   }
 
@@ -1314,54 +1330,85 @@ class _PostBlockState extends State<PostBlock> {
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
     final cachedUid = AuthService.instance.cachedUserId;
-    // 三重兜底：
-    // 1) 上层通过 showFollowButton 参数控制（如我的主页帖子 Tab 直接传 false）；
-    // 2) currentUser 有效时，用 ownerUserId == me.id 判断；
-    // 3) 会话恢复竞态窗口 currentUser 暂为 null 时，用本地缓存的 cachedUserId 判断。
-    // 三种方式任一命中即判定为自己的内容，永远不显示「关注」按钮。
-    final isSelf = (me != null && widget.ownerUserId == me.id) ||
-        (cachedUid != null && widget.ownerUserId == cachedUid);
+    // X 式转发：isRepost 时用 repostNote（被转发的原帖）数据替代转发者的数据，
+    // 直接展示原帖头像/昵称/内容/指标，转发者引言（quoteContent）单独展示。
+    final rn = widget.repostNote;
+    final bool showOriginal = widget.isRepost && rn != null;
+    // 判断「自己」：转发场景下判断原帖作者是否是自己。
+    final displayUserId = showOriginal ? rn.ownerUserId : widget.ownerUserId;
+    final displayNickname = showOriginal ? rn.authorName : widget.nickname;
+    final displayAccount = showOriginal ? rn.authorAccount : widget.account;
+    final displayVerified = showOriginal ? rn.authorVerified : widget.authorVerified;
+    final displayContent = showOriginal
+        ? (rn.content.isNotEmpty ? rn.content : widget.content)
+        : widget.content;
+    final displayTimeMs = showOriginal ? rn.createdAt : widget.timeMs;
+    final displayCanonRead = showOriginal ? rn.canonRead : widget.canonRead;
+    final displayCanonTotal = showOriginal ? rn.canonTotal : widget.canonTotal;
+    final displayNoteId = showOriginal ? rn.id : widget.noteId;
+    final isSelf = (me != null && displayUserId == me.id) ||
+        (cachedUid != null && displayUserId == cachedUid);
     final showMore = !isSelf &&
         me != null &&
-        widget.ownerUserId != null &&
-        widget.ownerUserId!.isNotEmpty;
+        displayUserId != null &&
+        displayUserId.isNotEmpty;
     // 使用 isSelf（含 cachedUid 兜底）判断，避免会话恢复竞态时 me 为 null
     // 导致自己的帖子显示屏蔽菜单而非编辑/删除/置顶菜单。
     final canManage = isSelf &&
-        widget.ownerUserId != null &&
-        widget.ownerUserId!.isNotEmpty &&
-        widget.noteId != null &&
+        displayUserId != null &&
+        displayUserId.isNotEmpty &&
+        displayNoteId != null &&
         (widget.onTogglePin != null ||
             widget.onEdit != null ||
             widget.onDelete != null);
-    final content = widget.content;
+    final content = displayContent;
     // 测量用的纯文本：剥离 [@账号](user:ID) / [@经名](路径) 标记，渲染仍用原文。
     final measureContent =
         content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
     // 阅藏进度百分比：自己的帖子用本地实时统计，他人的用云端数据（0% 也显示）。
     final postPct = postCanonPercent(
       isSelf: isSelf,
-      cloudRead: widget.canonRead,
-      cloudTotal: widget.canonTotal,
+      cloudRead: displayCanonRead,
+      cloudTotal: displayCanonTotal,
     );
     return InkWell(
       onTap: widget.onTap ?? () => setState(() => _expanded = !_expanded),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _openUserSpace,
-              child: UserAvatar(userId: widget.ownerUserId, radius: 22),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 第一行：昵称 + @账户名 + 阅藏进度百分比 + 置顶标注 + 更多
+            // X 式转发角标（最顶部，与内容列对齐）
+            if (widget.isRepost) ...[
+              Padding(
+                padding: const EdgeInsets.only(left: 54),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.repeat, size: 12, color: Color(0xFF8C8C8C)),
+                    const SizedBox(width: 4),
+                    Text('你已转帖',
+                        style: TextStyle(
+                            fontSize: 12, color: Color(0xFF8C8C8C))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _openUserSpace,
+                  child: UserAvatar(userId: displayUserId, radius: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 第一行：昵称 + @账户名 + 阅藏进度百分比 + 置顶标注 + 更多
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
@@ -1374,7 +1421,7 @@ class _PostBlockState extends State<PostBlock> {
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onTap: _openUserSpace,
-                                child: Text(widget.nickname,
+                                child: Text(displayNickname,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -1383,20 +1430,20 @@ class _PostBlockState extends State<PostBlock> {
                                         color: _text)),
                               ),
                             ),
-                            if (widget.authorVerified) ...[
+                            if (displayVerified) ...[
                               const SizedBox(width: 3),
                               const Icon(Icons.verified,
                                   size: 17, color: Color(0xFF70867A)),
                             ],
-                            if (widget.account.isNotEmpty) ...[
+                            if (displayAccount.isNotEmpty) ...[
                               const SizedBox(width: 3),
                               Flexible(
                                 // 点击 @账户名 进入该用户个人主页（按下时变暗），
                                 // 过长时省略显示，保证昵称完整。
                                 child: AccountLink(
-                                  account: widget.account,
+                                  account: displayAccount,
                                   onTap: () {
-                                    final uid = widget.ownerUserId;
+                                    final uid = displayUserId;
                                     if (uid != null && uid.isNotEmpty) {
                                       final me = AuthService
                                           .instance.currentUser.value;
@@ -1486,7 +1533,7 @@ class _PostBlockState extends State<PostBlock> {
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => showMoreMenu(
-                              context, widget.ownerUserId!, widget.nickname),
+                              context, displayUserId!, displayNickname),
                           child: const Padding(
                             padding: EdgeInsets.all(2),
                             child: Icon(Icons.more_horiz,
@@ -1496,19 +1543,7 @@ class _PostBlockState extends State<PostBlock> {
                       ],
                     ],
                   ),
-                  // 转发/引用角标（昵称行下方）
-                  if (widget.isRepost) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.repeat, size: 12, color: _gold),
-                        const SizedBox(width: 2),
-                        Text(widget.isQuoteRepost ? '引用' : '转发',
-                            style: TextStyle(fontSize: 11, color: _gold)),
-                      ],
-                    ),
-                  ],
+
                   // 内容（与昵称同一左缘）
                   if (content.isNotEmpty) ...[
                     const SizedBox(height: 4),
@@ -1585,18 +1620,43 @@ class _PostBlockState extends State<PostBlock> {
                       },
                     ),
                   ],
-                  // 被回复的原贴（引用框）
-                  if (widget.quoteBox != null) ...[
+                  // 被回复的原贴（引用框）——X 式转发时不显示（原帖已直接展示），
+                  // 仅非转发场景（如回复帖嵌套原贴）才显示。
+                  if (widget.quoteBox != null && !widget.isRepost) ...[
                     const SizedBox(height: 8),
                     widget.quoteBox!,
+                  ],
+                  // X 式引用转发：原帖下方展示转发者引言。
+                  if (showOriginal && widget.isQuoteRepost && rn.quoteContent.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppPalette.p.card,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text.rich(
+                        TextSpan(
+                          text: '💬 ',
+                          style: TextStyle(fontSize: 12, color: _textSec),
+                          children: [
+                            TextSpan(
+                              text: rn.quoteContent,
+                              style: TextStyle(fontSize: 14, color: _text, height: 1.5),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                   // 发布时间：放在内容和指标行之间（顶部行只留昵称+@账户名+进度百分比），
                   // 点击时间戳进入帖子详情。
                   const SizedBox(height: 6),
                   PostTimeLink(
-                    text: postTime(widget.timeMs),
+                    text: postTime(displayTimeMs),
                     onTap: () {
-                      final id = widget.noteId;
+                      final id = displayNoteId;
                       if (id != null) {
                         Navigator.push(
                           context,
@@ -1628,8 +1688,10 @@ class _PostBlockState extends State<PostBlock> {
             ),
           ],
         ),
-      ),
-    );
+      ],
+    ),
+  ),
+);
   }
 }
 
@@ -1960,7 +2022,7 @@ Future<void> forwardNote(
 
 /// 帖子行：与笔记详情页同风格——无卡片背景，
 /// 头像+用户名/时间 → 内容预览（最多8行，可展开）→ 统计数据行。
-class PostFeedRow extends StatelessWidget {
+class PostFeedRow extends StatefulWidget {
   final PlazaNote note;
   final FutureOr<void> Function(PlazaNote note)? onReplyPosted;
   final VoidCallback? onTap;
@@ -1989,41 +2051,71 @@ class PostFeedRow extends StatelessWidget {
   static String plainContent(PlazaNote note) =>
       note.content.replaceAll(RegExp(r'\[@([^\]]+)\]\([^)]+\)'), r'@$1');
 
+  @override
+  State<PostFeedRow> createState() => _PostFeedRowState();
+}
+
+class _PostFeedRowState extends State<PostFeedRow> {
+  PlazaNote? _repostNote;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRepostNote();
+  }
+
+  @override
+  void didUpdateWidget(covariant PostFeedRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.note.id != widget.note.id) {
+      _repostNote = null;
+      _fetchRepostNote();
+    }
+  }
+
+  Future<void> _fetchRepostNote() async {
+    final note = widget.note;
+    if (note.repostOf.isEmpty || note.repostKind == 'reply') return;
+    try {
+      final n = await CloudNotesService.instance.getNoteById(note.repostOf);
+      if (!mounted) return;
+      setState(() => _repostNote = n);
+    } catch (_) {}
+  }
+
   void _openDetail(BuildContext context) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: note.id)),
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: widget.note.id)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final note = this.note;
+    final note = widget.note;
     final me = AuthService.instance.currentUser.value;
     final cachedUid = AuthService.instance.cachedUserId;
-    // 与 PostBlock.isSelf 一致的三重兜底：会话恢复竞态时 me 可能为 null，
-    // 用 cachedUserId 判断确保自己的帖子在喜欢/书签 Tab 不显示关注按钮。
     final isMine = (me != null && note.ownerUserId == me.id) ||
         (cachedUid != null && note.ownerUserId == cachedUid);
-    // 回复帖：渲染成连贴样式（原帖在上 + 回复在下 + 头像竖线连接）。
     if (note.repostKind == 'reply') {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: GestureDetector(
-          onTap: onTap ?? () => _openDetail(context),
+          onTap: widget.onTap ?? () => _openDetail(context),
           behavior: HitTestBehavior.opaque,
           child: ReplyThread(
             replyNote: note,
-            pinned: pinned,
-            onComment: (n) => replyToNote(context, n, onReplyPosted),
-            onLike: (n) => likeTargetNote(context, n, onReplyPosted),
-            onRepost: (n) => forwardNote(context, n, onReplyPosted),
-            onMore: onMore,
-            onOpenSelf: onOpenSelf,
+            pinned: widget.pinned,
+            onComment: (n) => replyToNote(context, n, widget.onReplyPosted),
+            onLike: (n) => likeTargetNote(context, n, widget.onReplyPosted),
+            onRepost: (n) => forwardNote(context, n, widget.onReplyPosted),
+            onMore: widget.onMore,
+            onOpenSelf: widget.onOpenSelf,
           ),
         ),
       );
     }
+    final isRepost = note.repostOf.isNotEmpty && note.repostKind != 'reply';
     return PostBlock(
       ownerUserId: note.ownerUserId,
       nickname: (isMine && me != null) ? me.displayName : note.authorName,
@@ -2039,17 +2131,18 @@ class PostFeedRow extends StatelessWidget {
       repostCount: note.repostCount,
       commentCount: note.commentCount,
       viewCount: note.viewCount,
-      onReplyPosted: onReplyPosted,
-      onTap: onTap ?? () => _openDetail(context),
-      pinned: pinned,
-      onTogglePin: onTogglePin,
-      onEdit: onEdit,
-      onDelete: onDelete,
-      showFollowButton: showFollowButton && !isMine,
-      quoteBox: note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
-      isRepost: note.repostOf.isNotEmpty && note.repostKind != 'reply',
+      onReplyPosted: widget.onReplyPosted,
+      onTap: widget.onTap ?? () => _openDetail(context),
+      pinned: widget.pinned,
+      onTogglePin: widget.onTogglePin,
+      onEdit: widget.onEdit,
+      onDelete: widget.onDelete,
+      showFollowButton: widget.showFollowButton && !isMine,
+      quoteBox: !isRepost && note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
+      isRepost: isRepost,
       isQuoteRepost: note.quoteContent.isNotEmpty,
-      onOpenSelf: onOpenSelf,
+      repostNote: _repostNote,
+      onOpenSelf: widget.onOpenSelf,
       stats: buildStatsRow(
         commentCount: note.commentCount,
         repostCount: note.repostCount,
@@ -2138,7 +2231,7 @@ Widget statsCell(Widget icon, String text,
   );
 }
 
-/// 帖子 Tab：我自己发布的广场笔记。
+/// 笔记 Tab：我自己直接新建的原创帖子（不含回复帖与转发帖）。
 class _MyPostsTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
@@ -2198,7 +2291,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       });
     }
 
-    // 帖子 = 我发布的帖子 + 我转发（含引用转发）的帖子，不含回复帖。
+    // 笔记 = 我自己直接新建的原创帖子：不含回复帖（对自己的回复折叠到原帖
+    // 评论图标下），也不含转发/引用转发帖（在「转发」Tab 展示）。
     // 注意：此处用实时 AuthService.instance.isLoggedIn 判断，
     // 避免 reloadNotifier 同步触发时 widget 属性还是旧值导致跳过加载。
     List<PlazaNote> cloudNotes = [];
@@ -2218,7 +2312,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
         );
         cloudNotes = list
             .where((n) =>
-                n.repostKind != 'reply' &&
+                n.repostKind.isEmpty &&
+                // 双保险：直接新建的原创帖 repostOf 恒为空；旧数据可能存在
+                // 未标记 repostKind 的回复/转帖，靠 repostOf 一并排除。
+                n.repostOf.isEmpty &&
                 (myUid == null || myUid.isEmpty || n.ownerUserId == myUid))
             .toList();
         hasMore = more;
@@ -2421,8 +2518,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       setState(() {
         final myUid = AuthService.instance.currentUser.value?.id ??
             AuthService.instance.cachedUserId;
+        // 与首屏一致：只保留直接新建的原创帖子。
         _notes.addAll(list.where((n) =>
-            n.repostKind != 'reply' &&
+            n.repostKind.isEmpty &&
+            n.repostOf.isEmpty &&
             (myUid == null || myUid.isEmpty || n.ownerUserId == myUid)));
         _hasMore = more;
         _page++;
@@ -2600,7 +2699,10 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   Widget _buildNoteCard(PlazaNote note) {
     return PostFeedRow(
       note: note,
-      onReplyPosted: (_) => _load(),
+      // 笔记 Tab 全部是自己的原创帖：回复/转发后不整页刷新——
+      // 评论数由 PostBlock 本地即时 +1，对自己的回复按规则折叠到原帖
+      // 评论图标下（详情页可见），列表本身无需任何变化。
+      onReplyPosted: null,
       pinned: _pinnedIds.contains(note.id),
       onTogglePin: () => _togglePin(note),
       onEdit: () => _editNote(note),
@@ -2613,7 +2715,8 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   }
 }
 
-/// 回复 Tab：我的互动动态（转发 + 评论/回复）。
+/// 回复 Tab：我对其他人的回复（不含对自己帖子/回复的回复；
+/// 对自己的回复与其他人的回复一样，折叠到原帖评论图标下）。
 class _MyRepliesTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
@@ -2624,8 +2727,7 @@ class _MyRepliesTab extends StatefulWidget {
 }
 
 class _MyRepliesTabState extends State<_MyRepliesTab> {
-  /// 回复 = 我发出的回复帖（repostKind == 'reply'），
-  /// 含回复自己的帖子与回复其他人的帖子。
+  /// 回复 = 我对其他人发出的回复帖（repostKind == 'reply' 且回复对象不是自己）。
   final List<PlazaNote> _replies = [];
 
   /// 按最顶层原贴分组：同一原贴下的多条回复归入同一区域（原贴 + 回复链连线）。
@@ -2720,8 +2822,12 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       }
       debugPrint('[Replies] _load done: total collected=${collected.length}, lastPage=$p, hasMore=$hasMore');
       if (!mounted) return;
+      // 去掉「对自己的回复」：回复对象是我自己的帖子/回复时不展示在回复 Tab。
+      final visible = await _excludeSelfReplies(
+          collected, collected.map((n) => n.id).toSet());
+      if (!mounted) return;
       setState(() {
-        _replies.addAll(collected);
+        _replies.addAll(visible);
         _hasMore = hasMore;
         _page = p + 1;
       });
@@ -2779,8 +2885,15 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       }
       debugPrint('[Replies] _loadMore done: collected=${collected.length}, nextPage=$p, hasMore=$hasMore');
       if (!mounted) return;
+      // 去掉「对自己的回复」：回复对象判定需包含已加载的全部回复帖 id。
+      final knownReplyIds = <String>{
+        ..._replies.map((n) => n.id),
+        ...collected.map((n) => n.id),
+      };
+      final visible = await _excludeSelfReplies(collected, knownReplyIds);
+      if (!mounted) return;
       setState(() {
-        _replies.addAll(collected);
+        _replies.addAll(visible);
         _hasMore = hasMore;
         _page = p;
         _loadingMore = false;
@@ -2795,6 +2908,65 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       if (!mounted) return;
       setState(() => _loadingMore = false);
     }
+  }
+
+  /// 去掉「对自己的回复」：回复对象是我自己的帖子/回复时，不展示在回复 Tab——
+  /// 这类回复与其他人的回复一样，折叠到原帖评论图标下。
+  /// 判定优先用回复帖自带的 repostSourceUserId（服务端创建回复时记录的被回复帖
+  /// 作者 uid，无需联网，新旧数据通用）；旧数据缺失该字段时才按 repostOf 回源查询。
+  /// [myReplyIds] 为我自己回复帖的 id 集合（回复对象是其中一条时即回复自己）。
+  Future<List<PlazaNote>> _excludeSelfReplies(
+      List<PlazaNote> batch, Set<String> myReplyIds) async {
+    final myUid = AuthService.instance.currentUser.value?.id ??
+        AuthService.instance.cachedUserId;
+    if (myUid == null || myUid.isEmpty || batch.isEmpty) return batch;
+    final keeps = await Future.wait(batch.map((n) async {
+      // 首选：被回复帖作者 uid 在创建回复时已写入，直接本地比对。
+      if (n.repostSourceUserId.isNotEmpty) {
+        return n.repostSourceUserId != myUid;
+      }
+      final parentId = n.repostOf;
+      if (parentId.isEmpty) return true;
+      if (myReplyIds.contains(parentId)) return false;
+      // 旧数据缺失 repostSourceUserId 时回源查询被回复帖判断归属。
+      try {
+        final parent = await CloudNotesService.instance.getNoteById(parentId);
+        if (parent.ownerUserId.isNotEmpty && parent.ownerUserId == myUid) {
+          return false;
+        }
+      } catch (_) {
+        // 原帖获取失败（已删/隐藏/网络异常）时先保留，避免误隐藏对他人的回复；
+        // _buildGroups 内还有「根帖是自己的帖子则整组跳过」的兜底拦截。
+      }
+      return true;
+    }));
+    final kept = [
+      for (var i = 0; i < batch.length; i++)
+        if (keeps[i]) batch[i],
+    ];
+    debugPrint('[Replies] _excludeSelfReplies: myUid=$myUid '
+        'batch=${batch.length} kept=${kept.length} '
+        'excluded=${batch.length - kept.length}');
+    return kept;
+  }
+
+  /// 在自己的回复下再回复（对自己的回复）：新回复按规则不展示在回复 Tab，
+  /// 无需整页刷新，只把目标回复的评论量本地 +1 即时展示。
+  void _bumpCommentCountLocal(PlazaNote target) {
+    final bumped = target.copyWith(commentCount: target.commentCount + 1);
+    for (var i = 0; i < _replies.length; i++) {
+      if (_replies[i].id == target.id) _replies[i] = bumped;
+    }
+    for (var i = 0; i < _pinnedReplies.length; i++) {
+      if (_pinnedReplies[i].id == target.id) _pinnedReplies[i] = bumped;
+    }
+    for (final g in _groups) {
+      final list = g.$2;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id == target.id) list[i] = bumped;
+      }
+    }
+    if (mounted) setState(() {});
   }
 
   /// 按最顶层原贴分组：沿 repostOf 逐级向上找到根原贴，
@@ -2890,6 +3062,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
       roots[e.key] = e.value;
     }
     final groups = <(PlazaNote, List<PlazaNote>)>[];
+    final myUid = AuthService.instance.currentUser.value?.id ??
+        AuthService.instance.cachedUserId;
     for (final id in rootIds) {
       final list = children[id]!;
       if (list.isEmpty) continue;
@@ -2901,6 +3075,24 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
         list.removeWhere((n) => n.id == rootNote.id);
       }
       if (list.isEmpty) continue;
+      // 兜底拦截：根帖是「我自己的帖子」时整组跳过——对自己的回复不进回复 Tab。
+      // 正常情况这类回复已被 _excludeSelfReplies 过滤；此处专门拦截旧数据缺失
+      // repostSourceUserId 且回源查询失败漏进来的情况。
+      // - 根帖是普通帖：作者是我 → 整组都是对我自己帖子的回复 → 跳过；
+      // - 根帖是回复帖（回源失败的兜底展示，或别人在我帖子下的评论）：
+      //   仅当它是我发的、且回复的也是我时才是「对自己的回复」→ 跳过；
+      //   别人发的评论（哪怕评的是我的帖子）我回复了，属于对他人的回复 → 保留。
+      if (myUid != null && myUid.isNotEmpty) {
+        final selfRoot = rootNote.repostKind == 'reply'
+            ? (rootNote.ownerUserId == myUid &&
+                rootNote.repostSourceUserId == myUid)
+            : rootNote.ownerUserId == myUid;
+        if (selfRoot) {
+          debugPrint('[Replies] _buildGroups: skip self-reply group '
+              'rootId=$id rootKind=${rootNote.repostKind}');
+          continue;
+        }
+      }
       groups.add((rootNote, list));
     }
     // 分组按组内最新回复倒序展示。
@@ -3267,7 +3459,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                   viewCount: reply.viewCount,
                   liked: CloudNotesService.instance.likedNoteIds
                       .contains(reply.id),
-                  onComment: () => replyToNote(context, reply, (_) => _load()),
+                  onComment: () =>
+                      replyToNote(context, reply, (_) => _bumpCommentCountLocal(reply)),
                   onRepost: () => forwardNote(context, reply, (_) => _load()),
                   onLike: () => likeTargetNote(context, reply, (_) => _load()),
                 ),
@@ -3325,7 +3518,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             root.id: root.authorAccount,
             for (final r in replies) r.id: r.authorAccount,
           },
-          onComment: (n) => replyToNote(context, n, (_) => _load()),
+          onComment: (n) =>
+              replyToNote(context, n, (_) => _bumpCommentCountLocal(n)),
           onLike: (n) => likeTargetNote(context, n, (_) => _load()),
           onRepost: (n) => forwardNote(context, n, (_) => _load()),
           onMore: (n) => _showReplyMenu(n),
@@ -3409,7 +3603,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
             root.id: root.authorAccount,
             for (final r in replies) r.id: r.authorAccount,
           },
-          onComment: (n) => replyToNote(context, n, (_) => _load()),
+          onComment: (n) =>
+              replyToNote(context, n, (_) => _bumpCommentCountLocal(n)),
           onLike: (n) => likeTargetNote(context, n, (_) => _load()),
           onRepost: (n) => forwardNote(context, n, (_) => _load()),
           onMore: (n) => _showReplyMenu(n),
@@ -3461,7 +3656,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 }
 
-/// 「喜欢 / 书签」Tab 共用的帖子管理操作：置顶（本地）/ 编辑 / 删除自己的帖子，
+/// 「转发 / 书签」Tab 共用的帖子管理操作：置顶（本地）/ 编辑 / 删除自己的帖子，
 /// 与「我的帖子」Tab 行为一致；三点菜单由 PostBlock 内部按是否本人自动分发
 /// （本人 → 置顶/编辑/删除，他人 → 关注/屏蔽）。
 mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
@@ -3574,18 +3769,18 @@ mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
   }
 }
 
-/// 喜欢 Tab：我点赞过的帖子列表。
-class _MyLikesTab extends StatefulWidget {
+/// 转发 Tab：我转发过的其他人的帖子（直接转发 + 引用转发）。
+class _MyRepostsTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
-  const _MyLikesTab({required this.isLoggedIn, required this.reloadNotifier});
+  const _MyRepostsTab({required this.isLoggedIn, required this.reloadNotifier});
 
   @override
-  State<_MyLikesTab> createState() => _MyLikesTabState();
+  State<_MyRepostsTab> createState() => _MyRepostsTabState();
 }
 
-class _MyLikesTabState extends State<_MyLikesTab>
-    with _SharedNoteActions<_MyLikesTab> {
+class _MyRepostsTabState extends State<_MyRepostsTab>
+    with _SharedNoteActions<_MyRepostsTab> {
   List<PlazaNote>? _notes;
   bool _loading = true;
   String? _error;
@@ -3612,7 +3807,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
   }
 
   @override
-  void didUpdateWidget(covariant _MyLikesTab oldWidget) {
+  void didUpdateWidget(covariant _MyRepostsTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     // didUpdateWidget：widget 属性变化检测保留。
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
@@ -3639,18 +3834,63 @@ class _MyLikesTabState extends State<_MyLikesTab>
       return;
     }
     try {
-      // 置顶记录与「帖子」Tab 共用，每次加载时同步一次。
+      // 置顶记录与「笔记」Tab 共用，每次加载时同步一次。
       await loadSharedPinnedIds();
-      final notes = await CloudNotesService.instance.getLikedNotes();
-      // 喜欢 Tab 里的帖子全部是已点赞的，写入点赞记录让爱心显示为填充色。
-      CloudNotesService.instance.likedNoteIds.addAll(notes.map((n) => n.id));
+      await CloudNotesService.instance.refreshLikedNoteIds();
+      // 服务端一次只能按一个 repostKind 过滤：直接转发/引用转发分两路拉取合并。
+      // 旧版服务端不识别 repostKind 时返回全部笔记，客户端按 repostKind 兜底过滤。
+      final byId = <String, PlazaNote>{};
+      for (final kind in const ['forward', 'quote']) {
+        var p = 1;
+        var hasMore = true;
+        const maxPages = 100;
+        while (p <= maxPages && hasMore) {
+          final (list, more) = await CloudNotesService.instance.getMyNotes(
+            page: p,
+            pageSize: 50,
+            repostKind: kind,
+          );
+          for (final n in list) {
+            // 双重校验：repostKind 匹配且 repostOf 非空才是真正的转发帖。
+            // 旧数据可能存在 repostKind 被错误赋值但 repostOf 为空的情况。
+            if (n.repostKind == kind && n.repostOf.isNotEmpty) byId[n.id] = n;
+          }
+          hasMore = more;
+          p++;
+        }
+      }
+      // 只保留转发「其他人」的帖子：转发自己的帖子不展示。
+      // repostSourceUserId 为原帖作者 uid；旧数据缺失时按 repostOf 回源判断。
+      final myUid = AuthService.instance.currentUser.value?.id ??
+          AuthService.instance.cachedUserId;
+      final all = byId.values.toList();
+      final sourceOwners = await Future.wait(all.map((n) async {
+        if (myUid == null || myUid.isEmpty) return '';
+        if (n.repostSourceUserId.isNotEmpty) return n.repostSourceUserId;
+        if (n.repostOf.isEmpty) return '';
+        try {
+          final src =
+              await CloudNotesService.instance.getNoteById(n.repostOf);
+          return src.ownerUserId;
+        } catch (_) {
+          // 原帖获取失败（已删/隐藏/网络异常）时保留，避免误隐藏对他人的转发。
+          return '';
+        }
+      }));
+      final notes = <PlazaNote>[];
+      for (var i = 0; i < all.length; i++) {
+        final owner = sourceOwners[i];
+        if (owner.isEmpty || owner != myUid) notes.add(all[i]);
+      }
+      // 两路合并后按转发时间倒序（最新在前）。
+      notes.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       if (!mounted) return;
       setState(() {
         _notes = notes;
         _loading = false;
       });
     } catch (e, st) {
-      debugPrint('[Likes] _load error: $e\n$st');
+      debugPrint('[Reposts] _load error: $e\n$st');
       if (!mounted) return;
       setState(() {
         _notes = [];
@@ -3668,7 +3908,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
     if (_notes == null || _notes!.isEmpty) {
-      return _tabEmpty('还没有点赞过帖子', Icons.favorite_border);
+      return _tabEmpty('还没有转发过帖子', Icons.repeat_rounded);
     }
     return Builder(
       builder: (context) => CustomScrollView(
@@ -3682,7 +3922,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
-                  // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
+                  // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「笔记」Tab 一致）。
                   if (index == _notes!.length) {
                     return Divider(
                         height: 1, thickness: 0.5, color: AppPalette.p.divider);
@@ -3706,7 +3946,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
                         onDelete: () => deleteSharedNote(note,
                             onRemoved: () =>
                                 _notes!.removeWhere((n) => n.id == note.id)),
-                        // 喜欢 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                        // 转发 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
                         showFollowButton: false,
                       ),
                     ],
@@ -3719,7 +3959,7 @@ class _MyLikesTabState extends State<_MyLikesTab>
         ],
       ),
     );
-  } // _MyLikesTab build
+  } // _MyRepostsTab build
 
   Widget _tabLoading() {
     return Builder(
@@ -3902,259 +4142,6 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
                   );
                 },
                 childCount: _notes!.length + 1,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tabLoading() {
-    return Builder(
-      builder: (context) => CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: SizedBox(height: 4),
-          ),
-          const SliverFillRemaining(
-            child: Center(
-              child: AppLoadingIndicator(message: '正在加载内容...'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tabEmpty(String text, IconData icon) {
-    return Builder(
-      builder: (context) => CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: SizedBox(height: 4),
-          ),
-          SliverFillRemaining(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 48, color: _textHint),
-                  const SizedBox(height: 12),
-                  Text(text,
-                      style: TextStyle(fontSize: 14, color: _textHint)),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 草稿行：本地保存但未分享到菩提空间的笔记，样式与帖子一致，但没有统计指标行（未发表）。
-class _DraftRow extends StatelessWidget {
-  final Map<String, dynamic> note;
-  final VoidCallback onTap;
-  final VoidCallback? onDelete;
-  final String account;
-  final bool verified;
-  const _DraftRow({
-    required this.note,
-    required this.onTap,
-    this.onDelete,
-    this.account = '',
-    this.verified = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final note = this.note;
-    final content = note['content']?.toString() ?? '';
-    final ts = DateTime.tryParse(note['updatedAt']?.toString() ?? '');
-    final nickname =
-        AuthService.instance.currentUser.value?.displayName ?? '同修';
-    return PostBlock(
-      // 三重兜底取 uid：会话恢复竞态时 currentUser 可能为 null。
-      ownerUserId: AuthService.instance.currentUser.value?.id ??
-          AuthService.instance.cachedUserId ??
-          'local',
-      nickname: nickname,
-      account: account,
-      authorVerified: verified,
-      timeMs: ts?.millisecondsSinceEpoch ?? 0,
-      content: content,
-      onTap: onTap,
-      // 草稿三点菜单：编辑 / 删除（未发布无置顶）。
-      noteId: note['id']?.toString(),
-      onEdit: onTap,
-      onDelete: onDelete,
-    );
-  }
-}
-
-/// 草稿 Tab：本地保存但未分享到菩提空间的笔记。
-class _MyDraftsTab extends StatefulWidget {
-  final ValueNotifier<int> reloadNotifier;
-  const _MyDraftsTab({required this.reloadNotifier});
-
-  @override
-  State<_MyDraftsTab> createState() => _MyDraftsTabState();
-}
-
-class _MyDraftsTabState extends State<_MyDraftsTab> {
-  List<Map<String, dynamic>> _notes = [];
-  bool _loading = true;
-  String _account = '';
-  bool _verified = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    widget.reloadNotifier.addListener(_onReload);
-  }
-
-  @override
-  void dispose() {
-    widget.reloadNotifier.removeListener(_onReload);
-    super.dispose();
-  }
-
-  void _onReload() => _load();
-
-  @override
-  void didUpdateWidget(covariant _MyDraftsTab oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.reloadNotifier != oldWidget.reloadNotifier) {
-      oldWidget.reloadNotifier.removeListener(_onReload);
-      widget.reloadNotifier.addListener(_onReload);
-    }
-  }
-
-  Future<void> _load() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes') ?? '[]';
-      final notes = (jsonDecode(raw) as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .where((n) => n['shared'] != true)
-          .toList()
-        ..sort((a, b) => (b['updatedAt']?.toString() ?? '')
-            .compareTo(a['updatedAt']?.toString() ?? ''));
-      if (!mounted) return;
-      setState(() {
-        _notes = notes;
-        _account = prefs.getString('user_account_name') ?? '';
-        _verified = prefs.getBool('user_verified') ?? false;
-        _loading = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _notes = [];
-        _loading = false;
-      });
-    }
-  }
-
-  void _openEdit(Map<String, dynamic> note) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteEditPage(note: note)),
-    ).then((_) {
-      if (mounted) _load();
-    });
-  }
-
-  /// 删除草稿：从本地存储移除，无法恢复。
-  Future<void> _deleteDraft(Map<String, dynamic> note) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('删除草稿',
-            style: TextStyle(
-                fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-        content: Text('删除后草稿将无法恢复。确定删除吗？',
-            style: TextStyle(fontSize: 14, color: _textSec)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消', style: TextStyle(color: _textSec)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除',
-                style: TextStyle(
-                    color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final id = note['id']?.toString();
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes') ?? '[]';
-      final list = (jsonDecode(raw) as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .where((n) => n['id']?.toString() != id)
-          .toList();
-      await prefs.setString('notes', jsonEncode(list));
-    } catch (_) {}
-    if (!mounted) return;
-    setState(() =>
-        _notes.removeWhere((n) => n['id']?.toString() == id));
-    showPostToast(context, '已删除');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return _tabLoading();
-    if (_notes.isEmpty) {
-      return _tabEmpty('还没有草稿', Icons.edit_note);
-    }
-    return Builder(
-      builder: (context) => CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: SizedBox(height: 4),
-          ),
-          SliverPadding(
-            // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页/帖子 Tab 一致）。
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  // 末尾收尾分割线，保证最后一条草稿下方也有分割线（与其他 Tab 一致）。
-                  if (index == _notes.length) {
-                    return Divider(
-                        height: 1, thickness: 0.5, color: AppPalette.p.divider);
-                  }
-                  final note = _notes[index];
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 草稿顶部分割线（首条不画，避免顶部多一条线）。
-                      if (index > 0)
-                        Divider(
-                            height: 1,
-                            thickness: 0.5,
-                            color: AppPalette.p.divider),
-                      _DraftRow(
-                        note: note,
-                        account: _account,
-                        verified: _verified,
-                        onTap: () => _openEdit(note),
-                        onDelete: () => _deleteDraft(note),
-                      ),
-                    ],
-                  );
-                },
-                childCount: _notes.length + 1,
               ),
             ),
           ),

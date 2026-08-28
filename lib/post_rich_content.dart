@@ -137,8 +137,16 @@ Widget buildPostRichText(
             trailing.isEmpty && (multiVolumeBases?.contains(t) ?? false)
                 ? '卷一'
                 : '';
+        // 带卷标的引用定位到具体卷的正文路径（如「$高僧传卷十一」打开卷十一，
+        // 而不是目录缓存的第一卷）；查不到该卷时回退到第一部路径。
+        final trailingVolume =
+            trailing.isEmpty ? 0 : parseChineseVolumeNumber(trailing);
+        final tapPath = (trailingVolume > 0
+                ? NoteSutraCatalog.cachedVolumePath(t, trailingVolume)
+                : null) ??
+            library[t]!.filePath;
         spans.add(linkSpan(text[i] + t + trailing + supplement,
-            () => onSutraTap(t, library[t]!.filePath)));
+            () => onSutraTap(t, tapPath)));
         i += 1 + t.length + trailing.length;
         litStart = i;
         continue;
@@ -205,6 +213,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   /// 经书目录映射：渲染相关帖子里的 $经名/@经名 链接。
   Map<String, NoteSutraLink> _sutraLibrary = const {};
 
+  /// 按卷区分的讨论键（如「高僧传卷十一」）：目录就绪后计算。
+  /// 多卷经书按卷拆分讨论；单卷经书或无法定位卷时为基础经名。null 表示未就绪。
+  String? _discussionKey;
+
+  /// 讨论键对应的卷号（0 表示未知/无卷号）。
+  int _discussionVolume = 0;
+
   /// 新讨论提醒：后台静默统计新讨论数量，只更新「显示X帖子」提醒条与悬浮按钮，
   /// 不自动刷新列表，点击提醒或下拉才手动刷出，避免浏览时被打断。
   final ScrollController _scroll = ScrollController();
@@ -222,21 +237,44 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   void initState() {
     super.initState();
     _checkDownload();
-    _loadComments();
-    _loadRelatedNotes();
     _scroll.addListener(_onScroll);
     WidgetsBinding.instance.addObserver(this);
     _newPostTimer =
         Timer.periodic(_newPostCheckInterval, (_) => _checkNewPosts());
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopSection());
-    // 确保经书目录（含多卷经名集合）就绪后刷新头部卷标显示。
-    NoteSutraCatalog.load().then((_) {
-      if (mounted) setState(() {});
-    });
+    // 经书目录（含多卷经名集合）就绪后计算按卷区分的讨论键，再加载讨论与相关帖子：
+    // 多卷经书的讨论按卷拆分（「高僧传卷十一」与「高僧传卷一」分开显示）。
+    // 目录加载失败时也继续（退回基础经名键），不能卡住页面。
+    NoteSutraCatalog.load()
+        .then((_) => _onCatalogReady(), onError: (_) => _onCatalogReady());
   }
 
-  /// 经书展示名：带卷号后缀显示具体卷标；仅基础经名的多卷经书统一补「卷一」。
-  String get _displayTitle => sutraAggregatedDisplayName(widget.title,
+  void _onCatalogReady() {
+    if (!mounted) return;
+    _initDiscussionKey();
+    setState(() {});
+    _loadComments();
+    _loadRelatedNotes();
+  }
+
+  /// 计算按卷区分的讨论键：标题或 filePath 能定位具体卷且为多卷经书时，
+  /// 用「基础经名+卷X」（如「高僧传卷十一」）作键；否则用基础经名。
+  void _initDiscussionKey() {
+    final bases = NoteSutraCatalog.cachedMultiVolumeBases;
+    var t = widget.title;
+    if (sutraVolumeOf(t) <= 0 && widget.filePath.isNotEmpty) {
+      final id = SutraDownloader.extractId(null, widget.filePath);
+      if (id != null) t = '${widget.title}$id';
+    }
+    _discussionVolume = sutraVolumeOf(t);
+    _discussionKey =
+        sutraDisplayNameWithVolume(t, multiVolumeBases: bases);
+  }
+
+  /// 经书展示名：从带卷标的链接进入时（filePath 指向具体卷）显示具体卷标；
+  /// 其余情况按聚合规则——带卷号后缀显示具体卷标，仅基础经名的多卷经书补「卷一」。
+  String get _displayTitle => sutraDiscussionDisplayName(widget.title,
+      filePath: widget.filePath,
       multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
 
   @override
@@ -290,11 +328,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   /// 后台静默统计本经书的新讨论数量：只更新「显示X帖子」提醒，不刷新列表。
   Future<void> _checkNewPosts() async {
     if (!mounted || !_appActive || _newPostChecking) return;
+    final key = _discussionKey;
+    if (key == null) return;
     if (_comments.isEmpty || _commentsLoading) return;
     _newPostChecking = true;
     try {
       final (list, _) = await CloudNotesService.instance
-          .getSutraDiscussions(sutraTitle: widget.title, pageSize: _pageSize);
+          .getSutraDiscussions(sutraTitle: key, pageSize: _pageSize);
       if (!mounted) return;
       final known =
           _comments.map((c) => c['id']?.toString()).whereType<String>().toSet();
@@ -461,12 +501,34 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   }
 
   Future<void> _loadComments() async {
+    final key = _discussionKey;
+    if (key == null) return;
     try {
       final (list, _) = await CloudNotesService.instance
-          .getSutraDiscussions(sutraTitle: widget.title, pageSize: _pageSize);
+          .getSutraDiscussions(sutraTitle: key, pageSize: _pageSize);
+      var merged = list;
+      // 卷拆分之前的历史讨论存在基础经名键下：并入卷一展示避免丢失，
+      // 其余卷只显示本卷讨论。
+      final base = sutraBaseTitle(widget.title);
+      if (_discussionVolume == 1 && base != key) {
+        try {
+          final (legacy, _) = await CloudNotesService.instance
+              .getSutraDiscussions(sutraTitle: base, pageSize: _pageSize);
+          final ids =
+              merged.map((c) => c['id']?.toString()).toSet();
+          merged = [
+            ...merged,
+            ...legacy.where((c) => !ids.contains(c['id']?.toString())),
+          ];
+          merged.sort((a, b) => ((b['at'] as num?)?.toInt() ?? 0)
+              .compareTo((a['at'] as num?)?.toInt() ?? 0));
+        } catch (_) {
+          // 历史数据拉取失败不影响本卷讨论展示。
+        }
+      }
       if (!mounted) return;
       setState(() {
-        _comments = list;
+        _comments = merged;
         _commentsLoading = false;
         _newPostCount = 0;
       });
@@ -479,6 +541,8 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   }
 
   /// 拉取广场上引用本经书的帖子（$经名 / @经名），与讨论混排在统一列表里。
+  /// 能定位具体卷时只取引用本卷的帖子（卷一含只写基础经名的引用），
+  /// 避免多卷经书各卷讨论页混在一起。
   Future<void> _loadRelatedNotes() async {
     try {
       if (_sutraLibrary.isEmpty) {
@@ -487,10 +551,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       final (list, _) = await CloudNotesService.instance
           .getPlazaNotes(page: 1, pageSize: 100);
       if (!mounted) return;
+      final base = sutraBaseTitle(widget.title);
+      final vol = _discussionVolume;
       setState(() {
         _relatedNotes = list
-            .where(
-                (n) => NoteSutraLinks.referencesSutra(n.content, widget.title))
+            .where((n) => vol <= 0
+                ? NoteSutraLinks.referencesSutra(n.content, base)
+                : referencesSutraVolume(n.content, base, vol))
             .toList();
       });
     } catch (_) {
@@ -593,7 +660,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     if (content.isEmpty) return;
     try {
       await CloudNotesService.instance.createSutraDiscussion(
-        sutraTitle: widget.title,
+        sutraTitle: _discussionKey ?? widget.title,
         content: content,
       );
       if (!mounted) return;

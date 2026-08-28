@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'drafts_page.dart';
 import 'login_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
@@ -39,6 +40,9 @@ class _NoteEditPageState extends State<NoteEditPage> {
   late bool _shared;
   String? _cloudId;
   bool _savingCloud = false;
+
+  // 编辑页保存成功后置 true：侧滑返回时直接弹回个人主页（跳过草稿页等中间页）。
+  bool _goHomeOnPop = false;
 
   // 触发面板状态：@ 提及用户 / $ 引用经文 / # 话题
   List<NoteSutraLink> _sutraResults = [];
@@ -368,7 +372,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
     super.dispose();
   }
 
-  Future<void> _save() async {
+  Future<void> _save({bool fromDraftButton = false}) async {
     final content = _fullContent();
     if (content.isEmpty) return;
 
@@ -439,9 +443,21 @@ class _NoteEditPageState extends State<NoteEditPage> {
         _hasChanges = false;
         _savingCloud = false;
       });
-      _showSavedToastWithView(sharedNow ? '已发表' : '已保存草稿', newNote);
-      // 保存成功后返回上一页（修学主页等）。
-      Navigator.pop(context);
+      final isEditPage = widget.note != null;
+      if (sharedNow) {
+        _showSavedToastWithView('已发表', newNote);
+        if (isEditPage) {
+          // 编辑页：发表后停留本页，侧滑返回时直接回个人主页。
+          if (!fromDraftButton) _goHomeOnPop = true;
+        } else {
+          // 新建页：发表成功后返回上一页（修学主页等）。
+          Navigator.pop(context);
+        }
+      } else {
+        // 未分享：保存到本地草稿，停留在当前编辑页，不返回。
+        _showToast('已保存到草稿');
+        if (isEditPage && !fromDraftButton) _goHomeOnPop = true;
+      }
     }
   }
 
@@ -921,7 +937,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         final shouldPop = await _onWillPop();
-        if (shouldPop && context.mounted) Navigator.pop(context);
+        if (!shouldPop || !context.mounted) return;
+        if (_goHomeOnPop) {
+          // 编辑页已保存：直接弹回个人主页，跳过草稿页等中间页。
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        } else {
+          Navigator.pop(context);
+        }
       },
       child: Scaffold(
         backgroundColor: _bg,
@@ -932,6 +954,33 @@ class _NoteEditPageState extends State<NoteEditPage> {
               style: TextStyle(
                   color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
           actions: [
+            GestureDetector(
+              onTap: () async {
+                // 编辑页有未保存的更改时先保存，避免草稿新增/删减的内容丢失。
+                if (widget.note != null && _hasChanges) {
+                  await _save(fromDraftButton: true);
+                }
+                if (!context.mounted) return;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const DraftsPage()),
+                );
+              },
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                decoration: BoxDecoration(
+                  color: _primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Text('草稿',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: _primary)),
+              ),
+            ),
+            const SizedBox(width: 8),
             Padding(
               padding: const EdgeInsets.only(right: 16),
               child: GestureDetector(

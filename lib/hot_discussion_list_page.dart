@@ -35,11 +35,16 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   bool _isAdmin = false;
   // 热门经文的基础经名 → 显示名（含卷标），用于榜单显示。
   Map<String, String> _displayNames = const {};
+  // 经文榜条目的副标题（部类 · 共N卷）：目录就绪后构建。
+  Map<String, String> _subtitles = const {};
   // 每页 50 条，用户点击「查看更多」再展示下一页 50 条，
   // 直到全部展示完。避免一次性渲染超长榜单。
   static const int _pageStep = 50;
   int _visibleCount = _pageStep;
   bool _refreshing = false;
+  // 滚动超过一屏后显示「回到顶部」小按钮。
+  final ScrollController _scroll = ScrollController();
+  bool _showBackToTop = false;
 
   @override
   void initState() {
@@ -47,16 +52,21 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     // 按热度分从高到低排列：越靠上的热度越大，火把越多。
     // 已被管理员删除的话题直接剔除，避免热门榜残留展示。
     final bans = CloudNotesService.instance.bannedTopicNames;
-    // 经文榜先按基础经名归一化合并：「XX经卷一」与「XX经」并入同一条目。
-    final source =
-        widget.isSutra ? mergeHotSutraItems(widget.items) : widget.items;
+    // 经文榜按卷拆分归并：多卷经书每一卷单独一条，卷拆分前的历史讨论并入卷一
+    // （传目录经名做最长前缀归一、多卷基础名做分卷，与讨论页口径一致）。
+    final source = widget.isSutra
+        ? mergeHotSutraItems(widget.items,
+            catalogNames: NoteSutraCatalog.cachedTitleMap?.keys.toSet(),
+            multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases)
+        : widget.items;
     final raw = (bans.isEmpty
             ? source
             : source.where((it) => !bans.contains(it.name)))
         .toList()
       ..sort((a, b) => b.score.compareTo(a.score));
     _items = raw;
-    NoteSutraCatalog.load();
+    _scroll.addListener(_onScroll);
+    NoteSutraCatalog.load().then((_) => _buildSubtitles());
     CloudNotesService.instance.isAdmin().then((ok) {
       if (mounted) setState(() => _isAdmin = ok);
     });
@@ -65,29 +75,82 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
       if (mounted) setState(() => _displayNames = names);
     });
     // 主动重新拉取热门榜：父页传来的 widget.items 可能是旧快照
-    // （刚发布带新 #话题/$经名的帖子，父页还没刷新），这里拉一次保证
+    // （刚发布带新 #话题/$经名 的帖子，父页还没刷新），这里拉一次保证
     // 新发布的话题/经书能立即在被打开的热度榜页里展示。
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final show = _scroll.hasClients && _scroll.offset > 600;
+    if (show != _showBackToTop) setState(() => _showBackToTop = show);
+  }
+
+  void _backToTop() {
+    if (_scroll.hasClients) {
+      _scroll.animateTo(0,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic);
+    }
+  }
+
+  /// 经文榜条目副标题：部类（folder 去掉 T\d+ 前缀）· 共N卷（多卷时）。
+  void _buildSubtitles() {
+    if (!mounted || !widget.isSutra) return;
+    final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
+    final map = <String, String>{};
+    for (final it in _items) {
+      // 条目名可能带卷标（「XX经卷二」），按基础经名查部类/总卷数。
+      final base = splitHotSutraName(it.name).$1;
+      final link = titleMap[base];
+      if (link == null) continue;
+      final parts = <String>[];
+      final dept = link.folder.replaceAll(RegExp(r'^T\d+'), '').trim();
+      if (dept.isNotEmpty) parts.add(dept);
+      final vols = NoteSutraCatalog.cachedVolumeCount(base);
+      if (vols > 1) parts.add('共$vols卷');
+      if (parts.isNotEmpty) map[it.name] = parts.join(' · ');
+    }
+    setState(() => _subtitles = map);
   }
 
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      final (topics, sutras) =
-          await CloudNotesService.instance.getHotDiscussions();
-      // 经文榜按基础经名归一化合并，话题榜保持原样。
-      final all = widget.isSutra ? mergeHotSutraItems(sutras) : topics;
+      await NoteSutraCatalog.load(); // 确保经书目录（含多卷基础名）就绪
+      final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
+      final mvBases = NoteSutraCatalog.cachedMultiVolumeBases;
+      // 经文榜用「最近 30 天提及数」口径（广场帖 $经名 引用 + 经书讨论页讨论，
+      // 同一帖多次提及只算一次）；话题榜沿用互动热度榜。
+      final List<HotDiscussionItem> all;
+      if (widget.isSutra) {
+        final sutras = await CloudNotesService.instance.getHotSutraMentions();
+        // 经文榜按卷拆分归并：多卷经书每一卷单独一条、历史讨论并入卷一
+        // （传目录经名做最长前缀归一，与讨论页口径一致）。
+        all = mergeHotSutraItems(sutras,
+            catalogNames: titleMap.keys.toSet(), multiVolumeBases: mvBases);
+      } else {
+        final (topics, _) =
+            await CloudNotesService.instance.getHotDiscussions();
+        all = topics;
+      }
       // 经文榜要再过一遍经书目录白名单（与 study_hub_page 同款），
       // 话题榜要剔掉管理员已删除的话题。
-      final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
       final bans = CloudNotesService.instance.bannedTopicNames;
-      final valid = widget.isSutra
-          ? all.where((s) => titleMap.containsKey(s.name)).toList()
+      final List<HotDiscussionItem> valid = widget.isSutra
+          ? all
+              .where((s) => titleMap.containsKey(splitHotSutraName(s.name).$1))
+              .toList()
           : (bans.isEmpty
               ? all
-              : all.where((t) => !bans.contains(t.name)).toList())
-        ..sort((a, b) => b.score.compareTo(a.score));
+              : all.where((t) => !bans.contains(t.name)).toList());
+      valid.sort((a, b) => b.score.compareTo(a.score));
       final enhanced =
           await buildSutraDisplayNameMap(valid, isSutra: widget.isSutra);
       if (!mounted) return;
@@ -96,6 +159,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
         _displayNames = enhanced;
         _refreshing = false;
       });
+      _buildSubtitles();
     } catch (_) {
       if (!mounted) return;
       setState(() => _refreshing = false);
@@ -103,8 +167,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   }
 
   /// 按名次取火把数：仅前三名显示火把——第 1 名 5 把、第 2 名 4 把、第 3 名 3 把；
-  /// 第 4 名起不再显示火把，改在名称右侧展示「讨论x个」。
-  static int _flamesByRank(int index) => index < 5 ? 5 - index : 1;
+  /// 第 4 名起不再显示火把，改在名称右侧展示讨论数徽章。
+  static int _flamesByRank(int index) => 5 - index;
 
   /// 火把：按名次取数量，颜色从橙黄到红渐变，模拟真实火簇。
   /// 第一名整体用红色并放大，突出榜首。
@@ -141,15 +205,20 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   /// 顶部摘要文案：总榜单按客户端可见数显示，避免渲染超长数字。
   String get _totalLabel => '${_items.length}';
 
+  /// 全部条目的讨论总数（头部摘要展示）。
+  int get _totalPosts => _items.fold<int>(0, (sum, it) => sum + it.posts);
+
   void _open(HotDiscussionItem it) {
     if (widget.isSutra) {
-      final entry = NoteSutraCatalog.cachedTitleMap?[it.name];
+      // 条目名可能带卷标（「XX经卷二」）：解析出基础经名与该卷正文路径，
+      // 打开对应卷的讨论页，保证与榜单计数口径一致。
+      final (base, path) = resolveHotSutraTarget(it.name);
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => SutraDiscussionPage(
-            title: it.name,
-            filePath: entry?.filePath ?? '',
+            title: base,
+            filePath: path,
           ),
         ),
       );
@@ -204,10 +273,13 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   }
 
   /// 顶部渐变摘要卡：色系与榜单一致（话题金、经文绿），暖色调不突兀。
+  /// 素白模式下经文榜改用灰白渐变，跟随 plain 调色板。
   /// 左侧图标不加底框：经文/话题两页统一用与热门胶囊同款的火把（放大版）。
   Widget _buildHeader() {
     final colors = widget.isSutra
-        ? const [Color(0xFFE5F0EA), Color(0xFFF2F8F4)]
+        ? (AppPalette.instance.isPlain
+            ? [AppPalette.p.tintBg, AppPalette.p.card]
+            : const [Color(0xFFE5F0EA), Color(0xFFF2F8F4)])
         : [AppPalette.p.tintBg, AppPalette.p.tintBg];
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -229,13 +301,16 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(widget.isSutra ? '经文讨论热度榜' : '话题讨论热度榜',
+                  Text(widget.isSutra ? '经文提及热度榜' : '话题讨论热度榜',
                       style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: _accent)),
                   const SizedBox(height: 3),
-                  Text('近 14 天 · 互动越多越靠前 · 共 $_totalLabel 项',
+                  Text(
+                      widget.isSutra
+                          ? '近 30 天 · 共 $_totalLabel 项 · $_totalPosts 次提及'
+                          : '近 14 天 · 共 $_totalLabel 项 · $_totalPosts 条讨论',
                       style: TextStyle(fontSize: 12, color: _textSec)),
                 ],
               ),
@@ -246,7 +321,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     );
   }
 
-  /// 名次牌：第 1/2/3 名用字符01/02/03，颜色#6F877A，字号递减。第 4 名起灰色数字。
+  /// 名次牌：第 1/2/3 名用字符01/02/03，颜色跟随榜色（经文绿、话题金），字号递减。第 4 名起灰色数字。
   Widget _rankBadge(int index) {
     if (index < 3) {
       final fontSize = index == 0 ? 26.0 : (index == 1 ? 22.0 : 19.0);
@@ -258,7 +333,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
           style: TextStyle(
             fontSize: fontSize,
             fontWeight: FontWeight.w700,
-            color: const Color(0xFF6F877A),
+            color: _accent,
             letterSpacing: 1,
           ),
         ),
@@ -275,7 +350,48 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
 
   String _rankLabel(int index) => (index + 1).toString().padLeft(2, '0');
 
-  /// 前三名：渐变底色卡片（无边线），名次奖牌 + 名称 + 火把 + 箭头。
+  /// 讨论数徽章：浅底全圆角、次级文字色（对比度达标），前三名与普通行共用。
+  /// 经文榜口径为最近 30 天提及次数（提及X次），话题榜为讨论帖数（讨论X个）。
+  Widget _postCountBadge(int posts) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppPalette.p.tintBg,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(widget.isSutra ? '提及$posts次' : '讨论$posts个',
+          style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w600, color: _textSec)),
+    );
+  }
+
+  /// 条目名称区：经名（含 $/# 前缀与卷标）+ 可选副标题（部类 · 共N卷）。
+  Widget _nameBlock(HotDiscussionItem it) {
+    final subtitle = _subtitles[it.name];
+    final name = Text(
+      '$_prefix${_displayNames[it.name] ?? it.name}',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          color: widget.isSutra ? _accent : const Color(0xFFcf9e66)),
+    );
+    if (subtitle == null || subtitle.isEmpty) return name;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        name,
+        const SizedBox(height: 2),
+        Text(subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: _textSec)),
+      ],
+    );
+  }
+
+  /// 前三名：渐变底色卡片（无边线），名次奖牌 + 名称 + 火把 + 讨论数徽章 + 箭头。
   Widget _buildTopCard(HotDiscussionItem it, int index) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -289,10 +405,10 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
             begin: Alignment.centerLeft,
             end: Alignment.centerRight,
           ),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
         ),
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           onTap: () => _open(it),
           onLongPress: (_isAdmin && !widget.isSutra)
               ? () => _deleteTopic(it)
@@ -304,23 +420,11 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               children: [
                 _rankBadge(index),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    '$_prefix${_displayNames[it.name] ?? it.name}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: widget.isSutra ? _accent : const Color(0xFFcf9e66)),
-                  ),
-                ),
+                Expanded(child: _nameBlock(it)),
                 const SizedBox(width: 8),
-                if (index < 3)
-                  _buildFlames(_flamesByRank(index), firstPlace: index == 0)
-                else
-                  Text('讨论${it.posts}个',
-                      style: TextStyle(fontSize: 12, color: _textHint)),
+                _buildFlames(_flamesByRank(index), firstPlace: index == 0),
+                const SizedBox(width: 6),
+                _postCountBadge(it.posts),
                 const SizedBox(width: 6),
                 Icon(Icons.chevron_right, size: 16, color: _textHint),
               ],
@@ -331,35 +435,21 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
     );
   }
 
-  /// 第 4 名起的普通行：名次 + 名称 + 笔记数 + 箭头，行间无边线。
+  /// 第 4 名起的普通行：名次 + 名称 + 讨论数徽章 + 箭头，行间无边线。
   Widget _buildPlainRow(HotDiscussionItem it, int index) {
     return InkWell(
       onTap: () => _open(it),
       onLongPress:
           (_isAdmin && !widget.isSutra) ? () => _deleteTopic(it) : null,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
             _rankBadge(index),
             const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                '$_prefix${_displayNames[it.name] ?? it.name}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: widget.isSutra ? _accent : const Color(0xFFcf9e66)),
-              ),
-            ),
+            Expanded(child: _nameBlock(it)),
             const SizedBox(width: 8),
-            if (index < 3)
-              _buildFlames(_flamesByRank(index), firstPlace: index == 0)
-            else
-              Text('讨论${it.posts}个',
-                  style: TextStyle(fontSize: 12, color: _textHint)),
+            _postCountBadge(it.posts),
             const SizedBox(width: 6),
             Icon(Icons.chevron_right, size: 16, color: _textHint),
           ],
@@ -393,48 +483,85 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
             ),
         ],
       ),
-      body: _items.isEmpty
-          ? Center(
-              child: Text('暂无数据',
-                  style: TextStyle(fontSize: 14, color: _textHint)),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.only(top: 6, bottom: 24),
-              // 1 个 header + 可见条目数 + (有更多时)1 个「查看更多」按钮。
-              itemCount: visibleCount + 1 + (hasMore ? 1 : 0),
-              itemBuilder: (context, i) {
-                if (i == 0) return _buildHeader();
-                final index = i - 1;
-                if (index < visibleCount) {
-                  final it = _items[index];
-                  if (index < 3) return _buildTopCard(it, index);
-                  return _buildPlainRow(it, index);
-                }
-                // 「查看更多」按钮：展开下一页 50 条。
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _accent,
-                      side: BorderSide(color: _accent.withValues(alpha: 0.4)),
-                      minimumSize: const Size.fromHeight(44),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _visibleCount = visibleCount + _pageStep;
-                      });
+      body: Stack(
+        children: [
+          _items.isEmpty
+              ? Center(
+                  child: Text('暂无数据',
+                      style: TextStyle(fontSize: 14, color: _textHint)),
+                )
+              : RefreshIndicator(
+                  onRefresh: _refresh,
+                  color: _accent,
+                  child: ListView.builder(
+                    controller: _scroll,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(top: 6, bottom: 24),
+                    // 1 个 header + 可见条目数 + (有更多时)1 个「查看更多」按钮。
+                    itemCount: visibleCount + 1 + (hasMore ? 1 : 0),
+                    itemBuilder: (context, i) {
+                      if (i == 0) return _buildHeader();
+                      final index = i - 1;
+                      if (index < visibleCount) {
+                        final it = _items[index];
+                        if (index < 3) return _buildTopCard(it, index);
+                        return _buildPlainRow(it, index);
+                      }
+                      // 「查看更多」按钮：展开下一页 50 条。
+                      return Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _accent,
+                            side:
+                                BorderSide(color: _accent.withValues(alpha: 0.4)),
+                            minimumSize: const Size.fromHeight(44),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _visibleCount = visibleCount + _pageStep;
+                            });
+                          },
+                          child: Text(
+                            '查看更多（剩 ${_items.length - visibleCount} 项）',
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      );
                     },
-                    child: Text(
-                      '查看更多（剩 ${_items.length - visibleCount} 项）',
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
+          // 滚动超过一屏后出现的「回到顶部」小按钮。
+          Positioned(
+            right: 16,
+            bottom: 20,
+            child: AnimatedOpacity(
+              opacity: _showBackToTop ? 1 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: IgnorePointer(
+                ignoring: !_showBackToTop,
+                child: Material(
+                  color: _accent,
+                  shape: const CircleBorder(),
+                  elevation: 3,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _backToTop,
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child:
+                          Icon(Icons.arrow_upward, size: 20, color: Colors.white),
                     ),
                   ),
-                );
-              },
+                ),
+              ),
             ),
+          ),
+        ],
+      ),
     );
   }
 }

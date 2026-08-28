@@ -893,6 +893,24 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // X 式转发角标（最顶部，与内容列对齐）
+                      if (note.repostOf.isNotEmpty &&
+                          note.repostKind != 'reply') ...[
+                        Padding(
+                          padding: const EdgeInsets.only(left: 32),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.repeat, size: 12, color: Color(0xFF8C8C8C)),
+                              const SizedBox(width: 4),
+                              Text('你已转帖',
+                                  style: TextStyle(
+                                      fontSize: 12, color: Color(0xFF8C8C8C))),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                      ],
                       Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -918,19 +936,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _buildUserNameRow(note),
-                          if (note.repostOf.isNotEmpty &&
-                              note.repostKind != 'reply') ...[
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                Icon(Icons.repeat, size: 13, color: _gold),
-                                const SizedBox(width: 4),
-                                Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
-                                    style: TextStyle(
-                                        fontSize: 12, color: _gold)),
-                              ],
-                            ),
-                          ],
                           if (note.content.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。

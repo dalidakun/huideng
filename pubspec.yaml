@@ -51,6 +51,8 @@ flutter:
     - assets/images/my_selected.png
     - assets/images/assistant.png
     - assets/images/assistant_selected.png
+    # 经藏页右上角助手入口：米黄外观图标。
+    - assets/images/assistant000.png
     - assets/images/search.png
     - assets/images/search_selected.png
     - assets/images/splash.png
@@ -80,6 +82,24 @@ flutter:
     - assets/images/chat_selected1.png
     - assets/images/my1.png
     - assets/images/my_selected1.png
+    # 菩提空间菜单图标：米黄外观 mi1/mi2，素白外观 su1/su2。
+    - assets/images/mi1.png
+    - assets/images/mi2.png
+    - assets/images/su1.png
+    - assets/images/su2.png
+    # 菩提空间页顶部标题图标：米黄外观 puti1，素白外观 puti2。
+    - assets/images/puti1.png
+    - assets/images/puti2.png
+    # 菩提空间页右上角公告图标：米黄外观 gao1，素白外观 gao2。
+    - assets/images/gao1.png
+    - assets/images/gao2.png
+    # 菩提空间页右下角悬浮按钮图标：添加笔记 write，回到顶部 top。
+    - assets/images/write.png
+    - assets/images/top.png
+    # 经藏页「我的收藏」快捷入口图标。
+    - assets/images/like.png
+    # 经藏页「随缘读经」卡片标题图标。
+    - assets/images/leaf-sharp.png
     - assets/sutras_catalog.json
     - assets/tool.html
     # 《用户协议》与《隐私政策》全文（首次启动弹窗与应用内「关于我们」共用）。

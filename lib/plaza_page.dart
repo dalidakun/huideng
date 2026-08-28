@@ -328,6 +328,23 @@ class _PlazaPageState extends State<PlazaPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // X 式转发角标（最顶部，与内容列对齐）
+              if (note.repostOf.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.only(left: 38),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.repeat, size: 12, color: Color(0xFF8C8C8C)),
+                      const SizedBox(width: 4),
+                      Text('你已转帖',
+                          style: TextStyle(
+                              fontSize: 12, color: Color(0xFF8C8C8C))),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 4),
+              ],
               Row(
                 children: [
                   CircleAvatar(
@@ -376,22 +393,6 @@ class _PlazaPageState extends State<PlazaPage> {
                 ],
               ),
               const SizedBox(height: 10),
-              Row(
-                children: [
-                  if (note.repostOf.isNotEmpty) ...[
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.repeat, size: 12, color: _gold),
-                        const SizedBox(width: 2),
-                        Text(note.quoteContent.isNotEmpty ? '引用' : '转发',
-                            style: TextStyle(
-                                fontSize: 11, color: _gold)),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
               if (preview.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Text(

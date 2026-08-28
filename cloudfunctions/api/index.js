@@ -106,6 +106,8 @@ const app = cloudbase.init(buildInitOptions());
 
 // 热门讨论聚合结果缓存（内存级，仅热实例间共享）：15 分钟内不重复全表扫描。
 let hotDiscussionsCache = null;
+// 菩提空间热门经文榜缓存：最近 30 天 $提及 计数，15 分钟 TTL。
+let hotSutraMentionsCache = null;
 // 大家都在读：全平台锁定精读经书热度缓存。
 let popularSutrasCache = null;
 
@@ -587,6 +589,7 @@ exports.main = async (event, context) => {
         // 新发布的笔记可能含尚未上过热门榜的 #话题/$经名，立即失效热门榜缓存，
         // 让下一次拉取能看到这些新话题/新经书。
         hotDiscussionsCache = null;
+        hotSutraMentionsCache = null;
         return ok({ id: res.id });
       }
 
@@ -616,6 +619,7 @@ exports.main = async (event, context) => {
         // 内容/可见性/状态改变会改变 #话题/$经名的贡献，重新聚合热门榜。
         if (event.content != null || event.visibility != null || event.status != null) {
           hotDiscussionsCache = null;
+          hotSutraMentionsCache = null;
         }
         return ok({ id });
       }
@@ -645,6 +649,7 @@ exports.main = async (event, context) => {
         await favorites.where({ noteId: id }).remove();
         // 删除笔记后其 #话题/$经名贡献消失，重新聚合热门榜。
         hotDiscussionsCache = null;
+        hotSutraMentionsCache = null;
         return ok({});
       }
 
@@ -1016,7 +1021,14 @@ exports.main = async (event, context) => {
           return ok({ ...hotDiscussionsCache.data, cached: true });
         }
         const topicRe = /#([^\s#，。！？,;:!?（）()]+)/g;
-        const sutraRe = /\$([^\s#$，。！？,;:!?（）()@]+)/g;
+        // 经文引用识别与客户端 referencesSutra 完全一致：
+        // - $经名 / @经名 两种标记都识别（旧版 @经名 引用同样计入）；
+        // - 标记前一个字符不能是汉字/字母/数字（避免「读$金刚经」之外的长词误判，
+        //   与讨论页筛选相关帖子的规则相同，保证榜单数与点进去看到的条数一致）；
+        // - 排除 [@账号](user:...) 用户提及；
+        // - 经名后允许粘连正文（「$金刚经真好」），客户端按经书目录最长前缀归一。
+        const sutraRe = /[@$]([^\s#$，。！？,;:!?（）()@[\]]+)/g;
+        const sutraBeforeRe = /[0-9A-Za-z\u4e00-\u9fa5]/;
         // 含数字的话题（如 #20240808、#第3天、#abc123）不入榜，避免污染榜单。
         const noiseTopicRe = /\d/;
         const topics = new Map();
@@ -1033,10 +1045,19 @@ exports.main = async (event, context) => {
         // 所有出现过的话题/经文都稳定在榜；排序仍由互动量 + 时间衰减决定。
         // 单条记录对热度榜的贡献（话题帖、经书讨论都复用同款聚合逻辑）：
         // - ageHours 小（新发布）且 engagement 越高，得分越高；
-        // - 经书讨论（sutraDiscussions）的 sutraTitle 字段视作一条 $经名 引用，
-        //   content 中的 #话题 也按话题帖一样计分，确保经书讨论页与话题讨论页
-        //   「在同一份热门榜上」按热度排序展示。
-        const aggregateRecord = (createdAt, likeCount, viewCount, commentCount, repostCount, /* regex content */ text, /* 经书讨论专属 */ sutraTitle) => {
+        // - 经书讨论（sutraDiscussions）只按 sutraTitle 字段计入对应经书——
+        //   讨论正文里提到的其它 $经名 不计入（那条讨论不会出现在被提及经书的
+        //   讨论页），content 中的 #话题 仍按话题帖一样计分；
+        // - 广场帖子按正文（不含标题）里的 $经名 引用计入，识别规则与客户端讨论页
+        //   筛选相关帖子完全一致，保证榜单数 == 点进去看到的条数。
+        const addSutra = (name, score, createdAt) => {
+          const cur = sutras.get(name) || { score: 0, posts: 0, last: 0 };
+          cur.score += score;
+          cur.posts += 1;
+          if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
+          sutras.set(name, cur);
+        };
+        const aggregateRecord = (createdAt, likeCount, viewCount, commentCount, repostCount, /* 话题扫描文本 */ topicText, /* 经书讨论专属 */ sutraTitle, /* 经文引用扫描文本（仅正文） */ sutraText) => {
           const ageHours = Math.max(0, (nowMs - (createdAt || nowMs)) / 3600000);
           const engagement =
             (viewCount || 0) +
@@ -1047,23 +1068,17 @@ exports.main = async (event, context) => {
           // 有互动 → 按互动量除以时间衰减因子，新互动比老互动更值钱。
           // 不再用 (1 + engagement)：避免 0 互动的新帖凭"新鲜度"白拿 ~0.4 分冲到前三。
           const score = engagement / Math.pow(ageHours + 2, 1.3);
-          // 经书讨论：直接以 sutraTitle 字段为 $经名 引用计入经文榜。
+          // 经书讨论：直接以 sutraTitle 字段计入经文榜（正文不再重复计 $经名）。
           if (sutraTitle) {
             const s = String(sutraTitle).trim();
-            if (s && s.length <= 24) {
-              const cur = sutras.get(s) || { score: 0, posts: 0, last: 0 };
-              cur.score += score;
-              cur.posts += 1;
-              if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
-              sutras.set(s, cur);
-            }
+            if (s && s.length <= 24) addSutra(s, score, createdAt);
           }
-          // 通用：从正文中识别 #话题 / $经名，每个去重后累加。
-          if (text) {
+          // 通用：从文本中识别 #话题，每个去重后累加。
+          if (topicText) {
             topicRe.lastIndex = 0;
             const seenT = new Set();
             let m;
-            while ((m = topicRe.exec(text)) !== null) {
+            while ((m = topicRe.exec(topicText)) !== null) {
               const t = m[1];
               if (t.length > 24 ||
                   seenT.has(t) ||
@@ -1078,17 +1093,22 @@ exports.main = async (event, context) => {
               if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
               topics.set(t, cur);
             }
+          }
+          // 经文引用：$经名/@经名，与客户端 referencesSutra 同款规则。
+          if (sutraText) {
             sutraRe.lastIndex = 0;
             const seenS = new Set();
-            while ((m = sutraRe.exec(text)) !== null) {
+            let m;
+            while ((m = sutraRe.exec(sutraText)) !== null) {
+              const markerIdx = m.index;
+              const before = markerIdx > 0 ? sutraText[markerIdx - 1] : "";
+              if (sutraBeforeRe.test(before)) continue;
+              // [@账号](user:...) 是用户提及，不是经文引用。
+              if (sutraText.startsWith("](user:", markerIdx + m[0].length)) continue;
               const s = m[1];
-              if (s.length > 24 || seenS.has(s)) continue;
+              if (!s || s.length > 24 || seenS.has(s)) continue;
               seenS.add(s);
-              const cur = sutras.get(s) || { score: 0, posts: 0, last: 0 };
-              cur.score += score;
-              cur.posts += 1;
-              if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
-              sutras.set(s, cur);
+              addSutra(s, score, createdAt);
             }
           }
         };
@@ -1116,7 +1136,9 @@ exports.main = async (event, context) => {
               n.viewCount,
               n.commentCount,
               n.repostCount,
-              `${n.title || ""}\n${n.content || ""}`
+              `${n.title || ""}\n${n.content || ""}`,
+              null,
+              n.content || "" // 经文引用只按正文统计（与讨论页筛选口径一致，标题不计）
             );
           }
           if (batch.length < 1000 || scanned >= cap) break;
@@ -1145,8 +1167,9 @@ exports.main = async (event, context) => {
                 0, // 经书讨论没有 viewCount
                 0, // 没有 commentCount
                 0, // 没有 repostCount
-                d.content || "",
-                d.sutraTitle || ""
+                d.content || "", // 正文里的 #话题 仍计入话题榜
+                d.sutraTitle || "",
+                null // 讨论正文里的 $经名 不再重复计入经文榜（与讨论页展示口径一致）
               );
             }
             if (sBatch.length < 1000 || sdScanned >= sdCap) break;
@@ -1175,6 +1198,103 @@ exports.main = async (event, context) => {
         const data = { topics: topTopics, sutras: topSutras, updatedAt: nowMs };
         hotDiscussionsCache = { at: nowMs, data };
         return ok(data);
+      }
+
+      // 菩提空间热门经文榜：只统计最近 30 天的「提及」，规则与经书讨论页展示口径一致：
+      // - 广场帖子正文里的 $经名/@经名 引用（识别规则与客户端 referencesSutra 相同），
+      //   同一帖子多次提及同一经书只算一次（按帖去重）；
+      // - 经书讨论页里发布的每条讨论（sutraDiscussions）算对该经书的一次提及
+      //   （讨论自动挂在其 sutraTitle 下，讨论正文里的其它 $经名 不重复计入）；
+      // - 阅读页右下角发出的笔记本质是带 $经名 的广场帖，已包含在第一条里。
+      // 只要有 1 次提及就入榜；提及次数越多热度越高，score 即提及次数。
+      case "getHotSutraMentions": {
+        const nowMs = Date.now();
+        if (hotSutraMentionsCache && nowMs - hotSutraMentionsCache.at < 15 * 60 * 1000) {
+          return ok({ ...hotSutraMentionsCache.data, cached: true });
+        }
+        const windowStart = nowMs - 30 * 24 * 3600 * 1000;
+        const sutraRe = /[@$]([^\s#$，。！？,;:!?（）()@[\]]+)/g;
+        const sutraBeforeRe = /[0-9A-Za-z\u4e00-\u9fa5]/;
+        const mentions = new Map(); // name -> { posts, last }
+        const addMention = (name, createdAt) => {
+          const cur = mentions.get(name) || { posts: 0, last: 0 };
+          cur.posts += 1;
+          if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
+          mentions.set(name, cur);
+        };
+        // 广场帖子：30 天窗口内的公开帖，正文含 $经名 引用即计一次（按帖去重）。
+        const mentionBase = notes.where({
+          visibility: "public",
+          status: "normal",
+          kind: _.neq("announcement"),
+          createdAt: _.gte(windowStart),
+        });
+        const mentionCap = 10000;
+        let mScanned = 0;
+        let mSkip = 0;
+        while (mScanned < mentionCap) {
+          const r = await mentionBase
+            .orderBy("createdAt", "desc")
+            .skip(mSkip)
+            .limit(1000)
+            .get();
+          const batch = r.data || [];
+          if (batch.length === 0) break;
+          for (const n of batch) {
+            if (++mScanned > mentionCap) break;
+            const text = n.content || "";
+            if (!text) continue;
+            sutraRe.lastIndex = 0;
+            const seen = new Set();
+            let m;
+            while ((m = sutraRe.exec(text)) !== null) {
+              const markerIdx = m.index;
+              const before = markerIdx > 0 ? text[markerIdx - 1] : "";
+              if (sutraBeforeRe.test(before)) continue;
+              // [@账号](user:...) 是用户提及，不是经文引用。
+              if (text.startsWith("](user:", markerIdx + m[0].length)) continue;
+              const s = m[1];
+              if (!s || s.length > 24 || seen.has(s)) continue;
+              seen.add(s);
+              addMention(s, n.createdAt);
+            }
+          }
+          if (batch.length < 1000 || mScanned >= mentionCap) break;
+          mSkip += 1000;
+        }
+        // 经书讨论页的讨论：每条讨论算对其 sutraTitle 的一次提及。
+        try {
+          await ensureSutraDiscussions();
+          let dSkip = 0;
+          const dCap = 5000;
+          let dScanned = 0;
+          while (dScanned < dCap) {
+            const dr = await sutraDiscussions
+              .where({ createdAt: _.gte(windowStart) })
+              .orderBy("createdAt", "desc")
+              .skip(dSkip)
+              .limit(1000)
+              .get();
+            const dBatch = dr.data || [];
+            if (dBatch.length === 0) break;
+            for (const d of dBatch) {
+              if (++dScanned > dCap) break;
+              const s = String(d.sutraTitle || "").trim();
+              if (s && s.length <= 24) addMention(s, d.createdAt);
+            }
+            if (dBatch.length < 1000 || dScanned >= dCap) break;
+            dSkip += 1000;
+          }
+        } catch (e) {
+          // 经书讨论集合读取失败时静默降级：广场帖的提及计数不受影响。
+        }
+        const topMentions = [...mentions.entries()]
+          .sort((a, b) => b[1].posts - a[1].posts || b[1].last - a[1].last)
+          .slice(0, 200)
+          .map(([name, v]) => ({ name, posts: v.posts, score: v.posts }));
+        const mData = { sutras: topMentions, updatedAt: nowMs };
+        hotSutraMentionsCache = { at: nowMs, data: mData };
+        return ok(mData);
       }
 
       case "getPopularSutras": {
@@ -2432,6 +2552,7 @@ exports.main = async (event, context) => {
         });
         // 新经书讨论会按 sutraTitle 计入经文热度榜，立即失效缓存让下次拉取能看到新讨论。
         hotDiscussionsCache = null;
+        hotSutraMentionsCache = null;
         return ok({ id: res.id, createdAt });
       }
 
@@ -2447,6 +2568,7 @@ exports.main = async (event, context) => {
         await doc.remove();
         // 经书讨论删除会影响经文热度榜，重新聚合。
         hotDiscussionsCache = null;
+        hotSutraMentionsCache = null;
         return ok({});
       }
 
