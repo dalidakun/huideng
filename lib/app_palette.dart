@@ -67,7 +67,7 @@ class AppPalette extends ChangeNotifier {
 
   static PaletteData get p => _current;
 
-  AppearanceMode _mode = AppearanceMode.warm;
+  AppearanceMode _mode = AppearanceMode.plain;
 
   AppearanceMode get mode => _mode;
 
@@ -115,11 +115,16 @@ class AppPalette extends ChangeNotifier {
   );
 
   /// 启动时读取用户保存的外观偏好（main 里 runApp 前调用）。
+  /// 首次安装（未保存过任何偏好）默认素白清新；用户曾显式选择过时按保存值恢复。
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    _apply(prefs.getString(_prefKey) == 'plain'
-        ? AppearanceMode.plain
-        : AppearanceMode.warm);
+    final stored = prefs.getString(_prefKey);
+    if (stored == null) {
+      // 首次安装：默认素白，不写入（保留「未选择」状态，仍可用默认值呈现）。
+      _apply(AppearanceMode.plain);
+    } else {
+      _apply(stored == 'plain' ? AppearanceMode.plain : AppearanceMode.warm);
+    }
   }
 
   /// 切换外观：持久化 + 同步系统栏 + 通知全局刷新（即时生效，无需重启）。

@@ -1597,7 +1597,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       for (final m in _decodeMapList(v))
         _CustomTypeInfo(
           key: (m['key'] ?? '').toString(),
-          label: (m['label'] ?? '').toString(),
+          label: (m['category'] ?? m['label'] ?? '').toString(),
           unit: (m['unit'] ?? '遍').toString(),
           count: (m['count'] ?? '').toString(),
         ),

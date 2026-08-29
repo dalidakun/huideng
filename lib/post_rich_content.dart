@@ -333,7 +333,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     if (_comments.isEmpty || _commentsLoading) return;
     _newPostChecking = true;
     try {
-      final (list, _) = await CloudNotesService.instance
+      final (list, _, _) = await CloudNotesService.instance
           .getSutraDiscussions(sutraTitle: key, pageSize: _pageSize);
       if (!mounted) return;
       final known =
@@ -504,7 +504,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     final key = _discussionKey;
     if (key == null) return;
     try {
-      final (list, _) = await CloudNotesService.instance
+      final (list, _, _) = await CloudNotesService.instance
           .getSutraDiscussions(sutraTitle: key, pageSize: _pageSize);
       var merged = list;
       // 卷拆分之前的历史讨论存在基础经名键下：并入卷一展示避免丢失，
@@ -512,7 +512,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       final base = sutraBaseTitle(widget.title);
       if (_discussionVolume == 1 && base != key) {
         try {
-          final (legacy, _) = await CloudNotesService.instance
+          final (legacy, _, _) = await CloudNotesService.instance
               .getSutraDiscussions(sutraTitle: base, pageSize: _pageSize);
           final ids =
               merged.map((c) => c['id']?.toString()).toSet();
@@ -1782,7 +1782,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     _newPostChecking = true;
     try {
       // 服务端按话题过滤后统计新帖 id，不再客户端筛 tag。
-      final (list, _, _) = await CloudNotesService.instance
+      final (list, _, _, _) = await CloudNotesService.instance
           .getTopicNotes(widget.topic, pageSize: _pageSize);
       if (!mounted) return;
       final known = _notes.map((n) => n.id).toSet();
@@ -1863,7 +1863,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     try {
       // 服务端按 #话题 精确过滤 + 热度衰减分倒序返回，并附带发起人帖 id
       // （最早的含该话题帖子，不受分页截断影响）。
-      final (list, _, firstId) = await CloudNotesService.instance
+      final (list, _, firstId, _) = await CloudNotesService.instance
           .getTopicNotes(widget.topic, pageSize: _pageSize);
       if (!mounted) return;
       setState(() {
@@ -1878,7 +1878,10 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
             n.id != _pinnedId &&
             CloudNotesService.isRecentlyPublished(n.id);
         final mine = list.where(fresh).toList();
-        final others = list.where((n) => !fresh(n)).toList();
+        // 发起人帖已在最顶部展示，列表里排除避免重复显示。
+        final others = list
+            .where((n) => n.id != _pinnedId && !fresh(n))
+            .toList();
         // 展示顺序：发起人帖 → 刚发布的帖子 → 其余帖子（云端热度序）。
         _notes = [
           ...initiator,

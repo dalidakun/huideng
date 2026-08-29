@@ -12,30 +12,91 @@ class CheckInStatEntry {
   final String unit;
   final double total;
   final List<String> detail;
+
+  /// 类型标识，用于长按拖动排序时定位条目与持久化顺序。
+  final String? key;
   const CheckInStatEntry({
     required this.label,
     required this.unit,
     required this.total,
     this.detail = const [],
+    this.key,
   });
 }
 
 /// 历史统计区块：直接列出各类功课自使用以来累计的总量（与打卡目标无关，持续累积）。
-class CheckInHistoryStats extends StatelessWidget {
+/// 提供 [onOrderChanged] 回调时，可长按某一条目直接拖动调整顺序，
+/// 并把最新顺序（类型 key 列表）回调给调用方持久化。
+class CheckInHistoryStats extends StatefulWidget {
   final List<CheckInStatEntry> entries;
 
-  const CheckInHistoryStats({super.key, required this.entries});
+  /// 背景色；为 null 时使用当前配色卡片色。
+  final Color? bg;
+
+  /// 圆角；为 null 时默认 14。
+  final double? radius;
+
+  /// 是否带细边框（独立页面用带边卡片，主页内嵌时去掉边框更协调）。
+  final bool bordered;
+
+  /// 提供后启用「长按拖动排序」；回调参数为调整后的类型 key 顺序列表。
+  final ValueChanged<List<String>>? onOrderChanged;
+
+  const CheckInHistoryStats({
+    super.key,
+    required this.entries,
+    this.bg,
+    this.radius,
+    this.bordered = true,
+    this.onOrderChanged,
+  });
+
+  @override
+  State<CheckInHistoryStats> createState() => _CheckInHistoryStatsState();
+}
+
+class _CheckInHistoryStatsState extends State<CheckInHistoryStats> {
+  late List<CheckInStatEntry> _entries;
+
+  bool get _reorderable =>
+      widget.onOrderChanged != null &&
+      _entries.isNotEmpty &&
+      _entries.every((e) => e.key != null && e.key!.isNotEmpty);
+
+  @override
+  void initState() {
+    super.initState();
+    _entries = _filter(widget.entries);
+  }
+
+  @override
+  void didUpdateWidget(covariant CheckInHistoryStats oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _entries = _filter(widget.entries);
+  }
+
+  List<CheckInStatEntry> _filter(List<CheckInStatEntry> entries) =>
+      entries.where((e) => e.total > 0).toList();
+
+  void _onReorder(int oldIndex, int newIndex) {
+    setState(() {
+      if (newIndex > oldIndex) newIndex -= 1;
+      final item = _entries.removeAt(oldIndex);
+      _entries.insert(newIndex, item);
+    });
+    widget.onOrderChanged
+        ?.call([for (final e in _entries) e.key ?? '']);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final list = entries.where((e) => e.total > 0).toList();
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _border),
+        color: widget.bg ?? _card,
+        borderRadius: BorderRadius.circular(widget.radius ?? 14),
+        border: widget.bordered ? Border.all(color: _border) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -59,11 +120,11 @@ class CheckInHistoryStats extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                       color: _text)),
               const Spacer(),
-              Text('自使用以来累计',
+              Text(_reorderable ? '长按拖动排序' : '自使用以来累计',
                   style: TextStyle(fontSize: 11, color: _textHint)),
             ],
           ),
-          if (list.isEmpty)
+          if (_entries.isEmpty)
             Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
               child: Center(
@@ -71,16 +132,52 @@ class CheckInHistoryStats extends StatelessWidget {
                     style: TextStyle(fontSize: 12, color: _textHint)),
               ),
             )
+          else if (_reorderable)
+            _buildReorderList()
           else
-            for (final e in list) _buildEntry(e),
+            for (final e in _entries) _buildEntry(e),
         ],
       ),
     );
   }
 
+  Widget _buildReorderList() {
+    return ReorderableListView(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      padding: EdgeInsets.zero,
+      onReorder: _onReorder,
+      proxyDecorator: (child, index, animation) => Material(
+        color: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            color: widget.bg ?? _card,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.10),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2)),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+      children: [
+        for (int i = 0; i < _entries.length; i++)
+          ReorderableDelayedDragStartListener(
+            key: ValueKey(_entries[i].key),
+            index: i,
+            child: _buildEntry(_entries[i]),
+          ),
+      ],
+    );
+  }
+
   Widget _buildEntry(CheckInStatEntry e) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,

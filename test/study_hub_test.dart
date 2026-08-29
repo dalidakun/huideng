@@ -10,7 +10,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('bodhi space header, tabs and sort sheet do not crash',
+  testWidgets('bodhi space header, tabs and custom sheet do not crash',
       (tester) async {
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 2.75;
@@ -29,14 +29,14 @@ void main() {
     );
 
     // Reveal the tab bar header.
-    await tester.scrollUntilVisible(find.byIcon(Icons.menu), 300,
+    await tester.scrollUntilVisible(find.text('自定义'), 300,
         scrollable: customScroll.first);
     await tester.pump(const Duration(milliseconds: 200));
     expect(tester.takeException(), isNull,
         reason: 'header reveal threw');
 
-    // Tabs are now 热门/推荐/关注; 公告 moved to a top-right icon entry.
-    expect(find.text('热门'), findsOneWidget, reason: '热门 tab missing');
+    // Tabs are now 讨论/推荐/关注; 公告 moved to a top-right icon entry.
+    expect(find.text('讨论'), findsOneWidget, reason: '讨论 tab missing');
     expect(find.text('推荐'), findsOneWidget, reason: '推荐 tab missing');
     expect(find.text('关注'), findsOneWidget, reason: '关注 tab missing');
     expect(find.text('公告'), findsNothing,
@@ -58,29 +58,21 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull, reason: 'follow tab threw');
 
-    // Open the tab-sort bottom sheet.
-    await tester.tap(find.byIcon(Icons.menu));
+    // Open the custom dropdown panel via the custom tab,
+    // then enter the add sheet via the in-panel add row.
+    await tester.tap(find.text('自定义'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(tester.takeException(), isNull, reason: 'sort sheet threw');
-    expect(find.text('栏目排序'), findsOneWidget);
-
-    // Drag 关注 above 热门 via its drag handle.
-    final handle = find.descendant(
-      of: find.widgetWithText(ListTile, '关注'),
-      matching: find.byIcon(Icons.drag_handle),
-    );
-    final gesture = await tester.startGesture(tester.getCenter(handle));
-    await tester.pump(const Duration(milliseconds: 200));
-    await gesture.moveBy(const Offset(0, -160));
-    await tester.pump(const Duration(milliseconds: 200));
-    await gesture.up();
+    expect(find.text('添加关注的经文和话题'), findsOneWidget,
+        reason: 'empty panel should show the add row');
+    await tester.tap(find.text('添加关注的经文和话题'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(tester.takeException(), isNull, reason: 'reorder drag threw');
+    expect(tester.takeException(), isNull, reason: 'custom sheet threw');
+    expect(find.text('添加经文或话题，数量不限'), findsOneWidget);
 
-    // Confirm the new order and close the sheet.
+    // Close the sheet without saving.
     await tester.tap(find.text('完成'));
     await tester.pump(const Duration(milliseconds: 400));
-    expect(tester.takeException(), isNull, reason: 'completing sort threw');
+    expect(tester.takeException(), isNull, reason: 'closing custom sheet threw');
   });
 
   testWidgets('top bar is not fixed: avatar, title and tabs scroll with content',
@@ -115,17 +107,17 @@ void main() {
       reason: 'title should live inside the scrollable content',
     );
     expect(
-      find.descendant(of: scrollable.first, matching: find.byIcon(Icons.menu)),
+      find.descendant(of: scrollable.first, matching: find.text('自定义')),
       findsOneWidget,
       reason: 'tab bar should live inside the scrollable content',
     );
 
-    // 栏目栏不再吸顶：随内容滚走而非固定。
+    // 栏目栏吸顶：与个人主页同款，上滑时钉在顶部。
     final header = tester.widget<SliverPersistentHeader>(
       find.byType(SliverPersistentHeader),
     );
-    expect(header.pinned, isFalse,
-        reason: 'tab bar must not be pinned in the new design');
+    expect(header.pinned, isTrue,
+        reason: 'tab bar must be pinned like the user-space toolbar');
   });
 
   testWidgets('new-note FAB is present on the bodhi space', (tester) async {

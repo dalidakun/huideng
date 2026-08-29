@@ -31,7 +31,7 @@ Color get _border => AppPalette.p.border;
 Color get _overlay => AppPalette.p.tintBg;
 
 const Map<String, String> _plazaTabMeta = {
-  'discuss': '热门',
+  'discuss': '讨论',
   'hot': '推荐',
   'follow': '关注',
 };
@@ -44,6 +44,35 @@ class _PlazaFeedCache {
   bool hasMore = true;
   bool initial = true;
   bool error = false;
+}
+
+/// 自定义工具栏的单个条目：经文（$，可带卷标）或话题（#）。
+class _CustomToolbarItem {
+  final bool isSutra;
+  final String name;
+  final String path;
+
+  const _CustomToolbarItem({
+    required this.isSutra,
+    required this.name,
+    this.path = '',
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': isSutra ? 'sutra' : 'topic',
+        'name': name,
+        'path': path,
+      };
+
+  static _CustomToolbarItem? fromJson(Map<String, dynamic> e) {
+    final name = (e['name'] ?? '').toString().trim();
+    if (name.isEmpty) return null;
+    return _CustomToolbarItem(
+      isSutra: e['type'] == 'sutra',
+      name: name,
+      path: (e['path'] ?? '').toString(),
+    );
+  }
 }
 
 /// 笔记是否来自被屏蔽用户：作者本人被屏蔽，或转发源作者被屏蔽，一律不展示。
@@ -97,6 +126,19 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
 
   int _tabIndex = 0;
   List<String> _plazaTabs = ['discuss', 'hot', 'follow'];
+  /// 自定义工具栏：栏目名（默认「自定义」，可改名）+ 经文/话题条目（数量不限），
+  /// 点击工具栏上的自定义栏目向下展开列表，点击条目进入对应讨论页。
+  String _customTabName = '自定义';
+  List<_CustomToolbarItem> _customItems = const [];
+  bool _customTabOpen = false;
+  /// 自定义面板悬浮层：锚定在工具栏下边缘（LayerLink 跟随滚动），
+  /// 以 OverlayEntry 盖在帖子流上方，而不是占位把内容挤下去。
+  final LayerLink _customPanelLink = LayerLink();
+  OverlayEntry? _customPanelEntry;
+
+  /// 自定义面板每条目的最新讨论数：键为「s:经名」/「t:话题」，
+  /// 面板展开时异步拉取（经文=经书讨论总数，话题=话题下帖子总数）。
+  final Map<String, int> _customCounts = {};
   final Map<String, _PlazaFeedCache> _tabCaches = {};
   final List<PlazaNote> _feedNotes = [];
   final Set<String> _followedIds = {};
@@ -185,6 +227,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     NoteSutraCatalog.load(); // 预加载经书目录，让卡片 @经书 提取可用
     _feedScroll.addListener(_onFeedScroll);
     final tabOrderFuture = _loadTabOrder();
+    unawaited(_loadCustomTab());
     _loadFeed();
     // 静默拉取公告列表：只用于右上角公告图标的「新公告」角标判定。
     unawaited(_loadAnnouncements());
@@ -260,6 +303,9 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     WidgetsBinding.instance.removeObserver(this);
     _newPostTimer?.cancel();
     _newPostTimer = null;
+    // 页面销毁时移除自定义悬浮面板，避免 OverlayEntry 泄漏。
+    _customPanelEntry?.remove();
+    _customPanelEntry = null;
     routeObserver.unsubscribe(this);
     _feedScroll.dispose();
     super.dispose();
@@ -813,18 +859,11 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   /// 顶部栏（头像 + 标题 + 公告）高度：上内边距 6 + 头像高 32 + 下内边距 10。
   double get _topBarHeight => 6 + 32 + 10;
 
-  /// 栏目工具栏（热门/推荐/关注）高度，与 _PlazaHeaderDelegate 保持一致。
-  double get _toolbarHeight {
-    final scale = MediaQuery.textScalerOf(context).scale(1.0);
-    return (48 * scale).clamp(48.0, 88.0);
-  }
-
-  /// 计算右下角按钮形态：栏目工具栏整行滚出视口后切为「回到顶部」，
-  /// 工具栏再次露出时恢复「添加笔记」。
+  /// 计算右下角按钮形态：顶部栏（头像/标题）完全滚出视口、
+  /// 工具栏吸顶后切为「回到顶部」，滚回顶部时恢复「添加笔记」。
   void _updateFabMode() {
     if (!_feedScroll.hasClients) return;
-    // 工具栏位于顶部栏之下：滚动距离超过两者高度之和即整行隐藏。
-    final backToTop = _feedScroll.offset >= _topBarHeight + _toolbarHeight;
+    final backToTop = _feedScroll.offset >= _topBarHeight;
     if (backToTop != _fabBackToTop) {
       setState(() => _fabBackToTop = backToTop);
     }
@@ -1048,9 +1087,13 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     if (_tabIndex == i) return;
     final prevTab = _plazaTabs[_tabIndex];
     _saveFeedToCache(prevTab);
+    // 切换固定栏目时收起自定义悬浮面板。
+    _customPanelEntry?.remove();
+    _customPanelEntry = null;
     setState(() {
       _tabIndex = i;
       _feedNewestFirst = false;
+      _customTabOpen = false;
       _setNewPostCount(0);
       _restoreFeedFromCache(_plazaTabs[i]);
     });
@@ -1063,104 +1106,637 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     _refreshFeedInBackground(prevTab);
   }
 
-  /// 弹出栏目排序面板，长按拖动调整顺序并持久化。
-  Future<void> _showTabSortDialog() async {
-    final result = await showModalBottomSheet<List<String>>(
+  /// 左右滑动切换固定栏目（讨论/推荐/关注）；自定义栏目不参与滑动切换。
+  void _swipeToTab(int i) {
+    if (_customTabOpen) return;
+    if (i < 0 || i >= _plazaTabs.length || i == _tabIndex) return;
+    _onTabChanged(i);
+  }
+
+  /// 加载自定义工具栏配置（栏目名 + 经文/话题条目）。
+  Future<void> _loadCustomTab() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('plaza_custom_tab');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      final name = (m['name'] ?? '').toString().trim();
+      final items = (m['items'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(_CustomToolbarItem.fromJson)
+          .whereType<_CustomToolbarItem>()
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _customTabName = name.isEmpty ? '自定义' : name;
+        _customItems = items;
+      });
+    } catch (_) {}
+  }
+
+  /// 保存自定义工具栏配置并更新工具栏（条目为空时收起自定义栏目）。
+  Future<void> _saveCustomTab(
+      String name, List<_CustomToolbarItem> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'plaza_custom_tab',
+        jsonEncode({
+          'name': name,
+          'items': items.map((e) => e.toJson()).toList(),
+        }));
+    if (!mounted) return;
+    if (items.isEmpty) _closeCustomPanel();
+    setState(() {
+      _customTabName = name;
+      _customItems = items;
+    });
+    // 面板正展开时条目有变动，同步刷新悬浮层内容。
+    _customPanelEntry?.markNeedsBuild();
+  }
+
+  /// 展开/收起自定义悬浮面板：点击自定义栏目触发。
+  /// 面板一旦展开会作为 OverlayEntry 叠在页面之上，需在打开弹窗等
+  /// 需要交互的场景前先收起，否则会遮挡弹窗内容。
+  void _toggleCustomTab() {
+    if (_customTabOpen) {
+      _closeCustomPanel();
+    } else {
+      _openCustomPanel();
+    }
+  }
+
+  /// 展开自定义悬浮面板（插入 OverlayEntry 并拉取讨论计数）。
+  void _openCustomPanel() {
+    if (_customTabOpen) return;
+    setState(() => _customTabOpen = true);
+    _customPanelEntry =
+        OverlayEntry(builder: (ctx) => _buildCustomOverlay(ctx));
+    Overlay.of(context).insert(_customPanelEntry!);
+    unawaited(_loadCustomCounts());
+  }
+
+  /// 拉取自定义面板每条目的最新讨论数（经文=经书讨论总数，话题=话题下帖子总数），
+  /// 完成后刷新悬浮层。计数键与打开讨论页时的口径保持一致。
+  Future<void> _loadCustomCounts() async {
+    final items = List<_CustomToolbarItem>.from(_customItems);
+    final results = await Future.wait<int?>(items.map((it) async {
+      try {
+        if (it.isSutra) {
+          final (base, path) = resolveHotSutraTarget(it.name);
+          final key = sutraDisplayTitleWithPath(
+            base,
+            filePath: path.isNotEmpty ? path : it.path,
+            multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
+          );
+          final (_, _, total) = await CloudNotesService.instance
+              .getSutraDiscussions(sutraTitle: key, page: 1, pageSize: 1);
+          return total;
+        } else {
+          final (_, _, _, total) = await CloudNotesService.instance
+              .getTopicNotes(it.name, page: 1, pageSize: 1);
+          return total;
+        }
+      } catch (_) {
+        return null;
+      }
+    }));
+    if (!mounted || !_customTabOpen) return;
+    for (var i = 0; i < items.length; i++) {
+      final c = results[i];
+      if (c == null) continue;
+      _customCounts['${items[i].isSutra ? 's' : 't'}:${items[i].name}'] = c;
+    }
+    _customPanelEntry?.markNeedsBuild();
+  }
+
+  /// 收起自定义悬浮面板（移除 OverlayEntry）。
+  void _closeCustomPanel() {
+    _customPanelEntry?.remove();
+    _customPanelEntry = null;
+    if (_customTabOpen) setState(() => _customTabOpen = false);
+  }
+
+  /// 供外部调用（如切到其他底部菜单页时）：自动收起自定义悬浮面板，
+  /// 避免面板残留在其他页面上方。
+  void closeCustomPanel() => _closeCustomPanel();
+
+  /// 点击自定义列表条目：经文进对应经书讨论页，话题进话题页。
+  void _openCustomItem(_CustomToolbarItem it) {
+    _closeCustomPanel();
+    if (it.isSutra) {
+      final (base, path) = resolveHotSutraTarget(it.name);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SutraDiscussionPage(
+            title: base,
+            filePath: path.isNotEmpty ? path : it.path,
+          ),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => TopicPage(topic: it.name)),
+      );
+    }
+  }
+
+  /// 自定义栏目悬浮下拉面板：经 LayerLink 锚定在工具栏下边缘，
+  /// 盖在帖子流上方（不挤动内容）；点击面板外任意处收起。
+  Widget _buildCustomOverlay(BuildContext ctx) {
+    return Stack(
+      children: [
+        // 透明遮罩：拦截背后交互，点击面板外区域即收起。
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _closeCustomPanel,
+          ),
+        ),
+        CompositedTransformFollower(
+          link: _customPanelLink,
+          targetAnchor: Alignment.bottomLeft,
+          followerAnchor: Alignment.topLeft,
+          showWhenUnlinked: false,
+          child: SizedBox(
+            width: MediaQuery.of(ctx).size.width,
+            child: Material(
+              color: _card,
+              elevation: 3,
+              shadowColor: Colors.black.withValues(alpha: 0.16),
+              borderRadius:
+                  const BorderRadius.vertical(bottom: Radius.circular(12)),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final it in _customItems)
+                    Builder(builder: (ctx2) {
+                      final count =
+                          _customCounts['${it.isSutra ? 's' : 't'}:${it.name}'];
+                      return InkWell(
+                        onTap: () => _openCustomItem(it),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          child: Row(
+                            children: [
+                              Text(it.isSutra ? r'$' : '#',
+                                  style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: it.isSutra
+                                          ? const Color(0xFF71867A)
+                                          : const Color(0xFFcf9e66))),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(it.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style:
+                                        TextStyle(fontSize: 15, color: _text)),
+                              ),
+                              if (count != null) ...[
+                                const SizedBox(width: 8),
+                                Text('$count讨论',
+                                    style: TextStyle(
+                                        fontSize: 12, color: _textSec)),
+                              ],
+                              const SizedBox(width: 4),
+                              Icon(Icons.chevron_right,
+                                  size: 16, color: _textHint),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  // 面板内的添加行：无条目时即首行引导添加；
+                  // 已有条目时排在最后一行，继续添加。点击进入添加面板。
+                  InkWell(
+                    onTap: _showCustomToolbarSheet,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Icon(Icons.add, size: 17, color: _gold),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _customItems.isEmpty
+                                  ? '添加关注的经文和话题'
+                                  : '继续添加经文和话题',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  TextStyle(fontSize: 14, color: _textSec),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // 面板底部分割线：跟随工具栏横线规则，仅素白外观显示。
+                  if (AppPalette.instance.isPlain)
+                    Divider(
+                        height: 1,
+                        thickness: 0.5,
+                        color: AppPalette.p.divider),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 自定义工具栏的话题候选：本地用过的话题 + 广场热门话题聚合，
+  /// 排除管理员已删除与含数字的话题；前缀匹配优先，最多 20 个。
+  Future<List<String>> _searchTopicsForCustom(String q) async {
+    await CloudNotesService.instance.refreshBannedTopics();
+    final bans = CloudNotesService.instance.bannedTopicNames;
+    final noiseRe = RegExp(r'\d');
+    final prefs = await SharedPreferences.getInstance();
+    final topics = <String>{
+      ...(prefs.getStringList('note_topics') ?? const <String>[]),
+    };
+    try {
+      final (list, _) = await CloudNotesService.instance.getHotDiscussions();
+      for (final t in list) {
+        if (t.name.isNotEmpty) topics.add(t.name);
+      }
+    } catch (_) {}
+    final qq = q.trim().toLowerCase();
+    final prefix = <String>[];
+    final contains = <String>[];
+    for (final t in topics) {
+      if (bans.contains(t) || noiseRe.hasMatch(t)) continue;
+      final lower = t.toLowerCase();
+      if (qq.isEmpty || lower.startsWith(qq)) {
+        prefix.add(t);
+      } else if (lower.contains(qq)) {
+        contains.add(t);
+      }
+    }
+    return [...prefix, ...contains].take(20).toList();
+  }
+
+  /// 打开「自定义工具栏」面板：栏目改名、添加/删除经文或话题（数量不限）。
+  /// 检索联想与笔记正文同款：输入 $ 出经文、输入 # 出话题。
+  /// 完成后持久化并立即更新工具栏上的自定义栏目。
+  Future<void> _showCustomToolbarSheet() async {
+    // 先收起悬浮面板：面板的透明遮罩是整屏的，若在弹窗之上会挡住
+    // 弹窗内列表/按钮的点击。保存后若原本展开再重新打开以显示新条目。
+    final panelWasOpen = _customTabOpen;
+    if (panelWasOpen) _closeCustomPanel();
+    // 目录预热不阻塞面板打开；检索时 search() 内部会自行等待目录就绪。
+    unawaited(NoteSutraCatalog.load());
+    var items = List<_CustomToolbarItem>.from(_customItems);
+    var searchSeq = 0;
+    var sheetOpen = true; // 弹窗关闭后，未完成的搜索回调不得再 setSheet
+    var trigger = ''; // 当前触发符：$ 经文 / # 话题，空表示未进入检索
+    var sutraResults = <NoteSutraLink>[];
+    var topicResults = <String>[];
+    Timer? debounce;
+    final nameCtrl = TextEditingController(text: _customTabName);
+    final queryCtrl = TextEditingController();
+
+    void onQueryChanged(StateSetter setSheet, String v) {
+      final seq = ++searchSeq;
+      var t = '';
+      var q = v;
+      if (v.startsWith(r'$')) {
+        t = r'$';
+        q = v.substring(1);
+      } else if (v.startsWith('#')) {
+        t = '#';
+        q = v.substring(1);
+      }
+      trigger = t;
+      debounce?.cancel();
+      if (t.isEmpty || q.trim().isEmpty) {
+        setSheet(() {
+          sutraResults = const [];
+          topicResults = const [];
+        });
+        return;
+      }
+      // 与笔记正文联想同款 250ms 防抖。
+      debounce = Timer(const Duration(milliseconds: 250), () async {
+        if (t == r'$') {
+          final results = await NoteSutraCatalog.search(q);
+          if (!sheetOpen || seq != searchSeq) return;
+          setSheet(() => sutraResults = results);
+        } else {
+          final results = await _searchTopicsForCustom(q);
+          if (!sheetOpen || seq != searchSeq) return;
+          setSheet(() => topicResults = results);
+        }
+      });
+    }
+
+    void tryAdd(StateSetter setSheet, _CustomToolbarItem it) {
+      if (items.any((e) => e.isSutra == it.isSutra && e.name == it.name)) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已经添加过了')));
+        return;
+      }
+      setSheet(() {
+        items.add(it);
+        queryCtrl.clear();
+        trigger = '';
+        sutraResults = const [];
+        topicResults = const [];
+      });
+    }
+
+    Widget hintRow(String msg) => Padding(
+          padding: const EdgeInsets.only(top: 18),
+          child: Center(
+            child: Text(msg, style: TextStyle(fontSize: 13, color: _textHint)),
+          ),
+        );
+
+    final result = await showModalBottomSheet<bool>(
       context: context,
       backgroundColor: _card,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        var items = List<String>.from(_plazaTabs);
         return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('栏目排序',
-                        style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: _text)),
-                    const SizedBox(height: 4),
-                    Text('长按拖动调整栏目顺序',
-                        style: TextStyle(fontSize: 12, color: _textSec)),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      height: items.length * 56.0,
-                      child: ReorderableListView(
-                        shrinkWrap: true,
-                        buildDefaultDragHandles: false,
-                        proxyDecorator: (child, index, animation) {
-                          return AnimatedBuilder(
-                            animation: animation,
-                            builder: (context, child) {
-                              final t =
-                                  Curves.easeInOut.transform(animation.value);
-                              return Material(
-                                color: _card,
-                                elevation: 4 + 8 * t,
-                                shadowColor:
-                                    Colors.black.withValues(alpha: 0.22),
-                                borderRadius: BorderRadius.circular(12),
-                                child: child,
-                              );
-                            },
-                            child: child,
-                          );
-                        },
-                        onReorder: (o, n) {
-                          setModalState(() {
-                            if (n > o) n -= 1;
-                            final item = items.removeAt(o);
-                            items.insert(n, item);
-                          });
-                        },
-                        children: [
-                          for (var i = 0; i < items.length; i++)
-                            ReorderableDelayedDragStartListener(
-                              index: i,
-                              key: ValueKey(items[i]),
-                              child: ListTile(
-                                contentPadding:
-                                    const EdgeInsets.symmetric(horizontal: 4),
-                                leading: ReorderableDragStartListener(
-                                  index: i,
-                                  child: Icon(Icons.drag_handle,
-                                      color: _textHint),
-                                ),
-                                title: Text(_plazaTabMeta[items[i]] ?? items[i],
-                                    style: TextStyle(
-                                        fontSize: 15, color: _text)),
-                                trailing: Icon(Icons.unfold_more,
-                                    color: _textHint),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 44,
-                      child: FilledButton(
-                        onPressed: () => Navigator.pop(ctx, items),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _gold,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                          elevation: 0,
+          builder: (ctx, setSheet) {
+            final topicQuery =
+                trigger == '#' ? queryCtrl.text.substring(1).trim() : '';
+            final canCreateTopic = topicQuery.isNotEmpty &&
+                !topicResults.contains(topicQuery) &&
+                !items.any((e) => !e.isSutra && e.name == topicQuery);
+            return Padding(
+              padding:
+                  EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('添加经文或话题，数量不限',
+                          style: TextStyle(fontSize: 12, color: _textSec)),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: nameCtrl,
+                        maxLength: 8,
+                        style: TextStyle(color: _text, fontSize: 15),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          counterText: '',
+                          hintText: '默认「自定义」，可改成你喜欢的名字',
+                          hintStyle: TextStyle(color: _textHint, fontSize: 14),
+                          filled: true,
+                          fillColor: _bg,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 12),
+                          enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(color: _border)),
+                          focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(color: _gold)),
                         ),
-                        child: const Text('完成', style: TextStyle(fontSize: 15)),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 12),
+                      if (items.isNotEmpty) ...[
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final it in items)
+                              Container(
+                                padding:
+                                    const EdgeInsets.fromLTRB(10, 4, 2, 4),
+                                decoration: BoxDecoration(
+                                  color: _overlay,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(it.isSutra ? r'$' : '#',
+                                        style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: it.isSutra
+                                                ? const Color(0xFF71867A)
+                                                : const Color(0xFFcf9e66))),
+                                    const SizedBox(width: 4),
+                                    ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                          maxWidth: 150),
+                                      child: Text(it.name,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                              fontSize: 13, color: _text)),
+                                    ),
+                                    IconButton(
+                                      onPressed: () =>
+                                          setSheet(() => items.remove(it)),
+                                      icon: Icon(Icons.close,
+                                          size: 16, color: _textHint),
+                                      tooltip: '移除',
+                                      padding: EdgeInsets.zero,
+                                      constraints:
+                                          const BoxConstraints.tightFor(
+                                              width: 30, height: 30),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      TextField(
+                        controller: queryCtrl,
+                        style: TextStyle(color: _text, fontSize: 14),
+                        onChanged: (v) => onQueryChanged(setSheet, v),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: r'输入 $ 搜索经文，输入 # 搜索话题',
+                          hintStyle: TextStyle(color: _textHint),
+                          prefixIcon: Icon(Icons.search,
+                              size: 18, color: _textHint),
+                          prefixIconConstraints:
+                              const BoxConstraints.tightFor(
+                                  width: 36, height: 36),
+                          suffixIcon: queryCtrl.text.isEmpty
+                              ? null
+                              : GestureDetector(
+                                  onTap: () {
+                                    queryCtrl.clear();
+                                    onQueryChanged(setSheet, '');
+                                  },
+                                  child: Icon(Icons.close,
+                                      size: 16, color: _textHint),
+                                ),
+                          suffixIconConstraints:
+                              const BoxConstraints.tightFor(
+                                  width: 32, height: 32),
+                          filled: true,
+                          fillColor: _bg,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 10),
+                          enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(color: _border)),
+                          focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(color: _gold)),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        height: 190,
+                        child: ListView(
+                          children: [
+                            if (trigger == r'$') ...[
+                              if (sutraResults.isEmpty)
+                                hintRow(queryCtrl.text.trim().length > 1
+                                    ? '未找到相关经书'
+                                    : r'输入经书名称开始搜索，例如：$地藏')
+                              else
+                                ...sutraResults.map((s) => InkWell(
+                                      onTap: () => tryAdd(
+                                          setSheet,
+                                          _CustomToolbarItem(
+                                              isSutra: true,
+                                              name: s.title,
+                                              path: s.filePath)),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 4, vertical: 9),
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.menu_book_rounded,
+                                                size: 17, color: _gold),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(s.title,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow
+                                                          .ellipsis,
+                                                      style: TextStyle(
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: _text)),
+                                                  if (s.folder.isNotEmpty) ...[
+                                                    const SizedBox(height: 1),
+                                                    Text(s.folder,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                            fontSize: 11,
+                                                            color:
+                                                                _textHint)),
+                                                  ],
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    )),
+                            ] else if (trigger == '#') ...[
+                              if (canCreateTopic)
+                                InkWell(
+                                  onTap: () => tryAdd(
+                                      setSheet,
+                                      _CustomToolbarItem(
+                                          isSutra: false, name: topicQuery)),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 9),
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.add, size: 17, color: _gold),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text('创建话题 #$topicQuery',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: _text)),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              if (topicResults.isEmpty && !canCreateTopic)
+                                hintRow('输入话题名称，或从已有话题中选择')
+                              else
+                                ...topicResults.map((t) => InkWell(
+                                      onTap: () => tryAdd(
+                                          setSheet,
+                                          _CustomToolbarItem(
+                                              isSutra: false, name: t)),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 4, vertical: 9),
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.tag,
+                                                size: 17, color: _gold),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Text('#$t',
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: _text)),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    )),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _gold,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            elevation: 0,
+                          ),
+                          child:
+                              const Text('完成', style: TextStyle(fontSize: 15)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -1168,20 +1744,25 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
         );
       },
     );
-    if (result == null || result.isEmpty) return;
-    final currentType = _plazaTabs[_tabIndex];
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    setState(() {
-      _plazaTabs = result;
-      _tabIndex = _plazaTabs.indexOf(currentType);
-      if (_tabIndex < 0) _tabIndex = 0;
-      _restoreFeedFromCache(_plazaTabs[_tabIndex]);
+    sheetOpen = false;
+    debounce?.cancel();
+    final savedName = nameCtrl.text.trim();
+    // pop 之后底部弹窗仍在播放退出动画，TextField 还挂在树上；
+    // 立即 dispose 控制器会触发「控制器被 dispose 后继续使用」红屏，
+    // 故延迟到退出动画结束后再释放。
+    Future.delayed(const Duration(milliseconds: 400), () {
+      nameCtrl.dispose();
+      queryCtrl.dispose();
     });
-    await prefs.setString('plaza_tab_order', jsonEncode(_plazaTabs));
-    if (_cacheFor(_plazaTabs[_tabIndex]).initial) {
-      _loadFeed();
+    if (result != true) {
+      // 未保存（取消）：若原本展开则恢复面板。
+      if (panelWasOpen) _openCustomPanel();
+      return;
     }
+    await _saveCustomTab(
+        savedName.isEmpty ? '自定义' : savedName, List.of(items));
+    // 保存后若原本展开且还有条目，重新展开面板以显示最新条目与「继续添加」行。
+    if (panelWasOpen && items.isNotEmpty) _openCustomPanel();
   }
 
   void _openPlazaNote(PlazaNote note) {
@@ -1290,29 +1871,45 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
             RefreshIndicator(
               onRefresh: _loadFeed,
               color: _gold,
-              child: CustomScrollView(
-                controller: _feedScroll,
-                physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
-                  // 顶部栏（头像 + 图标 + 菩提空间）不固定：随内容一起向上滚走。
-                  SliverToBoxAdapter(child: _buildTopBar()),
-                  SliverPersistentHeader(
-                    pinned: false,
-                    delegate: _PlazaHeaderDelegate(
-                      tabIndex: _tabIndex,
-                      tabs: _plazaTabs,
-                      onTabChanged: _onTabChanged,
-                      onReorderPressed: () => _showTabSortDialog(),
-                      textScale: MediaQuery.textScalerOf(context).scale(1.0),
+              child: GestureDetector(
+                // 左右滑动切换栏目：与纵向滚动在手势竞技场按方向共存；
+                // 胶囊行等自身可横滑的区域会优先消费横向手势。
+                onHorizontalDragEnd: (d) {
+                  final v = d.primaryVelocity ?? 0;
+                  if (v <= -300) _swipeToTab(_tabIndex + 1);
+                  if (v >= 300) _swipeToTab(_tabIndex - 1);
+                },
+                child: CustomScrollView(
+                  controller: _feedScroll,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    // 顶部栏（头像 + 图标 + 菩提空间）不固定：随内容一起向上滚走。
+                    SliverToBoxAdapter(child: _buildTopBar()),
+                    SliverPersistentHeader(
+                      // 与个人主页同款：上滑时工具栏吸顶。
+                      pinned: true,
+                      delegate: _PlazaHeaderDelegate(
+                        tabIndex: _tabIndex,
+                        tabs: _plazaTabs,
+                        onTabChanged: _onTabChanged,
+                        customTabLabel: _customTabName,
+                        customTabOpen: _customTabOpen,
+                        onCustomTabPressed: _toggleCustomTab,
+                        panelLink: _customPanelLink,
+                        textScale: MediaQuery.textScalerOf(context).scale(1.0),
+                      ),
                     ),
-                  ),
-                  ..._buildFeedSlivers(),
-                ],
+                    ..._buildFeedSlivers(),
+                  ],
+                ),
               ),
             ),
             // 滚动后顶部提醒条被隐藏时的悬浮按钮：回到顶部并刷新出新帖。
+            // 工具栏吸顶后，提醒条需避开吸顶工具栏的高度。
             Positioned(
-              top: 8,
+              top: (48 * MediaQuery.textScalerOf(context).scale(1.0))
+                      .clamp(48.0, 88.0) +
+                  8,
               left: 0,
               right: 0,
               child: IgnorePointer(
@@ -1338,7 +1935,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // 居中：图标 + 菩提空间（不与头像挨着，字号 19）。
+            // 居中：图标 + 菩提空间（不与头像挨着，图标 28、字号 19）。
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1346,8 +1943,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                   AppPalette.instance.isPlain
                       ? 'assets/images/puti2.png'
                       : 'assets/images/puti1.png',
-                  width: 24,
-                  height: 24,
+                  width: 28,
+                  height: 28,
                 ),
                 const SizedBox(width: 6),
                 Text(
@@ -1627,18 +2224,13 @@ if (_feedAuthDead) {
     if (_hotTopics.isEmpty && _hotSutras.isEmpty) return null;
     return SliverToBoxAdapter(
       child: Padding(
-        // 与顶部栏目栏贴近：top 4。
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+        // 与顶部栏目栏贴近：top 4。横向不留边距：
+        // 胶囊行自身在滚动内容里带 16 内边距，左右滑动时可贴到屏幕边缘，
+        // 不会在到达边缘前被裁切。
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 2),
         child: Container(
-          // 素白外观下去掉包裹色块，仅由内部纯白胶囊承载经文/话题；暖黄保留。
-          // 左侧收窄：首个胶囊贴近卡片左缘，减小与屏幕左缘的总间距。
-          padding: const EdgeInsets.fromLTRB(8, 14, 16, 16),
-          decoration: AppPalette.instance.isPlain
-              ? null
-              : BoxDecoration(
-                  color: _overlay,
-                  borderRadius: BorderRadius.circular(16),
-                ),
+          // 两种外观均去掉包裹色块，仅由内部胶囊承载经文/话题。
+          padding: const EdgeInsets.fromLTRB(0, 14, 0, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1709,23 +2301,31 @@ if (_feedAuthDead) {
       bool showFirstFire = false}) {
     if (items.isEmpty) {
       if (onMore == null) return const SizedBox.shrink();
-      return Row(children: [_buildHotMoreChip(onMore, label: moreLabel)]);
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(children: [_buildHotMoreChip(onMore, label: moreLabel)]),
+      );
     }
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (var i = 0; i < items.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: _buildHotChip(
-                items[i],
-                isSutra: isSutra,
-                showFire: i == 0 && showFirstFire,
+      // 左右内边距放在滚动内容里：初始位置仍缩进 16，
+      // 但滑动时胶囊可一直贴到屏幕边缘，不会被提前裁切。
+      child: Padding(
+        padding: const EdgeInsets.only(left: 16, right: 16),
+        child: Row(
+          children: [
+            for (var i = 0; i < items.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _buildHotChip(
+                  items[i],
+                  isSutra: isSutra,
+                  showFire: i == 0 && showFirstFire,
+                ),
               ),
-            ),
-          if (onMore != null) _buildHotMoreChip(onMore, label: moreLabel),
-        ],
+            if (onMore != null) _buildHotMoreChip(onMore, label: moreLabel),
+          ],
+        ),
       ),
     );
   }
@@ -2275,14 +2875,24 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
   final int tabIndex;
   final List<String> tabs;
   final ValueChanged<int> onTabChanged;
-  final VoidCallback onReorderPressed;
+
+  /// 自定义栏目名：常显；条目为空时点击进添加面板。
+  final String customTabLabel;
+  final bool customTabOpen;
+  final VoidCallback onCustomTabPressed;
+
+  /// 悬浮下拉面板的锚点：面板经此锚定在工具栏下边缘。
+  final LayerLink panelLink;
   final double textScale;
 
   const _PlazaHeaderDelegate({
     required this.tabIndex,
     required this.tabs,
     required this.onTabChanged,
-    required this.onReorderPressed,
+    required this.customTabLabel,
+    this.customTabOpen = false,
+    required this.onCustomTabPressed,
+    required this.panelLink,
     this.textScale = 1.0,
   });
 
@@ -2297,64 +2907,112 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
   @override
   Widget build(
       BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
+    return CompositedTransformTarget(
+      // 悬浮下拉面板锚定在工具栏下边缘，随工具栏一起滚动。
+      link: panelLink,
+      child: Container(
+        width: double.infinity,
         color: _bg,
-      ),
-      child: Align(
-        alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 4, 0),
-          child: Row(
-            children: [
-              for (var i = 0; i < tabs.length; i++)
-                _buildTab(context, _plazaTabMeta[tabs[i]] ?? tabs[i], i),
-              const Spacer(),
-              IconButton(
-                onPressed: onReorderPressed,
-                tooltip: '排序',
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 40, height: 40),
-                icon:
-                    Icon(Icons.menu, color: AppPalette.p.textSec, size: 20),
+        child: Column(
+          children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 4, 0),
+              child: Row(
+                // 底对齐：选中态金色短横杆与工具栏底部横线刚好接触。
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // 与个人主页同款分布：栏目均分整行宽度。
+                  for (var i = 0; i < tabs.length; i++)
+                    _buildTab(
+                      context,
+                      _plazaTabMeta[tabs[i]] ?? tabs[i],
+                      // 自定义面板展开时固定栏目保持失活：
+                      // 金色短杠只出现在自定义栏目下。
+                      selected: tabIndex == i && !customTabOpen,
+                      onTap: () => onTabChanged(i),
+                    ),
+                  if (customTabLabel.isNotEmpty)
+                    _buildTab(
+                      context,
+                      customTabLabel,
+                      selected: customTabOpen,
+                      onTap: onCustomTabPressed,
+                      // 自定义为三字栏目：短线比三字宽度再大一些才协调。
+                      underlineWidth: 52,
+                      trailingIcon: Icon(
+                        customTabOpen
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        size: 15,
+                        color: customTabOpen ? _text : _textSec,
+                      ),
+                    ),
+                ],
               ),
-            ],
+            ),
           ),
+          // 工具栏下边缘横线：仅素白外观显示（米黄外观不加横线），
+          // 样式与帖子分割线一致、横向贴满手机两边，栏目按钮刚好位于其上方。
+          if (AppPalette.instance.isPlain)
+            Divider(height: 1, thickness: 0.5, color: AppPalette.p.divider),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildTab(BuildContext context, String label, int index) {
-    final selected = tabIndex == index;
-    return GestureDetector(
-      onTap: () => onTabChanged(index),
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                color: selected ? _text : _textSec,
+  /// 与个人主页同款栏目按钮：均分宽度、字号 15、金色短线 36×3。
+  /// [underlineWidth] 可按栏目字数加宽（如三字自定义栏目用更宽的短线）。
+  Widget _buildTab(BuildContext context, String label,
+      {required bool selected,
+      required VoidCallback onTap,
+      double underlineWidth = 36,
+      Widget? trailingIcon}) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w400,
+                        color: selected ? _text : _textSec,
+                      ),
+                    ),
+                  ),
+                  if (trailingIcon != null) trailingIcon,
+                ],
               ),
-            ),
-            const SizedBox(height: 3),
-            Container(
-              width: 36,
-              height: 3,
-              decoration: BoxDecoration(
-                color: selected ? _gold : Colors.transparent,
-                borderRadius: BorderRadius.circular(2),
+              const SizedBox(height: 3),
+              // 下行文字旁有箭头图标时，Column 会把短线居中在「文字 + 箭头」整体上，
+              // 导致短线偏右、不居中文案。向左平移半箭头宽，让短线居中在文字正下方。
+              Transform.translate(
+                offset: Offset(trailingIcon != null ? -7.5 : 0, 0),
+                child: Container(
+                  width: underlineWidth,
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: selected ? _gold : Colors.transparent,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2364,6 +3022,8 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(covariant _PlazaHeaderDelegate oldDelegate) =>
       oldDelegate.tabIndex != tabIndex ||
       oldDelegate.textScale != textScale ||
+      oldDelegate.customTabLabel != customTabLabel ||
+      oldDelegate.customTabOpen != customTabOpen ||
       oldDelegate.tabs.join(',') != tabs.join(',');
 }
 

@@ -928,7 +928,9 @@ class CloudNotesService {
   /// 排序与「发现」同款：热度衰减分倒序（热帖靠前、随时间下沉给新帖让位）。
   /// 同时返回话题发起人帖 id——服务端权威查出的最早一条，
   /// 客户端置顶展示时不受分页截断影响。未登录也可浏览。
-  Future<(List<PlazaNote>, bool hasMore, String firstNoteId)> getTopicNotes(
+  /// 第四个返回值为该话题下的帖子总数（服务端 count）。
+  Future<(List<PlazaNote>, bool hasMore, String firstNoteId, int total)>
+      getTopicNotes(
     String topic, {
     int page = 1,
     int pageSize = 100,
@@ -947,6 +949,7 @@ class CloudNotesService {
       _withoutDeleted(list),
       res['hasMore'] == true,
       res['firstNoteId']?.toString() ?? '',
+      (res['total'] as num?)?.toInt() ?? list.length,
     );
   }
 
@@ -1436,9 +1439,10 @@ class CloudNotesService {
   }
 
   /// 拉取某本经书的讨论（公开共享，最新在前）。
-  /// 返回（讨论列表, 是否还有更多）；每条为 {id, content, name, userId,
-  /// account, verified, likeCount, at} 结构，供经书讨论页直接渲染。
-  Future<(List<Map<String, dynamic>>, bool hasMore)> getSutraDiscussions({
+  /// 返回（讨论列表, 是否还有更多, 讨论总数）；每条为 {id, content, name,
+  /// userId, account, verified, likeCount, at} 结构，供经书讨论页直接渲染。
+  Future<(List<Map<String, dynamic>>, bool hasMore, int total)>
+      getSutraDiscussions({
     required String sutraTitle,
     int page = 1,
     int pageSize = 50,
@@ -1453,7 +1457,7 @@ class CloudNotesService {
         .map(_sutraDiscussionFromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (list, hasMore);
+    return (list, hasMore, (res['total'] as num?)?.toInt() ?? list.length);
   }
 
   /// 发表经书讨论（需登录）。返回云端讨论 id。

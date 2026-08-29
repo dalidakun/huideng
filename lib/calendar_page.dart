@@ -147,7 +147,7 @@ class _CalendarPageState extends State<CalendarPage> {
       ...all,
       ...customs.map((c) => {
             'key': c['key'].toString(),
-            'label': (c['label'] ?? '').toString(),
+            'label': (c['category'] ?? c['label'] ?? '').toString(),
             'unit': (c['unit'] ?? '遍').toString(),
           }),
     ]) {
@@ -220,7 +220,11 @@ class _CalendarPageState extends State<CalendarPage> {
                 .cast<Map<String, dynamic>>();
         for (final c in customs) {
           if (c['key'] == typeKey) {
-            return double.tryParse((c['count'] ?? '').toString()) ?? 0;
+            final itemList = c['items'] as List<dynamic>? ?? [];
+            return itemList.fold<double>(
+                0,
+                (s, it) => s +
+                    (double.tryParse((it['count'] ?? '').toString()) ?? 0));
           }
         }
         return 0;

@@ -311,6 +311,8 @@ class _MainPageState extends State<MainPage>
     SharedPreferences.getInstance().then((prefs) {
       final shouldSwitchToSutra = prefs.getBool('switch_to_sutra');
       if (shouldSwitchToSutra == true) {
+        // 切离菩提空间时收起其自定义悬浮面板。
+        if (_currentIndex == 1) _bodhiKey.currentState?.closeCustomPanel();
         setState(() {
           _currentIndex = 2;
         });
@@ -319,6 +321,7 @@ class _MainPageState extends State<MainPage>
 
       final shouldSwitchToAssistant = prefs.getBool('switch_to_assistant');
       if (shouldSwitchToAssistant == true) {
+        if (_currentIndex == 1) _bodhiKey.currentState?.closeCustomPanel();
         setState(() {
           _currentIndex = 3;
         });
@@ -360,10 +363,10 @@ class _MainPageState extends State<MainPage>
     ),
     BottomNavigationBarItem(
       icon: Image.asset(navIconAsset('assets/images/sutra_book.png'),
-          width: 23, height: 23),
+          width: 24, height: 24),
       activeIcon:
           Image.asset(navIconAsset('assets/images/sutra_book_selected.png'),
-              width: 23, height: 23),
+              width: 24, height: 24),
       label: '',
     ),
     BottomNavigationBarItem(
@@ -447,6 +450,10 @@ class _MainPageState extends State<MainPage>
       _syncAssistantTab();
       _revealNavBar();
       return;
+    }
+    // 离开菩提空间时收起其自定义悬浮面板，避免面板残留在其他页面上方。
+    if (_currentIndex == 1 && pageIndex != 1) {
+      _bodhiKey.currentState?.closeCustomPanel();
     }
     _tabIndex.value = pageIndex;
     setState(() {
@@ -731,13 +738,14 @@ class _BodhiTabIcon extends StatelessWidget {
                   : (active
                       ? 'assets/images/mi2.png'
                       : 'assets/images/mi1.png'),
-              width: 26,
-              height: 26,
+              width: 27,
+              height: 27,
             ),
             if (count > 0)
               Positioned(
-                top: -2,
-                right: -4,
+                // 圆点尽量贴近图标右上角（图标素材自身带少量透明边距）。
+                top: -1,
+                right: -1,
                 child: IgnorePointer(
                   child: Container(
                     width: 8,

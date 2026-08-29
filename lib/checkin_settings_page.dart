@@ -42,7 +42,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     setState(() {
       _allowShareDailyCheckin = prefs.getBool('privacy_share_daily_checkin') ?? false;
       _meditationItems = _decodeItems(prefs.getString('setting_meditation_minutes'));
-      if (_meditationItems.isEmpty) _meditationItems.add(_Item(ctrl: TextEditingController(text: '30')));
+      if (_meditationItems.isEmpty) _meditationItems.add(_Item(ctrl: TextEditingController(text: '0')));
       _readingItems = _decodeReading(prefs.getString('setting_reading_titles'));
       if (_readingItems.isEmpty) _readingItems.add(_NamedCountItem(nameCtrl: TextEditingController(), countCtrl: TextEditingController()));
       _nianfoItems = _decodeNamedCount(prefs.getString('setting_nianfo_items'));
@@ -88,13 +88,28 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
 
   List<_CustomType> _decodeCustom(String? raw) {
     if (raw == null || raw.isEmpty) return [];
-    final list = jsonDecode(raw) as List<dynamic>;
-    return list.map((e) => _CustomType(
-      key: e['key'],
-      label: e['label'] ?? '',
-      unit: e['unit'] ?? '遍',
-      count: (e['count'] ?? '').toString(),
-    )).toList();
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list.map((e) {
+        final itemList = e['items'] as List<dynamic>?;
+        return _CustomType(
+          key: e['key'].toString(),
+          category: (e['category'] ?? e['label'] ?? '').toString(),
+          unit: (e['unit'] ?? '遍').toString(),
+          items: itemList == null
+              ? null
+              : [
+                  for (final i in itemList)
+                    {
+                      'name': (i['name'] ?? '').toString(),
+                      'count': (i['count'] ?? '').toString(),
+                    }
+                ],
+        );
+      }).toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<void> _save() async {
@@ -124,8 +139,14 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       if (v.isNotEmpty) lines.add('抄经 $v');
     }
     for (final e in _customTypes) {
-      final n = e.label.trim();
-      if (n.isNotEmpty) lines.add('$n ${e.count.trim().isEmpty ? '0' : e.count.trim()}${e.unit}');
+      final cat = e.category.trim();
+      if (cat.isEmpty) continue;
+      for (final item in e.items) {
+        final name = item.name.trim();
+        if (name.isEmpty) continue;
+        final cnt = item.count.trim();
+        lines.add('$cat $name ${cnt.isEmpty ? '0' : cnt}${e.unit}');
+      }
     }
 
     if (!mounted) return;
@@ -168,7 +189,16 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     await prefs.setString('setting_mantra_items', jsonEncode(_mantraItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_buddha_items', jsonEncode(_buddhaItems.map((e) => {'name': e.name, 'count': e.count}).toList()));
     await prefs.setString('setting_copying_titles', jsonEncode(_copyingItems.map((e) => e.text).toList()));
-    await prefs.setString('custom_checkin_types', jsonEncode(_customTypes.map((e) => {'key': e.key, 'label': e.label, 'unit': e.unit, 'count': e.count}).toList()));
+    await prefs.setString('custom_checkin_types', jsonEncode(_customTypes.map((e) => {
+      'key': e.key,
+      'category': e.category,
+      'label': e.category,
+      'unit': e.unit,
+      'count': '',
+      'items': e.items
+          .map((i) => {'name': i.name, 'count': i.count})
+          .toList(),
+    }).toList()));
     if (mounted) {
       _showSavedToast();
       // 确认保存后直接返回主页，不留在这个编辑设置页面。
@@ -271,17 +301,36 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
       context: context,
       builder: (ctx) => const _AddTypeDialog(),
     );
-    if (result != null) {
-      final key = 'custom_${DateTime.now().millisecondsSinceEpoch}';
-      setState(() {
-        _customTypes.add(_CustomType(key: key, label: result['label']!, unit: result['unit']!));
-      });
-    }
+    if (result == null) return;
+    final category = result['category']?.trim() ?? '';
+    final name = result['name']?.trim() ?? '';
+    final unit = result['unit'] ?? '遍';
+    if (category.isEmpty || name.isEmpty) return;
+    // 同类别复用同一分组，新增名称只需追加一个条目。
+    final idx = _customTypes.indexWhere((t) => t.category == category);
+    setState(() {
+      if (idx >= 0) {
+        _customTypes[idx].items.add(_CustomItem(name: name));
+      } else {
+        final key = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+        _customTypes.add(_CustomType(
+            key: key,
+            category: category,
+            unit: unit,
+            items: [
+              {'name': name, 'count': ''}
+            ]));
+      }
+    });
   }
 
   void _removeCustomType(int index) {
-    _customTypes[index].labelCtrl.dispose();
-    _customTypes[index].countCtrl.dispose();
+    final t = _customTypes[index];
+    t.categoryCtrl.dispose();
+    for (final item in t.items) {
+      item.nameCtrl.dispose();
+      item.countCtrl.dispose();
+    }
     setState(() => _customTypes.removeAt(index));
   }
 
@@ -293,7 +342,13 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     for (final e in _mantraItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _buddhaItems) { e.nameCtrl.dispose(); e.countCtrl.dispose(); }
     for (final e in _copyingItems) e.ctrl.dispose();
-    for (final e in _customTypes) { e.labelCtrl.dispose(); e.countCtrl.dispose(); }
+    for (final e in _customTypes) {
+      e.categoryCtrl.dispose();
+      for (final item in e.items) {
+        item.nameCtrl.dispose();
+        item.countCtrl.dispose();
+      }
+    }
     super.dispose();
   }
 
@@ -488,6 +543,82 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     );
   }
 
+  /// 自定义功课分组内的名称+数量行：支持追加/删除条目。
+  Widget _buildCustomItemRow(_CustomType type, int index, String unit) {
+    final item = type.items[index];
+    final isLast = index == type.items.length - 1;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Container(
+              decoration: BoxDecoration(
+                color: _bg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: TextField(
+                controller: item.nameCtrl,
+                style: TextStyle(fontSize: 14, color: _text),
+                decoration: InputDecoration(
+                  hintText: '名称',
+                  hintStyle: TextStyle(color: _textHint, fontSize: 14),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  isDense: true,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: _bg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: TextField(
+                controller: item.countCtrl,
+                keyboardType: TextInputType.number,
+                style: TextStyle(fontSize: 14, color: _text),
+                decoration: InputDecoration(
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  isDense: true,
+                  suffixText: unit,
+                  suffixStyle: TextStyle(fontSize: 13, color: _textHint),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: isLast
+                ? () => setState(() => type.items.add(_CustomItem()))
+                : () => setState(() => type.items.removeAt(index)),
+            child: Container(
+              width: 32, height: 32,
+              decoration: BoxDecoration(
+                color: isLast
+                    ? _primary.withValues(alpha: 0.1)
+                    : Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(isLast ? Icons.add : Icons.remove, size: 18,
+                color: isLast
+                    ? const Color(0xFF71867A)
+                    : Colors.red.withValues(alpha: 0.7)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -581,18 +712,19 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
             ..._copyingItems.asMap().entries.map((e) => _buildItemRow(e.key, _copyingItems, '经书名')),
           ]),
           _buildSection(Icons.self_improvement_outlined, '静坐', [
-            ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '30', suffix: '分钟', keyboardType: TextInputType.number)),
+            ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '0', suffix: '分钟', keyboardType: TextInputType.number)),
           ]),
           if (_customTypes.isNotEmpty) ...[
             ..._customTypes.asMap().entries.map((e) {
+              final idx = e.key;
               final t = e.value;
-              return _buildSection(Icons.playlist_add, t.label, [
+              return _buildSection(Icons.menu, '自定义', [
+                // 类别行
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Row(
                     children: [
                       Expanded(
-                        flex: 3,
                         child: Container(
                           decoration: BoxDecoration(
                             color: _bg,
@@ -600,10 +732,10 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 14),
                           child: TextField(
-                            controller: t.labelCtrl,
+                            controller: t.categoryCtrl,
                             style: TextStyle(fontSize: 14, color: _text),
                             decoration: InputDecoration(
-                              hintText: '名称',
+                              hintText: '类别（如：读经）',
                               hintStyle: TextStyle(color: _textHint, fontSize: 14),
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(vertical: 10),
@@ -614,43 +746,23 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Expanded(
-                        flex: 2,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: _bg,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: TextField(
-                            controller: t.countCtrl,
-                            keyboardType: TextInputType.number,
-                            style: TextStyle(fontSize: 14, color: _text),
-                            decoration: InputDecoration(
-                              border: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                              isDense: true,
-                              suffixText: t.unit,
-                              suffixStyle: TextStyle(fontSize: 13, color: _textHint),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
                       GestureDetector(
-                        onTap: () => _removeCustomType(e.key),
+                        onTap: () => _removeCustomType(idx),
                         child: Container(
                           width: 32, height: 32,
                           decoration: BoxDecoration(
                             color: Colors.red.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Icon(Icons.remove, size: 18, color: Colors.red.withValues(alpha: 0.7)),
+                          child: Icon(Icons.delete_outline, size: 18, color: Colors.red.withValues(alpha: 0.7)),
                         ),
                       ),
                     ],
                   ),
                 ),
+                // 该类别的各名称行
+                ...t.items.asMap().entries
+                    .map((it) => _buildCustomItemRow(t, it.key, t.unit)),
               ]);
             }),
           ],
@@ -677,13 +789,31 @@ class _NamedCountItem {
 
 class _CustomType {
   final String key;
-  final TextEditingController labelCtrl;
-  final TextEditingController countCtrl;
+  final TextEditingController categoryCtrl;
   final String unit;
-  _CustomType({required this.key, required String label, required this.unit, String count = ''})
-      : labelCtrl = TextEditingController(text: label),
+  final List<_CustomItem> items;
+  _CustomType({
+    required this.key,
+    required String category,
+    required this.unit,
+    List<Map<String, String>>? items,
+  })  : categoryCtrl = TextEditingController(text: category),
+        items = (items == null || items.isEmpty)
+            ? [_CustomItem()]
+            : items
+                .map((e) => _CustomItem(
+                    name: e['name'] ?? '', count: e['count'] ?? ''))
+                .toList();
+  String get category => categoryCtrl.text;
+}
+
+class _CustomItem {
+  final TextEditingController nameCtrl;
+  final TextEditingController countCtrl;
+  _CustomItem({String name = '', String count = ''})
+      : nameCtrl = TextEditingController(text: name),
         countCtrl = TextEditingController(text: count);
-  String get label => labelCtrl.text;
+  String get name => nameCtrl.text;
   String get count => countCtrl.text;
 }
 
@@ -694,11 +824,13 @@ class _AddTypeDialog extends StatefulWidget {
 }
 
 class _AddTypeDialogState extends State<_AddTypeDialog> {
+  final _categoryCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _unitCtrl = TextEditingController(text: '遍');
 
   @override
   void dispose() {
+    _categoryCtrl.dispose();
     _nameCtrl.dispose();
     _unitCtrl.dispose();
     super.dispose();
@@ -714,10 +846,25 @@ class _AddTypeDialogState extends State<_AddTypeDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
+            controller: _categoryCtrl,
+            style: TextStyle(color: _text),
+            decoration: InputDecoration(
+              labelText: '类别',
+              hintText: '如：读经',
+              hintStyle: TextStyle(color: _textHint),
+              labelStyle: TextStyle(color: _textSec),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _primary)),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: _border)),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
             controller: _nameCtrl,
             style: TextStyle(color: _text),
             decoration: InputDecoration(
               labelText: '名称',
+              hintText: '如：金刚经',
+              hintStyle: TextStyle(color: _textHint),
               labelStyle: TextStyle(color: _textSec),
               focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _primary)),
               enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: _border)),
@@ -741,9 +888,10 @@ class _AddTypeDialogState extends State<_AddTypeDialog> {
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: Text('取消', style: TextStyle(color: _textSec))),
         TextButton(onPressed: () {
-          if (_nameCtrl.text.trim().isEmpty) return;
+          if (_categoryCtrl.text.trim().isEmpty || _nameCtrl.text.trim().isEmpty) return;
           Navigator.pop(context, {
-            'label': _nameCtrl.text.trim(),
+            'category': _categoryCtrl.text.trim(),
+            'name': _nameCtrl.text.trim(),
             'unit': _unitCtrl.text.trim().isEmpty ? '遍' : _unitCtrl.text.trim(),
           });
         }, child: Text('添加', style: TextStyle(color: _primary, fontWeight: FontWeight.w600))),

@@ -301,7 +301,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(widget.isSutra ? '经文提及热度榜' : '话题讨论热度榜',
+                  Text(widget.isSutra ? '经文讨论热度榜' : '话题讨论热度榜',
                       style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
@@ -309,8 +309,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                   const SizedBox(height: 3),
                   Text(
                       widget.isSutra
-                          ? '近 30 天 · 共 $_totalLabel 项 · $_totalPosts 次提及'
-                          : '近 14 天 · 共 $_totalLabel 项 · $_totalPosts 条讨论',
+                          ? '近 30 天 · 共 $_totalLabel 项 · $_totalPosts讨论'
+                          : '近 14 天 · 共 $_totalLabel 项 · $_totalPosts讨论',
                       style: TextStyle(fontSize: 12, color: _textSec)),
                 ],
               ),
@@ -351,7 +351,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   String _rankLabel(int index) => (index + 1).toString().padLeft(2, '0');
 
   /// 讨论数徽章：浅底全圆角、次级文字色（对比度达标），前三名与普通行共用。
-  /// 经文榜口径为最近 30 天提及次数（提及X次），话题榜为讨论帖数（讨论X个）。
+  /// 经文榜与话题榜统一口径文案：x讨论。
   Widget _postCountBadge(int posts) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -359,7 +359,7 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
         color: AppPalette.p.tintBg,
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(widget.isSutra ? '提及$posts次' : '讨论$posts个',
+      child: Text('$posts讨论',
           style: TextStyle(
               fontSize: 12, fontWeight: FontWeight.w600, color: _textSec)),
     );

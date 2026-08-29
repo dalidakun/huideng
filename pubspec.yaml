@@ -100,6 +100,8 @@ flutter:
     - assets/images/like.png
     # 经藏页「随缘读经」卡片标题图标。
     - assets/images/leaf-sharp.png
+    # 首页精读经文卡片右侧莲花装饰图。
+    - assets/images/lianhua.png
     - assets/sutras_catalog.json
     - assets/tool.html
     # 《用户协议》与《隐私政策》全文（首次启动弹窗与应用内「关于我们」共用）。

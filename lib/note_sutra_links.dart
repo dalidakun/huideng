@@ -63,6 +63,13 @@ class NoteSutraCatalog {
   /// 基础经名 -> 全书总字数（多卷经书为各卷之和），与目录同生命周期缓存。
   static Map<String, int>? _charCounts;
 
+  /// 基础经名 ->（卷号 -> 该卷字数），用于精读卡取「当前这一卷」的字数。
+  static Map<String, Map<int, int>>? _volumeCharCounts;
+
+  /// 完整经名（含 CBETA 编号，如「摩诃般若波罗蜜经T08n0223_005」）-> 该卷字数，
+  /// 用于精读卡精确取「当前这部经文」的字数。
+  static Map<String, int>? _rawCharCounts;
+
   static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
   static final RegExp _volumeOfRe = RegExp(r'T\d+n[0-9A-Za-z]+_(\d+)$');
 
@@ -78,6 +85,8 @@ class NoteSutraCatalog {
     final counts = <String, int>{};
     final volumePaths = <String, Map<int, String>>{};
     final charCounts = <String, int>{};
+    final volumeCharCounts = <String, Map<int, int>>{};
+    final rawCharCounts = <String, int>{};
     for (final e in decoded) {
       final m = e as Map<String, dynamic>;
       final rawTitle =
@@ -85,15 +94,23 @@ class NoteSutraCatalog {
       final title = rawTitle.replaceAll(_idSuffixRe, '');
       if (title.isEmpty) continue;
       counts[title] = (counts[title] ?? 0) + 1;
+      final c = (m['c'] as num?)?.toInt() ?? 0;
       // 字数按基础经名累加：多卷经书得到全书总字数。
-      charCounts[title] =
-          (charCounts[title] ?? 0) + ((m['c'] as num?)?.toInt() ?? 0);
+      charCounts[title] = (charCounts[title] ?? 0) + c;
+      rawCharCounts[rawTitle] = c;
       final path = SutraAssetPath.resolve(title: rawTitle);
-      if (!path.startsWith('assets/')) continue;
-      final vm = _volumeOfRe.firstMatch(rawTitle);
-      if (vm != null) {
-        final vol = int.tryParse(vm.group(1)!) ?? 0;
-        if (vol > 0) (volumePaths[title] ??= {})[vol] = path;
+      if (path.startsWith('assets/')) {
+        final vm = _volumeOfRe.firstMatch(rawTitle);
+        if (vm != null) {
+          final vol = int.tryParse(vm.group(1)!) ?? 0;
+          if (vol > 0) {
+            (volumePaths[title] ??= {})[vol] = path;
+            (volumeCharCounts[title] ??= {})[vol] = c;
+          }
+        } else if (!byTitle.containsKey(title)) {
+          // 单卷经书：无卷号时记录整卷字数，供精读卡直接取用。
+          (volumeCharCounts[title] ??= {})[0] = c;
+        }
       }
       if (byTitle.containsKey(title)) continue; // 多卷经书只保留第一部
       byTitle[title] = NoteSutraLink(
@@ -107,6 +124,8 @@ class NoteSutraCatalog {
     _cache = list;
     _volumePaths = volumePaths;
     _charCounts = charCounts;
+    _volumeCharCounts = volumeCharCounts;
+    _rawCharCounts = rawCharCounts;
     _multiVolumeBases = {
       for (final e in counts.entries)
         if (e.value > 1) e.key,
@@ -193,6 +212,16 @@ class NoteSutraCatalog {
   /// 目录已加载时，返回基础经名 [base] 的总字数（多卷经书为各卷之和）；
   /// 未加载或无记录返回 0。
   static int cachedCharCount(String base) => _charCounts?[base] ?? 0;
+
+  /// 目录已加载时，返回基础经名 [base] 第 [volume] 卷的字数（单卷经书
+  /// [volume] 为 0）；未加载或无记录返回 0。
+  static int cachedVolumeCharCount(String base, int volume) =>
+      _volumeCharCounts?[base]?[volume] ?? 0;
+
+  /// 目录已加载时，返回完整经名 [rawTitle]（含 CBETA 编号）对应这一部经文的
+  /// 字数；未加载或未精确命中返回 0。
+  static int cachedCharCountForRawTitle(String rawTitle) =>
+      _rawCharCounts?[rawTitle.replaceAll(_legacyGarbageRe, '')] ?? 0;
 
   /// 经书名 -> 经书的映射，用于点击 @经书 时定位正文路径。
   static Future<Map<String, NoteSutraLink>> titleMap() async {

@@ -2336,36 +2336,41 @@ class SutraListPageState extends State<SutraListPage>
   Widget _buildSearchEntryField() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Material(
-        color: AppPalette.p.bg,
+      child: _buildSearchFieldBody(),
+    );
+  }
+
+  /// 搜索框主体：素白外观独立成行置顶；米黄外观嵌入「经典入口」标题右侧。
+  Widget _buildSearchFieldBody() {
+    return Material(
+      color: AppPalette.p.bg,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: activateSearch,
-          child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppPalette.p.border, width: 0.8),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.search, color: AppPalette.p.textHint, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '搜索经文',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppPalette.p.textHint,
-                      fontSize: 14,
-                    ),
+        onTap: activateSearch,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppPalette.p.border, width: 0.8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.search, color: AppPalette.p.textHint, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '搜索经文',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppPalette.p.textHint,
+                    fontSize: 14,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -2386,20 +2391,41 @@ class SutraListPageState extends State<SutraListPage>
     const milestones = [25, 50, 75, 100];
     final isPlain = AppPalette.instance.isPlain;
     final accentColor = AppPalette.p.readingAccent;
+    // 米黄外观恢复原版棕米渐变底，卡片内文字随之用深棕/白色；素白保持白底。
+    final headColor = isPlain ? AppPalette.p.text : const Color(0xFF4E342E);
+    final pctColor = isPlain ? accentColor : Colors.white;
+    final markActive = isPlain ? accentColor : Colors.white;
+    final markIdle =
+        isPlain ? AppPalette.p.textHint : Colors.white.withValues(alpha: 0.6);
+    final trackColor = isPlain
+        ? accentColor.withValues(alpha: 0.12)
+        : AppPalette.p.primary.withValues(alpha: 0.16);
+    final fillColor = isPlain ? accentColor : AppPalette.p.accent;
+    final tickColor = isPlain
+        ? accentColor.withValues(alpha: 0.45)
+        : AppPalette.p.primary.withValues(alpha: 0.55);
+    final statColor = isPlain ? AppPalette.p.textSec : headColor;
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      // 米黄外观下进度卡是首块内容，缩小与 AppBar 的间距；素白上方还有搜索框，保持原间距。
+      margin: EdgeInsets.fromLTRB(16, isPlain ? 16 : 8, 16, 0),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
       decoration: BoxDecoration(
-        color: AppPalette.p.card,
-        borderRadius: BorderRadius.circular(12),
-        border: isPlain
+        gradient: isPlain
             ? null
-            : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+            : const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF8D6E63), Color(0xFFBCAAA4)],
+              ),
+        color: isPlain ? AppPalette.p.card : null,
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            color: isPlain
+                ? Colors.black.withValues(alpha: 0.04)
+                : const Color(0xFF8D6E63).withValues(alpha: 0.25),
+            blurRadius: isPlain ? 8 : 10,
+            offset: Offset(0, isPlain ? 2 : 3),
           ),
         ],
       ),
@@ -2408,18 +2434,18 @@ class SutraListPageState extends State<SutraListPage>
         children: [
           Row(
             children: [
-              Icon(Icons.auto_stories, color: accentColor, size: 18),
+              Icon(Icons.auto_stories, color: headColor, size: 18),
               const SizedBox(width: 6),
               Text('阅读进度',
                   style: TextStyle(
-                      color: AppPalette.p.text,
+                      color: headColor,
                       fontSize: 15,
                       fontWeight: FontWeight.w600)),
               const Spacer(),
               Text(
                 '${pct.toStringAsFixed(2)}%',
                 style: TextStyle(
-                  color: accentColor,
+                  color: pctColor,
                   fontSize: 24,
                   fontWeight: FontWeight.w800,
                   height: 1,
@@ -2439,7 +2465,7 @@ class SutraListPageState extends State<SutraListPage>
                     Container(
                       height: 6,
                       decoration: BoxDecoration(
-                        color: accentColor.withValues(alpha: 0.12),
+                        color: trackColor,
                         borderRadius: BorderRadius.circular(3),
                       ),
                     ),
@@ -2449,7 +2475,7 @@ class SutraListPageState extends State<SutraListPage>
                         child: Container(
                           height: 6,
                           decoration: BoxDecoration(
-                            color: accentColor,
+                            color: fillColor,
                             borderRadius: BorderRadius.circular(3),
                           ),
                         ),
@@ -2462,7 +2488,7 @@ class SutraListPageState extends State<SutraListPage>
                         bottom: 0,
                         child: Container(
                           width: 1.5,
-                          color: accentColor.withValues(alpha: 0.45),
+                          color: tickColor,
                         ),
                       ),
                   ],
@@ -2485,7 +2511,7 @@ class SutraListPageState extends State<SutraListPage>
                         child: Text(
                           '0%',
                           style: TextStyle(
-                            color: AppPalette.p.textHint,
+                            color: markIdle,
                             fontSize: 11,
                           ),
                         ),
@@ -2498,7 +2524,7 @@ class SutraListPageState extends State<SutraListPage>
                             child: Text(
                               '100%',
                               style: TextStyle(
-                                color: pct >= m ? accentColor : AppPalette.p.textHint,
+                                color: pct >= m ? markActive : markIdle,
                                 fontSize: 11,
                                 fontWeight: pct >= m
                                     ? FontWeight.w700
@@ -2515,7 +2541,7 @@ class SutraListPageState extends State<SutraListPage>
                               child: Text(
                                 '$m%',
                                 style: TextStyle(
-                                  color: pct >= m ? accentColor : AppPalette.p.textHint,
+                                  color: pct >= m ? markActive : markIdle,
                                   fontSize: 11,
                                   fontWeight: pct >= m
                                       ? FontWeight.w700
@@ -2535,12 +2561,12 @@ class SutraListPageState extends State<SutraListPage>
             children: [
               Text(
                 '已完成 $read / $total 册',
-                style: TextStyle(color: AppPalette.p.textSec, fontSize: 12),
+                style: TextStyle(color: statColor, fontSize: 12),
               ),
               const Spacer(),
               Text(
                 '已阅读 ${_formatCharCount(readChars)} / ${_formatCharCount(totalChars)}',
-                style: TextStyle(color: AppPalette.p.textSec, fontSize: 12),
+                style: TextStyle(color: statColor, fontSize: 12),
               ),
             ],
           ),
@@ -2835,13 +2861,15 @@ class SutraListPageState extends State<SutraListPage>
                   fontWeight: FontWeight.w700,
                 ),
               ),
+              const SizedBox(width: 12),
+              Expanded(child: _buildSearchFieldBody()),
             ],
           ),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: SizedBox(
-            height: 132,
+            height: 203,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2851,35 +2879,133 @@ class SutraListPageState extends State<SutraListPage>
                     children: [
                       Expanded(child: _buildRecentTile()),
                       const SizedBox(height: 10),
+                      Expanded(child: _buildReadLaterTile()),
+                      const SizedBox(height: 10),
                       Expanded(child: _buildFavoriteTile()),
                     ],
                   ),
                 ),
                 const SizedBox(width: 10),
-                Expanded(child: _buildRandomTile()),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(height: 61, child: _buildHotRankTile()),
+                      const SizedBox(height: 10),
+                      Expanded(child: _buildRandomTile()),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
         ),
-        const SizedBox(height: 16),
-        Padding(
+        _buildAllSutrasBar(),
+        if (_randomFolder != null) _buildRandomFolderSection(),
+      ],
+    );
+  }
+
+  /// 热度榜单入口卡：与素白外观「热门榜单」同一入口，样式跟随米黄卡片风格。
+  Widget _buildHotRankTile() {
+    return Material(
+      color: AppPalette.p.card,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismissKeyboard();
+          _openHotDiscussionList();
+        },
+        child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
+          ),
           child: Row(
             children: [
-              Expanded(child: _buildAllSutrasBar()),
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: AppPalette.p.accent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: Icon(Icons.leaderboard_outlined,
+                    size: 14, color: AppPalette.p.accent),
+              ),
               const SizedBox(width: 8),
-              _buildChangeFolderButton(),
+              Expanded(
+                child: Text(
+                  '热门榜单',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppPalette.p.primary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 14),
             ],
           ),
         ),
-        if (_randomFolder != null) ...[
-          const SizedBox(height: 10),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: _buildRandomFolderSection(),
+      ),
+    );
+  }
+
+  /// 稍后阅读入口卡：与素白外观「稍后阅读」同一入口，样式跟随米黄卡片风格。
+  Widget _buildReadLaterTile() {
+    return Material(
+      color: AppPalette.p.card,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: widget.onOpenReadingHistory,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: AppPalette.instance.isPlain
+                ? null
+                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
           ),
-        ],
-      ],
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: AppPalette.p.accent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: Icon(Icons.bookmark_border,
+                    size: 14, color: AppPalette.p.accent),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '稍后阅读',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppPalette.p.primary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_right, color: AppPalette.p.textHint, size: 14),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -3135,47 +3261,6 @@ class SutraListPageState extends State<SutraListPage>
                       ),
                     ),
                   ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildChangeFolderButton() {
-    return Material(
-      color: AppPalette.p.card,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () {
-          _dismissKeyboard();
-          setState(() {
-            _randomFolder = _rollRandomFolder();
-          });
-        },
-        child: Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: AppPalette.instance.isPlain
-                ? null
-                : Border.all(color: AppPalette.p.borderSoft, width: 0.8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.autorenew, color: Color(0xFF71867A), size: 14),
-              const SizedBox(width: 3),
-              const Text(
-                '换一部',
-                style: TextStyle(
-                  color: Color(0xFF71867A),
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
@@ -3873,7 +3958,9 @@ class SutraListPageState extends State<SutraListPage>
                         padding: const EdgeInsets.only(bottom: 40),
                         child: Column(
                           children: [
-                            _buildSearchEntryField(),
+                            // 米黄外观下搜索框已移入「经典入口」标题行右侧。
+                            if (AppPalette.instance.isPlain)
+                              _buildSearchEntryField(),
                             _buildProgressCard(),
                             _buildContinueReadingCard(),
                             if (AppPalette.instance.isPlain) ...[
