@@ -52,13 +52,13 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
         backgroundColor: bg,
         foregroundColor: fg,
         elevation: 0,
-        title: Text('读经笔记：${widget.title}',
+        title: Text('读经想法：${widget.title}',
             style: TextStyle(fontSize: 16, color: fg)),
       ),
       body: entries.isEmpty
           ? Center(
               child: Text(
-                '还没有为《${widget.title}》添加段落笔记\n点击每段右侧的「笔记」按钮即可记录',
+                '还没有为《${widget.title}》添加段落想法\n点击每段右侧的「想法」按钮即可记录',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 14, height: 1.6, color: _dark ? Colors.white38 : Colors.black38),
@@ -227,7 +227,7 @@ class _NotesEditDialogState extends State<_NotesEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('编辑笔记'),
+      title: const Text('编辑想法'),
       content: TextField(
         controller: _controller,
         maxLines: 5,
@@ -236,7 +236,7 @@ class _NotesEditDialogState extends State<_NotesEditDialog> {
         textInputAction: TextInputAction.done,
         onSubmitted: (_) => _close(_controller.text),
         decoration: const InputDecoration(
-          hintText: '为这段经文添加笔记/备注…',
+          hintText: '为这段经文写下你的想法…',
           border: OutlineInputBorder(),
         ),
       ),

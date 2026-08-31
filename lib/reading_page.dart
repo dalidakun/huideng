@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:path_provider/path_provider.dart';
@@ -82,6 +83,12 @@ class _ReadingPageState extends State<ReadingPage>
 
   // ── 读经段落笔记 / 完成态（云端同步） ─────────
   Map<int, String> _paraNotes = {}; // index -> 备注文本（空串表示无）
+  Map<int, List<Map<String, int>>> _paraUnderlines = {}; // index -> 该段已画线的文字区间 [{start,end}]
+  // 单击已画线文字时触发弹窗的手势识别器容器（随 build 重建）。
+  final List<TapGestureRecognizer> _underlineTapRecognizers = [];
+  Offset? _underlineTapPos;
+  // 长按选中时的菜单是否已弹出（防止拖动句柄时重复插入 Overlay）。
+  OverlayEntry? _selectionMenuEntry;
   Map<int, bool> _paraDone = {}; // index -> 是否已读完/学完
   Map<int, bool> _paraShared = {}; // index -> 该段笔记是否已分享到菩提空间
   Map<int, String> _paraCloudIds = {}; // index -> 分享后的云端帖子 ID
@@ -264,6 +271,14 @@ class _ReadingPageState extends State<ReadingPage>
     _pageController?.dispose();
     _searchController.dispose();
     _noteInputController.dispose();
+    for (final r in _underlineTapRecognizers) {
+      r.dispose();
+    }
+    _underlineTapRecognizers.clear();
+    if (_selectionMenuEntry != null) {
+      _selectionMenuEntry!.remove();
+      _selectionMenuEntry = null;
+    }
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
     assistantVisible.value = false;
     super.dispose();
@@ -493,6 +508,33 @@ class _ReadingPageState extends State<ReadingPage>
           for (final it in items)
             if (it['index'] is int) it['index'] as int: (it['note'] ?? '').toString(),
         };
+        // 画线：仅当云端明确返回 underlines 字段时才覆盖本地，避免旧后端/未部署
+        // 返回空字段时把刚画好的线冲掉。合并时以各段现有本地值为基础。
+        final merged = Map<int, List<Map<String, int>>>.of(_paraUnderlines);
+        for (final it in items) {
+          final idx = it['index'];
+          if (idx is! int) continue;
+          if (it['underlines'] is! List) continue; // 旧后端无该字段，保留本地
+          final raw = (it['underlines'] as List)
+              .whereType<Map>()
+              .map((u) => {
+                    'start': (u['start'] is int)
+                        ? u['start'] as int
+                        : int.tryParse('${u['start']}') ?? 0,
+                    'end': (u['end'] is int)
+                        ? u['end'] as int
+                        : int.tryParse('${u['end']}') ?? 0,
+                  })
+              .where((u) =>
+                  (u['start'] ?? 0) >= 0 && (u['end'] ?? 0) >= (u['start'] ?? 0))
+              .toList();
+          if (raw.isEmpty) {
+            merged.remove(idx);
+          } else {
+            merged[idx] = raw;
+          }
+        }
+        _paraUnderlines = merged;
         _paraDone = {
           for (final it in items)
             if (it['index'] is int) it['index'] as int: it['done'] == true,
@@ -518,7 +560,7 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 保存某段备注文本到云端并更新本地状态。
   Future<void> _saveParagraphNote(int index, String note,
-      {bool shared = false, String cloudId = ''}) async {
+      {bool shared = false, String cloudId = '', List<Map<String, int>>? underlines}) async {
     if (index < 0 || index >= _paragraphs.length) return;
     // 段落笔记存云端、按用户隔离：未登录直接提示，避免白白弹错误窗。
     if (!AuthService.instance.isLoggedIn) {
@@ -536,6 +578,13 @@ class _ReadingPageState extends State<ReadingPage>
         _paraShared[index] = shared;
         _paraCloudIds[index] = cloudId;
       }
+      if (underlines != null) {
+        if (underlines.isEmpty) {
+          _paraUnderlines.remove(index);
+        } else {
+          _paraUnderlines[index] = underlines;
+        }
+      }
       _activeNoteParagraphIndex = -1;
     });
     try {
@@ -546,6 +595,7 @@ class _ReadingPageState extends State<ReadingPage>
         note: noteTrim,
         shared: shared,
         cloudId: cloudId,
+        underlines: underlines ?? _paraUnderlines[index] ?? const [],
       );
       if (!mounted) return;
       _loadParagraphNotes();
@@ -562,7 +612,7 @@ class _ReadingPageState extends State<ReadingPage>
   /// 未登录时点击笔记/勾选/读经笔记的统一提示。
   void _promptLoginForNotes() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('登录后才能保存读经笔记（跨设备同步），请先在「我的」页面登录')),
+      const SnackBar(content: Text('登录后才能保存读经想法与画线（跨设备同步），请先在「我的」页面登录')),
     );
   }
 
@@ -814,6 +864,11 @@ class _ReadingPageState extends State<ReadingPage>
 
   @override
   Widget build(BuildContext context) {
+    // 每帧重建前释放上一帧的画线点击识别器，避免其指向旧的 TextSpan。
+    for (final r in _underlineTapRecognizers) {
+      r.dispose();
+    }
+    _underlineTapRecognizers.clear();
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -1057,27 +1112,21 @@ class _ReadingPageState extends State<ReadingPage>
                                       ? Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                            children: List.generate(_paragraphs.length, (i) {
-                                             final p = _paragraphs[i];
-                                             return Padding(
-                                               padding: const EdgeInsets.only(bottom: 24.0),
-                                               child: Column(
-                                                 crossAxisAlignment: CrossAxisAlignment.start,
-                                                 children: [
-                                                    SelectableText(
-                                                      p,
+                                              return Padding(
+                                                padding: const EdgeInsets.only(bottom: 24.0),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    SelectableText.rich(
+                                                      TextSpan(
+                                                        style: _paraBaseStyle(i),
+                                                        children: _buildParagraphSpans(i),
+                                                      ),
                                                       onSelectionChanged: (sel, cause) {
                                                         _hasTextSelection = !sel.isCollapsed;
                                                       },
-                                                      style: TextStyle(
-                                                        color: _paraDone[i] == true
-                                                            ? (_isDarkBg
-                                                                ? Colors.white.withOpacity(0.35)
-                                                                : const Color(0xFFBDBDBD))
-                                                            : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
-                                                        fontSize: _fontSize,
-                                                        height: _lineHeight,
-                                                        letterSpacing: 0.5,
-                                                      ),
+                                                      contextMenuBuilder: (context, editableTextState) =>
+                                                          _buildSelectionToolbar(context, editableTextState, i),
                                                     ),
                                                     Align(
                                                       alignment: Alignment.centerLeft,
@@ -1091,50 +1140,22 @@ class _ReadingPageState extends State<ReadingPage>
                                       : Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                            children: List.generate(_paragraphs.length, (i) {
-                                             final p = _paragraphs[i];
-                                             return Padding(
-                                               padding: const EdgeInsets.only(bottom: 24.0),
-                                               child: Column(
-                                                 crossAxisAlignment: CrossAxisAlignment.start,
-                                                 children: [
-                                                   SelectableText.rich(
-                                                    TextSpan(
-                                                      style: TextStyle(
-                                                        color: _paraDone[i] == true
-                                                            ? (_isDarkBg
-                                                                ? Colors.white.withOpacity(0.35)
-                                                                : const Color(0xFFBDBDBD))
-                                                            : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
-                                                        fontSize: _fontSize,
-                                                        height: _lineHeight,
-                                                        letterSpacing: 0.5,
-                                                      ),
-                                                      children: _highlightText(p),
+                                              return Padding(
+                                                padding: const EdgeInsets.only(bottom: 24.0),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    SelectableText.rich(
+                                                     TextSpan(
+                                                       style: _paraBaseStyle(i),
+                                                       children: _buildParagraphSpans(i),
+                                                     ),
+                                                     onSelectionChanged: (sel, cause) {
+                                                       _hasTextSelection = !sel.isCollapsed;
+                                                     },
+                                                     contextMenuBuilder: (context, editableTextState) =>
+                                                         _buildSelectionToolbar(context, editableTextState, i),
                                                     ),
-                                                    onSelectionChanged: (sel, cause) {
-                                                      _hasTextSelection = !sel.isCollapsed;
-                                                    },
-                                                    contextMenuBuilder: (context, editableTextState) {
-                                                      return AdaptiveTextSelectionToolbar(
-                                                        anchors: editableTextState.contextMenuAnchors,
-                                                        children: [
-                                                          TextSelectionToolbarTextButton(
-                                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                                            onPressed: () {
-                                                              final selection = editableTextState.textEditingValue.selection;
-                                                              final selectedText = p.substring(selection.start, selection.end);
-                                                              Clipboard.setData(ClipboardData(text: selectedText));
-                                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                                const SnackBar(content: Text('已复制到剪贴板')),
-                                                              );
-                                                              editableTextState.hideToolbar();
-                                                            },
-                                                            child: const Text('复制'),
-                                                          ),
-                                                        ],
-                                                      );
-                                                    },
-                                                   ),
                                                      Align(
                                                       alignment: Alignment.centerLeft,
                                                       child: _buildParagraphActions(i),
@@ -1213,7 +1234,7 @@ class _ReadingPageState extends State<ReadingPage>
                             ),
                             _buildMoreMenuItem(
                               icon: const Icon(Icons.menu_book_outlined, size: 18),
-                              label: '读经笔记',
+                              label: '读经想法',
                               onTap: _openReadingNotes,
                             ),
                             _buildMoreMenuItem(
@@ -1283,7 +1304,17 @@ class _ReadingPageState extends State<ReadingPage>
                       tooltip: '写笔记',
                       heroTag: 'sutra_note',
                       onTap: _openNoteEditor,
-                      child: const Icon(Icons.edit_note, size: 18),
+                      child: ColorFiltered(
+                        colorFilter: ColorFilter.mode(
+                          AppPalette.p.primary,
+                          BlendMode.srcIn,
+                        ),
+                        child: Image.asset(
+                          'assets/images/write.png',
+                          width: 18,
+                          height: 18,
+                        ),
+                      ),
                     ),
                   ),
                  ),
@@ -1761,7 +1792,7 @@ class _ReadingPageState extends State<ReadingPage>
                   ),
                   const SizedBox(width: 2),
                   Text(
-                    '笔记',
+                    '想法',
                     style: TextStyle(
                       fontSize: 13,
                       color: hasNote ? activeFg : fg,
@@ -1789,13 +1820,14 @@ class _ReadingPageState extends State<ReadingPage>
     _showNoteDialog(index);
   }
 
-  /// 进入「读经笔记」编辑页（直接点「笔记」按钮时的入口）。
-  Future<void> _showNoteDialog(int index) async {
+  /// 进入「读经想法」编辑页。默认显示整段原文；
+  /// [displayText] 非空时顶部显示被选中的具体文字（由长按/单击画线的想法入口传入）。
+  Future<void> _showNoteDialog(int index, {String? displayText}) async {
     if (index < 0 || index >= _paragraphs.length) return;
     final result = await Navigator.of(context).push<Map<String, dynamic>>(
       MaterialPageRoute(
         builder: (_) => ReadingNoteEditPage(
-          paragraph: _paragraphs[index],
+          paragraph: displayText ?? _paragraphs[index],
           initialText: _paraNotes[index] ?? '',
           hasExistingNote: (_paraNotes[index] ?? '').isNotEmpty,
           sutraTitle: _titleShown,
@@ -1812,7 +1844,8 @@ class _ReadingPageState extends State<ReadingPage>
     }
     final shared = result['shared'] == true;
     final cloudId = (result['cloudId'] as String?) ?? '';
-    await _saveParagraphNote(index, note, shared: shared, cloudId: cloudId);
+    await _saveParagraphNote(index, note,
+        shared: shared, cloudId: cloudId, underlines: _paraUnderlines[index] ?? const []);
   }
 
   /// 删除某段备注（保留完成态）。
@@ -1824,6 +1857,7 @@ class _ReadingPageState extends State<ReadingPage>
         _noteInputController.clear();
       }
       _paraNotes.remove(index);
+      _paraUnderlines.remove(index);
       _paraDone.remove(index);
       _paraShared.remove(index);
       _paraCloudIds.remove(index);
@@ -2033,7 +2067,7 @@ class _ReadingPageState extends State<ReadingPage>
               Icon(Icons.sticky_note_2_outlined,
                   size: 16, color: subColor),
               const SizedBox(width: 6),
-              Text('读经笔记',
+              Text('读经想法',
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -2055,7 +2089,7 @@ class _ReadingPageState extends State<ReadingPage>
             maxLines: 4,
             minLines: 2,
             decoration: InputDecoration(
-              hintText: '为这段经文添加笔记/备注…',
+              hintText: '为这段经文写下你的想法…',
               hintStyle: TextStyle(fontSize: 13, color: subColor),
               filled: true,
               fillColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF5F3EF),
@@ -2080,7 +2114,7 @@ class _ReadingPageState extends State<ReadingPage>
                   shared: _paraShared[_aiParagraphIndex] == true,
                   cloudId: _paraCloudIds[_aiParagraphIndex] ?? ''),
               icon: const Icon(Icons.save_outlined, size: 16),
-              label: const Text('保存笔记'),
+              label: const Text('保存想法'),
               style: FilledButton.styleFrom(
                 backgroundColor: AppPalette.p.accent,
                 visualDensity: VisualDensity.compact,
@@ -2560,38 +2594,297 @@ class _ReadingPageState extends State<ReadingPage>
     }
   }
 
-  List<TextSpan> _highlightText(String text) {
-    if (_searchController.text.isEmpty) {
-      return [TextSpan(text: text)];
+  /// 段落的基准文字样式（含是否已读完的置灰）。
+  TextStyle _paraBaseStyle(int i) => TextStyle(
+        color: _paraDone[i] == true
+            ? (_isDarkBg
+                ? Colors.white.withOpacity(0.35)
+                : const Color(0xFFBDBDBD))
+            : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
+        fontSize: _fontSize,
+        height: _lineHeight,
+        letterSpacing: 0.5,
+      );
+
+  /// 将第 i 段文字切成多个 TextSpan：叠加「画线」下划线 与 搜索结果高亮。
+  /// 已画线的文字区域带 Tap 识别器，单击即弹出 复制 / 擦除(buy) / 想法 菜单。
+  List<TextSpan> _buildParagraphSpans(int i) {
+    final text = _paragraphs[i];
+    final len = text.length;
+    if (len == 0) return [TextSpan(text: '')];
+
+    // 画线区间：合并重叠/相邻成有序不相交段 [(s,e)...]。
+    final raw = <(int, int)>[];
+    for (final u in _paraUnderlines[i] ?? const <Map<String, int>>[]) {
+      final s = (u['start'] ?? 0).clamp(0, len);
+      final e = (u['end'] ?? 0).clamp(0, len);
+      if (e > s) raw.add((s, e));
+    }
+    raw.sort((a, b) => a.$1.compareTo(b.$1));
+    final merged = <(int, int)>[];
+    for (final r in raw) {
+      if (merged.isNotEmpty && r.$1 <= merged.last.$2) {
+        final last = merged.removeLast();
+        merged.add((last.$1, r.$2 > last.$2 ? r.$2 : last.$2));
+      } else {
+        merged.add(r);
+      }
     }
 
+    // 搜索高亮（按字符）。
+    final isSrch = List<bool>.filled(len, false);
     final query = _searchController.text.toLowerCase();
-    final spans = <TextSpan>[];
-    final lowerText = text.toLowerCase();
-
-    int start = 0;
-    int index = lowerText.indexOf(query);
-    while (index != -1) {
-      if (index > start) {
-        spans.add(TextSpan(text: text.substring(start, index)));
+    if (query.isNotEmpty) {
+      final lower = text.toLowerCase();
+      var idx = lower.indexOf(query);
+      while (idx != -1) {
+        for (var k = idx; k < idx + query.length && k < len; k++) {
+          isSrch[k] = true;
+        }
+        idx = lower.indexOf(query, idx + query.length);
       }
+    }
 
+    final spans = <TextSpan>[];
+    var pos = 0;
+    for (final r in merged) {
+      if (r.$1 > pos) spans.addAll(_plainSpans(text, pos, r.$1, isSrch));
+      spans.addAll(_underlineSpans(text, i, r.$1, r.$2, isSrch));
+      pos = r.$2;
+    }
+    if (pos < len) spans.addAll(_plainSpans(text, pos, len, isSrch));
+    if (spans.isEmpty) spans.add(TextSpan(text: ''));
+    return spans;
+  }
+
+  /// 非画线区间的普通 span（仅按搜索高亮细分）。
+  List<TextSpan> _plainSpans(String text, int s, int e, List<bool> isSrch) {
+    final spans = <TextSpan>[];
+    var start = s;
+    while (start < e) {
+      final se0 = isSrch[start];
+      var end = start + 1;
+      while (end < e && isSrch[end] == se0) {
+        end++;
+      }
       spans.add(TextSpan(
-        text: text.substring(index, index + query.length),
+        text: text.substring(start, end),
         style: TextStyle(
-          backgroundColor: _isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow,
+          backgroundColor: se0
+              ? (_isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow)
+              : null,
         ),
       ));
-
-      start = index + query.length;
-      index = lowerText.indexOf(query, start);
+      start = end;
     }
-
-    if (start < text.length) {
-      spans.add(TextSpan(text: text.substring(start)));
-    }
-
+    if (spans.isEmpty) spans.add(TextSpan(text: text.substring(s, e)));
     return spans;
+  }
+
+  /// 已画线区间的 span：整段加下划线，内部按搜索高亮细分；每个 sub span
+  /// 都带上同一个 Tap 识别器，单击触发该画线的弹窗。
+  List<TextSpan> _underlineSpans(
+      String text, int para, int s, int e, List<bool> isSrch) {
+    final spans = <TextSpan>[];
+    final recognizer = TapGestureRecognizer()
+      ..onTapDown = (d) {
+        _underlineTapPos = d.globalPosition;
+      }
+      ..onTap = () => _onUnderlineTap(para, s, e);
+    _underlineTapRecognizers.add(recognizer);
+    var start = s;
+    while (start < e) {
+      final se0 = isSrch[start];
+      var end = start + 1;
+      while (end < e && isSrch[end] == se0) {
+        end++;
+      }
+      spans.add(TextSpan(
+        text: text.substring(start, end),
+        recognizer: recognizer,
+        style: TextStyle(
+          decoration: TextDecoration.underline,
+          backgroundColor: se0
+              ? (_isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow)
+              : null,
+        ),
+      ));
+      start = end;
+    }
+    if (spans.isEmpty) {
+      spans.add(TextSpan(
+        text: text.substring(s, e),
+        recognizer: recognizer,
+        style: const TextStyle(decoration: TextDecoration.underline),
+      ));
+    }
+    return spans;
+  }
+
+  /// 统一的菜单卡片：横向的 复制 / 画线(擦除) / 全选 / 想法（每项图标上文字下）。
+  /// 单击画线（Overlay）与长按选中（contextMenuBuilder）共用，保证两者 UI 一致。
+  /// [close] 在需要关闭弹窗时调用（复制 / 想法）；画线与全选不关闭，可继续操作。
+  Widget _buildMenuCard({
+    required int para,
+    required int start,
+    required int end,
+    required VoidCallback close,
+  }) {
+    if (para < 0 || para >= _paragraphs.length) return const SizedBox.shrink();
+    final p = _paragraphs[para];
+    final s = start.clamp(0, p.length);
+    final e = end.clamp(0, p.length);
+    final underlined = (_paraUnderlines[para] ?? const <Map<String, int>>[]).any(
+        (u) => s < (u['end'] ?? 0) && e > (u['start'] ?? 0));
+
+    return _IdeaMenuCard(
+      para: para,
+      paragraph: p,
+      initialStart: s,
+      initialEnd: e,
+      initialUnderlined: underlined,
+      initialHasIdea: (_paraNotes[para] ?? '').isNotEmpty,
+      isDarkBg: _isDarkBg,
+      close: close,
+      onDrawUnderline: (ss, ee) => _toggleUnderline(para, ss, ee),
+      onOpenNote: (ss, ee) => _openIdeaFromRange(para, ss, ee),
+    );
+  }
+
+  /// 根据当前选中的 [start,end) 区间打开「想法」编辑页，顶部显示被选中的文字。
+  void _openIdeaFromRange(int para, int start, int end) {
+    if (para < 0 || para >= _paragraphs.length) return;
+    final p = _paragraphs[para];
+    final s = start.clamp(0, p.length);
+    final e = end.clamp(0, p.length);
+    final display =
+        (s < e && e <= p.length) ? p.substring(s, e) : p;
+    _showNoteDialog(para, displayText: display);
+  }
+
+  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 全选 / 想法）。
+  /// 会测量卡片实际尺寸并夹在屏幕安全区内，优先显示在选中处上方、居中；
+  /// 空间不足则自动转下方。点击菜单外恢复原状（[onDismiss]）。返回 OverlayEntry 以便外部管理/清理。
+  OverlayEntry? _showFloatingMenu({
+    required int para,
+    required int start,
+    required int end,
+    required Offset anchor,
+    VoidCallback? onDismiss,
+  }) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return null;
+    final size = MediaQuery.of(context).size;
+    final safe = MediaQuery.of(context).padding;
+
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => Stack(
+        children: [
+          // 点击菜单外任意处关闭并恢复正常界面。
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () {
+                if (entry.mounted) entry.remove();
+                onDismiss?.call();
+              },
+            ),
+          ),
+          Positioned.fill(
+            child: CustomSingleChildLayout(
+              delegate: _MenuLayoutDelegate(
+                anchor: anchor,
+                overlaySize: size,
+                safeArea: safe,
+              ),
+              child: _buildMenuCard(
+                para: para,
+                start: start,
+                end: end,
+                close: () {
+                  if (entry.mounted) entry.remove();
+                  onDismiss?.call();
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    overlay.insert(entry);
+    return entry;
+  }
+
+  /// 单击已画线文字：在点击处弹出与长按选中相同的菜单。
+  void _onUnderlineTap(int para, int start, int end) {
+    final target = _underlineTapPos ??
+        MediaQuery.of(context).size.center(Offset.zero);
+    _showFloatingMenu(para: para, start: start, end: end, anchor: target);
+  }
+
+  /// 画线 / 取消画线：给第 i 段 [start,end) 区间添加或移除下划线，并云端同步。
+  /// 选中区间已完全被现有画线覆盖 → 擦除；否则 → 新增整段 [start,end)（渲染端会自动合并重叠）。
+  Future<void> _toggleUnderline(int i, int start, int end) async {
+    if (start >= end) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return;
+    }
+    final current = List<Map<String, int>>.from(_paraUnderlines[i] ?? const []);
+    // 选中范围是否已被某条画线完整覆盖（此时视为“擦除”）。
+    final covering = current
+        .where((u) =>
+            (u['start'] ?? 0) <= start && (u['end'] ?? 0) >= end)
+        .toList();
+    List<Map<String, int>> next;
+    if (covering.isNotEmpty) {
+      final removeSet = covering.toSet();
+      next = [
+        for (final u in current)
+          if (!removeSet.contains(u)) u,
+      ];
+    } else {
+      // 新增整段选中范围；与既有画线重叠的部分会在渲染时自动合并。
+      next = [...current, {'start': start, 'end': end}];
+    }
+    next.sort((a, b) => (a['start'] ?? 0).compareTo(b['start'] ?? 0));
+    await _saveParagraphNote(
+      i,
+      _paraNotes[i] ?? '',
+      shared: _paraShared[i] == true,
+      cloudId: _paraCloudIds[i] ?? '',
+      underlines: next,
+    );
+  }
+
+  /// 长按选中文字后的菜单：与「单击画线」共用同一个卡片 UI
+  /// （复制 / 画线(擦除) / 全选 / 想法，每项图标上文字下）。
+  /// 不直接把卡片返回给框架（那样会铺满整屏变白屏），而是返回空组件，
+  /// 由 [Overlay] 在选中处上方独立弹出同一张卡片，经文保持可见。
+  Widget _buildSelectionToolbar(
+      BuildContext context, EditableTextState editableTextState, int i) {
+    final p = _paragraphs[i];
+    final sel = editableTextState.textEditingValue.selection;
+    final start = sel.isValid ? sel.start.clamp(0, p.length) : 0;
+    final end = sel.isValid ? sel.end.clamp(0, p.length) : 0;
+    final anchor = editableTextState.contextMenuAnchors.primaryAnchor;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _selectionMenuEntry != null) return;
+      _selectionMenuEntry = _showFloatingMenu(
+        para: i,
+        start: start,
+        end: end,
+        anchor: anchor,
+        // 点菜单外：关闭浮层并收起选择，恢复正常阅读页。
+        onDismiss: () {
+          _selectionMenuEntry = null;
+          if (editableTextState.mounted) editableTextState.hideToolbar();
+        },
+      );
+    });
+    return const SizedBox.shrink();
   }
 
   TextStyle get _flipTextStyle => TextStyle(
@@ -2688,24 +2981,21 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 翻页模式下的单个段落（文本 + 右侧操作栏）。
   Widget _buildFlipParagraph(int index) {
-    final p = _paragraphs[index];
     return Padding(
       padding: const EdgeInsets.only(bottom: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SelectableText(
-            p,
-            style: TextStyle(
-              color: _paraDone[index] == true
-                  ? (_isDarkBg
-                      ? Colors.white.withOpacity(0.35)
-                      : const Color(0xFFBDBDBD))
-                  : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
-              fontSize: _fontSize,
-              height: _lineHeight,
-              letterSpacing: 0.5,
+          SelectableText.rich(
+            TextSpan(
+              style: _paraBaseStyle(index),
+              children: _buildParagraphSpans(index),
             ),
+            onSelectionChanged: (sel, cause) {
+              _hasTextSelection = !sel.isCollapsed;
+            },
+            contextMenuBuilder: (context, editableTextState) =>
+                _buildSelectionToolbar(context, editableTextState, index),
           ),
           Align(
             alignment: Alignment.centerRight,
@@ -2715,4 +3005,166 @@ class _ReadingPageState extends State<ReadingPage>
       ),
     );
   }
+}
+
+/// 长按选中 / 单击画线的统一菜单卡片：横向 复制 / 画线(擦除) / 全选 / 想法。
+/// 画线与全选时不关闭弹窗，可继续点击想法（针对当前选中的文字）。
+class _IdeaMenuCard extends StatefulWidget {
+  final int para;
+  final String paragraph;
+  final int initialStart;
+  final int initialEnd;
+  final bool initialUnderlined;
+  final bool initialHasIdea;
+  final bool isDarkBg;
+  final VoidCallback close;
+  final void Function(int start, int end) onDrawUnderline;
+  final void Function(int start, int end) onOpenNote;
+
+  const _IdeaMenuCard({
+    required this.para,
+    required this.paragraph,
+    required this.initialStart,
+    required this.initialEnd,
+    required this.initialUnderlined,
+    required this.initialHasIdea,
+    required this.isDarkBg,
+    required this.close,
+    required this.onDrawUnderline,
+    required this.onOpenNote,
+  });
+
+  @override
+  State<_IdeaMenuCard> createState() => _IdeaMenuCardState();
+}
+
+class _IdeaMenuCardState extends State<_IdeaMenuCard> {
+  late int _start;
+  late int _end;
+  late bool _underlined;
+
+  @override
+  void initState() {
+    super.initState();
+    _start = widget.initialStart;
+    _end = widget.initialEnd;
+    _underlined = widget.initialUnderlined;
+  }
+
+  String get _selectedText {
+    final s = _start.clamp(0, widget.paragraph.length);
+    final e = _end.clamp(0, widget.paragraph.length);
+    return (e > s) ? widget.paragraph.substring(s, e) : '';
+  }
+
+  Widget _item(IconData icon, String label, VoidCallback onTap) {
+    final fg = widget.isDarkBg ? Colors.white : const Color(0xFF212121);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22, color: fg),
+            const SizedBox(height: 6),
+            Text(label, style: TextStyle(fontSize: 12, color: fg)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = widget.isDarkBg ? const Color(0xFF2A2A2A) : Colors.white;
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(14),
+      color: bg,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _item(Icons.copy, '复制', () {
+            final t = _selectedText;
+            widget.close();
+            if (t.isNotEmpty) {
+              Clipboard.setData(ClipboardData(text: t));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('已复制到剪贴板')),
+              );
+            }
+          }),
+          _item(
+              _underlined ? Icons.undo : Icons.format_underlined,
+              _underlined ? '擦除' : '画线', () {
+            final s = _start;
+            final e = _end;
+            setState(() => _underlined = !_underlined);
+            widget.onDrawUnderline(s, e);
+          }),
+          _item(Icons.select_all, '全选', () {
+            setState(() {
+              _start = 0;
+              _end = widget.paragraph.length;
+              _underlined = false;
+            });
+          }),
+          _item(Icons.edit_note, widget.initialHasIdea ? '修改想法' : '想法', () {
+            final s = _start;
+            final e = _end;
+            widget.close();
+            widget.onOpenNote(s, e);
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+/// 浮层卡片的自适应布局：以上边/下边锚点为基准，把卡片居中并夹在屏幕安全区内。
+class _MenuLayoutDelegate extends SingleChildLayoutDelegate {
+  final Offset anchor;
+  final Size overlaySize;
+  final EdgeInsets safeArea;
+
+  _MenuLayoutDelegate({
+    required this.anchor,
+    required this.overlaySize,
+    required this.safeArea,
+  });
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      constraints.loosen();
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    const margin = 10.0;
+    final minLeft = safeArea.left + margin;
+    final maxRight = size.width - safeArea.right - margin;
+    final minTop = safeArea.top + margin;
+    final maxBottom = size.height - safeArea.bottom - margin;
+
+    // 水平居中于选中处，并夹在左右安全区内（卡片比屏幕宽时从安全区开始铺）。
+    var left = anchor.dx - childSize.width / 2;
+    if (left < minLeft) left = minLeft;
+    if (left + childSize.width > maxRight) left = maxRight - childSize.width;
+    if (left < minLeft) left = minLeft;
+
+    // 优先显示在选中处上方；上方放不下则转下方；都不够时夹在垂直范围内。
+    var top = anchor.dy - childSize.height - margin;
+    if (top < minTop) top = anchor.dy + margin;
+    if (top + childSize.height > maxBottom) top = maxBottom - childSize.height;
+    if (top < minTop) top = minTop;
+
+    return Offset(left, top);
+  }
+
+  @override
+  bool shouldRelayout(covariant _MenuLayoutDelegate oldDelegate) =>
+      oldDelegate.anchor != anchor ||
+      oldDelegate.overlaySize != overlaySize ||
+      oldDelegate.safeArea != safeArea;
 }

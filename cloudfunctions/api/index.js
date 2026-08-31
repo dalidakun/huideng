@@ -3439,6 +3439,7 @@ exports.main = async (event, context) => {
           const list = (data || []).map((d) => ({
             index: parseInt(d.index, 10),
             note: d.note || "",
+            underlines: Array.isArray(d.underlines) ? d.underlines : [],
             done: !!d.done,
             shared: !!d.shared,
             cloudId: d.cloudId || "",
@@ -3459,6 +3460,14 @@ exports.main = async (event, context) => {
         const note = (event.note || "").toString().trim();
         const shared = !!event.shared;
         const cloudId = (event.cloudId || "").toString();
+        const rawUnderlines = Array.isArray(event.underlines) ? event.underlines : [];
+        const underlines = rawUnderlines
+          .filter((u) => u && typeof u === "object")
+          .map((u) => ({
+            start: Number.isInteger(u.start) ? u.start : 0,
+            end: Number.isInteger(u.end) ? u.end : 0,
+          }))
+          .filter((u) => u.start >= 0 && u.end >= u.start);
         if (!sutraKey || index === undefined || index === null) {
           return fail("缺少参数");
         }
@@ -3468,6 +3477,7 @@ exports.main = async (event, context) => {
           if (existing) {
             await readingParagraphNotes.doc(existing._id).update({
               note,
+              underlines,
               shared,
               cloudId,
               updatedAt: now(),
@@ -3479,6 +3489,7 @@ exports.main = async (event, context) => {
               index: String(index),
               text: (event.text || "").toString().slice(0, 200),
               note,
+              underlines,
               shared,
               cloudId,
               done: false,

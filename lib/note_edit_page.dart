@@ -64,9 +64,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
   List<String> _fetchedTopics = const [];
   bool _fetchedTopicsLoaded = false;
 
+  /// 从 presetContent 中提取的 $经书名（如 $地藏菩萨本愿经），显示为绿色标题。
+  String _sutraTitle = '';
+
   @override
   void initState() {
     super.initState();
+    _extractSutraTitle();
     _contentController =
         TextEditingController(text: _initialContent());
     _shared = widget.note?['shared'] == true;
@@ -74,12 +78,30 @@ class _NoteEditPageState extends State<NoteEditPage> {
     _contentController.addListener(_onContentChanged);
   }
 
-  /// 编辑框初始内容：去掉固定话题前缀，用户只能编辑话题下方的文字。
+  /// 从 presetContent 中提取 $经书名，供绿色标题显示，编辑框内容不含此前缀。
+  void _extractSutraTitle() {
+    final preset = widget.presetContent;
+    if (widget.note == null && preset != null && preset.startsWith(r'$')) {
+      final end = preset.indexOf(' ');
+      if (end > 0) {
+        _sutraTitle = preset.substring(1, end);
+      } else {
+        _sutraTitle = preset.substring(1).trim();
+      }
+    }
+  }
+
+  /// 编辑框初始内容：去掉固定话题前缀和 $经书名 前缀。
   String _initialContent() {
     var raw = widget.note?['content'] ?? '';
     final preset = widget.presetContent;
     if (widget.note == null && preset != null && preset.isNotEmpty) {
-      raw = preset;
+      // 如果 presetContent 以 $ 开头（经书名），编辑框应为空，经书名显示为绿色标题。
+      if (preset.startsWith(r'$') && _sutraTitle.isNotEmpty) {
+        raw = '';
+      } else {
+        raw = preset;
+      }
     }
     for (final m in _mentionRe.allMatches(raw.toString())) {
       _mentionUids[m.group(1)!] = m.group(2)!;
@@ -98,7 +120,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
     return raw.toString();
   }
 
-  /// 保存的完整正文：固定话题置于最前。
+  /// 保存的完整正文：$经书名 + 固定话题 + 用户笔记。
   String _fullContent() {
     var body = _contentController.text.trim();
     if (_mentionUids.isNotEmpty) {
@@ -107,14 +129,21 @@ class _NoteEditPageState extends State<NoteEditPage> {
         return uid == null ? m.group(0)! : '[@${m.group(1)}](user:$uid)';
       });
     }
+    final parts = <String>[
+      if (_sutraTitle.isNotEmpty) '\$$_sutraTitle',
+    ];
     final topic = widget.fixedTopic;
     if (topic != null && topic.isNotEmpty) {
       final prefix = '#$topic';
-      final t = body;
-      if (t.startsWith(prefix)) return t;
-      return body.isEmpty ? prefix : '$prefix $body';
+      if (body.startsWith(prefix)) {
+        parts.add(body);
+      } else {
+        parts.add(body.isEmpty ? prefix : '$prefix $body');
+      }
+    } else if (body.isNotEmpty) {
+      parts.add(body);
     }
-    return body;
+    return parts.join('\n');
   }
 
   void _onContentChanged() {
@@ -1015,6 +1044,19 @@ class _NoteEditPageState extends State<NoteEditPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // $经书名 标题：绿色，不可编辑，位于编辑框顶部。
+                    if (_sutraTitle.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                        child: Text(
+                          '\$$_sutraTitle',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: AppPalette.p.accent,
+                          ),
+                        ),
+                      ),
                     // 固定话题：直接显示在白色编辑框顶部，不可编辑、无边框。
                     if (widget.fixedTopic != null &&
                         widget.fixedTopic!.isNotEmpty)
@@ -1037,11 +1079,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             style: TextStyle(
                                 fontSize: 16, color: _text, height: 1.6),
                             decoration: InputDecoration(
-                              hintText: '开始记录...\n'
-                                  '输入 @ 可提及用户\n'
-                                  '输入 \$ 可引用经文\n'
-                                  '输入 # 可创建或选择话题',
-                              hintStyle: TextStyle(color: _textHint),
                               isDense: true,
                               contentPadding: const EdgeInsets.fromLTRB(
                                   16, 14, 16, 18),

@@ -501,7 +501,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                             style: TextStyle(
                                 fontSize: 16, color: _text),
                             decoration: InputDecoration(
-                              hintText: '一句修学感悟',
+                              hintText: '一句修学想法',
                               hintStyle:
                                   TextStyle(color: _textHint),
                               border: OutlineInputBorder(

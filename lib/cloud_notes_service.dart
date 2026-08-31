@@ -740,18 +740,40 @@ class CloudNotesService {
   }
 
   /// 读取某本经的全部段落笔记/完成态（跨设备云端同步）。
-  /// 返回 [{index, note, done, updatedAt}]。
+  /// 返回 [{index, note, underlines, done, updatedAt}]。
   Future<List<Map<String, dynamic>>> getParagraphNotes(String sutraKey) async {
     final res = await _call('getParagraphNotes', params: {'sutraKey': sutraKey});
     final items = res['items'];
     if (items is List) {
-      return items.cast<Map<String, dynamic>>();
+      return items.map((it) {
+        final m = Map<String, dynamic>.from(it as Map);
+        final raw = m['underlines'];
+        m['underlines'] = _normalizeUnderlines(raw);
+        return m;
+      }).toList();
     }
     return const [];
   }
 
+  /// 把云端返回的画线区间统一成 [{start:int, end:int}]。
+  List<Map<String, int>> _normalizeUnderlines(dynamic raw) {
+    if (raw is! List) return const [];
+    final result = <Map<String, int>>[];
+    for (final u in raw) {
+      if (u is Map) {
+        final start = (u['start'] is int) ? u['start'] as int : int.tryParse('${u['start']}') ?? 0;
+        final end = (u['end'] is int) ? u['end'] as int : int.tryParse('${u['end']}') ?? 0;
+        if (start >= 0 && end >= start) {
+          result.add({'start': start, 'end': end});
+        }
+      }
+    }
+    return result;
+  }
+
   /// 保存某段的备注文本（note 为空表示清除该段备注）。
   /// [shared] 表示该段读经笔记是否分享到菩提空间，[cloudId] 为分享后的云端帖子 ID。
+  /// [underlines] 为该段已画线的文字区间列表（[{start, end}]）。
   Future<void> saveParagraphNote({
     required String sutraKey,
     required int index,
@@ -759,6 +781,7 @@ class CloudNotesService {
     required String note,
     bool shared = false,
     String cloudId = '',
+    List<Map<String, int>> underlines = const [],
   }) async {
     await _call('saveParagraphNote', params: {
       'sutraKey': sutraKey,
@@ -767,6 +790,7 @@ class CloudNotesService {
       'note': note,
       'shared': shared,
       'cloudId': cloudId,
+      'underlines': _normalizeUnderlines(underlines),
     });
   }
 
