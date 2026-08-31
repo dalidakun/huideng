@@ -3453,6 +3453,87 @@ exports.main = async (event, context) => {
       }
 
       // 保存某段的备注文本（note 为 '' 表示清除该段备注）。
+      // 按「段原文」聚合所有用户对该段的读经想法（菩提空间公开帖中
+      // 符合 $经名\n\n段原文\n\n想法 格式、且段原文与给定段落匹配的帖子）。
+      // 返回分页列表 + 总数，未登录也可浏览。
+      case "searchParagraphThoughts": {
+        const rawParagraph = (event.paragraph || "").toString();
+        const paragraph = rawParagraph.trim();
+        if (!paragraph) return fail("缺少段原文参数");
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 100);
+        try {
+          // 段原文是该段特有的完整句子，通常足够唯一；用整段做右侧包含匹配，
+          // 命中后再用读经笔记格式解析，确保返回的都是真正的段落想法帖。
+          const escaped = paragraph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const paraRe = db.RegExp({
+            regexp: `\\$[^\\n]+\\s*\\n\\s*\\n${escaped}`,
+            options: "",
+          });
+          const base = notes.where({
+            visibility: "public",
+            status: "normal",
+            kind: _.neq("announcement"),
+            content: paraRe,
+          });
+
+          // 屏蔽的用户内容隐藏（与广场口径一致）。
+          let blocked = [];
+          if (uid) {
+            try {
+              const br = await blocks.where({ blockerId: uid }).limit(1000).get();
+              blocked = br.data.map((r) => r.blockedId);
+            } catch (e) {}
+          }
+
+          let list = [];
+          let skip = 0;
+          while (true) {
+            const r = await base
+              .orderBy("createdAt", "desc")
+              .skip(skip)
+              .limit(1000)
+              .get();
+            list.push(...(r.data || []));
+            if ((r.data || []).length < 1000) break;
+            skip += 1000;
+          }
+          const total = list.length;
+          if (blocked.length) {
+            list = list.filter(
+              (n) =>
+                n.ownerUserId === uid ||
+                (!blocked.includes(n.ownerUserId) &&
+                  !(
+                    n.repostSourceUserId &&
+                    blocked.includes(n.repostSourceUserId)
+                  ))
+            );
+          }
+          const pageNotes = list.slice(
+            (page - 1) * pageSize,
+            (page - 1) * pageSize + pageSize
+          );
+          const notesOut = pageNotes.map(({ _hotScore, ...rest }) => rest);
+          await attachAuthorAccounts(notesOut);
+          await attachAuthorVerified(notesOut);
+          await attachAuthorCanonProgress(notesOut);
+          return ok({
+            notes: notesOut,
+            total,
+            hasMore: (page - 1) * pageSize + pageNotes.length < total,
+          });
+        } catch (e) {
+          console.error(
+            "[api] searchParagraphThoughts error:",
+            e && e.message ? e.message : e
+          );
+          return fail(
+            e && e.message ? e.message : "获取段落想法失败"
+          );
+        }
+      }
+
       case "saveParagraphNote": {
         if (!uid) return fail("unauthorized");
         const sutraKey = event.sutraKey;

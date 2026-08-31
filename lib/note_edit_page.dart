@@ -1076,9 +1076,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             maxLines: null,
                             expands: true,
                             textAlignVertical: TextAlignVertical.top,
+                            autofocus: true,
                             style: TextStyle(
                                 fontSize: 16, color: _text, height: 1.6),
                             decoration: InputDecoration(
+                              hintText: '开始记录...',
+                              hintStyle: TextStyle(color: _textHint),
                               isDense: true,
                               contentPadding: const EdgeInsets.fromLTRB(
                                   16, 14, 16, 18),

@@ -26,6 +26,7 @@ import 'sutra_list_page.dart'
 import 'reading_guide_page.dart';
 import 'reading_notes_page.dart';
 import 'reading_note_edit_page.dart';
+import 'paragraph_thoughts_page.dart';
 import 'cloud_notes_service.dart';
 import 'auth_service.dart';
 
@@ -89,6 +90,10 @@ class _ReadingPageState extends State<ReadingPage>
   Offset? _underlineTapPos;
   // 长按选中时的菜单是否已弹出（防止拖动句柄时重复插入 Overlay）。
   OverlayEntry? _selectionMenuEntry;
+  // 长按选中的 EditableTextState，用于点 画线/想法/复制 时读取实时选区。
+  EditableTextState? _selectionTextState;
+  // 每次选区变化时更新的最新范围（长按初始为单字，拖动句柄后为完整范围）。
+  (int, int)? _selectionRange;
   Map<int, bool> _paraDone = {}; // index -> 是否已读完/学完
   Map<int, bool> _paraShared = {}; // index -> 该段笔记是否已分享到菩提空间
   Map<int, String> _paraCloudIds = {}; // index -> 分享后的云端帖子 ID
@@ -279,6 +284,7 @@ class _ReadingPageState extends State<ReadingPage>
       _selectionMenuEntry!.remove();
       _selectionMenuEntry = null;
     }
+    _selectionTextState = null;
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
     assistantVisible.value = false;
     super.dispose();
@@ -1124,6 +1130,7 @@ class _ReadingPageState extends State<ReadingPage>
                                                       ),
                                                       onSelectionChanged: (sel, cause) {
                                                         _hasTextSelection = !sel.isCollapsed;
+                                                        _onSelectionChanged(sel);
                                                       },
                                                       contextMenuBuilder: (context, editableTextState) =>
                                                           _buildSelectionToolbar(context, editableTextState, i),
@@ -1152,6 +1159,7 @@ class _ReadingPageState extends State<ReadingPage>
                                                      ),
                                                      onSelectionChanged: (sel, cause) {
                                                        _hasTextSelection = !sel.isCollapsed;
+                                                       _onSelectionChanged(sel);
                                                      },
                                                      contextMenuBuilder: (context, editableTextState) =>
                                                          _buildSelectionToolbar(context, editableTextState, i),
@@ -1807,8 +1815,10 @@ class _ReadingPageState extends State<ReadingPage>
     );
   }
 
-  /// 点击「笔记」：若翻译面板已打开则聚焦到面板内的输入框；否则弹出输入框对话框。
+  /// 点击「想法」：打开该段经文所有用户想法的汇总底部弹层。
+  /// （若 AI 翻译面板正显示该段且用户在看笔记输入框，则仍聚焦到笔记输入框。）
   void _onParagraphNoteTap(int index) {
+    if (index < 0 || index >= _paragraphs.length) return;
     // 若 AI 翻译面板正显示该段，切到笔记输入框。
     if (_aiParagraphIndex == index && _aiParagraph != null) {
       setState(() {
@@ -1817,7 +1827,11 @@ class _ReadingPageState extends State<ReadingPage>
       });
       return;
     }
-    _showNoteDialog(index);
+    ParagraphThoughtsPage.open(
+      context,
+      sutraTitle: _titleShown,
+      paragraph: _paragraphs[index],
+    );
   }
 
   /// 进入「读经想法」编辑页。默认显示整段原文；
@@ -2704,6 +2718,9 @@ class _ReadingPageState extends State<ReadingPage>
         recognizer: recognizer,
         style: TextStyle(
           decoration: TextDecoration.underline,
+          decorationColor:
+              _isDarkBg ? Colors.white : const Color(0xFF212121),
+          decorationThickness: 1.4,
           backgroundColor: se0
               ? (_isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow)
               : null,
@@ -2715,20 +2732,27 @@ class _ReadingPageState extends State<ReadingPage>
       spans.add(TextSpan(
         text: text.substring(s, e),
         recognizer: recognizer,
-        style: const TextStyle(decoration: TextDecoration.underline),
+        style: TextStyle(
+          decoration: TextDecoration.underline,
+          decorationColor:
+              _isDarkBg ? Colors.white : const Color(0xFF212121),
+          decorationThickness: 1.4,
+        ),
       ));
     }
     return spans;
   }
 
-  /// 统一的菜单卡片：横向的 复制 / 画线(擦除) / 全选 / 想法（每项图标上文字下）。
+  /// 统一的菜单卡片：横向的 复制 / 画线(擦除) / 本段全选 / 想法（每项图标上文字下）。
   /// 单击画线（Overlay）与长按选中（contextMenuBuilder）共用，保证两者 UI 一致。
   /// [close] 在需要关闭弹窗时调用（复制 / 想法）；画线与全选不关闭，可继续操作。
+  /// [onResolveRange] 为空时用 [start,end]（单击画线）；否则用它实时取当前选区（长按选中）。
   Widget _buildMenuCard({
     required int para,
     required int start,
     required int end,
     required VoidCallback close,
+    (int, int)? Function()? onResolveRange,
   }) {
     if (para < 0 || para >= _paragraphs.length) return const SizedBox.shrink();
     final p = _paragraphs[para];
@@ -2746,6 +2770,7 @@ class _ReadingPageState extends State<ReadingPage>
       initialHasIdea: (_paraNotes[para] ?? '').isNotEmpty,
       isDarkBg: _isDarkBg,
       close: close,
+      onResolveRange: onResolveRange,
       onDrawUnderline: (ss, ee) => _toggleUnderline(para, ss, ee),
       onOpenNote: (ss, ee) => _openIdeaFromRange(para, ss, ee),
     );
@@ -2762,15 +2787,20 @@ class _ReadingPageState extends State<ReadingPage>
     _showNoteDialog(para, displayText: display);
   }
 
-  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 全选 / 想法）。
+  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 本段全选 / 想法）。
   /// 会测量卡片实际尺寸并夹在屏幕安全区内，优先显示在选中处上方、居中；
-  /// 空间不足则自动转下方。点击菜单外恢复原状（[onDismiss]）。返回 OverlayEntry 以便外部管理/清理。
+  /// 空间不足则自动转下方。
+  /// [showBarrier]：为 true 时点击菜单外关闭（单击画线场景）；为 false 时不遮罩、
+  /// 允许继续拖动选中句柄，通过选区折叠自动关闭（长按选中场景）。
+  /// [onResolveRange]：返回当前应作用的目标区间；为空时用 [start,end]（单击画线场景）。
   OverlayEntry? _showFloatingMenu({
     required int para,
     required int start,
     required int end,
     required Offset anchor,
     VoidCallback? onDismiss,
+    bool showBarrier = true,
+    (int, int)? Function()? onResolveRange,
   }) {
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return null;
@@ -2781,16 +2811,17 @@ class _ReadingPageState extends State<ReadingPage>
     entry = OverlayEntry(
       builder: (ctx) => Stack(
         children: [
-          // 点击菜单外任意处关闭并恢复正常界面。
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () {
-                if (entry.mounted) entry.remove();
-                onDismiss?.call();
-              },
+          if (showBarrier)
+            // 点击菜单外任意处关闭并恢复正常界面。
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () {
+                  if (entry.mounted) entry.remove();
+                  onDismiss?.call();
+                },
+              ),
             ),
-          ),
           Positioned.fill(
             child: CustomSingleChildLayout(
               delegate: _MenuLayoutDelegate(
@@ -2806,6 +2837,7 @@ class _ReadingPageState extends State<ReadingPage>
                   if (entry.mounted) entry.remove();
                   onDismiss?.call();
                 },
+                onResolveRange: onResolveRange,
               ),
             ),
           ),
@@ -2858,10 +2890,28 @@ class _ReadingPageState extends State<ReadingPage>
     );
   }
 
+  /// 选区变化：更新最新范围，供浮层 画线/想法/复制 使用；
+  /// 当长按选中浮层打开、而用户把选区折叠（点击空白 / 清空）时，
+  /// 关闭浮层并恢复为正常阅读页（无遮罩场景下的“点外关闭”）。
+  void _onSelectionChanged(TextSelection sel) {
+    if (sel.isCollapsed) {
+      _selectionRange = null;
+      if (_selectionMenuEntry == null) return;
+      final entry = _selectionMenuEntry;
+      _selectionMenuEntry = null;
+      _selectionTextState = null;
+      if (entry != null && entry.mounted) entry.remove();
+      return;
+    }
+    _selectionRange = (sel.start, sel.end);
+  }
+
   /// 长按选中文字后的菜单：与「单击画线」共用同一个卡片 UI
-  /// （复制 / 画线(擦除) / 全选 / 想法，每项图标上文字下）。
+  /// （复制 / 画线(擦除) / 本段全选 / 想法，每项图标上文字下）。
   /// 不直接把卡片返回给框架（那样会铺满整屏变白屏），而是返回空组件，
   /// 由 [Overlay] 在选中处上方独立弹出同一张卡片，经文保持可见。
+  /// 不使用全屏遮罩，句柄仍可拖动调整选区；点 画线/想法 时读取实时选区，
+  /// 确保画线覆盖的就是当前可见的高亮范围（而非长按时的初始单字）。
   Widget _buildSelectionToolbar(
       BuildContext context, EditableTextState editableTextState, int i) {
     final p = _paragraphs[i];
@@ -2869,6 +2919,7 @@ class _ReadingPageState extends State<ReadingPage>
     final start = sel.isValid ? sel.start.clamp(0, p.length) : 0;
     final end = sel.isValid ? sel.end.clamp(0, p.length) : 0;
     final anchor = editableTextState.contextMenuAnchors.primaryAnchor;
+    _selectionTextState = editableTextState;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _selectionMenuEntry != null) return;
@@ -2877,10 +2928,27 @@ class _ReadingPageState extends State<ReadingPage>
         start: start,
         end: end,
         anchor: anchor,
-        // 点菜单外：关闭浮层并收起选择，恢复正常阅读页。
+        showBarrier: false,
+        // 读取当前最新选区（随句柄拖动即时更新），保证画线/想法作用于用户当前高亮的整段。
+        onResolveRange: () {
+          final r = _selectionRange;
+          if (r != null) {
+            final cs = r.$1.clamp(0, p.length);
+            final ce = r.$2.clamp(0, p.length);
+            if (ce > cs) return (cs, ce);
+          }
+          final s0 = _selectionTextState?.textEditingValue.selection;
+          if (s0 == null || !s0.isValid || s0.isCollapsed) return null;
+          final cs2 = s0.start.clamp(0, p.length);
+          final ce2 = s0.end.clamp(0, p.length);
+          if (ce2 <= cs2) return null;
+          return (cs2, ce2);
+        },
         onDismiss: () {
           _selectionMenuEntry = null;
-          if (editableTextState.mounted) editableTextState.hideToolbar();
+    _selectionTextState = null;
+    _selectionRange = null;
+          _selectionRange = null;
         },
       );
     });
@@ -2993,6 +3061,7 @@ class _ReadingPageState extends State<ReadingPage>
             ),
             onSelectionChanged: (sel, cause) {
               _hasTextSelection = !sel.isCollapsed;
+              _onSelectionChanged(sel);
             },
             contextMenuBuilder: (context, editableTextState) =>
                 _buildSelectionToolbar(context, editableTextState, index),
@@ -3020,6 +3089,7 @@ class _IdeaMenuCard extends StatefulWidget {
   final VoidCallback close;
   final void Function(int start, int end) onDrawUnderline;
   final void Function(int start, int end) onOpenNote;
+  final (int, int)? Function()? onResolveRange;
 
   const _IdeaMenuCard({
     required this.para,
@@ -3032,6 +3102,7 @@ class _IdeaMenuCard extends StatefulWidget {
     required this.close,
     required this.onDrawUnderline,
     required this.onOpenNote,
+    this.onResolveRange,
   });
 
   @override
@@ -3042,6 +3113,8 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
   late int _start;
   late int _end;
   late bool _underlined;
+  // 点击「本段全选」后置真：之后画线/想法作用于整段，不再依赖实时选区。
+  bool _overrideFull = false;
 
   @override
   void initState() {
@@ -3051,10 +3124,19 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
     _underlined = widget.initialUnderlined;
   }
 
+  /// 当前应作用的目标区间：优先「本段全选」；其次实时选区；最后初始区间。
+  (int, int) get _activeRange {
+    if (_overrideFull) return (0, widget.paragraph.length);
+    final live = widget.onResolveRange?.call();
+    if (live != null) return live;
+    return (_start, _end);
+  }
+
   String get _selectedText {
-    final s = _start.clamp(0, widget.paragraph.length);
-    final e = _end.clamp(0, widget.paragraph.length);
-    return (e > s) ? widget.paragraph.substring(s, e) : '';
+    final (s, e) = _activeRange;
+    final cs = s.clamp(0, widget.paragraph.length);
+    final ce = e.clamp(0, widget.paragraph.length);
+    return (ce > cs) ? widget.paragraph.substring(cs, ce) : '';
   }
 
   Widget _item(IconData icon, String label, VoidCallback onTap) {
@@ -3099,21 +3181,20 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
           _item(
               _underlined ? Icons.undo : Icons.format_underlined,
               _underlined ? '擦除' : '画线', () {
-            final s = _start;
-            final e = _end;
+            final (s, e) = _activeRange;
             setState(() => _underlined = !_underlined);
             widget.onDrawUnderline(s, e);
           }),
-          _item(Icons.select_all, '全选', () {
+          _item(Icons.select_all, '本段全选', () {
             setState(() {
+              _overrideFull = true;
               _start = 0;
               _end = widget.paragraph.length;
               _underlined = false;
             });
           }),
           _item(Icons.edit_note, widget.initialHasIdea ? '修改想法' : '想法', () {
-            final s = _start;
-            final e = _end;
+            final (s, e) = _activeRange;
             widget.close();
             widget.onOpenNote(s, e);
           }),

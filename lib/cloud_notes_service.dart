@@ -755,6 +755,27 @@ class CloudNotesService {
     return const [];
   }
 
+  /// 拉取「所有用户」对某段经文的想法：菩提空间公开帖中符合
+  /// `$经名\n\n段原文\n\n想法` 格式、且段原文与 [paragraph] 匹配的帖子。
+  /// 返回分页列表 + 是否还有更多。
+  Future<(List<PlazaNote>, bool hasMore)> getParagraphThoughts(
+    String paragraph, {
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final res = await _call('searchParagraphThoughts', params: {
+      'paragraph': paragraph,
+      'page': page,
+      'pageSize': pageSize,
+    });
+    final list = (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+    final hasMore = res['hasMore'] == true;
+    return (_withoutDeleted(list), hasMore);
+  }
+
   /// 把云端返回的画线区间统一成 [{start:int, end:int}]。
   List<Map<String, int>> _normalizeUnderlines(dynamic raw) {
     if (raw is! List) return const [];
