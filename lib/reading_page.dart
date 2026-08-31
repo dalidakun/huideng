@@ -2753,6 +2753,7 @@ class _ReadingPageState extends State<ReadingPage>
     required int end,
     required VoidCallback close,
     (int, int)? Function()? onResolveRange,
+    VoidCallback? onSelectFull,
   }) {
     if (para < 0 || para >= _paragraphs.length) return const SizedBox.shrink();
     final p = _paragraphs[para];
@@ -2770,6 +2771,7 @@ class _ReadingPageState extends State<ReadingPage>
       initialHasIdea: (_paraNotes[para] ?? '').isNotEmpty,
       isDarkBg: _isDarkBg,
       close: close,
+      onSelectFull: onSelectFull,
       onResolveRange: onResolveRange,
       onDrawUnderline: (ss, ee) => _toggleUnderline(para, ss, ee),
       onOpenNote: (ss, ee) => _openIdeaFromRange(para, ss, ee),
@@ -2801,6 +2803,7 @@ class _ReadingPageState extends State<ReadingPage>
     VoidCallback? onDismiss,
     bool showBarrier = true,
     (int, int)? Function()? onResolveRange,
+    VoidCallback? onSelectFull,
   }) {
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return null;
@@ -2838,6 +2841,7 @@ class _ReadingPageState extends State<ReadingPage>
                   onDismiss?.call();
                 },
                 onResolveRange: onResolveRange,
+                onSelectFull: onSelectFull,
               ),
             ),
           ),
@@ -2906,6 +2910,19 @@ class _ReadingPageState extends State<ReadingPage>
     _selectionRange = (sel.start, sel.end);
   }
 
+  /// 「本段全选」：把当前选中文字所在整个段落的蓝色高亮扩展到整段，
+  /// 并更新 [_selectionRange] 供后续画线/想法作用于整段。
+  void _selectFullParagraph(int i) {
+    if (i < 0 || i >= _paragraphs.length) return;
+    final p = _paragraphs[i];
+    final state = _selectionTextState;
+    if (state != null) {
+      state.selectAll(SelectionChangedCause.tap);
+      // selectAll 会把选区整段选中，同步记录供 onResolveRange 读取。
+      _selectionRange = (0, p.length);
+    }
+  }
+
   /// 长按选中文字后的菜单：与「单击画线」共用同一个卡片 UI
   /// （复制 / 画线(擦除) / 本段全选 / 想法，每项图标上文字下）。
   /// 不直接把卡片返回给框架（那样会铺满整屏变白屏），而是返回空组件，
@@ -2944,6 +2961,8 @@ class _ReadingPageState extends State<ReadingPage>
           if (ce2 <= cs2) return null;
           return (cs2, ce2);
         },
+        // 「本段全选」：把视觉高亮扩大到整段（真实选中整段文字），并置后续画线/想法作用整段。
+        onSelectFull: () => _selectFullParagraph(i),
         onDismiss: () {
           _selectionMenuEntry = null;
     _selectionTextState = null;
@@ -3091,6 +3110,9 @@ class _IdeaMenuCard extends StatefulWidget {
   final void Function(int start, int end) onOpenNote;
   final (int, int)? Function()? onResolveRange;
 
+  /// 「本段全选」时回调外层：把屏幕上的选中高亮扩展到整段（长按选中场景）。
+  final VoidCallback? onSelectFull;
+
   const _IdeaMenuCard({
     required this.para,
     required this.paragraph,
@@ -3103,6 +3125,7 @@ class _IdeaMenuCard extends StatefulWidget {
     required this.onDrawUnderline,
     required this.onOpenNote,
     this.onResolveRange,
+    this.onSelectFull,
   });
 
   @override
@@ -3192,6 +3215,8 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
               _end = widget.paragraph.length;
               _underlined = false;
             });
+            // 同步把屏幕上的选中高亮扩展到整段（长按选中场景）。
+            widget.onSelectFull?.call();
           }),
           _item(Icons.edit_note, widget.initialHasIdea ? '修改想法' : '想法', () {
             final (s, e) = _activeRange;
