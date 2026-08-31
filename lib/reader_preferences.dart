@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 阅读偏好统一存储。阅读页与设置页共用同一套键，保证设置即时生效。
@@ -6,10 +7,34 @@ class ReaderPreferences {
   static const String isDarkModeKey = 'isDarkMode';
   static const String lineHeightKey = 'reader_line_height';
   static const String pageModeKey = 'reader_page_mode';
+  static const String bgColorKey = 'reader_bg_color';
 
   /// 翻页方式：0=纵向滚动，1=左右翻页。
   static const int pageModeScroll = 0;
   static const int pageModeFlip = 1;
+
+  /// 五种阅读背景色：默认白、暖黄、米灰、豆绿、深色。
+  static const List<int> bgColors = [
+    0xFFF5F5F5, // 默认白（修改前的原色）
+    0xFFEDDAB9, // 暖黄
+    0xFFE6DED4, // 米灰
+    0xFFCCDAC0, // 豆绿
+    0xFF393536, // 深色
+  ];
+
+  /// AppBar 背景色：直接使用阅读背景色。
+  static Color appBarColor(int index) => Color(bgColors[index]);
+
+  /// 背景色索引：0=默认白, 1=暖黄, 2=米灰, 3=豆绿, 4=深色。
+  static Future<int> getBgColorIndex() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(bgColorKey) ?? 0;
+  }
+
+  static Future<void> setBgColorIndex(int index) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(bgColorKey, index);
+  }
 
   static Future<double> getFontSize() async {
     final prefs = await SharedPreferences.getInstance();

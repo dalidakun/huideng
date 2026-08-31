@@ -699,6 +699,100 @@ class CloudNotesService {
   String get _authorName =>
       AuthService.instance.currentUser.value?.displayName ?? '同修';
 
+  /// AI 经文翻译/讨论（云端调用 DeepSeek，密钥在服务端，客户端不接触）。
+  /// - action: 'translate' 把整段古文翻译成白话；'discuss' 围绕该段继续追问。
+  /// - history: 追问时带上 {role, content}（与 OpenAI 消息格式一致）。
+  /// 返回已生成的译文/回复文本。
+  Future<String> aiTranslate({
+    required String paragraph,
+    String action = 'translate',
+    List<Map<String, String>> history = const [],
+  }) async {
+    final res = await _call(
+      'aiTranslate',
+      params: {
+        'paragraph': paragraph,
+        'mode': action,
+        if (history.isNotEmpty) 'history': history,
+      },
+      // 大模型生成耗时较长，放宽云调用超时（内部另设服务端 60s 上限）。
+      timeout: const Duration(seconds: 70),
+    );
+    final text = res['text']?.toString() ?? '';
+    if (text.isEmpty) {
+      throw const CloudApiException('AI 未返回内容，请稍后重试');
+    }
+    return text;
+  }
+
+  /// 读取某段经文已缓存的白话翻译（其他同修/自己之前翻译过的结果）。
+  /// 只查共享缓存，不调用 DeepSeek 生成。未命中返回 null。
+  Future<String?> getCachedParagraphTranslation(String paragraph) async {
+    final res = await _call(
+      'getParagraphTranslation',
+      params: {'paragraph': paragraph},
+    );
+    if (res['found'] == true) {
+      final text = res['text']?.toString() ?? '';
+      return text.isEmpty ? null : text;
+    }
+    return null;
+  }
+
+  /// 读取某本经的全部段落笔记/完成态（跨设备云端同步）。
+  /// 返回 [{index, note, done, updatedAt}]。
+  Future<List<Map<String, dynamic>>> getParagraphNotes(String sutraKey) async {
+    final res = await _call('getParagraphNotes', params: {'sutraKey': sutraKey});
+    final items = res['items'];
+    if (items is List) {
+      return items.cast<Map<String, dynamic>>();
+    }
+    return const [];
+  }
+
+  /// 保存某段的备注文本（note 为空表示清除该段备注）。
+  /// [shared] 表示该段读经笔记是否分享到菩提空间，[cloudId] 为分享后的云端帖子 ID。
+  Future<void> saveParagraphNote({
+    required String sutraKey,
+    required int index,
+    required String text,
+    required String note,
+    bool shared = false,
+    String cloudId = '',
+  }) async {
+    await _call('saveParagraphNote', params: {
+      'sutraKey': sutraKey,
+      'index': index,
+      'text': text,
+      'note': note,
+      'shared': shared,
+      'cloudId': cloudId,
+    });
+  }
+
+  /// 切换某段「已读完/学完」标记。
+  Future<void> toggleParagraphDone({
+    required String sutraKey,
+    required int index,
+    required String text,
+    required bool done,
+  }) async {
+    await _call('toggleParagraphDone', params: {
+      'sutraKey': sutraKey,
+      'index': index,
+      'text': text,
+      'done': done,
+    });
+  }
+
+  /// 删除某段全部段落数据（备注 + 完成态）。
+  Future<void> deleteParagraphNote({
+    required String sutraKey,
+    required int index,
+  }) async {
+    await _call('deleteParagraphNote', params: {'sutraKey': sutraKey, 'index': index});
+  }
+
   Future<Map<String, dynamic>> _call(
     String action, {
     Map<String, dynamic>? params,
@@ -737,6 +831,9 @@ class CloudNotesService {
       'reportReadingTime',
       'reportCanonProgress',
       'deleteTopic',
+      'saveParagraphNote',
+      'toggleParagraphDone',
+      'deleteParagraphNote',
     };
     return writes.contains(action);
   }
@@ -1728,6 +1825,11 @@ class CloudNotesService {
     Map<String, dynamic>? params,
   }) {
     return _call(action, params: params);
+  }
+
+  /// AI 网络自诊断：检测云函数到大模型服务的连通性，返回根因结论。
+  Future<Map<String, dynamic>> aiNetProbe() async {
+    return _call('aiNetProbe', timeout: const Duration(seconds: 30));
   }
 
   /// 上报读经时长增量（秒）到云端：服务端累加到 userAccounts.readingSeconds，

@@ -26,6 +26,7 @@ import 'recent_sutras_page.dart';
 
 import 'app_palette.dart';
 import 'agreements.dart';
+import 'ui_sound.dart';
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
@@ -40,6 +41,8 @@ void main() async {
   // 因此登录恢复、云同步、通知调度等服务统一延迟到 [startBackgroundServices]。
   final agreed = await PrivacyConsent.isAgreed();
   runApp(MyApp(privacyAgreed: agreed));
+  // 预热底部菜单点击音（纯本地资源，无网络请求），保证首次点击立即发声。
+  unawaited(UiSound.instance.warmup());
   if (!agreed) return;
   startBackgroundServices();
 }
@@ -695,7 +698,11 @@ class _BottomNavBar extends StatelessWidget {
                   final Widget icon = selected ? item.activeIcon : item.icon;
                   return Expanded(
                     child: InkWell(
-                      onTap: () => onTap(i),
+                      onTap: () {
+                        // 点击菜单时播放清脆短暂的自带点击音效。
+                        UiSound.instance.playClick();
+                        onTap(i);
+                      },
                       borderRadius: BorderRadius.circular(10),
                       child: Center(
                         child: SizedBox(

@@ -16,12 +16,14 @@ class SutraEditPage extends StatefulWidget {
   final String title;
   final String content;
   final String keyPath;
+  final double scrollProgress;
 
   const SutraEditPage({
     super.key,
     required this.title,
     required this.content,
     required this.keyPath,
+    this.scrollProgress = 0.0,
   });
 
   @override
@@ -30,13 +32,37 @@ class SutraEditPage extends StatefulWidget {
 
 class _SutraEditPageState extends State<SutraEditPage> {
   late final TextEditingController _controller;
+  late final FocusNode _focusNode;
   bool _hasEdited = false;
+  bool _positioned = false;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.content);
+    _focusNode = FocusNode();
     _checkEdited();
+    // 将光标/滚动位置定位到与阅读进度一致的位置，便于直接编辑该处经文。
+    final progress = widget.scrollProgress.clamp(0.0, 1.0);
+    if (progress > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final length = _controller.text.length;
+        final pos = (length * progress).round().clamp(0, length);
+        _controller.selection = TextSelection.collapsed(offset: pos);
+        if (!_positioned) {
+          _positioned = true;
+          _focusNode.requestFocus();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
   }
 
   Future<void> _checkEdited() async {
@@ -46,12 +72,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
         _hasEdited = File(path).existsSync();
       });
     }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
   }
 
   Future<void> _save() async {
@@ -117,6 +137,7 @@ class _SutraEditPageState extends State<SutraEditPage> {
           ),
           child: TextField(
             controller: _controller,
+            focusNode: _focusNode,
             maxLines: null,
             expands: true,
             textAlignVertical: TextAlignVertical.top,

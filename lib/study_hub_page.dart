@@ -926,20 +926,17 @@ class StudyHubPageState extends State<StudyHubPage>
               ),
             ),
             if (_currentTitle != null)
-              Positioned.fill(
-                child: Align(
-                  alignment: Alignment.bottomRight,
-                  child: FractionallySizedBox(
-                    widthFactor: 0.75,
-                    heightFactor: 0.75,
-                    child: Opacity(
-                      opacity: 0.25,
-                      child: Image.asset(
-                        'assets/images/lianhua.png',
-                        fit: BoxFit.contain,
-                        alignment: Alignment.bottomRight,
-                      ),
-                    ),
+              Positioned(
+                width: 220,
+                height: 180,
+                right: 0,
+                bottom: 0,
+                child: Opacity(
+                  opacity: 0.25,
+                  child: Image.asset(
+                    'assets/images/lianhua.png',
+                    fit: BoxFit.contain,
+                    alignment: Alignment.bottomRight,
                   ),
                 ),
               ),
@@ -962,14 +959,14 @@ class StudyHubPageState extends State<StudyHubPage>
                       child: Icon(Icons.menu_book_rounded,
                           size: 16, color: AppPalette.p.readingAccent),
                     ),
-                    SizedBox(width: AppPalette.instance.isPlain ? 5 : 10),
+                    SizedBox(width: AppPalette.instance.isPlain ? 9 : 12),
                     Text('精读经文',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: _text)),
+                            color: _textSec)),
                     if (_currentTitle != null) ...[
                       const SizedBox(width: 6),
                       GestureDetector(

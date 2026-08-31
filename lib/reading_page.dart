@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
-import 'sutra_edit_page.dart';
+import 'sutra_edit_page.dart' show editedSutraFilePath;
 import 'sutra_favorites.dart';
 import 'sutra_read_later.dart';
 import 'app_state.dart';
@@ -23,6 +23,10 @@ import 'sutra_list_page.dart'
         sutraBaseTitle,
         loadLocalMultiVolumeBases;
 import 'reading_guide_page.dart';
+import 'reading_notes_page.dart';
+import 'reading_note_edit_page.dart';
+import 'cloud_notes_service.dart';
+import 'auth_service.dart';
 
 import 'app_palette.dart';
 class ReadingPage extends StatefulWidget {
@@ -44,22 +48,48 @@ class ReadingPage extends StatefulWidget {
 class _ReadingPageState extends State<ReadingPage>
     with WidgetsBindingObserver, RouteAware {
   String _content = '';
+  List<String> _paragraphs = [];
   double _fontSize = 16.0;
   double _lineHeight = 1.8;
   int _pageMode = ReaderPreferences.pageModeScroll;
+  int _bgColorIndex = 0;
   bool _isDarkMode = false;
   late ScrollController _scrollController;
   PageController? _pageController;
   final TextEditingController _searchController = TextEditingController();
   bool _showSearchBar = false;
   bool _showMoreMenu = false;
+  bool _showStylePanel = false;
+  Offset? _pointerDownPos;
+  DateTime? _pointerDownTime;
+  bool _longPressActive = false;
+  bool _menuOpenAtDown = false;
+  bool _hasTextSelection = false;
+  bool _actionRowTapped = false; // 点击段落操作栏（AI译/笔记/方框）时置true，阻止外层Listener触发面板
   final GlobalKey _moreMenuKey = GlobalKey();
+
+  // ── AI 翻译面板状态 ─────────────────────────
+  String? _aiParagraph; // 当前选中要翻译的段落原文
+  int _aiParagraphIndex = -1; // 该段在 _paragraphs 中的下标
+  bool _aiPanelLoading = false; // 翻译请求进行中
+  String? _aiTranslation; // 已生成的白话译文
+  String? _aiError; // 错误信息
+  bool _aiDiagLoading = false; // 诊断请求进行中
+  String? _aiDiagText; // 诊断结果文本
   List<int> _searchMatches = [];
   int _currentMatchIndex = 0;
   double _scrollProgress = 0.0;
+
+  // ── 读经段落笔记 / 完成态（云端同步） ─────────
+  Map<int, String> _paraNotes = {}; // index -> 备注文本（空串表示无）
+  Map<int, bool> _paraDone = {}; // index -> 是否已读完/学完
+  Map<int, bool> _paraShared = {}; // index -> 该段笔记是否已分享到菩提空间
+  Map<int, String> _paraCloudIds = {}; // index -> 分享后的云端帖子 ID
+  bool _paraNotesLoading = false;
+  int _activeNoteParagraphIndex = -1; // 正在编辑备注的段落（用于输入框）
+  final TextEditingController _noteInputController = TextEditingController();
   late final String? _resolvedFilePath;
   bool _isLoadingContent = true;
-  bool _isEdited = false;
   bool _needsDownload = false;
   bool _isDownloading = false;
   double _downloadProgress = 0;
@@ -67,11 +97,15 @@ class _ReadingPageState extends State<ReadingPage>
   bool _isRead = false;
   bool _isReadLater = false;
   double? _savedPosition;
+
+  /// 当前背景是否为深色（索引4 = 393536）。
+  bool get _isDarkBg => _bgColorIndex == 4;
   double? _savedProgress;
   int _restoreAttempts = 0;
 
   // 翻页模式：分页结果与缓存，避免每帧重算。
-  List<String> _flipPages = [];
+  // 每页存的是该页包含的段落索引列表（按段落分页，段内才带操作栏）。
+  List<List<int>> _flipPages = [];
   String _flipCacheKey = '';
   int _currentFlipPage = 0;
   bool _flipPageRestored = false;
@@ -94,7 +128,12 @@ class _ReadingPageState extends State<ReadingPage>
           filePath: _resolvedFilePath ?? widget.filePath,
           multiVolumeBases: mvBases);
     });
+    // 内容可能在标题加载后仍在进行，笔记状态按需要异步拉取即可。
+    _loadParagraphNotes();
   }
+
+  /// 本经的段落笔记云端存储主键（用经名，稳定且跨设备一致）。
+  String get _sutraKey => widget.title;
 
   /// 是否已订阅路由生命周期（用于读经计时）。
   bool _subscribed = false;
@@ -224,6 +263,7 @@ class _ReadingPageState extends State<ReadingPage>
     _scrollController.dispose();
     _pageController?.dispose();
     _searchController.dispose();
+    _noteInputController.dispose();
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
     assistantVisible.value = false;
     super.dispose();
@@ -285,6 +325,7 @@ class _ReadingPageState extends State<ReadingPage>
       _isDarkMode = prefs.getBool('isDarkMode') ?? false;
       _lineHeight = (prefs.get('reader_line_height') as num?)?.toDouble() ?? 1.8;
       _pageMode = prefs.getInt('reader_page_mode') ?? ReaderPreferences.pageModeScroll;
+      _bgColorIndex = prefs.getInt('reader_bg_color') ?? 0;
     });
     // 同步全局夜间模式信号，消息中心等页面跟随切换浅色/深色配色。
     appDarkMode.value = _isDarkMode;
@@ -305,6 +346,7 @@ class _ReadingPageState extends State<ReadingPage>
     await prefs.setBool('isDarkMode', _isDarkMode);
     await prefs.setDouble('reader_line_height', _lineHeight);
     await prefs.setInt('reader_page_mode', _pageMode);
+    await prefs.setInt('reader_bg_color', _bgColorIndex);
   }
 
   Future<void> _loadContent() async {
@@ -327,7 +369,7 @@ class _ReadingPageState extends State<ReadingPage>
           if (mounted) {
             setState(() {
               _content = content;
-              _isEdited = true;
+              _paragraphs = _parseParagraphs(content);
               _isLoadingContent = false;
             });
             WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
@@ -337,7 +379,6 @@ class _ReadingPageState extends State<ReadingPage>
           // 读取失败则回退到原始文件
         }
       }
-      _isEdited = false;
 
       // 2. 其次加载已下载到本地的副本
       File? localCopy;
@@ -361,6 +402,7 @@ class _ReadingPageState extends State<ReadingPage>
           if (mounted) {
             setState(() {
               _content = content;
+              _paragraphs = _parseParagraphs(content);
               _isLoadingContent = false;
             });
             WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
@@ -378,6 +420,7 @@ class _ReadingPageState extends State<ReadingPage>
           if (mounted) {
             setState(() {
               _content = content;
+              _paragraphs = _parseParagraphs(content);
               _isLoadingContent = false;
             });
             WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
@@ -385,12 +428,12 @@ class _ReadingPageState extends State<ReadingPage>
         } catch (e) {
           if (mounted) {
             setState(() {
-              _content = '该经文正文尚未下载，请点击上方“下载”按钮获取后再阅读。';
+              _content = '该经文正文尚未下载，请点击上方"下载"按钮获取后再阅读。';
+              _paragraphs = [];
               _isLoadingContent = false;
               _needsDownload = true;
             });
           }
-
         }
       } else {
         try {
@@ -400,6 +443,7 @@ class _ReadingPageState extends State<ReadingPage>
             if (mounted) {
               setState(() {
                 _content = content;
+                _paragraphs = _parseParagraphs(content);
                 _isLoadingContent = false;
               });
               WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
@@ -407,6 +451,7 @@ class _ReadingPageState extends State<ReadingPage>
           } else if (mounted) {
             setState(() {
               _content = '该经文正文尚未下载。';
+              _paragraphs = [];
               _isLoadingContent = false;
               _needsDownload = true;
             });
@@ -415,6 +460,7 @@ class _ReadingPageState extends State<ReadingPage>
           if (mounted) {
             setState(() {
               _content = '无法加载文件内容';
+              _paragraphs = [];
               _isLoadingContent = false;
             });
           }
@@ -424,9 +470,127 @@ class _ReadingPageState extends State<ReadingPage>
       if (mounted) {
         setState(() {
           _content = '这是《$_titleShown》的预览内容。\n\n暂无实际文件，请添加本地文件。';
+          _paragraphs = ['暂无实际文件，请添加本地文件。'];
           _isLoadingContent = false;
         });
       }
+    }
+  }
+
+  List<String> _parseParagraphs(String content) {
+    return content.split('\n').where((line) => line.trim().isNotEmpty).toList();
+  }
+
+  /// 拉取本经所有段落的笔记与完成态（云端）到本地状态。
+  Future<void> _loadParagraphNotes() async {
+    if (_paraNotesLoading) return;
+    setState(() => _paraNotesLoading = true);
+    try {
+      final items = await CloudNotesService.instance.getParagraphNotes(_sutraKey);
+      if (!mounted) return;
+      setState(() {
+        _paraNotes = {
+          for (final it in items)
+            if (it['index'] is int) it['index'] as int: (it['note'] ?? '').toString(),
+        };
+        _paraDone = {
+          for (final it in items)
+            if (it['index'] is int) it['index'] as int: it['done'] == true,
+        };
+        _paraShared = {
+          for (final it in items)
+            if (it['index'] is int) it['index'] as int: it['shared'] == true,
+        };
+        _paraCloudIds = {
+          for (final it in items)
+            if (it['index'] is int)
+              it['index'] as int: (it['cloudId'] ?? '').toString(),
+        };
+        _paraNotesLoading = false;
+      });
+    } catch (e) {
+      // 笔记拉取失败不阻塞阅读：保持本地为空，静默降级。
+      if (!mounted) return;
+      setState(() => _paraNotesLoading = false);
+      debugPrint('[reading] 拉取段落笔记失败: $e');
+    }
+  }
+
+  /// 保存某段备注文本到云端并更新本地状态。
+  Future<void> _saveParagraphNote(int index, String note,
+      {bool shared = false, String cloudId = ''}) async {
+    if (index < 0 || index >= _paragraphs.length) return;
+    // 段落笔记存云端、按用户隔离：未登录直接提示，避免白白弹错误窗。
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return;
+    }
+    final noteTrim = note.trim();
+    setState(() {
+      if (noteTrim.isEmpty) {
+        _paraNotes.remove(index);
+        _paraShared.remove(index);
+        _paraCloudIds.remove(index);
+      } else {
+        _paraNotes[index] = noteTrim;
+        _paraShared[index] = shared;
+        _paraCloudIds[index] = cloudId;
+      }
+      _activeNoteParagraphIndex = -1;
+    });
+    try {
+      await CloudNotesService.instance.saveParagraphNote(
+        sutraKey: _sutraKey,
+        index: index,
+        text: _paragraphs[index],
+        note: noteTrim,
+        shared: shared,
+        cloudId: cloudId,
+      );
+      if (!mounted) return;
+      _loadParagraphNotes();
+    } catch (e) {
+      debugPrint('[reading] 保存段落笔记失败: $e');
+      if (!mounted) return;
+      final msg = e is CloudApiException ? e.message : '网络异常，请稍后重试';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保存笔记失败：$msg')),
+      );
+    }
+  }
+
+  /// 未登录时点击笔记/勾选/读经笔记的统一提示。
+  void _promptLoginForNotes() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('登录后才能保存读经笔记（跨设备同步），请先在「我的」页面登录')),
+    );
+  }
+
+  /// 切换某段「已读完/学完」标记并云端同步。
+  Future<void> _toggleParagraphDone(int index) async {
+    if (index < 0 || index >= _paragraphs.length) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return;
+    }
+    final newDone = !(_paraDone[index] ?? false);
+    setState(() => _paraDone[index] = newDone);
+    try {
+      await CloudNotesService.instance.toggleParagraphDone(
+        sutraKey: _sutraKey,
+        index: index,
+        text: _paragraphs[index],
+        done: newDone,
+      );
+    } catch (e) {
+      debugPrint('[reading] 切换段落完成态失败: $e');
+      if (!mounted) return;
+      // 失败回滚，避免本地显示与云端不一致。
+      setState(() => _paraDone[index] = !newDone);
+      final msg = e is CloudApiException ? e.message : '网络异常，请稍后重试';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('更新失败：$msg')),
+      );
     }
   }
 
@@ -452,7 +616,10 @@ class _ReadingPageState extends State<ReadingPage>
       await SutraDownloader.download(id, onProgress: (received, total) {
         if (!mounted) return;
         setState(() {
-          _downloadProgress = total > 0 ? received / total : 0;
+          // 服务器/代理的 Content-Length 可能不准（压缩、分块传输等），
+          // received 会大于 total，导致百分比超过 100%，这里夹在 [0,1]。
+          _downloadProgress =
+              total > 0 ? (received / total).clamp(0.0, 1.0) : 0;
         });
       });
       if (!mounted) return;
@@ -482,7 +649,7 @@ class _ReadingPageState extends State<ReadingPage>
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: _isDarkMode ? const Color(0xFF2c2c2c) : AppPalette.p.tintBg,
+        color: _isDarkBg ? const Color(0xFF2c2c2c) : AppPalette.p.tintBg,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -492,14 +659,14 @@ class _ReadingPageState extends State<ReadingPage>
                 ? Text(
                     '下载中… ${(_downloadProgress * 100).toStringAsFixed(0)}%',
                     style: TextStyle(
-                      color: _isDarkMode ? Colors.white : AppPalette.p.primary,
+                      color: _isDarkBg ? Colors.white : AppPalette.p.primary,
                       fontSize: 13,
                     ),
                   )
                 : Text(
                     '该经文正文未打包，需要联网下载。',
                     style: TextStyle(
-                      color: _isDarkMode ? Colors.white : AppPalette.p.primary,
+                      color: _isDarkBg ? Colors.white : AppPalette.p.primary,
                       fontSize: 13,
                     ),
                   ),
@@ -531,23 +698,6 @@ class _ReadingPageState extends State<ReadingPage>
         ],
       ),
     );
-  }
-
-  Future<void> _openEditor() async {
-    final filePath = _resolvedFilePath ?? widget.filePath;
-    if (filePath == null) return;
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => SutraEditPage(
-          title: _titleShown,
-          content: _content,
-          keyPath: filePath,
-        ),
-      ),
-    );
-    if (changed == true && mounted) {
-      await _loadContent();
-    }
   }
 
   void _scrollToStart() {
@@ -662,34 +812,6 @@ class _ReadingPageState extends State<ReadingPage>
     await prefs.setBool('read_$keyPath', true);
   }
 
-  void _showFontSizeDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('选择字号'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [12, 14, 16, 18, 20, 22, 24, 28, 32].map((size) {
-            return ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-              minVerticalPadding: 0,
-              dense: true,
-              title: Text('$size', style: TextStyle(fontSize: size.toDouble())),
-              onTap: () {
-                setState(() {
-                  _fontSize = size.toDouble();
-                });
-                _saveSettings();
-                Navigator.pop(context);
-              },
-              trailing: _fontSize == size ? Icon(Icons.check, color: AppPalette.p.primary) : null,
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -704,13 +826,13 @@ class _ReadingPageState extends State<ReadingPage>
         }
       },
       child: Scaffold(
-            backgroundColor: _isDarkMode ? const Color(0xFF121212) : AppPalette.p.tintBg,
+            backgroundColor: Color(ReaderPreferences.bgColors[_bgColorIndex]),
             appBar: AppBar(
-              backgroundColor: _isDarkMode ? const Color(0xFF121212) : AppPalette.p.tintBg,
+              backgroundColor: ReaderPreferences.appBarColor(_bgColorIndex),
               elevation: 0,
               leadingWidth: 48,
               titleSpacing: 0,
-              iconTheme: IconThemeData(color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121)),
+              iconTheme: IconThemeData(color: _isDarkBg ? Colors.white.withOpacity(0.7) : const Color(0xFF212121)),
               title: GestureDetector(
                 onTap: () {
                   final now = DateTime.now();
@@ -743,14 +865,6 @@ class _ReadingPageState extends State<ReadingPage>
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (_isEdited)
-                      Padding(
-                        padding: EdgeInsets.only(left: 6),
-                        child: Text(
-                          '已编辑',
-                          style: TextStyle(color: AppPalette.p.accent, fontSize: 11),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -786,6 +900,8 @@ class _ReadingPageState extends State<ReadingPage>
               child: Listener(
                 onPointerDown: (event) {
                   if (_showMoreMenu && !_isPointerInsideMenu(event.position)) {
+                    // 标记这次点击是用来收起菜单的，内容区收到抬起后不弹面板。
+                    _menuOpenAtDown = true;
                     setState(() {
                       _showMoreMenu = false;
                     });
@@ -806,21 +922,23 @@ class _ReadingPageState extends State<ReadingPage>
                                   controller: _searchController,
                                   decoration: InputDecoration(
                                     hintText: '搜索内容',
-                                    hintStyle: TextStyle(
-                                      color: _isDarkMode ? Colors.white.withOpacity(0.38) : const Color(0xFF999999),
+                                    hintStyle: const TextStyle(
+                                      color: Color(0xFF999999),
                                       fontSize: 14,
                                     ),
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(8),
-                                      borderSide: BorderSide.none,
+                                      borderSide: _isDarkBg
+                                          ? BorderSide.none
+                                          : const BorderSide(color: Color(0xFFD9D9D9), width: 1),
                                     ),
                                     filled: true,
-                                    fillColor: _isDarkMode ? const Color(0xFF2c2c2c) : const Color(0xFFf5f5f5),
+                                    fillColor: Colors.white,
                                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                     isDense: true,
                                   ),
-                                  style: TextStyle(
-                                    color: _isDarkMode ? Colors.white : const Color(0xFF212121),
+                                  style: const TextStyle(
+                                    color: Color(0xFF212121),
                                     fontSize: 14,
                                   ),
                                   onChanged: _performSearch,
@@ -834,7 +952,7 @@ class _ReadingPageState extends State<ReadingPage>
                                       child: Text(
                                         '${_currentMatchIndex + 1}/${_searchMatches.length}',
                                         style: TextStyle(
-                                          color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
+                          color: _isDarkBg ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
                                           fontSize: 14,
                                         ),
                                       ),
@@ -856,16 +974,64 @@ class _ReadingPageState extends State<ReadingPage>
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: GestureDetector(
-                            onTap: () {
+                          child: Listener(
+                            onPointerDown: (event) {
+                              // 注意：此处绝不重置 _actionRowTapped ——
+                              // 指针事件按「从内到外」派发，操作栏的内层 Listener
+                              // 先把标记置 true，若这里再清掉，onPointerUp 就拦不住了。
+                              _pointerDownPos = event.position;
+                              _pointerDownTime = DateTime.now();
+                              _longPressActive = false;
+                              // 300ms 后若手指仍未抬起，视为长按（文字选择）。
+                              Future.delayed(const Duration(milliseconds: 300), () {
+                                if (_pointerDownPos != null && mounted) {
+                                  _longPressActive = true;
+                                }
+                              });
+                            },
+                            // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
+                            onPointerCancel: (_) {
+                              _actionRowTapped = false;
+                            },
+                            onPointerUp: (event) {
+                              // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
+                              if (_actionRowTapped) {
+                                _actionRowTapped = false;
+                                // 同步清理按下状态，避免残留影响 300ms 长按计时器。
+                                _pointerDownPos = null;
+                                _pointerDownTime = null;
+                                _longPressActive = false;
+                                return;
+                              }
+                              // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
+                              final menuOpenAtDown = _menuOpenAtDown;
+                              _menuOpenAtDown = false;
+                              final downPos = _pointerDownPos;
+                              _pointerDownPos = null;
+                              _pointerDownTime = null;
+                              // 长按或滑动均不触发面板。
+                              if (_longPressActive) {
+                                _longPressActive = false;
+                                return;
+                              }
+                              if (downPos != null &&
+                                  (event.position - downPos).distance > 10) return;
+                              // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
+                              if (menuOpenAtDown) return;
+                              // 正文正有文字被选中 → 点击是取消选中/交互，不弹面板。
+                              if (_hasTextSelection) return;
+                              // AI 翻译面板打开时，点击仅用于收起面板，不触发表单切换。
+                              if (_aiParagraph != null) return;
                               setState(() {
-                                _showMoreMenu = false;
-                                if (_showSearchBar) {
+                                if (_showMoreMenu) {
+                                  _showMoreMenu = false;
+                                } else if (_showSearchBar) {
                                   _showSearchBar = false;
                                   _searchController.clear();
                                   _searchMatches.clear();
                                   _currentMatchIndex = 0;
                                 }
+                                // 单击正文不再弹出任何面板（阅读设置已移入右上角菜单）。
                               });
                             },
                             child: LayoutBuilder(
@@ -882,52 +1048,102 @@ class _ReadingPageState extends State<ReadingPage>
                                     itemCount: pages.length,
                                     onPageChanged: _onFlipPageChanged,
                                     itemBuilder: (context, index) =>
-                                        _buildFlipPage(pages[index]),
+                                        _buildFlipPage(pages[index], index),
                                   );
                                 }
                                 return SingleChildScrollView(
                                   controller: _scrollController,
                                   child: _searchController.text.isEmpty
-                                      ? SelectableText(
-                                          _content,
-                                          style: TextStyle(
-                                            color: _isDarkMode ? Colors.white : const Color(0xFF212121),
-                                            fontSize: _fontSize,
-                                            height: _lineHeight,
-                                            letterSpacing: 0.5,
-                                          ),
+                                      ? Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                           children: List.generate(_paragraphs.length, (i) {
+                                             final p = _paragraphs[i];
+                                             return Padding(
+                                               padding: const EdgeInsets.only(bottom: 24.0),
+                                               child: Column(
+                                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                                 children: [
+                                                    SelectableText(
+                                                      p,
+                                                      onSelectionChanged: (sel, cause) {
+                                                        _hasTextSelection = !sel.isCollapsed;
+                                                      },
+                                                      style: TextStyle(
+                                                        color: _paraDone[i] == true
+                                                            ? (_isDarkBg
+                                                                ? Colors.white.withOpacity(0.35)
+                                                                : const Color(0xFFBDBDBD))
+                                                            : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
+                                                        fontSize: _fontSize,
+                                                        height: _lineHeight,
+                                                        letterSpacing: 0.5,
+                                                      ),
+                                                    ),
+                                                    Align(
+                                                      alignment: Alignment.centerLeft,
+                                                      child: _buildParagraphActions(i),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                          }),
                                         )
-                                      : SelectableText.rich(
-                                          TextSpan(
-                                            style: TextStyle(
-                                              color: _isDarkMode ? Colors.white : const Color(0xFF212121),
-                                              fontSize: _fontSize,
-                                              height: _lineHeight,
-                                              letterSpacing: 0.5,
-                                            ),
-                                            children: _highlightText(_content),
-                                          ),
-                                      contextMenuBuilder: (context, editableTextState) {
-                                        return AdaptiveTextSelectionToolbar(
-                                          anchors: editableTextState.contextMenuAnchors,
-                                          children: [
-                                            TextSelectionToolbarTextButton(
-                                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                              onPressed: () {
-                                                final selection = editableTextState.textEditingValue.selection;
-                                                final selectedText = _content.substring(selection.start, selection.end);
-                                                Clipboard.setData(ClipboardData(text: selectedText));
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text('已复制到剪贴板')),
-                                                );
-                                                editableTextState.hideToolbar();
-                                              },
-                                              child: const Text('复制'),
-                                            ),
-                                          ],
-                                        );
-                                      },
-                                     ),
+                                      : Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                           children: List.generate(_paragraphs.length, (i) {
+                                             final p = _paragraphs[i];
+                                             return Padding(
+                                               padding: const EdgeInsets.only(bottom: 24.0),
+                                               child: Column(
+                                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                                 children: [
+                                                   SelectableText.rich(
+                                                    TextSpan(
+                                                      style: TextStyle(
+                                                        color: _paraDone[i] == true
+                                                            ? (_isDarkBg
+                                                                ? Colors.white.withOpacity(0.35)
+                                                                : const Color(0xFFBDBDBD))
+                                                            : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
+                                                        fontSize: _fontSize,
+                                                        height: _lineHeight,
+                                                        letterSpacing: 0.5,
+                                                      ),
+                                                      children: _highlightText(p),
+                                                    ),
+                                                    onSelectionChanged: (sel, cause) {
+                                                      _hasTextSelection = !sel.isCollapsed;
+                                                    },
+                                                    contextMenuBuilder: (context, editableTextState) {
+                                                      return AdaptiveTextSelectionToolbar(
+                                                        anchors: editableTextState.contextMenuAnchors,
+                                                        children: [
+                                                          TextSelectionToolbarTextButton(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                                            onPressed: () {
+                                                              final selection = editableTextState.textEditingValue.selection;
+                                                              final selectedText = p.substring(selection.start, selection.end);
+                                                              Clipboard.setData(ClipboardData(text: selectedText));
+                                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                                const SnackBar(content: Text('已复制到剪贴板')),
+                                                              );
+                                                              editableTextState.hideToolbar();
+                                                            },
+                                                            child: const Text('复制'),
+                                                          ),
+                                                        ],
+                                                      );
+                                                    },
+                                                   ),
+                                                     Align(
+                                                      alignment: Alignment.centerLeft,
+                                                      child: _buildParagraphActions(i),
+                                                    ),
+                                                 ],
+                                               ),
+                                             );
+                                          }),
+                                        ),
                                 );
                               },
                             ),
@@ -941,17 +1157,17 @@ class _ReadingPageState extends State<ReadingPage>
                             Expanded(
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(
-                                    AppPalette.instance.isPlain && !_isDarkMode ? 2 : 3),
+                                    AppPalette.instance.isPlain && !_isDarkBg ? 2 : 3),
                                 child: LinearProgressIndicator(
                                   value: _scrollProgress,
                                   minHeight: 5,
-                                  backgroundColor: _isDarkMode
+                                  backgroundColor: _isDarkBg
                                       ? Colors.white.withOpacity(0.15)
                                       : AppPalette.instance.isPlain
                                           ? AppPalette.p.border
                                           : const Color(0xFFE8D9C4),
                                   valueColor:
-                                      AlwaysStoppedAnimation<Color>(!_isDarkMode &&
+                                      AlwaysStoppedAnimation<Color>(!_isDarkBg &&
                                               AppPalette.instance.isPlain
                                           ? const Color(0xFF4A4A4A)
                                           : AppPalette.p.accent),
@@ -964,7 +1180,7 @@ class _ReadingPageState extends State<ReadingPage>
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: _isDarkMode
+                                color: _isDarkBg
                                     ? Colors.white.withOpacity(0.7)
                                     : AppPalette.p.textSec,
                               ),
@@ -983,7 +1199,7 @@ class _ReadingPageState extends State<ReadingPage>
                       key: _moreMenuKey,
                       elevation: 6,
                       borderRadius: BorderRadius.circular(12),
-                      color: _isDarkMode ? const Color(0xFF2c2c2c) : Colors.white,
+                      color: _isDarkBg ? const Color(0xFF2c2c2c) : Colors.white,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                         child: Column(
@@ -991,27 +1207,14 @@ class _ReadingPageState extends State<ReadingPage>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _buildMoreMenuItem(
-                              icon: Icon(
-                                _isDarkMode ? Icons.light_mode : Icons.dark_mode,
-                                size: 18,
-                              ),
-                              label: _isDarkMode ? '日间模式' : '夜间模式',
-                              onTap: _toggleTheme,
-                            ),
-                            _buildMoreMenuItem(
                               icon: const Icon(Icons.text_fields, size: 18),
-                              label: '字体',
-                              onTap: _showFontSizeDialog,
+                              label: '阅读设置',
+                              onTap: _openReadingSettings,
                             ),
                             _buildMoreMenuItem(
-                              icon: const Icon(Icons.save_alt, size: 18),
-                              label: '导出TXT',
-                              onTap: _exportTxt,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: const Icon(Icons.edit, size: 18),
-                              label: '编辑',
-                              onTap: _openEditor,
+                              icon: const Icon(Icons.menu_book_outlined, size: 18),
+                              label: '读经笔记',
+                              onTap: _openReadingNotes,
                             ),
                             _buildMoreMenuItem(
                               icon: Icon(
@@ -1083,7 +1286,37 @@ class _ReadingPageState extends State<ReadingPage>
                       child: const Icon(Icons.edit_note, size: 18),
                     ),
                   ),
-                ),
+                 ),
+                 if (_showStylePanel) ...[
+                   // 阅读设置面板打开时，点阅读区任意位置收起。
+                   Positioned.fill(
+                     child: GestureDetector(
+                       behavior: HitTestBehavior.translucent,
+                       onTap: () => setState(() => _showStylePanel = false),
+                     ),
+                   ),
+                   Positioned(
+                     left: 0,
+                     right: 0,
+                     bottom: 0,
+                     child: _buildReadingSettingsPanel(),
+                   ),
+                 ],
+                 if (_aiParagraph != null) ...[
+                  // 阅读区遮罩：点击面板上方空隙（未盖住的经文区）即可关闭。
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: _closeAiPanel,
+                    ),
+                  ),
+                  Positioned(
+                    top: 56, // 与标题栏底部间隔约一个标题栏高度，露出经文空隙
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: _buildAiPanel(),
+                  ),
+                ],
                 ],
               ),
             ),
@@ -1125,8 +1358,49 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   void _toggleMoreMenu() {
+    if (_showMoreMenu) {
+      // 菜单已打开 → 关闭菜单。
+      setState(() {
+        _showMoreMenu = false;
+      });
+    } else {
+      // 正常打开菜单
+      setState(() {
+        _showMoreMenu = true;
+      });
+    }
+  }
+
+  /// 切换翻页样式（纵向滚动 / 左右翻页）：
+  /// 切换前把当前进度作为另一模式的定位基准，保证切换后进度不回退到开头。
+  void _switchPageMode(int mode) {
+    if (mode == _pageMode) return;
+    _savedProgress = _scrollProgress;
     setState(() {
-      _showMoreMenu = !_showMoreMenu;
+      _pageMode = mode;
+    });
+    ReaderPreferences.setPageMode(mode);
+    // 切回纵向滚动时按当前进度重新定位。
+    if (mode == ReaderPreferences.pageModeScroll) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleRestoreScroll();
+      });
+      return;
+    }
+    // 进入翻页模式：按当前进度定位到对应页（分页数据在首帧渲染后已就绪）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_flipPages.length > 1 && (_pageController?.hasClients ?? false)) {
+        final target = (_savedProgress! * _flipPages.length)
+            .floor()
+            .clamp(0, _flipPages.length - 1);
+        _pageController?.jumpToPage(target);
+        _flipPageRestored = true;
+        setState(() {
+          _currentFlipPage = target;
+          _scrollProgress = (target + 1) / _flipPages.length;
+        });
+      }
     });
   }
 
@@ -1275,7 +1549,7 @@ class _ReadingPageState extends State<ReadingPage>
       child: FloatingActionButton(
         heroTag: heroTag,
         onPressed: onTap,
-        backgroundColor: _isDarkMode ? Colors.white : const Color(0xFFf7f7f7),
+        backgroundColor: _isDarkBg ? Colors.white : const Color(0xFFf7f7f7),
         elevation: 8,
         highlightElevation: 12,
         shape: const CircleBorder(),
@@ -1294,13 +1568,627 @@ class _ReadingPageState extends State<ReadingPage>
     assistantVisible.value = !assistantVisible.value;
   }
 
+  /// 点击某段的「AI译」：打开翻译面板并自动翻译该段。
+  void _openAiTranslate(int index) {
+    if (index < 0 || index >= _paragraphs.length) return;
+    final paragraph = _paragraphs[index];
+    // 收起阅读设置面板，避免与翻译面板重叠。
+    _showStylePanel = false;
+    // 同步面板内「读经笔记」输入框为该段现有备注。
+    _noteInputController.text = _paraNotes[index] ?? '';
+    setState(() {
+      _aiParagraphIndex = index;
+      _aiParagraph = paragraph;
+      _aiTranslation = null;
+      _aiError = null;
+      _aiDiagText = null;
+      _aiPanelLoading = true;
+      _activeNoteParagraphIndex = index;
+    });
+    _requestAiTranslate();
+  }
+
+  /// 请求白话翻译（面板打开后/重试时调用）。
+  Future<void> _requestAiTranslate() async {
+    final paragraph = _aiParagraph;
+    if (paragraph == null) return;
+    setState(() {
+      _aiPanelLoading = true;
+      _aiError = null;
+    });
+    try {
+      final text = await CloudNotesService.instance.aiTranslate(paragraph: paragraph);
+      if (!mounted) return;
+      setState(() {
+        _aiTranslation = _stripAnnotation(text);
+        _aiPanelLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _aiPanelLoading = false;
+        _aiError = e is CloudApiException ? e.message : '翻译失败，请稍后重试';
+      });
+    }
+  }
+
+  /// 剔除译文末尾的「注：…」等补充说明，只保留译文正文。
+  /// （模型在某些旧缓存/旧版本可能仍会输出这类标注。）
+  String _stripAnnotation(String text) {
+    if (text.isEmpty) return text;
+    // 匹配：行首或句末换行后出现的 注/说明/备注/注释 标注（可带【】、（）等装饰）。
+    final RegExp noteRe = RegExp(
+      r'(?:\r?\n|。|；)[　\s]*(?:【|\[|（|\(|〔|『)?(?:注\s*[:：]?\s*\d*|注\s*释[:：]|说明[:：]|備注[:：]|备注[:：]|注释[:：])',
+    );
+    final match = noteRe.firstMatch(text);
+    if (match != null) {
+      return text.substring(0, match.start).trim();
+    }
+    return text.trim();
+  }
+
+  /// 关闭 AI 翻译面板。
+  void _closeAiPanel() {
+    FocusScope.of(context).unfocus();
+    _noteInputController.clear();
+    setState(() {
+      _aiParagraph = null;
+      _aiParagraphIndex = -1;
+      _aiTranslation = null;
+      _aiError = null;
+      _aiPanelLoading = false;
+      _activeNoteParagraphIndex = -1;
+    });
+  }
+
+  /// 一键网络自诊断：检测云函数到大模型的连通性，把根因显示在面板里。
+  Future<void> _runAiDiag() async {
+    if (_aiDiagLoading) return;
+    setState(() {
+      _aiDiagLoading = true;
+      _aiDiagText = null;
+    });
+    try {
+      final res = await CloudNotesService.instance.aiNetProbe();
+      if (!mounted) return;
+      final b = StringBuffer();
+      b.writeln('密钥已配置：${res['keyConfigured'] == true ? '是' : '否'}');
+      b.writeln('域名解析(DNS)：${res['dns'] ?? '未测'} ${res['ip'] ?? ''}');
+      b.writeln('TCP连接：${res['tcp'] ?? '未测'}${res['tcp'] == 'fail' ? ' ${res['tcpError'] ?? ''}' : ''}');
+      b.writeln('TLS握手：${res['tls'] ?? '未测'}${res['tls'] == 'fail' ? ' ${res['tlsError'] ?? ''}' : ''}');
+      b.writeln('结论：${res['conclusion'] ?? '未知'}');
+      setState(() {
+        _aiDiagText = b.toString();
+        _aiDiagLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _aiDiagText = '诊断失败：${e is CloudApiException ? e.message : e}';
+        _aiDiagLoading = false;
+      });
+    }
+  }
+
+  /// 段落右侧的操作栏（同一水平位）：待办圆圈 | AI译 | 笔记。
+  Widget _buildParagraphActions(int index) {
+    final isActive = _aiParagraphIndex == index && _aiParagraph != null;
+    final fg = _isDarkBg ? Colors.white.withOpacity(0.6) : const Color(0xFF9A9A9A);
+    final activeFg = AppPalette.p.accent;
+    final hasNote = (_paraNotes[index] ?? '').isNotEmpty;
+    final done = _paraDone[index] == true;
+    return Padding(
+      // 操作栏紧贴本段文字（与该段一体）；
+      // 与下一段的间隔交给段落容器的外部 bottom 留白。
+      padding: const EdgeInsets.only(
+        top: 0,
+        bottom: 0,
+      ),
+      child: Listener(
+        // 点击操作栏时置 true，阻止外层 Listener 触发面板（指针从内到外派发）。
+        onPointerDown: (_) => _actionRowTapped = true,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // 待办圆圈（提前到最前）：点击打勾并把该段文字变灰。
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _toggleParagraphDone(index),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    width: done ? 12 : 14,
+                    height: done ? 12 : 14,
+                    decoration: BoxDecoration(
+                      color: done ? activeFg : Colors.transparent,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: done ? activeFg : fg,
+                        width: 1.2,
+                      ),
+                    ),
+                    child: done
+                        ? Icon(Icons.check,
+                            size: 9,
+                            color: _isDarkBg ? const Color(0xFF1A1A1A) : Colors.white)
+                        : null,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            // AI译
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _openAiTranslate(index),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                   Icon(
+                    Icons.auto_awesome,
+                    size: 13,
+                    color: isActive ? activeFg : fg,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    'AI译',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isActive ? activeFg : fg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 14),
+            // 笔记
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _onParagraphNoteTap(index),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                   Icon(
+                    hasNote ? Icons.sticky_note_2 : Icons.sticky_note_2_outlined,
+                    size: 14,
+                    color: hasNote ? activeFg : fg,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    '笔记',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hasNote ? activeFg : fg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 点击「笔记」：若翻译面板已打开则聚焦到面板内的输入框；否则弹出输入框对话框。
+  void _onParagraphNoteTap(int index) {
+    // 若 AI 翻译面板正显示该段，切到笔记输入框。
+    if (_aiParagraphIndex == index && _aiParagraph != null) {
+      setState(() {
+        _activeNoteParagraphIndex = index;
+        _noteInputController.text = _paraNotes[index] ?? '';
+      });
+      return;
+    }
+    _showNoteDialog(index);
+  }
+
+  /// 进入「读经笔记」编辑页（直接点「笔记」按钮时的入口）。
+  Future<void> _showNoteDialog(int index) async {
+    if (index < 0 || index >= _paragraphs.length) return;
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => ReadingNoteEditPage(
+          paragraph: _paragraphs[index],
+          initialText: _paraNotes[index] ?? '',
+          hasExistingNote: (_paraNotes[index] ?? '').isNotEmpty,
+          sutraTitle: _titleShown,
+          initialShared: _paraShared[index] == true,
+          initialCloudId: _paraCloudIds[index],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    final note = result['note'] as String? ?? '';
+    if (note == '__delete__') {
+      await _deleteParagraphNote(index);
+      return;
+    }
+    final shared = result['shared'] == true;
+    final cloudId = (result['cloudId'] as String?) ?? '';
+    await _saveParagraphNote(index, note, shared: shared, cloudId: cloudId);
+  }
+
+  /// 删除某段备注（保留完成态）。
+  Future<void> _deleteParagraphNote(int index) async {
+    final cloudId = _paraCloudIds[index];
+    setState(() {
+      if (_activeNoteParagraphIndex == index) {
+        _activeNoteParagraphIndex = -1;
+        _noteInputController.clear();
+      }
+      _paraNotes.remove(index);
+      _paraDone.remove(index);
+      _paraShared.remove(index);
+      _paraCloudIds.remove(index);
+    });
+    try {
+      await CloudNotesService.instance.deleteParagraphNote(
+        sutraKey: _sutraKey,
+        index: index,
+      );
+      // 曾分享到菩提空间的帖子同步取消分享（隐藏）。
+      if (cloudId != null && cloudId.isNotEmpty) {
+        await CloudNotesService.instance.unpublishNote(cloudId);
+      }
+      if (!mounted) return;
+      _loadParagraphNotes();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('删除失败：${e is CloudApiException ? e.message : e}')),
+      );
+    }
+  }
+
+  /// 打开「阅读设置」底部弹层（三个点点菜单入口）：
+  /// 面板挂在页面 Stack 里，滑块 setState 能实时刷新面板上的数字。
+  void _openReadingSettings() {
+    setState(() {
+      _showMoreMenu = false;
+      _showStylePanel = true;
+    });
+  }
+
+  /// 打开「读经笔记」页：列出本经所有段落笔记，点击某段可跳回该段。
+  Future<void> _openReadingNotes() async {
+    setState(() {
+      _showMoreMenu = false;
+    });
+    // 先同步一次最新云端状态，避免跳转前笔记页数据过期。
+    await _loadParagraphNotes();
+    if (!mounted) return;
+    final jumpIndex = await Navigator.of(context).push<int>(
+      MaterialPageRoute(
+        builder: (_) => ReadingNotesPage(
+          sutraKey: _sutraKey,
+          title: _titleShown,
+          paragraphs: _paragraphs,
+          notes: Map.of(_paraNotes),
+          done: Map.of(_paraDone),
+          onDelete: (index) => _deleteParagraphNote(index),
+          onSave: (index, note) => _saveParagraphNote(
+            index,
+            note,
+            shared: _paraShared[index] == true,
+            cloudId: _paraCloudIds[index] ?? '',
+          ),
+          onToggleDone: (index) => _toggleParagraphDone(index),
+        ),
+      ),
+    );
+    if (!mounted || jumpIndex == null) return;
+    _jumpToParagraph(jumpIndex);
+  }
+
+  /// 滚动到指定段落（用于从读经笔记跳回该段）。
+  void _jumpToParagraph(int index) {
+    if (_pageMode == ReaderPreferences.pageModeFlip) {
+      // 翻页模式：直接切到包含该段的那一页。
+      final page = _flipPages.indexWhere((paras) => paras.contains(index));
+      if (page >= 0 && _pageController != null) {
+        _pageController!.animateToPage(
+          page,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      }
+      return;
+    }
+    // 滚动模式：用估算偏移定位到该段。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final estimate = _estimateParagraphOffset(index);
+      final max = _scrollController.position.maxScrollExtent;
+      final target = estimate.clamp(0.0, max);
+      _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  /// 估算第 index 段在滚动容器中的像素偏移（按字号×行距×字符数粗算）。
+  double _estimateParagraphOffset(int index) {
+    double y = 0;
+    const topPadding = 16.0;
+    for (int i = 0; i < index && i < _paragraphs.length; i++) {
+      final lines = (_paragraphs[i].length / _effectiveCharsPerLine()).ceil();
+      y += lines * _fontSize * _lineHeight;
+      y += 24; // 段间距（操作栏与下一段文字之间的留白）
+      y += 24; // 操作栏高度（含上方贴段留白）
+    }
+    return topPadding + y;
+  }
+
+  double _effectiveCharsPerLine() {
+    // 粗略估算每行可容纳的字符数（华文每字宽度≈字号）。
+    final width = (MediaQuery.of(context).size.width - 32);
+    return (width / _fontSize).clamp(6.0, 60.0).toDouble();
+  }
+
+  /// 全屏白话翻译面板（不含原文与讨论，译文大字号，仅右上角×号可关闭）。
+  /// 底部白话翻译面板：从下方滑出、顶边左右圆角、不触碰标题栏，
+  /// 译文字号/行距跟随正文设置；仅右上角×号可关闭。
+  Widget _buildAiPanel() {
+    final isDark = _isDarkBg;
+    final panelBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
+    final textColor = isDark ? Colors.white : const Color(0xFF212121);
+    final subColor = isDark ? Colors.white.withOpacity(0.6) : const Color(0xFF999999);
+
+    Widget body;
+    if (_aiPanelLoading) {
+      body = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(strokeWidth: 3),
+              const SizedBox(height: 12),
+              Text('正在把这段翻译成白话文…',
+                  style: TextStyle(fontSize: 14, color: subColor)),
+            ],
+          ),
+        ),
+      );
+    } else if (_aiError != null) {
+      body = Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.redAccent, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              _aiError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.redAccent, fontSize: 15),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: _requestAiTranslate,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('重试'),
+            ),
+            const SizedBox(height: 4),
+            TextButton.icon(
+              onPressed: _runAiDiag,
+              icon: _aiDiagLoading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.network_check, size: 18),
+              label: Text(_aiDiagLoading ? '诊断中…' : '一键诊断'),
+              style: TextButton.styleFrom(foregroundColor: AppPalette.p.accent),
+            ),
+            if (_aiDiagText != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: textColor.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _aiDiagText!,
+                  style: TextStyle(fontSize: 12, height: 1.5, color: subColor),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    } else if (_aiTranslation != null) {
+      // 白话译文 + 底部读经笔记输入框（为该段添加备注）。
+      final note = (_paraNotes[_aiParagraphIndex] ?? '');
+      body = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SelectableText(
+            _aiTranslation!,
+            style: TextStyle(
+              color: textColor,
+              fontSize: _fontSize,
+              height: _lineHeight,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Divider(height: 1),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Icon(Icons.sticky_note_2_outlined,
+                  size: 16, color: subColor),
+              const SizedBox(width: 6),
+              Text('读经笔记',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: textColor)),
+              const Spacer(),
+              if (note.isNotEmpty)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _deleteParagraphNote(_aiParagraphIndex),
+                  child: Text('删除',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.redAccent)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _noteInputController,
+            maxLines: 4,
+            minLines: 2,
+            decoration: InputDecoration(
+              hintText: '为这段经文添加笔记/备注…',
+              hintStyle: TextStyle(fontSize: 13, color: subColor),
+              filled: true,
+              fillColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF5F3EF),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            style: TextStyle(fontSize: 14, color: textColor),
+            onChanged: (_) {
+              if (_activeNoteParagraphIndex != _aiParagraphIndex) {
+                _activeNoteParagraphIndex = _aiParagraphIndex;
+              }
+            },
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: () => _saveParagraphNote(
+                  _aiParagraphIndex, _noteInputController.text,
+                  shared: _paraShared[_aiParagraphIndex] == true,
+                  cloudId: _paraCloudIds[_aiParagraphIndex] ?? ''),
+              icon: const Icon(Icons.save_outlined, size: 16),
+              label: const Text('保存笔记'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppPalette.p.accent,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ),
+          if (note.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: textColor.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '已保存：$note',
+                style: TextStyle(fontSize: 12, height: 1.5, color: subColor),
+              ),
+            ),
+          ],
+        ],
+      );
+    } else {
+      body = const SizedBox.shrink();
+    }
+
+    // 屏幕尺寸在 builder 外取好：builder 里调 MediaQuery.of 会随键盘
+    // 弹出/收起反复注册 InheritedWidget 依赖，保存笔记时触发
+    // 「_dependents.isEmpty」断言错误。
+    final screenSize = MediaQuery.of(context).size;
+    return TweenAnimationBuilder<Offset>(
+      tween: Tween(begin: const Offset(0, 1), end: Offset.zero),
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          color: panelBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 16,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          bottom: true,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 顶部栏：标题 + 右上角小号关闭（仅此处可关闭）
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 10, 8, 2),
+                child: Row(
+                  children: [
+                    Text(
+                      '白话翻译',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: _closeAiPanel,
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 20,
+                      tooltip: '关闭',
+                      color: subColor,
+                      padding: const EdgeInsets.all(4),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  child: body,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      builder: (context, offset, child) => Transform.translate(
+        offset: Offset(
+          offset.dx * screenSize.width,
+          offset.dy * screenSize.height,
+        ),
+        child: child,
+      ),
+    );
+  }
+
   /// 更多菜单里的带文字条目。
   Widget _buildMoreMenuItem({
     required Widget icon,
     required String label,
     required VoidCallback onTap,
   }) {
-    final fg = _isDarkMode ? Colors.white : AppPalette.p.primary;
+    final fg = _isDarkBg ? Colors.white : AppPalette.p.primary;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -1313,6 +2201,300 @@ class _ReadingPageState extends State<ReadingPage>
             const SizedBox(width: 10),
             Text(label, style: TextStyle(color: fg, fontSize: 14)),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 底部弹出的「阅读设置」面板：字号、行间距、夜间模式、背景、翻页方式。
+  Widget _buildReadingSettingsPanel() {
+    final isDark = _isDarkBg;
+    final panelBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final textColor = isDark ? Colors.white : const Color(0xFF212121);
+    final subTextColor = isDark ? Colors.white.withOpacity(0.6) : const Color(0xFF999999);
+    final accentColor = AppPalette.p.accent;
+
+    return GestureDetector(
+      // 吞掉面板内的点击，避免穿透到下面的收起遮罩。
+      onTap: () {},
+      child: Container(
+        decoration: BoxDecoration(
+          color: panelBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 20,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 顶部拖拽条
+              Padding(
+                padding: const EdgeInsets.only(top: 10, bottom: 8),
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.white.withOpacity(0.2) : const Color(0xFFD0D0D0),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              // 设置内容（小屏可滚动防溢出）
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+              // 字号滑块
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Icon(Icons.text_fields, size: 18, color: subTextColor),
+                    const SizedBox(width: 8),
+                    Text('字号', style: TextStyle(fontSize: 14, color: textColor)),
+                    const SizedBox(width: 8),
+                    Text('${_fontSize.toStringAsFixed(0)}',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: accentColor)),
+                    Expanded(
+                      child: Slider(
+                        value: _fontSize,
+                        min: 12,
+                        max: 32,
+                        divisions: 20,
+                        activeColor: accentColor,
+                        inactiveColor: accentColor.withOpacity(0.2),
+                        onChanged: (v) {
+                          setState(() => _fontSize = v);
+                          ReaderPreferences.setFontSize(v);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 行间距滑块
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Icon(Icons.format_line_spacing, size: 18, color: subTextColor),
+                    const SizedBox(width: 8),
+                    Text('行距', style: TextStyle(fontSize: 14, color: textColor)),
+                    const SizedBox(width: 8),
+                    Text('${_lineHeight.toStringAsFixed(1)}',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: accentColor)),
+                    Expanded(
+                      child: Slider(
+                        value: _lineHeight,
+                        min: 1.2,
+                        max: 2.5,
+                        divisions: 13,
+                        activeColor: accentColor,
+                        inactiveColor: accentColor.withOpacity(0.2),
+                        onChanged: (v) {
+                          setState(() => _lineHeight = v);
+                          ReaderPreferences.setLineHeight(v);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 夜间/白天模式：太阳 + 月亮两个图标
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(_isDarkBg ? Icons.dark_mode : Icons.light_mode,
+                        size: 18, color: subTextColor),
+                    const SizedBox(width: 8),
+                    Text(_isDarkBg ? '夜间模式' : '白天模式',
+                        style: TextStyle(fontSize: 14, color: textColor)),
+                    const Spacer(),
+                    // 太阳（白天模式）
+                    GestureDetector(
+                      onTap: _isDarkBg
+                          ? () {
+                              setState(() => _bgColorIndex = 0);
+                              _isDarkMode = false;
+                              appDarkMode.value = false;
+                              _saveSettings();
+                            }
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: !_isDarkBg
+                              ? const Color(0xFFF5A623).withOpacity(0.2)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(
+                          Icons.light_mode,
+                          size: 22,
+                          color: !_isDarkBg
+                              ? const Color(0xFFF5A623)
+                              : subTextColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // 月亮（夜间模式）
+                    GestureDetector(
+                      onTap: !_isDarkBg
+                          ? () {
+                              setState(() => _bgColorIndex = 4);
+                              _isDarkMode = true;
+                              appDarkMode.value = true;
+                              _saveSettings();
+                            }
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: _isDarkBg
+                              ? const Color(0xFF4A90D9).withOpacity(0.2)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(
+                          Icons.dark_mode,
+                          size: 22,
+                          color: _isDarkBg
+                              ? const Color(0xFF7BAFF7)
+                              : subTextColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 背景五色选择
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.palette_outlined, size: 18, color: subTextColor),
+                    const SizedBox(width: 8),
+                    Text('背景', style: TextStyle(fontSize: 14, color: textColor)),
+                    const Spacer(),
+                    ...List.generate(5, (i) {
+                      final selected = _bgColorIndex == i;
+                      return Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() => _bgColorIndex = i);
+                            _isDarkMode = (i == 4);
+                            appDarkMode.value = _isDarkMode;
+                            _saveSettings();
+                          },
+                          child: Container(
+                            width: 30,
+                            height: 30,
+                            decoration: BoxDecoration(
+                              color: Color(ReaderPreferences.bgColors[i]),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: selected ? accentColor : Colors.transparent,
+                                width: 2,
+                              ),
+                              boxShadow: selected
+                                  ? [
+                                      BoxShadow(
+                                        color: accentColor.withOpacity(0.3),
+                                        blurRadius: 4,
+                                      )
+                                    ]
+                                  : null,
+                            ),
+                            child: selected
+                                ? Icon(Icons.check, size: 14,
+                                    color: i == 4 ? Colors.white : const Color(0xFF212121))
+                                : null,
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              // 翻页方式选择
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
+                child: Row(
+                  children: [
+                    Icon(Icons.menu_book_outlined, size: 18, color: subTextColor),
+                    const SizedBox(width: 8),
+                    Text('翻页', style: TextStyle(fontSize: 14, color: textColor)),
+                    const Spacer(),
+                    _buildToggleChip(
+                      label: '纵向滚动',
+                      selected: _pageMode == ReaderPreferences.pageModeScroll,
+                      onTap: () {
+                        _switchPageMode(ReaderPreferences.pageModeScroll);
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    _buildToggleChip(
+                      label: '左右翻页',
+                      selected: _pageMode == ReaderPreferences.pageModeFlip,
+                      onTap: () {
+                        _switchPageMode(ReaderPreferences.pageModeFlip);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            ), // inner Column
+          ), // SingleChildScrollView
+        ), // Flexible
+          ], // outer Column children
+        ), // outer Column
+        ), // SafeArea
+      ), // Container
+    ); // GestureDetector
+  }
+
+  /// 样式面板里的切换胶囊按钮。
+  Widget _buildToggleChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final isDark = _isDarkMode;
+    final accentColor = AppPalette.p.accent;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? accentColor.withOpacity(isDark ? 0.3 : 0.15)
+              : (isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFF0F0F0)),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? accentColor : Colors.transparent,
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            color: selected ? accentColor : (isDark ? Colors.white.withOpacity(0.6) : const Color(0xFF999999)),
+          ),
         ),
       ),
     );
@@ -1397,7 +2579,7 @@ class _ReadingPageState extends State<ReadingPage>
       spans.add(TextSpan(
         text: text.substring(index, index + query.length),
         style: TextStyle(
-          backgroundColor: _isDarkMode ? Colors.yellow.withOpacity(0.3) : Colors.yellow,
+          backgroundColor: _isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow,
         ),
       ));
 
@@ -1413,59 +2595,46 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   TextStyle get _flipTextStyle => TextStyle(
-        color: _isDarkMode ? Colors.white : const Color(0xFF212121),
+        color: _isDarkBg ? Colors.white : const Color(0xFF212121),
         fontSize: _fontSize,
         height: _lineHeight,
         letterSpacing: 0.5,
       );
 
-  /// 把全文按视口高度切成若干页（按行分页，保证分页间不丢字）。
-  List<String> _paginateContent(String text, double width, double height) {
-    if (text.isEmpty) return [text];
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: _flipTextStyle),
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: width);
-    final lines = tp.computeLineMetrics();
-    if (lines.isEmpty) return [text];
-
-    final totalHeight = lines.fold<double>(0.0, (s, l) => s + l.height);
-    if (totalHeight <= height) return [text];
-
-    final pages = <String>[];
-    var startLine = 0;
-    while (startLine < lines.length) {
-      var endLine = startLine;
-      var acc = 0.0;
-      while (endLine < lines.length) {
-        final h = lines[endLine].height;
-        if (acc + h > height) break;
-        acc += h;
-        endLine++;
+  /// 按段落分页：每页包含若干「完整」段落（段内各自带操作栏），
+  /// 装不下的段落整体放入下一页，避免跨页把一段截断、也避免一段只有一条操作栏。
+  List<List<int>> _paginateParagraphs(double width, double height) {
+    if (_paragraphs.isEmpty) return const [];
+    // 每段除文字外的高度：操作栏行(~20) + 贴段留白(4) + 段间距(24)。
+    const extras = 48.0;
+    final pages = <List<int>>[];
+    var current = <int>[];
+    var used = 0.0;
+    for (var i = 0; i < _paragraphs.length; i++) {
+      final tp = TextPainter(
+        text: TextSpan(text: _paragraphs[i], style: _flipTextStyle),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: width);
+      final h = tp.height + extras;
+      if (current.isNotEmpty && used + h > height) {
+        pages.add(current);
+        current = [];
+        used = 0.0;
       }
-      if (endLine == startLine) endLine = startLine + 1;
-
-      var top = 0.0;
-      for (var i = 0; i < startLine; i++) {
-        top += lines[i].height;
-      }
-      final bottom = top + acc;
-
-      final startPos = tp.getPositionForOffset(Offset(0, top + 1));
-      final endPos = tp.getPositionForOffset(Offset(width - 1, bottom - 1));
-      pages.add(text.substring(startPos.offset, endPos.offset));
-      startLine = endLine;
+      current.add(i);
+      used += h;
     }
-    return pages.isEmpty ? [text] : pages;
+    if (current.isNotEmpty) pages.add(current);
+    return pages;
   }
 
   /// 获取（并缓存）翻页模式的页面列表，首次时恢复上次阅读进度。
-  List<String> _getFlipPages(double width, double height) {
+  List<List<int>> _getFlipPages(double width, double height) {
     final key =
-        '$_fontSize|$_lineHeight|${width.toStringAsFixed(1)}|${height.toStringAsFixed(1)}';
+        '$_fontSize|$_lineHeight|${width.toStringAsFixed(1)}|${height.toStringAsFixed(1)}|para';
     if (key == _flipCacheKey && _flipPages.isNotEmpty) return _flipPages;
     _flipCacheKey = key;
-    _flipPages = _paginateContent(_content, width, height);
+    _flipPages = _paginateParagraphs(width, height);
 
     if (!_flipPageRestored &&
         _savedProgress != null &&
@@ -1505,11 +2674,44 @@ class _ReadingPageState extends State<ReadingPage>
     await prefs.setDouble('progress_$keyPath', _scrollProgress);
   }
 
-  Widget _buildFlipPage(String text) {
+  /// 翻页模式的某一页：按段落逐段渲染（每段文本 + 各自操作栏）。
+  Widget _buildFlipPage(List<int> paras, int pageIndex) {
     return SingleChildScrollView(
-      child: SelectableText(
-        text,
-        style: _flipTextStyle,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final i in paras) _buildFlipParagraph(i),
+        ],
+      ),
+    );
+  }
+
+  /// 翻页模式下的单个段落（文本 + 右侧操作栏）。
+  Widget _buildFlipParagraph(int index) {
+    final p = _paragraphs[index];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SelectableText(
+            p,
+            style: TextStyle(
+              color: _paraDone[index] == true
+                  ? (_isDarkBg
+                      ? Colors.white.withOpacity(0.35)
+                      : const Color(0xFFBDBDBD))
+                  : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
+              fontSize: _fontSize,
+              height: _lineHeight,
+              letterSpacing: 0.5,
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _buildParagraphActions(index),
+          ),
+        ],
       ),
     );
   }

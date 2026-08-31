@@ -136,7 +136,8 @@ class _HotRankingPageState extends State<HotRankingPage> {
     try {
       await SutraDownloader.download(id, onProgress: (received, total) {
         if (!mounted) return;
-        final p = total > 0 ? received / total : 0.0;
+        // Content-Length 可能不准导致 received > total，夹在 [0,1] 防止超过 100%。
+        final p = total > 0 ? (received / total).clamp(0.0, 1.0) : 0.0;
         final prev = _downloadProgress[id] ?? 0;
         if (p < 1.0 && (p - prev).abs() < 0.02) return;
         setState(() {

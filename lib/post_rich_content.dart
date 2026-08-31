@@ -14,6 +14,7 @@ import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
 import 'post_time_link.dart';
 import 'reading_badges.dart';
+import 'reading_note_post.dart';
 import 'reading_page.dart';
 import 'sutra_downloader.dart';
 import 'sutra_list_page.dart';
@@ -1183,6 +1184,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                     ],
                   ),
                   const SizedBox(height: 4),
+                  if (ReadingNotePost.isReadingNote(n.content))
+                    ReadingNotePostView(
+                      note: ReadingNotePost.parse(n.content)!,
+                      noteId: n.id,
+                      sutraLibrary: _sutraLibrary,
+                    )
+                  else
                   buildPostRichText(
                     n.content,
                     style: TextStyle(
@@ -2184,6 +2192,17 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                       ],
                                                     ),
                                                     const SizedBox(height: 4),
+                                                    if (ReadingNotePost
+                                                        .isReadingNote(
+                                                            n.content))
+                                                      ReadingNotePostView(
+                                                        note: ReadingNotePost
+                                                            .parse(n.content)!,
+                                                        noteId: n.id,
+                                                        sutraLibrary:
+                                                            const {},
+                                                      )
+                                                    else
                                                     buildPostRichText(
                                                       n.content,
                                                       style: TextStyle(

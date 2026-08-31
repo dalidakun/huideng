@@ -13,6 +13,7 @@ import 'note_stats_center.dart';
 import 'note_sutra_links.dart';
 import 'quote_box.dart';
 import 'reading_badges.dart';
+import 'reading_note_post.dart';
 import 'reply_thread.dart';
 import 'text_input_sheet.dart';
 import 'post_time_link.dart';
@@ -938,6 +939,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                           _buildUserNameRow(note),
                           if (note.content.isNotEmpty) ...[
                             const SizedBox(height: 4),
+                            // 读经笔记分享帖：结构化渲染。
+                            if (ReadingNotePost.isReadingNote(note.content))
+                              ReadingNotePostView(
+                                note: ReadingNotePost.parse(note.content)!,
+                                noteId: note.id,
+                                sutraLibrary: _sutraLib,
+                              )
+                            else
                             // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。
                             LayoutBuilder(
                               builder: (context, constraints) {

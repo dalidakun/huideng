@@ -174,6 +174,108 @@ function fail(error) {
   return { ok: false, error };
 }
 
+// ─────────────────────────────────────────────────────────────
+// 大模型调用（DeepSeek，兼容 OpenAI chat/completions 协议）
+// 密钥放云函数环境变量 DEEPSEEK_API_KEY，绝不进客户端。
+// model：默认 deepseek-chat（性好价廉，适合佛经白话翻译）。
+//        deepseek-reasoner 供「深入讨论」时按需选用。
+// ─────────────────────────────────────────────────────────────
+function callDeepSeek({ model, messages, maxTokens, timeoutMs }) {
+  const apiKey = process.env.DEEPSEEK_API_KEY || "";
+  if (!apiKey) {
+    return Promise.reject(new Error("AI服务未配置（缺少 DEEPSEEK_API_KEY）"));
+  }
+  const body = JSON.stringify({
+    model: model || "deepseek-chat",
+    messages: messages || [],
+    max_tokens: maxTokens || 600,
+    temperature: 0.3,
+    stream: false,
+  });
+  const options = {
+    hostname: "api.deepseek.com",
+    path: "/chat/completions",
+    method: "POST",
+    // agent:false = 每次请求新建独立连接，不用 keep-alive 连接池。
+    // 云函数出网代理常对长连接/keep-alive 重置（ECONNRESET），显式关闭更稳。
+    agent: false,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Length": Buffer.byteLength(body),
+      // 显式要求短连接，避免连接空闲被代理 RST。
+      Connection: "close",
+      "User-Agent": "huideng-sutra/1.0",
+      Accept: "application/json",
+    },
+  };
+
+  // 单次 https.request 包装成 Promise。
+  function attempt(rejectUnauthorized) {
+    return new Promise((resolve, reject) => {
+      const opt = { ...options, rejectUnauthorized };
+      const req = https.request(opt, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          if (res.statusCode !== 200) {
+            try {
+              const j = JSON.parse(data);
+              return reject(
+                new Error("AI服务返回异常：" + (j.error && j.error.message ? j.error.message : res.statusCode))
+              );
+            } catch (e) {
+              return reject(new Error("AI服务返回异常：HTTP " + res.statusCode));
+            }
+          }
+          try {
+            const j = JSON.parse(data);
+            const text = j.choices && j.choices[0] && j.choices[0].message
+              ? j.choices[0].message.content
+              : "";
+            if (!text) return reject(new Error("AI服务返回空内容"));
+            resolve(String(text).trim());
+          } catch (e) {
+            reject(new Error("AI服务响应解析失败"));
+          }
+        });
+      });
+      req.on("error", (e) => {
+        const code = e.code || "";
+        const hint =
+          code === "ECONNRESET"
+            ? "（连接被重置，可能为密钥无效或云函数网络出口受限）"
+            : code === "ENOTFOUND"
+            ? "（域名无法解析）"
+            : code === "ETIMEDOUT" || e.message === "Socket timeout"
+            ? "（连接超时）"
+            : "";
+        reject(new Error("调用AI服务失败：" + (code || e.message) + hint));
+      });
+      req.setTimeout(timeoutMs || 45000, () => {
+        req.destroy(new Error("AI服务响应超时"));
+      });
+      req.end(body);
+    });
+  }
+
+  return attempt(true).catch((err) => {
+    // 首次失败（尤其 ECONNRESET/证书类）时，用关闭证书校验再试一次，
+    // 排除中间设备/证书链导致的握手后重置。若首次是非网络类错误（如 401/余额），
+    // 直接以首次错误为准，避免掩盖真实原因。
+    const msg = err && err.message ? err.message : "";
+    const retryable =
+      msg.includes("ECONNRESET") ||
+      msg.includes("certificate") ||
+      msg.includes("CERT_") ||
+      msg.includes("socket hang up") ||
+      msg.includes("ETIMEDOUT") ||
+      msg.includes("timeout");
+    if (!retryable) throw err;
+    return attempt(false);
+  });
+}
+
 exports.main = async (event, context) => {
   const uid = await resolveUid(event, context);
 
@@ -212,6 +314,38 @@ exports.main = async (event, context) => {
   const verifications = db.collection("userVerifications");
   const sutraDiscussions = db.collection("sutraDiscussions");
   const topicBans = db.collection("topicBans");
+  // AI 译文缓存：同一段经文只生成一次，之后所有用户直接复用，避免重复计费。
+  const aiTranslations = db.collection("aiTranslations");
+  // 读经段落笔记/完成态：按 (user, sutraKey, index) 唯一，跨设备云端同步。
+  const readingParagraphNotes = db.collection("readingParagraphNotes");
+
+  // 确保 aiTranslations 集合存在。
+  async function ensureAiTranslations() {
+    try {
+      await db.createCollection("aiTranslations");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 确保 readingParagraphNotes 集合存在。
+  async function ensureReadingParagraphNotes() {
+    try {
+      await db.createCollection("readingParagraphNotes");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 按 (ownerUserId, sutraKey, index) 定位该段记录（无则 null）。index 统一存字符串，避免类型不一致。
+  async function findReadingParagraph(owner, sutraKey, index) {
+    const { data } = await readingParagraphNotes
+      .where({ ownerUserId: owner, sutraKey, index: String(index) })
+      .limit(2)
+      .get();
+    if (data && data.length > 0) return data[0];
+    return null;
+  }
 
   // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
   async function ensureUserAccounts() {
@@ -3072,6 +3206,347 @@ exports.main = async (event, context) => {
         }
         await notes.doc(id).update({ status: "hidden" });
         return ok({});
+      }
+
+      // ==================== AI 经文翻译/讨论 ====================
+      // 以「段」为单位：把整段古文翻译成白话，并在面板里可围绕该段继续追问。
+      // 输入：{ paragraph, action: "translate"|"discuss", history?: [...] }
+      // history 用于追问时带上原文、已生成的译文与过往对话。
+      case "aiTranslate": {
+        const paragraph = String(event.paragraph || "").trim();
+        const mode = String(event.mode || "translate");
+        const history = Array.isArray(event.history) ? event.history : [];
+        if (!paragraph) return fail("缺少需要翻译的经文段落");
+        if (paragraph.length > 4000) return fail("段落过长，请分段后重试");
+        // 同一段经文只生成一次译文，之后所有用户直接复用（省 API 费用）。
+        const paraHash = crypto.createHash("sha1").update(paragraph).digest("hex").slice(0, 24);
+
+        const sysPrompt =
+          "你是一位精通汉传佛教经典的佛学翻译与讲解助手。" +
+          "任务：把用户提供的佛经古文段落翻译为通俗易懂的现代白话文。" +
+          "要求：1)忠于原文，不增删、不改义，佛学专有名词（名相、科判、术语）保留原词并自然融入译文，不再额外加注释；" +
+          "2)用通顺流畅的白话表达，保留原意的同时又让现代读者能读懂；" +
+          "3)只输出译文正文本身，不要输出『注：』、『说明：』等任何补充说明或标注，也不要输出与翻译无关的内容。";
+
+        // 讨论模式：本质是普通聊天。译文只是开场背景，但回答要像正常对话一样，
+        // 直接回答用户的问题，不要把话题强拉回经文，也不要重复附带译文。
+        const discussSysPrompt =
+          "你是一位知识渊博、亲切耐心的佛学研究者兼通用对话助手，正在与一位读者聊天。\n" +
+          "读者刚刚阅读了一段佛经，并看到它的白话翻译。仅供你作背景参考：\n" +
+          "经文原文：\n" + paragraph + "\n" +
+          "（背景）读者已看过该段的现代白话译文。\n\n" +
+          "对话原则：\n" +
+          "1) 读者接下来提出的问题，请像正常聊天一样直接、自然地回答，不要刻意重申或附上整段译文；\n" +
+          "2) 如果读者的问题与这段经文有关（含义、名相、背景、修行启示等），结合经文并适当扩展到佛教整体义理回答；\n" +
+          "3) 如果读者的问题与这段经文无关，就直接回答他的问题本身，当作普通对话；\n" +
+          "4) 回答要准确、通俗、流畅，语气自然。";
+
+        try {
+          if (mode === "discuss") {
+            const messages = [{ role: "system", content: discussSysPrompt }];
+            for (const h of history) {
+              if (!h || typeof h.role !== "string" || typeof h.content !== "string") continue;
+              const role = h.role === "user" ? "user" : "assistant";
+              if (h.content && h.content.length <= 8000) {
+                messages.push({ role, content: h.content });
+              }
+            }
+            // 兜底：保证最后一条是 user 消息（即待回答的问题）。
+            // 若历史为空或最后一条不是用户提问，模型会停在「你说，我听着」，
+            // 这里补上显式提问，确保它直接回答用户当前的问题。
+            const last = messages[messages.length - 1];
+            const isUserLast = last && last.role === "user";
+            if (!isUserLast) {
+              messages.push({
+                role: "user",
+                content: "请现在直接回答我刚才提出的问题，不要敷衍，不要问我要问什么。",
+              });
+            }
+            const text = await callDeepSeek({ model: "deepseek-chat", messages, maxTokens: 800, timeoutMs: 60000 });
+            return ok({ text, actor: text.length > 0 ? "ai" : "user", type: "discuss", done: true });
+          }
+
+          // 默认：白话翻译（带跨用户共享缓存）
+          // 1) 先查缓存：命中直接返回，不重复调用 API。
+          try {
+            const { data } = await aiTranslations.where({ h: paraHash }).limit(1).get();
+            if (data && data.length > 0 && data[0].text) {
+              return ok({ text: data[0].text, type: "translate", done: true, cached: true });
+            }
+          } catch (e) {
+            // 缓存查询失败不阻塞：当作未命中继续调用 API。
+            console.log("[api] aiTranslate 缓存查询失败，直接生成:", e.message);
+          }
+
+          const text = await callDeepSeek({
+            model: "deepseek-chat",
+            messages: [
+              { role: "system", content: sysPrompt },
+              { role: "user", content: "请把下面这段佛经古文翻译成现代白话文：\n\n" + paragraph },
+            ],
+            maxTokens: 800,
+            timeoutMs: 60000,
+          });
+
+          // 2) 生成成功后写入缓存，供后续所有用户复用。
+          try {
+            await ensureAiTranslations();
+            await aiTranslations.add({ h: paraHash, paragraph, text, createdAt: now() });
+          } catch (e) {
+            console.log("[api] aiTranslate 缓存写入失败（不影响本次返回）:", e.message);
+          }
+
+          return ok({ text, type: "translate", done: true, cached: false });
+        } catch (e) {
+          console.error("[api] aiTranslate error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "AI翻译失败，请稍后重试");
+        }
+      }
+
+      // 读取某段经文已缓存的白话翻译（其他同修/自己之前翻译过的结果），
+      // 只查 aiTranslations 共享缓存，不调用 DeepSeek API。
+      // 输入：{ paragraph } 输出：{ text?: string, found: boolean }
+      case "getParagraphTranslation": {
+        const paragraph = String(event.paragraph || "").trim();
+        if (!paragraph) return fail("缺少需要查询的经文段落");
+        try {
+          const paraHash = crypto.createHash("sha1").update(paragraph).digest("hex").slice(0, 24);
+          await ensureAiTranslations();
+          const { data } = await aiTranslations.where({ h: paraHash }).limit(1).get();
+          if (data && data.length > 0 && data[0].text) {
+            return ok({ text: data[0].text, found: true });
+          }
+          return ok({ text: "", found: false });
+        } catch (e) {
+          console.error("[api] getParagraphTranslation error:", e && e.message ? e.message : e);
+          return ok({ text: "", found: false });
+        }
+      }
+
+      // AI 网络自诊断：不发起真正的翻译请求，只检测云函数到 DeepSeek 的连通性，
+      // 返回精确根因，便于定位「socket hang up / 网络异常」。客户端错误面板可调用。
+      case "aiNetProbe": {
+        const dns = require("dns");
+        const net = require("net");
+        const tls = require("tls");
+        const host = "api.deepseek.com";
+        const result = { host, keyConfigured: !!process.env.DEEPSEEK_API_KEY };
+
+        // 1. DNS 解析
+        try {
+          await new Promise((resolve, reject) => {
+            dns.lookup(host, { family: 0 }, (err, address, family) => {
+              if (err) return reject(err);
+              result.ip = address;
+              result.ipFamily = family;
+              resolve();
+            });
+          });
+          result.dns = "ok";
+        } catch (e) {
+          result.dns = "fail";
+          result.dnsError = e.code + " " + e.message;
+        }
+
+        // 2. TCP 连接 :443
+        if (result.dns === "ok") {
+          try {
+            await new Promise((resolve, reject) => {
+              const sock = net.connect(443, host);
+              sock.setTimeout(8000, () => { sock.destroy(); reject(new Error("TCP_TIMEOUT")); });
+              sock.on("connect", () => { sock.destroy(); resolve(); });
+              sock.on("error", (e) => reject(e));
+            });
+            result.tcp = "ok";
+          } catch (e) {
+            result.tcp = "fail";
+            result.tcpError = e.code || e.message;
+          }
+        }
+
+        // 3. TLS 握手 :443
+        if (result.tcp === "ok") {
+          try {
+            await new Promise((resolve, reject) => {
+              const socket = tls.connect({
+                host,
+                port: 443,
+                servername: host,
+                rejectUnauthorized: true,
+              });
+              socket.setTimeout(8000, () => { socket.destroy(); reject(new Error("TLS_TIMEOUT")); });
+              socket.on("secureConnect", () => { socket.destroy(); resolve(); });
+              socket.on("error", (e) => reject(e));
+            });
+            result.tls = "ok";
+          } catch (e) {
+            result.tls = "fail";
+            result.tlsError = e.code || e.message;
+          }
+        }
+
+        // 4. 真实 HTTP POST /chat/completions（与翻译同款请求，最小文本）：
+        //    验证「握手通但发送带 body 的 POST 是否被重置」——这正是 socket hang up 的场景。
+        if (result.tls === "ok" && process.env.DEEPSEEK_API_KEY) {
+          try {
+            const text = await callDeepSeek({
+              model: "deepseek-chat",
+              messages: [
+                { role: "system", content: "你是佛经翻译助手。" },
+                { role: "user", content: "翻译：如是我闻。一时佛在舍卫国祇树给孤独园。" },
+              ],
+              maxTokens: 60,
+              timeoutMs: 20000,
+            });
+            result.post = "ok";
+            result.sample = String(text).slice(0, 40);
+          } catch (e) {
+            result.post = "fail";
+            result.postError = e && e.message ? e.message : String(e);
+          }
+        }
+
+        if (result.post === "ok") {
+          result.network = "ok";
+          result.conclusion = "云函数到 DeepSeek 完整通路正常（含真实翻译请求)，网络与密钥均正常。";
+        } else if (result.tls === "ok") {
+          result.conclusion = "TLS 握手可达，但发送真实翻译 POST 请求时失败（" + (result.postError || "") + "）——这是 socket hang up 的根因，多为云函数出网代理对大请求/长连接重置。";
+        } else if (result.dns !== "ok") {
+          result.conclusion = "云函数无法解析 api.deepseek.com（DNS 失败）——出网受限或 DNS 配置问题。";
+        } else if (result.tcp !== "ok") {
+          result.conclusion = "云函数无法建立到 api.deepseek.com:443 的 TCP 连接——出网/防火墙受限。";
+        } else {
+          result.conclusion = "TCP 可达但 TLS 握手失败——多为出网被中间设备重置。";
+        }
+
+        console.log("[api] aiNetProbe:", JSON.stringify(result));
+        return ok(result);
+      }
+
+      // ==================== 读经段落笔记 / 完成态 ====================
+      // 以 (ownerUserId, sutraKey, 段落index) 唯一。sutraKey 一般为经名（widget.title），
+      // 同一用户同一本经的每段各有一条记录，跨设备云端同步。
+      case "getParagraphNotes": {
+        if (!uid) return fail("unauthorized");
+        const sutraKey = event.sutraKey;
+        if (!sutraKey) return fail("缺少经名参数");
+        try {
+          await ensureReadingParagraphNotes();
+          const { data } = await readingParagraphNotes
+            .where({ ownerUserId: uid, sutraKey })
+            .limit(1000)
+            .get();
+          const list = (data || []).map((d) => ({
+            index: parseInt(d.index, 10),
+            note: d.note || "",
+            done: !!d.done,
+            shared: !!d.shared,
+            cloudId: d.cloudId || "",
+            updatedAt: d.updatedAt || 0,
+          }));
+          return ok({ items: list });
+        } catch (e) {
+          console.error("[api] getParagraphNotes error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "获取段落笔记失败");
+        }
+      }
+
+      // 保存某段的备注文本（note 为 '' 表示清除该段备注）。
+      case "saveParagraphNote": {
+        if (!uid) return fail("unauthorized");
+        const sutraKey = event.sutraKey;
+        const index = event.index;
+        const note = (event.note || "").toString().trim();
+        const shared = !!event.shared;
+        const cloudId = (event.cloudId || "").toString();
+        if (!sutraKey || index === undefined || index === null) {
+          return fail("缺少参数");
+        }
+        try {
+          await ensureReadingParagraphNotes();
+          const existing = await findReadingParagraph(uid, sutraKey, String(index));
+          if (existing) {
+            await readingParagraphNotes.doc(existing._id).update({
+              note,
+              shared,
+              cloudId,
+              updatedAt: now(),
+            });
+          } else {
+            await readingParagraphNotes.add({
+              ownerUserId: uid,
+              sutraKey,
+              index: String(index),
+              text: (event.text || "").toString().slice(0, 200),
+              note,
+              shared,
+              cloudId,
+              done: false,
+              updatedAt: now(),
+            });
+          }
+          return ok({ note });
+        } catch (e) {
+          console.error("[api] saveParagraphNote error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "保存段落笔记失败");
+        }
+      }
+
+      // 切换某段的「已读完/学完」完成态。
+      case "toggleParagraphDone": {
+        if (!uid) return fail("unauthorized");
+        const sutraKey = event.sutraKey;
+        const index = event.index;
+        const done = !!event.done;
+        if (!sutraKey || index === undefined || index === null) {
+          return fail("缺少参数");
+        }
+        try {
+          await ensureReadingParagraphNotes();
+          const existing = await findReadingParagraph(uid, sutraKey, String(index));
+          if (existing) {
+            await readingParagraphNotes.doc(existing._id).update({
+              done,
+              updatedAt: now(),
+            });
+            // 若已完成且无备注，可保留该记录（用于记住完成态）。
+          } else {
+            await readingParagraphNotes.add({
+              ownerUserId: uid,
+              sutraKey,
+              index: String(index),
+              text: (event.text || "").toString().slice(0, 200),
+              note: "",
+              done,
+              updatedAt: now(),
+            });
+          }
+          return ok({ done });
+        } catch (e) {
+          console.error("[api] toggleParagraphDone error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "更新段落状态失败");
+        }
+      }
+
+      // 删除某段的全部数据（备注 + 完成态）。
+      case "deleteParagraphNote": {
+        if (!uid) return fail("unauthorized");
+        const sutraKey = event.sutraKey;
+        const index = event.index;
+        if (!sutraKey || index === undefined || index === null) {
+          return fail("缺少参数");
+        }
+        try {
+          await ensureReadingParagraphNotes();
+          const existing = await findReadingParagraph(uid, sutraKey, String(index));
+          if (existing) {
+            await readingParagraphNotes.doc(existing._id).remove();
+          }
+          return ok({ deleted: true });
+        } catch (e) {
+          console.error("[api] deleteParagraphNote error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "删除段落笔记失败");
+        }
       }
 
       default:

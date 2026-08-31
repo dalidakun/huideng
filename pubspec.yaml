@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  audioplayers: ^6.1.0
   file_picker: ^8.0.0+1
   shared_preferences: ^2.2.2
   scrollable_positioned_list: ^0.3.0
@@ -104,6 +105,8 @@ flutter:
     - assets/images/lianhua.png
     - assets/sutras_catalog.json
     - assets/tool.html
+    # 底部菜单点击音效（清脆、短暂）。
+    - assets/sounds/ui_click.wav
     # 《用户协议》与《隐私政策》全文（首次启动弹窗与应用内「关于我们」共用）。
     - assets/agreements/user_agreement.md
     - assets/agreements/privacy_policy.md

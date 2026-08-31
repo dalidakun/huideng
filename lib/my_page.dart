@@ -9,7 +9,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
-import 'reader_settings_page.dart';
 import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
 import 'forgot_password_page.dart';
@@ -35,6 +34,8 @@ import 'note_stats_center.dart';
 import 'reading_badges.dart';
 import 'reading_time_service.dart';
 import 'loading_widgets.dart';
+import 'ui_sound.dart';
+import 'reading_note_post.dart';
 
 import 'app_palette.dart';
 Color get _primary => AppPalette.p.primary;
@@ -1547,7 +1548,16 @@ class _PostBlockState extends State<PostBlock> {
                   // 内容（与昵称同一左缘）
                   if (content.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    LayoutBuilder(
+                    // 读经笔记分享帖：结构化渲染（$经名 + 段原文高亮块 + 笔记）。
+                    if (ReadingNotePost.isReadingNote(content)) ...[
+                      ReadingNotePostView(
+                        note: ReadingNotePost.parse(content)!,
+                        noteId: displayNoteId ?? '',
+                        sutraLibrary:
+                            NoteSutraCatalog.cachedTitleMap ?? const {},
+                      ),
+                    ] else
+                      LayoutBuilder(
                       builder: (context, constraints) {
                         final tp = TextPainter(
                           text: TextSpan(
@@ -4390,20 +4400,6 @@ class _SettingsPageState extends State<_SettingsPage> {
                 ? ListView(
                     padding: const EdgeInsets.only(top: 4, bottom: 32),
                     children: [
-                      _sectionTitle('阅读与提醒'),
-                      SettingsCard(
-                        children: [
-                          _SettingsLinkTile(
-                            icon: Icons.text_fields,
-                            iconColor: _gold,
-                            title: '阅读偏好',
-                            subtitle: '字号 · 行距 · 背景 · 翻页方式',
-                            page: const ReaderSettingsPage(),
-                          ),
-                          const SettingsDivider(),
-                          const _SettingsReminderTile(),
-                        ],
-                      ),
                       _sectionTitle('安全'),
                       SettingsCard(
                         children: [
@@ -4414,11 +4410,19 @@ class _SettingsPageState extends State<_SettingsPage> {
                           _SettingsExportNotesTile(),
                         ],
                       ),
-                      _sectionTitle('其他'),
+                      _sectionTitle('通用'),
                       SettingsCard(
                         children: [
                           const _SettingsAppearanceTile(),
                           const SettingsDivider(),
+                          const _SettingsMenuSoundTile(),
+                          const SettingsDivider(),
+                          const _SettingsReminderTile(),
+                        ],
+                      ),
+                      _sectionTitle('其他'),
+                      SettingsCard(
+                        children: [
                           _SettingsLinkTile(
                             icon: Icons.favorite_outline,
                             iconColor: _gold,
@@ -4712,6 +4716,90 @@ class _AppearanceOption extends StatelessWidget {
     );
   }
 }
+/// 「菜单音效」行：开关控制底部菜单点击音，即时生效并试听。
+class _SettingsMenuSoundTile extends StatefulWidget {
+  const _SettingsMenuSoundTile();
+
+  @override
+  State<_SettingsMenuSoundTile> createState() => _SettingsMenuSoundTileState();
+}
+
+class _SettingsMenuSoundTileState extends State<_SettingsMenuSoundTile> {
+  bool _on = true;
+
+  @override
+  void initState() {
+    super.initState();
+    UiSound.instance.isEnabled().then((v) {
+      if (mounted) setState(() => _on = v);
+    });
+  }
+
+  void _toggle() {
+    final next = !_on;
+    setState(() => _on = next);
+    UiSound.instance.setEnabled(next);
+    // 打开时立即试听，方便用户确认音效。
+    if (next) UiSound.instance.playClick();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: _toggle,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _gold.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.volume_up_outlined, color: _gold, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('菜单音效',
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: _text,
+                          fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text('点按底部菜单时的气泡提示音',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: _textHint)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Transform.scale(
+              scale: 0.75,
+              alignment: Alignment.centerRight,
+              child: Switch(
+                value: _on,
+                onChanged: (_) => _toggle(),
+                activeTrackColor: _gold,
+                activeThumbColor: Colors.white,
+                inactiveTrackColor: AppPalette.p.borderSoft,
+                inactiveThumbColor: AppPalette.p.muted,
+                trackOutlineColor:
+                    WidgetStateProperty.resolveWith((_) => Colors.transparent),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 打卡提醒行：点击跳转到手机自带闹钟页面设置（最可靠，保证响铃）。
 class _SettingsReminderTile extends StatelessWidget {
   const _SettingsReminderTile();
