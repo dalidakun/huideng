@@ -3499,6 +3499,10 @@ exports.main = async (event, context) => {
             skip += 1000;
           }
           const total = list.length;
+          // 段想法按「喜欢的数量」从高到低排序（最多喜欢排最前）。
+          list.sort(
+            (a, b) => (b.likeCount || 0) - (a.likeCount || 0)
+          );
           if (blocked.length) {
             list = list.filter(
               (n) =>

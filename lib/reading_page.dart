@@ -27,6 +27,7 @@ import 'reading_guide_page.dart';
 import 'reading_notes_page.dart';
 import 'reading_note_edit_page.dart';
 import 'paragraph_thoughts_page.dart';
+import 'sutra_highlights_page.dart';
 import 'cloud_notes_service.dart';
 import 'auth_service.dart';
 
@@ -62,6 +63,8 @@ class _ReadingPageState extends State<ReadingPage>
   bool _showSearchBar = false;
   bool _showMoreMenu = false;
   bool _showStylePanel = false;
+  bool _showQuickPanel = false; // 点击正文中部弹出的 画线/想法/阅读设置 面板
+  bool _selectionActiveAtDown = false; // 按下时正文是否有文字选中或长按浮层菜单打开
   Offset? _pointerDownPos;
   DateTime? _pointerDownTime;
   bool _longPressActive = false;
@@ -1060,6 +1063,10 @@ class _ReadingPageState extends State<ReadingPage>
                               _pointerDownPos = event.position;
                               _pointerDownTime = DateTime.now();
                               _longPressActive = false;
+                              // 记录按下时文字是否已选中 / 长按浮层是否已打开：
+                              // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
+                              _selectionActiveAtDown =
+                                  _selectionMenuEntry != null || _hasTextSelection;
                               // 300ms 后若手指仍未抬起，视为长按（文字选择）。
                               Future.delayed(const Duration(milliseconds: 300), () {
                                 if (_pointerDownPos != null && mounted) {
@@ -1079,6 +1086,7 @@ class _ReadingPageState extends State<ReadingPage>
                                 _pointerDownPos = null;
                                 _pointerDownTime = null;
                                 _longPressActive = false;
+                                _selectionActiveAtDown = false;
                                 return;
                               }
                               // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
@@ -1090,27 +1098,35 @@ class _ReadingPageState extends State<ReadingPage>
                               // 长按或滑动均不触发面板。
                               if (_longPressActive) {
                                 _longPressActive = false;
+                                _selectionActiveAtDown = false;
                                 return;
                               }
                               if (downPos != null &&
                                   (event.position - downPos).distance > 10) return;
                               // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
                               if (menuOpenAtDown) return;
-                              // 正文正有文字被选中 → 点击是取消选中/交互，不弹面板。
-                              if (_hasTextSelection) return;
+                              // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
+                              // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
+                              if (_selectionActiveAtDown || _hasTextSelection) {
+                                _selectionActiveAtDown = false;
+                                return;
+                              }
                               // AI 翻译面板打开时，点击仅用于收起面板，不触发表单切换。
                               if (_aiParagraph != null) return;
                               setState(() {
                                 if (_showMoreMenu) {
                                   _showMoreMenu = false;
+                                } else if (_showStylePanel) {
+                                  _showStylePanel = false;
                                 } else if (_showSearchBar) {
                                   _showSearchBar = false;
                                   _searchController.clear();
                                   _searchMatches.clear();
                                   _currentMatchIndex = 0;
                                 }
-                                // 单击正文不再弹出任何面板（阅读设置已移入右上角菜单）。
                               });
+                              // 干净单击正文中部：弹出 画线/想法/阅读设置 底部面板。
+                              _openQuickPanel();
                             },
                             child: LayoutBuilder(
                               builder: (context, constraints) {
@@ -1253,16 +1269,6 @@ class _ReadingPageState extends State<ReadingPage>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _buildMoreMenuItem(
-                              icon: const Icon(Icons.text_fields, size: 18),
-                              label: '阅读设置',
-                              onTap: _openReadingSettings,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: const Icon(Icons.menu_book_outlined, size: 18),
-                              label: '读经想法',
-                              onTap: _openReadingNotes,
-                            ),
-                            _buildMoreMenuItem(
                               icon: Icon(
                                 _isFavorite
                                     ? Icons.favorite
@@ -1343,21 +1349,38 @@ class _ReadingPageState extends State<ReadingPage>
                     ),
                   ),
                  ),
-                 if (_showStylePanel) ...[
-                   // 阅读设置面板打开时，点阅读区任意位置收起。
-                   Positioned.fill(
-                     child: GestureDetector(
-                       behavior: HitTestBehavior.translucent,
-                       onTap: () => setState(() => _showStylePanel = false),
-                     ),
-                   ),
-                   Positioned(
-                     left: 0,
-                     right: 0,
-                     bottom: 0,
-                     child: _buildReadingSettingsPanel(),
-                   ),
-                 ],
+                  if (_showStylePanel) ...[
+                    // 阅读设置面板打开时，点阅读区任意位置收起。
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: () => setState(() => _showStylePanel = false),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _buildReadingSettingsPanel(),
+                    ),
+                  ],
+                  if (_showQuickPanel) ...[
+                    // 速览面板打开时，点面板外任意位置收起。
+                    // opaque：吞掉点击，避免下层正文的单击处理再弹面板。
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => setState(() => _showQuickPanel = false),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _buildQuickPanel(),
+                    ),
+                  ],
+
                  if (_aiParagraph != null) ...[
                   // 阅读区遮罩：点击面板上方空隙（未盖住的经文区）即可关闭。
                   Positioned.fill(
@@ -1848,6 +1871,8 @@ class _ReadingPageState extends State<ReadingPage>
       context,
       sutraTitle: _titleShown,
       paragraph: _paragraphs[index],
+      sutraKey: _sutraKey,
+      paragraphIndex: index,
     );
   }
 
@@ -1918,19 +1943,21 @@ class _ReadingPageState extends State<ReadingPage>
     }
   }
 
-  /// 打开「阅读设置」底部弹层（三个点点菜单入口）：
+  /// 打开「阅读设置」底部弹层（三个点点菜单 / 速览面板入口）：
   /// 面板挂在页面 Stack 里，滑块 setState 能实时刷新面板上的数字。
   void _openReadingSettings() {
     setState(() {
       _showMoreMenu = false;
+      _showQuickPanel = false;
       _showStylePanel = true;
     });
   }
 
-  /// 打开「读经笔记」页：列出本经所有段落笔记，点击某段可跳回该段。
+  /// 打开「读经笔记」页：列出本经所有段落想法，点击某段可跳回该段。
   Future<void> _openReadingNotes() async {
     setState(() {
       _showMoreMenu = false;
+      _showQuickPanel = false;
     });
     // 先同步一次最新云端状态，避免跳转前笔记页数据过期。
     await _loadParagraphNotes();
@@ -1956,6 +1983,59 @@ class _ReadingPageState extends State<ReadingPage>
     );
     if (!mounted || jumpIndex == null) return;
     _jumpToParagraph(jumpIndex);
+  }
+
+  /// 干净单击正文中部：弹出 画线/想法/阅读设置 速览面板。
+  void _openQuickPanel() {
+    if (_showQuickPanel) return;
+    setState(() {
+      _showQuickPanel = true;
+    });
+  }
+
+  /// 打开「画线归集」页：把这部经里所有被画线的文字汇总展示。
+  Future<void> _openHighlightsPage() async {
+    setState(() => _showQuickPanel = false);
+    // 先同步一次最新云端状态（含画线区间），避免归集页数据过期。
+    await _loadParagraphNotes();
+    if (!mounted) return;
+    // 把各段画线区间展开成画线文字列表（合并重叠，仅取被画线部分）。
+    final highlights = <String>[];
+    for (var i = 0; i < _paragraphs.length; i++) {
+      final raw = _paraUnderlines[i] ?? const <Map<String, int>>[];
+      if (raw.isEmpty) continue;
+      final text = _paragraphs[i];
+      final len = text.length;
+      final merged = <(int, int)>[];
+      for (final u in raw) {
+        final s = (u['start'] ?? 0).clamp(0, len);
+        final e = (u['end'] ?? 0).clamp(0, len);
+        if (e > s) merged.add((s, e));
+      }
+      merged.sort((a, b) => a.$1.compareTo(b.$1));
+      final consolidated = <(int, int)>[];
+      for (final r in merged) {
+        if (consolidated.isNotEmpty && r.$1 <= consolidated.last.$2) {
+          final last = consolidated.removeLast();
+          consolidated.add((last.$1, r.$2 > last.$2 ? r.$2 : last.$2));
+        } else {
+          consolidated.add(r);
+        }
+      }
+      for (final r in consolidated) {
+        final s = r.$1.clamp(0, len);
+        final e = r.$2.clamp(0, len);
+        if (e > s) highlights.add(text.substring(s, e));
+      }
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SutraHighlightsPage(
+          title: _titleShown,
+          highlights: highlights,
+        ),
+      ),
+    );
   }
 
   /// 滚动到指定段落（用于从读经笔记跳回该段）。
@@ -2249,6 +2329,82 @@ class _ReadingPageState extends State<ReadingPage>
           offset.dy * screenSize.height,
         ),
         child: child,
+      ),
+    );
+  }
+
+  /// 点击正文中部弹出的「速览面板」：画线 / 想法 / 阅读设置 并排三个按钮。
+  Widget _buildQuickPanel() {
+    final isDark = _isDarkBg;
+    final panelBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+
+    return GestureDetector(
+      // 吞掉面板内的点击，避免穿透到下面的收起遮罩。
+      onTap: () {},
+      child: Container(
+        decoration: BoxDecoration(
+          color: panelBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(0)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 20,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: Row(
+              children: [
+                _buildQuickPanelItem(
+                  icon: Icons.border_color,
+                  label: '画线',
+                  onTap: _openHighlightsPage,
+                ),                _buildQuickPanelItem(
+                  icon: Icons.sticky_note_2_outlined,
+                  label: '想法',
+                  onTap: _openReadingNotes,
+                ),
+                _buildQuickPanelItem(
+                  icon: Icons.text_fields,
+                  label: '阅读设置',
+                  onTap: _openReadingSettings,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 速览面板里的单个按钮：上面图标、下面文字。
+  Widget _buildQuickPanelItem({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final isDark = _isDarkBg;
+    final textColor = isDark ? Colors.white : const Color(0xFF212121);
+    final accentColor = AppPalette.p.accent;
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 26, color: accentColor),
+              const SizedBox(height: 8),
+              Text(label, style: TextStyle(fontSize: 13, color: textColor)),
+            ],
+          ),
+        ),
       ),
     );
   }

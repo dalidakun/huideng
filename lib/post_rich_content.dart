@@ -1184,7 +1184,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                     ],
                   ),
                   const SizedBox(height: 4),
-                  if (ReadingNotePost.isReadingNote(n.content))
+                  if (SutraHighlightsPost.isHighlightsPost(n.content))
+                    SutraHighlightsPostView(
+                      post: SutraHighlightsPost.parse(n.content)!,
+                      noteId: n.id,
+                      sutraLibrary: _sutraLibrary,
+                    )
+                  else if (ReadingNotePost.isReadingNote(n.content))
                     ReadingNotePostView(
                       note: ReadingNotePost.parse(n.content)!,
                       noteId: n.id,
@@ -2192,7 +2198,18 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                       ],
                                                     ),
                                                     const SizedBox(height: 4),
-                                                    if (ReadingNotePost
+                                                    if (SutraHighlightsPost
+                                                        .isHighlightsPost(
+                                                            n.content))
+                                                      SutraHighlightsPostView(
+                                                        post:
+                                                            SutraHighlightsPost
+                                                                .parse(
+                                                                    n.content)!,
+                                                        noteId: n.id,
+                                                        sutraLibrary: const {},
+                                                      )
+                                                    else if (ReadingNotePost
                                                         .isReadingNote(
                                                             n.content))
                                                       ReadingNotePostView(

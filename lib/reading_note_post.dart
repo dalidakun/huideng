@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
+import 'sutra_highlights_page.dart';
 import 'sutra_paragraph_page.dart';
 
 /// 读经笔记分享帖的解析与渲染。
@@ -159,6 +162,18 @@ class ReadingNotePostView extends StatelessWidget {
               ),
             ),
           ),
+          // 笔记内容（用户的想法，放在经文色块上方）
+          if (note.noteText.isNotEmpty) ...[
+            Text(
+              note.noteText,
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.6,
+                color: p.text,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           // 段原文区块（无边缘线条、无书本图标；整段全文显示，点击进入段落查看页）
           GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -181,18 +196,203 @@ class ReadingNotePostView extends StatelessWidget {
               ),
             ),
           ),
-          // 笔记内容
-          if (note.noteText.isNotEmpty) ...[
-            const SizedBox(height: 10),
+        ],
+      ),
+    );
+  }
+}
+
+/// 画线分享帖的解析。
+///
+/// 分享时 `SutraHighlightsPage._buildShareContent()` 生成的正文格式：
+///   $经书名
+///   <空行>
+///   第一条画线文字
+///   <空行>
+///   §§HS§§ + base64(全部画线文字 JSON 数组)
+/// 展示时只显示第一条画线（背景色包裹块），点击色块用完整数据打开画线归集页。
+class SutraHighlightsPost {
+  final String sutraTitle;
+  final String firstHighlight;
+  final List<String> highlights;
+  final String message;
+  final String? filePath;
+
+  const SutraHighlightsPost({
+    this.sutraTitle = '',
+    this.firstHighlight = '',
+    this.highlights = const [],
+    this.message = '',
+    this.filePath,
+  });
+
+  static bool isHighlightsPost(String content) =>
+      content.contains(kSutraHighlightsMetaPrefix);
+
+  static SutraHighlightsPost? parse(String content) {
+    if (content.isEmpty) return null;
+    if (!content.contains(kSutraHighlightsMetaPrefix)) return null;
+    final trimmed = content.trimRight();
+    final nl = trimmed.indexOf('\n');
+    if (nl < 0) return null;
+    final firstLine = trimmed.substring(0, nl).trim();
+    if (!firstLine.startsWith(r'$')) return null;
+    final sutraTitle = firstLine.substring(1).trim();
+    if (sutraTitle.isEmpty) return null;
+
+    // 解析哨兵之后的元数据。
+    final metaIdx = trimmed.indexOf(kSutraHighlightsMetaPrefix);
+    var metaSection = trimmed.substring(
+        metaIdx + kSutraHighlightsMetaPrefix.length);
+    final metaEnd = metaSection.indexOf('\n');
+    if (metaEnd >= 0) metaSection = metaSection.substring(0, metaEnd);
+    final highlights = <String>[];
+    try {
+      final decoded = utf8.decode(base64Decode(metaSection.trim()));
+      final arr = jsonDecode(decoded);
+      if (arr is List) {
+        for (final it in arr) {
+          if (it is String && it.trim().isNotEmpty) {
+            highlights.add(it.trim());
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 第一条画线 = 标题与哨兵之间、按空行分的首段。
+    final before = trimmed.substring(nl + 1, metaIdx).trim();
+    final first =
+        before.split(RegExp(r'\n\s*\n')).map((s) => s.trim()).firstWhere(
+              (s) => s.isNotEmpty,
+              orElse: () => '',
+            );
+
+    // 留言 = 哨兵那一行之后的内容（可为空）。
+    final afterMetaLine =
+        trimmed.substring(metaIdx + kSutraHighlightsMetaPrefix.length);
+    final firstNl = afterMetaLine.indexOf('\n');
+    final message =
+        firstNl >= 0 ? afterMetaLine.substring(firstNl + 1).trim() : '';
+
+    return SutraHighlightsPost(
+      sutraTitle: sutraTitle,
+      firstHighlight: first,
+      highlights: highlights,
+      message: message,
+    );
+  }
+}
+
+/// 画线分享帖渲染组件。
+/// 样式与读经笔记分享帖一致：
+///   - $经名 → 经文讨论页
+///   - 第一条画线（背景色块）→ 打开该经书画线归集页（展示分享时发布的完整画线）
+///   - 其余区域 → 笔记详情页
+class SutraHighlightsPostView extends StatelessWidget {
+  final SutraHighlightsPost post;
+  final String noteId;
+  final Map<String, dynamic> sutraLibrary;
+
+  const SutraHighlightsPostView({
+    super.key,
+    required this.post,
+    required this.noteId,
+    required this.sutraLibrary,
+  });
+
+  void _openDetail(BuildContext context) async {
+    if (noteId.isEmpty) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: noteId)),
+    );
+  }
+
+  void _openHighlights(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SutraHighlightsPage(
+          title: post.sutraTitle,
+          highlights: List.of(post.highlights),
+        ),
+      ),
+    );
+  }
+
+  void _openDiscussion(BuildContext context) {
+    final path = post.filePath ??
+        (sutraLibrary[post.sutraTitle]?.filePath ?? post.sutraTitle);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SutraDiscussionPage(
+          title: post.sutraTitle,
+          filePath: path,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openDetail(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openDiscussion(context),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '\$${post.sutraTitle}',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: p.accent,
+                ),
+              ),
+            ),
+          ),
+          // 留言（用户说的话，放在经文色块上方）
+          if (post.message.isNotEmpty) ...[
             Text(
-              note.noteText,
+              post.message,
               style: TextStyle(
-                fontSize: 15,
+                fontSize: 14,
                 height: 1.6,
                 color: p.text,
               ),
             ),
+            const SizedBox(height: 10),
           ],
+          // 第一条画线：纯背景色包裹块，点击进入画线归集页。
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openHighlights(context),
+            child: Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: p.accent.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                post.firstHighlight,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.6,
+                  color: p.text,
+                  decoration: TextDecoration.underline,
+                  decorationColor:
+                      p.accent.withValues(alpha: 0.6),
+                  decorationThickness: 1.2,
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
