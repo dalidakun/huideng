@@ -41,12 +41,14 @@ void main() {
         label: '诵经',
         unit: '遍',
         total: 12,
+        goal: 40,
         detail: ['地藏菩萨本愿经', '金刚经']),
     CheckInStatEntry(
         key: 'nianfo',
         label: '念佛',
         unit: '声',
         total: 500,
+        goal: 1000,
         detail: ['阿弥陀佛']),
   ];
 
@@ -62,6 +64,19 @@ void main() {
       expect(find.text('念佛 · 阿弥陀佛'), findsOneWidget);
       expect(find.text('12'), findsOneWidget);
       expect(find.text('500'), findsOneWidget);
+    });
+  }
+
+  for (final mode in AppearanceMode.values) {
+    testWidgets('历史统计显示完成百分比与合计（${mode.label}）', (tester) async {
+      await _useMode(mode);
+      await tester.pumpWidget(_wrap(SizedBox(
+        width: 400,
+        child: CheckInHistoryStats(entries: _sampleEntries),
+      )));
+      // 诵经 12/40 = 30%，念佛 500/1000 = 50%
+      expect(find.text('/30%'), findsOneWidget);
+      expect(find.text('/50%'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }
@@ -136,6 +151,11 @@ void main() {
             'amount': 3
           },
         ]),
+        'checkin_goals': jsonEncode({
+          'reading': 10,
+          'nianfo': 400,
+          'mantra': 6,
+        }),
         'history_stats_order': ['mantra', 'reading', 'nianfo'],
       });
 
@@ -160,6 +180,11 @@ void main() {
           reason: '持咒应排在保存顺序的第一位');
       expect(reading.dy, lessThan(nianfo.dy),
           reason: '诵经应在念佛之前（保持保存顺序）');
+
+      // 诵经 1/10 = 10%，念佛 100/400 = 25%，持咒 3/6 = 50%
+      expect(find.text('/10%'), findsOneWidget);
+      expect(find.text('/25%'), findsOneWidget);
+      expect(find.text('/50%'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

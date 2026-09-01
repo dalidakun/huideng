@@ -452,8 +452,8 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: SizedBox(
-          width: 48,
-          height: 48,
+          width: 42,
+          height: 42,
           child: FloatingActionButton(
             onPressed: () => Navigator.push(
               context,
@@ -467,7 +467,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
-            child: const Icon(Icons.add, color: Colors.white, size: 24),
+            child: const Icon(Icons.add, color: Colors.white, size: 21),
           ),
         ),
       ),

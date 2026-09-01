@@ -90,6 +90,15 @@ class _ReadingPageState extends State<ReadingPage>
   Offset? _underlineTapPos;
   // 长按选中时的菜单是否已弹出（防止拖动句柄时重复插入 Overlay）。
   OverlayEntry? _selectionMenuEntry;
+  // 所有仍处于显示中的浮层菜单条目（长按选中 + 单击画线），
+  // 打开其他页面（如想法输入页）前统一移除，避免残留弹窗。
+  final List<OverlayEntry> _activeMenuEntries = [];
+  // 每一次长按选中的菜单请求序号。用于丢弃切换页面 / 关闭弹窗后仍排队的
+  // addPostFrameCallback，避免其在想法输入页上重新插入残留的「复制/画线」弹窗。
+  int _menuRequestId = 0;
+  // 本页之上有其他路由（想法编辑页等）时为 true：期间禁止重建浮层菜单，
+  // 否则选区收起会再次触发 contextMenuBuilder，把弹窗插到新页面上方。
+  bool _coveredByRoute = false;
   // 长按选中的 EditableTextState，用于点 画线/想法/复制 时读取实时选区。
   EditableTextState? _selectionTextState;
   // 每次选区变化时更新的最新范围（长按初始为单字，拖动句柄后为完整范围）。
@@ -250,10 +259,21 @@ class _ReadingPageState extends State<ReadingPage>
   void didPush() => ReadingTimeService.instance.start();
 
   @override
-  void didPopNext() => ReadingTimeService.instance.start();
+  void didPopNext() {
+    ReadingTimeService.instance.start();
+    // 回到本页：恢复允许弹窗（下次长按选中）。
+    _coveredByRoute = false;
+  }
 
   @override
-  void didPushNext() => ReadingTimeService.instance.stop();
+  void didPushNext() {
+    ReadingTimeService.instance.stop();
+    // 有新页面盖在本页上（如想法编辑页）：清掉浮层菜单并禁止其重建。
+    // 否则失焦导致选区收起时 contextMenuBuilder 会再次回调，
+    // 把「复制/画线」弹窗重新插到新页面上方，形成残留。
+    _clearSelectionMenu();
+    _coveredByRoute = true;
+  }
 
   @override
   void didPop() => ReadingTimeService.instance.stop();
@@ -280,10 +300,7 @@ class _ReadingPageState extends State<ReadingPage>
       r.dispose();
     }
     _underlineTapRecognizers.clear();
-    if (_selectionMenuEntry != null) {
-      _selectionMenuEntry!.remove();
-      _selectionMenuEntry = null;
-    }
+    _clearSelectionMenu();
     _selectionTextState = null;
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
     assistantVisible.value = false;
@@ -1838,6 +1855,11 @@ class _ReadingPageState extends State<ReadingPage>
   /// [displayText] 非空时顶部显示被选中的具体文字（由长按/单击画线的想法入口传入）。
   Future<void> _showNoteDialog(int index, {String? displayText}) async {
     if (index < 0 || index >= _paragraphs.length) return;
+    // 跳转前先禁用浮层菜单：push 之后本页失焦、选区收起，
+    // contextMenuBuilder 可能再次回调，把「复制/画线」弹窗插到想法页上方。
+    _clearSelectionMenu();
+    _coveredByRoute = true;
+    FocusScope.of(context).unfocus();
     final result = await Navigator.of(context).push<Map<String, dynamic>>(
       MaterialPageRoute(
         builder: (_) => ReadingNoteEditPage(
@@ -1850,6 +1872,7 @@ class _ReadingPageState extends State<ReadingPage>
         ),
       ),
     );
+    _coveredByRoute = false;
     if (result == null || !mounted) return;
     final note = result['note'] as String? ?? '';
     if (note == '__delete__') {
@@ -2778,8 +2801,30 @@ class _ReadingPageState extends State<ReadingPage>
     );
   }
 
+  /// 移除单个浮层菜单条目并从跟踪列表中剔除；[onDismiss] 由调用方触发。
+  void _removeMenuEntry(OverlayEntry entry) {
+    _activeMenuEntries.remove(entry);
+    if (entry.mounted) entry.remove();
+  }
+
+  /// 打开「想法」编辑页前，确保所有长按选中 / 单击画线的浮层弹窗已被移除，
+  /// 避免弹窗残留显示在新的想法输入界面上。
+  void _clearSelectionMenu() {
+    // 递增请求序号，作废仍在排队的 addPostFrameCallback，防止其在跳转后
+    // 重新插入菜单弹窗。
+    _menuRequestId++;
+    for (final entry in _activeMenuEntries) {
+      if (entry.mounted) entry.remove();
+    }
+    _activeMenuEntries.clear();
+    _selectionMenuEntry = null;
+    _selectionTextState = null;
+    _selectionRange = null;
+  }
+
   /// 根据当前选中的 [start,end) 区间打开「想法」编辑页，顶部显示被选中的文字。
   void _openIdeaFromRange(int para, int start, int end) {
+    _clearSelectionMenu();
     if (para < 0 || para >= _paragraphs.length) return;
     final p = _paragraphs[para];
     final s = start.clamp(0, p.length);
@@ -2820,7 +2865,7 @@ class _ReadingPageState extends State<ReadingPage>
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTap: () {
-                  if (entry.mounted) entry.remove();
+                  _removeMenuEntry(entry);
                   onDismiss?.call();
                 },
               ),
@@ -2837,7 +2882,7 @@ class _ReadingPageState extends State<ReadingPage>
                 start: start,
                 end: end,
                 close: () {
-                  if (entry.mounted) entry.remove();
+                  _removeMenuEntry(entry);
                   onDismiss?.call();
                 },
                 onResolveRange: onResolveRange,
@@ -2849,6 +2894,7 @@ class _ReadingPageState extends State<ReadingPage>
       ),
     );
     overlay.insert(entry);
+    _activeMenuEntries.add(entry);
     return entry;
   }
 
@@ -2901,10 +2947,10 @@ class _ReadingPageState extends State<ReadingPage>
     if (sel.isCollapsed) {
       _selectionRange = null;
       if (_selectionMenuEntry == null) return;
-      final entry = _selectionMenuEntry;
+      final OverlayEntry entry = _selectionMenuEntry!;
       _selectionMenuEntry = null;
       _selectionTextState = null;
-      if (entry != null && entry.mounted) entry.remove();
+      _removeMenuEntry(entry);
       return;
     }
     _selectionRange = (sel.start, sel.end);
@@ -2931,6 +2977,11 @@ class _ReadingPageState extends State<ReadingPage>
   /// 确保画线覆盖的就是当前可见的高亮范围（而非长按时的初始单字）。
   Widget _buildSelectionToolbar(
       BuildContext context, EditableTextState editableTextState, int i) {
+    // 本页被其他路由覆盖（如想法编辑页）时不再弹任何菜单，
+    // 也不记录选区状态：直接返回空组件即可。
+    if (_coveredByRoute) return const SizedBox.shrink();
+    // 每次长按都视为一次新的菜单请求；用递增序号作废切换页面后仍排队的旧回调。
+    final myId = ++_menuRequestId;
     final p = _paragraphs[i];
     final sel = editableTextState.textEditingValue.selection;
     final start = sel.isValid ? sel.start.clamp(0, p.length) : 0;
@@ -2939,7 +2990,9 @@ class _ReadingPageState extends State<ReadingPage>
     _selectionTextState = editableTextState;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _selectionMenuEntry != null) return;
+      if (!mounted || _selectionMenuEntry != null || myId != _menuRequestId) {
+        return;
+      }
       _selectionMenuEntry = _showFloatingMenu(
         para: i,
         start: start,

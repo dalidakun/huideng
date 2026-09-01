@@ -26,10 +26,8 @@ class SutraParagraphPage extends StatefulWidget {
 }
 
 class _SutraParagraphPageState extends State<SutraParagraphPage> {
-  bool _expanded = false;
   String? _translation;
   bool _translationLoading = false;
-  bool _foundCached = false;
 
   @override
   void initState() {
@@ -46,7 +44,6 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
       if (!mounted || t == null) return;
       setState(() {
         _translation = t;
-        _foundCached = true;
       });
     } catch (_) {}
   }
@@ -65,7 +62,6 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
         if (!mounted) return;
         setState(() {
           _translation = cached;
-          _foundCached = true;
           _translationLoading = false;
         });
         return;
@@ -76,7 +72,6 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
       if (!mounted) return;
       setState(() {
         _translation = text;
-        _foundCached = false;
         _translationLoading = false;
       });
     } catch (e) {
@@ -146,13 +141,14 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
       ),
       body: SafeArea(
         top: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          children: [
-            if (widget.sutraTitle.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: GestureDetector(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 经名：顶部只显示 $经名，无书本图标
+              if (widget.sutraTitle.isNotEmpty)
+                GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
                     final path = widget.filePath;
@@ -166,141 +162,81 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
                       ),
                     );
                   },
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.menu_book_rounded,
-                          size: 17, color: p.accent),
-                      const SizedBox(width: 4),
-                      Text(
-                        '\$${widget.sutraTitle}',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: p.accent,
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    '\$${widget.sutraTitle}',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: p.accent,
+                    ),
                   ),
                 ),
+              const SizedBox(height: 14),
+              // 段原文：整段完整显示（页面可下滑），无边框框线
+              Text(
+                widget.paragraph,
+                style: TextStyle(
+                  fontSize: 16,
+                  height: 1.8,
+                  color: p.text,
+                ),
               ),
-            // 段原文卡片
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
-              decoration: BoxDecoration(
-                color: p.card,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: p.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 段原文（默认折叠 6 行，展开全文）
-                  Text(
-                    widget.paragraph,
-                    maxLines: _expanded ? null : 6,
-                    overflow: _expanded ? null : TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 16,
-                      height: 1.75,
-                      color: p.text,
-                    ),
-                  ),
-                  // 展开/收起
-                  if (widget.paragraph.length > 200)
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => setState(() => _expanded = !_expanded),
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Text(
-                              _expanded ? '收起' : '展开全文',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: p.accentDeep,
+              const SizedBox(height: 16),
+              if (_translation != null)
+                _buildTranslationSection()
+              else
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _translationLoading
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: p.accent),
                               ),
+                              const SizedBox(width: 8),
+                              Text('翻译中…',
+                                  style: TextStyle(
+                                      fontSize: 13, color: p.textSec)),
+                            ],
+                          ),
+                        )
+                      : GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _requestTranslate,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: p.accent.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(18),
                             ),
-                            const SizedBox(width: 2),
-                            Icon(
-                              _expanded
-                                  ? Icons.keyboard_arrow_up
-                                  : Icons.keyboard_arrow_down,
-                              size: 18,
-                              color: p.accentDeep,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  // 右下角 AI 翻译按钮
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: _translationLoading
-                          ? Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: p.accent),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.auto_awesome,
+                                    size: 15, color: p.accentDeep),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'AI翻译',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: p.accentDeep,
                                   ),
-                                  const SizedBox(width: 8),
-                                  Text('翻译中…',
-                                      style: TextStyle(
-                                          fontSize: 13, color: p.textSec)),
-                                ],
-                              ),
-                            )
-                          : GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: _requestTranslate,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: p.accent.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(18),
                                 ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.auto_awesome,
-                                        size: 15, color: p.accentDeep),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      _translation != null ? '白话翻译' : 'AI翻译',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        color: p.accentDeep,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                              ],
                             ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // 展开 / 折叠按钮放在卡片底部
-            // Align overflow
-            if (_translation != null) ...[
-              const SizedBox(height: 20),
-              _buildTranslationSection(),
+                          ),
+                        ),
+                ),
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -310,11 +246,10 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
     final p = AppPalette.p;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: p.border),
+        color: p.accent.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,19 +263,6 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
                       color: p.text)),
-              const Spacer(),
-              if (_foundCached)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: p.accent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text('同修翻译',
-                      style: TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.w600, color: p.accent)),
-                ),
             ],
           ),
           const SizedBox(height: 12),
@@ -348,7 +270,7 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
             _translation ?? '',
             style: TextStyle(
               fontSize: 15,
-              height: 1.75,
+              height: 1.8,
               color: p.text,
             ),
           ),

@@ -1294,6 +1294,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
       final amt = double.tryParse((r['amount'] ?? 1).toString()) ?? 1;
       totals[key] = (totals[key] ?? 0) + amt;
     }
+    final goalsMap = _decodeMap(checkin['checkin_goals']).map(
+        (k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
     final customs = _decodeCustomTypes(checkin['custom_checkin_types']);
     final typeInfo = <String, ({String label, String unit})>{
       'meditation': (label: '静坐', unit: '分钟'),
@@ -1313,6 +1315,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
           label: info.label,
           unit: info.unit,
           total: v,
+          goal: goalsMap[k] ?? 0,
           detail: details[k] ?? const []));
     });
     return out;

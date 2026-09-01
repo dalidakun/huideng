@@ -932,7 +932,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 right: 0,
                 bottom: 0,
                 child: Opacity(
-                  opacity: 0.25,
+                  opacity: 0.35,
                   child: Image.asset(
                     'assets/images/lianhua.png',
                     fit: BoxFit.contain,
@@ -1596,6 +1596,11 @@ class StudyHubPageState extends State<StudyHubPage>
       if (key.isNotEmpty && label.isNotEmpty) meta[key] = (label, unit);
     }
 
+    final goalsRaw = prefs.getString('checkin_goals') ?? '{}';
+    final goalsJson = jsonDecode(goalsRaw) as Map<String, dynamic>;
+    final goals = goalsJson.map((k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
+    debugPrint('[historyStats] checkin_goals=$goalsJson');
+
     final raw = prefs.getString('checkin_records') ?? '[]';
     final records = jsonDecode(raw) as List<dynamic>;
     final totals = <String, double>{};
@@ -1636,6 +1641,7 @@ class StudyHubPageState extends State<StudyHubPage>
             label: meta[k]!.$1,
             unit: meta[k]!.$2,
             total: totals[k] ?? 0,
+            goal: goals[k] ?? 0,
             detail: details[k] ?? const [],
           ),
     ];

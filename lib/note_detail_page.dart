@@ -823,10 +823,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       body: _buildBody(),
       // 右下角评论浮动按钮：与主页「新建」同款尺寸（素白为黑底），白色评论图标。
       floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.only(bottom: 62),
         child: SizedBox(
-          width: 48,
-          height: 48,
+          width: 42,
+          height: 42,
           child: FloatingActionButton(
             onPressed: _openCommentSheet,
             heroTag: 'detail_comment_fab',
@@ -841,7 +841,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               colorFilter:
                   const ColorFilter.mode(Colors.white, BlendMode.srcIn),
               child: Image.asset('assets/images/ic_comment.png',
-                  width: 24, height: 24),
+                  width: 21, height: 21),
             ),
           ),
         ),

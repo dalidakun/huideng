@@ -18,6 +18,12 @@ Color get _text => AppPalette.p.text;
 Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _gold => AppPalette.p.accent;
+
+/// 「新建笔记」编辑框提示语：说明 $ 经文 / # 话题 / @ 同修 三种输入方式。
+/// 仅在正文为空时显示，与「读经想法」输入框（无提示词）严格区分。
+String get _contentHint =>
+    '开始记录……\n输入 \$ 引用经文\n输入 # 添加话题\n输入 @ 提及同修';
+
 class NoteEditPage extends StatefulWidget {
   final Map<String, dynamic>? note;
 
@@ -71,8 +77,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
   void initState() {
     super.initState();
     _extractSutraTitle();
-    _contentController =
-        TextEditingController(text: _initialContent());
+    _contentController = _ColoredNoteController(text: _initialContent());
     _shared = widget.note?['shared'] == true;
     _cloudId = widget.note?['cloudId'] as String?;
     _contentController.addListener(_onContentChanged);
@@ -1080,7 +1085,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             style: TextStyle(
                                 fontSize: 16, color: _text, height: 1.6),
                             decoration: InputDecoration(
-                              hintText: '开始记录...',
+                              hintText: _contentHint,
                               hintStyle: TextStyle(color: _textHint),
                               isDense: true,
                               contentPadding: const EdgeInsets.fromLTRB(
@@ -1108,5 +1113,79 @@ class _NoteEditPageState extends State<NoteEditPage> {
         ),
       ),
     );
+  }
+}
+
+/// 「新建笔记」编辑框控制器：重写 [buildTextSpan]，在输入时把
+/// `$经文`、`#话题`、`@同修` 标记显示为彩色，正文其余内容保持普通颜色。
+/// 仅用于「新建笔记」页，与「读经想法」页的纯文本输入框严格区分。
+class _ColoredNoteController extends TextEditingController {
+  _ColoredNoteController({super.text});
+
+  static final RegExp _topicRe =
+      RegExp(r'#([^\s#，。！？,;:!?（）()]+)');
+  static final RegExp _stopRe =
+      RegExp(r'[\s，。！？,;:!?（）()#$@]');
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final text = this.text;
+    if (text.isEmpty) {
+      return TextSpan(style: style);
+    }
+    final baseStyle = style ?? const TextStyle();
+    final p = AppPalette.p;
+    final sutraStyle = baseStyle.copyWith(
+        color: p.accent, fontWeight: FontWeight.w600);
+    final userStyle = baseStyle.copyWith(
+        color: const Color(0xFF5B8FB9), fontWeight: FontWeight.w600);
+    final topicStyle = baseStyle.copyWith(
+        color: const Color(0xFFcf9e66), fontWeight: FontWeight.w600);
+
+    final spans = <InlineSpan>[];
+    var i = 0;
+    var litStart = 0;
+    void flushLit() {
+      if (litStart < i) spans.add(TextSpan(text: text.substring(litStart, i)));
+    }
+
+    while (i < text.length) {
+      final ch = text[i];
+      // 话题：#词语
+      if (ch == '#') {
+        final m = _topicRe.matchAsPrefix(text, i);
+        if (m != null && m.group(1)!.isNotEmpty) {
+          flushLit();
+          spans.add(TextSpan(text: m.group(0)!, style: topicStyle));
+          i = m.end;
+          litStart = i;
+          continue;
+        }
+      }
+      // 经文标记：$ 引用经文；@ 提及同修（旧式 @经名 一并着色）。
+      if (ch == r'$' || ch == '@') {
+        if (i + 1 < text.length) {
+          var j = i + 1;
+          while (j < text.length && !_stopRe.hasMatch(text[j])) {
+            j++;
+          }
+          flushLit();
+          spans.add(TextSpan(
+            text: text.substring(i, j),
+            style: ch == r'$' ? sutraStyle : userStyle,
+          ));
+          i = j;
+          litStart = i;
+          continue;
+        }
+      }
+      i++;
+    }
+    flushLit();
+    return TextSpan(children: spans, style: baseStyle);
   }
 }

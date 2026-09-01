@@ -1836,8 +1836,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: SizedBox(
-          width: 48,
-          height: 48,
+          width: 42,
+          height: 42,
           child: FloatingActionButton(
             // 工具栏整行滚出视口后：按钮变为「回到顶部」；样式与添加笔记一致，仅图标不同。
             onPressed: _fabBackToTop
@@ -1858,8 +1858,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
               _fabBackToTop
                   ? 'assets/images/top.png'
                   : 'assets/images/write.png',
-              width: 24,
-              height: 24,
+              width: 21,
+              height: 21,
             ),
           ),
         ),

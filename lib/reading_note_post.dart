@@ -37,17 +37,35 @@ class ReadingNotePost {
     return parse(content) != null;
   }
 
+  /// 合法 $经名：以汉字开头、且不含句读标点 / 空格等会话痕迹，
+  /// 避免把「$经名，……昨天读了……」这类讨论 / AI 互动帖误判成读经笔记分享
+  /// （误判会让 AI 复制文字被当成「段原文高亮块」显示）。
+  static final RegExp _titleStartRe = RegExp(r'^[\u4e00-\u9fff]');
+  static final RegExp _invalidTitleRe = RegExp(r'[，。！？；：、,;:!?．\s]');
+
   /// 解析正文。非读经笔记格式返回 null。
   static ReadingNotePost? parse(String content) {
     if (content.isEmpty) return null;
-    // 必须以 `$经书名` 开头，且紧跟空行（\n\n）。
+    // 必须以 `$经书名` 开头。
     final trimmed = content.trimRight();
     final nl = trimmed.indexOf('\n');
     if (nl < 0) return null;
     final firstLine = trimmed.substring(0, nl).trim();
     if (!firstLine.startsWith(r'$')) return null;
     final sutraTitle = firstLine.substring(1).trim();
-    if (sutraTitle.isEmpty) return null;
+    // 严格校验 $经名：以汉字开头且无会话标点/空格，才当作读经笔记分享。
+    if (sutraTitle.isEmpty ||
+        !_titleStartRe.hasMatch(sutraTitle) ||
+        _invalidTitleRe.hasMatch(sutraTitle)) {
+      return null;
+    }
+    // 两个分享入口用空行区分：
+    // - 读经想法（ReadingNoteEditPage）：`$经名\n\n段原文\n\n笔记`（空行分隔）
+    // - 普通笔记（主页新建 NoteEditPage）：`$经名\n笔记`（单换行，无段原文）
+    // 只有读经想法分享（标题后紧跟空行）才区块包裹段原文；普通笔记不包裹。
+    if (nl + 1 >= trimmed.length || trimmed[nl + 1] != '\n') {
+      return null;
+    }
 
     final rest = trimmed.substring(nl + 1).trim();
     // 剩余内容按空行（\n\n）分割：第一段为段原文，其余为笔记。
@@ -125,12 +143,12 @@ class ReadingNotePostView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // $经文名 链接（点击进入讨论页）
+          // $经文名 链接（点击进入讨论页，无书本图标）
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openDiscussion(context),
             child: Padding(
-              padding: const EdgeInsets.only(bottom: 4),
+              padding: const EdgeInsets.only(bottom: 6),
               child: Text(
                 '\$${note.sutraTitle}',
                 style: TextStyle(
@@ -141,7 +159,7 @@ class ReadingNotePostView extends StatelessWidget {
               ),
             ),
           ),
-          // 段原文一行高亮区块（点击进入段落查看页）
+          // 段原文区块（无边缘线条、无书本图标；整段全文显示，点击进入段落查看页）
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openParagraph(context),
@@ -150,35 +168,22 @@ class ReadingNotePostView extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: p.accent.withValues(alpha: 0.07),
+                color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: p.accent.withValues(alpha: 0.2)),
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Icon(Icons.menu_book_rounded, size: 16, color: p.accent),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      note.paragraph,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        height: 1.4,
-                        color: p.textSec,
-                      ),
-                    ),
-                  ),
-                  Icon(Icons.chevron_right, size: 18, color: p.textHint),
-                ],
+              child: Text(
+                note.paragraph,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.6,
+                  color: p.text,
+                ),
               ),
             ),
           ),
           // 笔记内容
           if (note.noteText.isNotEmpty) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Text(
               note.noteText,
               style: TextStyle(

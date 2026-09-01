@@ -11,6 +11,7 @@ class CheckInStatEntry {
   final String label;
   final String unit;
   final double total;
+  final double? goal;
   final List<String> detail;
 
   /// 类型标识，用于长按拖动排序时定位条目与持久化顺序。
@@ -19,6 +20,7 @@ class CheckInStatEntry {
     required this.label,
     required this.unit,
     required this.total,
+    this.goal,
     this.detail = const [],
     this.key,
   });
@@ -202,9 +204,23 @@ class _CheckInHistoryStatsState extends State<CheckInHistoryStats> {
           const SizedBox(width: 5),
           Text(e.unit,
               style: TextStyle(fontSize: 12, color: _textHint)),
+          if (e.goal != null && e.goal! > 0) ...[
+            const SizedBox(width: 2),
+            Text(
+              _fmtPct(e.total, e.goal!),
+              style: TextStyle(fontSize: 11, color: _textHint),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 计算完成百分比：已完成 / 总目标，格式 /XX%（<10% 时保留一位小数，避免显示成误导性的0）。
+  static String _fmtPct(double total, double goal) {
+    final pct = total / goal * 100;
+    if (pct >= 10 || pct == 0) return '/${pct.toStringAsFixed(0)}%';
+    return '/${pct.toStringAsFixed(1)}%';
   }
 
   /// 千分位格式化数字（保留最多 1 位小数）。
