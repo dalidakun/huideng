@@ -1184,7 +1184,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                     ],
                   ),
                   const SizedBox(height: 4),
-                  if (SutraHighlightsPost.isHighlightsPost(n.content))
+                  if (SutraThoughtsPost.isThoughtsPost(n.content))
+                    SutraThoughtsPostView(
+                      post: SutraThoughtsPost.parse(n.content)!,
+                      noteId: n.id,
+                      sutraLibrary: _sutraLibrary,
+                    )
+                  else if (SutraHighlightsPost.isHighlightsPost(n.content))
                     SutraHighlightsPostView(
                       post: SutraHighlightsPost.parse(n.content)!,
                       noteId: n.id,
@@ -2198,7 +2204,18 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                       ],
                                                     ),
                                                     const SizedBox(height: 4),
-                                                    if (SutraHighlightsPost
+                                                    if (SutraThoughtsPost
+                                                        .isThoughtsPost(
+                                                            n.content))
+                                                      SutraThoughtsPostView(
+                                                        post:
+                                                            SutraThoughtsPost
+                                                                .parse(
+                                                                    n.content)!,
+                                                        noteId: n.id,
+                                                        sutraLibrary: const {},
+                                                      )
+                                                    else if (SutraHighlightsPost
                                                         .isHighlightsPost(
                                                             n.content))
                                                       SutraHighlightsPostView(

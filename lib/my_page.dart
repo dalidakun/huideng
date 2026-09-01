@@ -1549,7 +1549,14 @@ class _PostBlockState extends State<PostBlock> {
                   if (content.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     // 读经笔记分享帖：结构化渲染（$经名 + 段原文高亮块 + 笔记）。
-                    if (SutraHighlightsPost.isHighlightsPost(content)) ...[
+                    if (SutraThoughtsPost.isThoughtsPost(content)) ...[
+                      SutraThoughtsPostView(
+                        post: SutraThoughtsPost.parse(content)!,
+                        noteId: displayNoteId ?? '',
+                        sutraLibrary:
+                            NoteSutraCatalog.cachedTitleMap ?? const {},
+                      ),
+                    ] else if (SutraHighlightsPost.isHighlightsPost(content)) ...[
                       SutraHighlightsPostView(
                         post: SutraHighlightsPost.parse(content)!,
                         noteId: displayNoteId ?? '',

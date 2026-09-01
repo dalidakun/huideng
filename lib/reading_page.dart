@@ -1838,9 +1838,9 @@ class _ReadingPageState extends State<ReadingPage>
                     size: 14,
                     color: hasNote ? activeFg : fg,
                   ),
-                  const SizedBox(width: 2),
+                   const SizedBox(width: 2),
                   Text(
-                    '想法',
+                    '所有想法',
                     style: TextStyle(
                       fontSize: 13,
                       color: hasNote ? activeFg : fg,
@@ -1962,27 +1962,23 @@ class _ReadingPageState extends State<ReadingPage>
     // 先同步一次最新云端状态，避免跳转前笔记页数据过期。
     await _loadParagraphNotes();
     if (!mounted) return;
-    final jumpIndex = await Navigator.of(context).push<int>(
+    // 汇总所有带想法（备注非空）的段落为「经文+想法」成对数据。
+    final pairs = <int, String>{};
+    for (final i in _paraNotes.keys) {
+      final note = (_paraNotes[i] ?? '').trim();
+      if (note.isEmpty || i >= _paragraphs.length) continue;
+      pairs[i] = note;
+    }
+    final idxs = pairs.keys.toList()..sort();
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ReadingNotesPage(
-          sutraKey: _sutraKey,
           title: _titleShown,
-          paragraphs: _paragraphs,
-          notes: Map.of(_paraNotes),
-          done: Map.of(_paraDone),
-          onDelete: (index) => _deleteParagraphNote(index),
-          onSave: (index, note) => _saveParagraphNote(
-            index,
-            note,
-            shared: _paraShared[index] == true,
-            cloudId: _paraCloudIds[index] ?? '',
-          ),
-          onToggleDone: (index) => _toggleParagraphDone(index),
+          paragraphs: [for (final i in idxs) _paragraphs[i]],
+          notes: [for (final i in idxs) pairs[i]!],
         ),
       ),
     );
-    if (!mounted || jumpIndex == null) return;
-    _jumpToParagraph(jumpIndex);
   }
 
   /// 干净单击正文中部：弹出 画线/想法/阅读设置 速览面板。
@@ -2036,53 +2032,6 @@ class _ReadingPageState extends State<ReadingPage>
         ),
       ),
     );
-  }
-
-  /// 滚动到指定段落（用于从读经笔记跳回该段）。
-  void _jumpToParagraph(int index) {
-    if (_pageMode == ReaderPreferences.pageModeFlip) {
-      // 翻页模式：直接切到包含该段的那一页。
-      final page = _flipPages.indexWhere((paras) => paras.contains(index));
-      if (page >= 0 && _pageController != null) {
-        _pageController!.animateToPage(
-          page,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      }
-      return;
-    }
-    // 滚动模式：用估算偏移定位到该段。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) return;
-      final estimate = _estimateParagraphOffset(index);
-      final max = _scrollController.position.maxScrollExtent;
-      final target = estimate.clamp(0.0, max);
-      _scrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
-    });
-  }
-
-  /// 估算第 index 段在滚动容器中的像素偏移（按字号×行距×字符数粗算）。
-  double _estimateParagraphOffset(int index) {
-    double y = 0;
-    const topPadding = 16.0;
-    for (int i = 0; i < index && i < _paragraphs.length; i++) {
-      final lines = (_paragraphs[i].length / _effectiveCharsPerLine()).ceil();
-      y += lines * _fontSize * _lineHeight;
-      y += 24; // 段间距（操作栏与下一段文字之间的留白）
-      y += 24; // 操作栏高度（含上方贴段留白）
-    }
-    return topPadding + y;
-  }
-
-  double _effectiveCharsPerLine() {
-    // 粗略估算每行可容纳的字符数（华文每字宽度≈字号）。
-    final width = (MediaQuery.of(context).size.width - 32);
-    return (width / _fontSize).clamp(6.0, 60.0).toDouble();
   }
 
   /// 全屏白话翻译面板（不含原文与讨论，译文大字号，仅右上角×号可关闭）。

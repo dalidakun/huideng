@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'app_palette.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
+import 'reading_notes_page.dart';
 import 'sutra_highlights_page.dart';
 import 'sutra_paragraph_page.dart';
 
@@ -389,6 +390,211 @@ class SutraHighlightsPostView extends StatelessWidget {
                   decorationColor:
                       p.accent.withValues(alpha: 0.6),
                   decorationThickness: 1.2,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 想法分享帖的解析。
+///
+/// 分享时 `ReadingNotesPage._buildShareContent()` 生成的正文格式：
+///   $经书名
+///   <空行>
+///   第一条经文
+///   <空行>
+///   §§TS§§ + base64((经文,想法) 成对数组 JSON)
+/// 展示时只显示第一条经文（背景色包裹块），点击色块用完整数据打开想法页。
+class SutraThoughtsPost {
+  final String sutraTitle;
+  final String firstParagraph;
+  final List<(String, String)> pairs;
+  final String message;
+  final String? filePath;
+
+  const SutraThoughtsPost({
+    this.sutraTitle = '',
+    this.firstParagraph = '',
+    this.pairs = const [],
+    this.message = '',
+    this.filePath,
+  });
+
+  static bool isThoughtsPost(String content) =>
+      content.contains(kSutraThoughtsMetaPrefix);
+
+  /// 解析 base64 元数据为「经文,想法」成对数组。
+  static List<(String, String)> _decodePairs(String base) {
+    final pairs = <(String, String)>[];
+    try {
+      final decoded = utf8.decode(base64Decode(base.trim()));
+      final arr = jsonDecode(decoded);
+      if (arr is List) {
+        for (final it in arr) {
+          if (it is Map) {
+            final p = (it['p'] ?? '').toString().trim();
+            final t = (it['t'] ?? '').toString().trim();
+            if (p.isNotEmpty || t.isNotEmpty) pairs.add((p, t));
+          } else if (it is String && it.trim().isNotEmpty) {
+            // 兼容单字符串形式（当作只有经文）。
+            pairs.add((it.trim(), ''));
+          }
+        }
+      }
+    } catch (_) {}
+    return pairs;
+  }
+
+  static SutraThoughtsPost? parse(String content) {
+    if (content.isEmpty) return null;
+    if (!content.contains(kSutraThoughtsMetaPrefix)) return null;
+    final trimmed = content.trimRight();
+    final nl = trimmed.indexOf('\n');
+    if (nl < 0) return null;
+    final firstLine = trimmed.substring(0, nl).trim();
+    if (!firstLine.startsWith(r'$')) return null;
+    final sutraTitle = firstLine.substring(1).trim();
+    if (sutraTitle.isEmpty) return null;
+
+    final metaIdx = trimmed.indexOf(kSutraThoughtsMetaPrefix);
+    var metaSection = trimmed.substring(
+        metaIdx + kSutraThoughtsMetaPrefix.length);
+    final metaEnd = metaSection.indexOf('\n');
+    if (metaEnd >= 0) metaSection = metaSection.substring(0, metaEnd);
+    final pairs = _decodePairs(metaSection);
+
+    // 第一条经文 = 标题与哨兵之间、按空行分的首段。
+    final before = trimmed.substring(nl + 1, metaIdx).trim();
+    final first =
+        before.split(RegExp(r'\n\s*\n')).map((s) => s.trim()).firstWhere(
+              (s) => s.isNotEmpty,
+              orElse: () => pairs.isNotEmpty ? pairs.first.$1 : '',
+            );
+
+    // 留言 = 哨兵那一行之后的内容（可为空）。
+    final afterMetaLine =
+        trimmed.substring(metaIdx + kSutraThoughtsMetaPrefix.length);
+    final firstNl = afterMetaLine.indexOf('\n');
+    final message =
+        firstNl >= 0 ? afterMetaLine.substring(firstNl + 1).trim() : '';
+
+    return SutraThoughtsPost(
+      sutraTitle: sutraTitle,
+      firstParagraph: first,
+      pairs: pairs,
+      message: message,
+    );
+  }
+}
+
+/// 想法分享帖渲染组件。
+/// 样式与画线分享帖完全一致：
+///   - $经名 → 经文讨论页
+///   - 第一条经文（背景色块）→ 打开该经书想法汇总页（展示分享时发布的完整想法）
+///   - 留言 → 显示在色块上方
+///   - 其余区域 → 笔记详情页
+class SutraThoughtsPostView extends StatelessWidget {
+  final SutraThoughtsPost post;
+  final String noteId;
+  final Map<String, dynamic> sutraLibrary;
+
+  const SutraThoughtsPostView({
+    super.key,
+    required this.post,
+    required this.noteId,
+    required this.sutraLibrary,
+  });
+
+  void _openDetail(BuildContext context) async {
+    if (noteId.isEmpty) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: noteId)),
+    );
+  }
+
+  void _openThoughts(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReadingNotesPage(
+          title: post.sutraTitle,
+          paragraphs: [for (final (p, _) in post.pairs) p],
+          notes: [for (final (_, t) in post.pairs) t],
+        ),
+      ),
+    );
+  }
+
+  void _openDiscussion(BuildContext context) {
+    final path = post.filePath ??
+        (sutraLibrary[post.sutraTitle]?.filePath ?? post.sutraTitle);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SutraDiscussionPage(
+          title: post.sutraTitle,
+          filePath: path,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openDetail(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openDiscussion(context),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '\$${post.sutraTitle}',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: p.accent,
+                ),
+              ),
+            ),
+          ),
+          // 留言（用户说的话，放在经文色块上方）
+          if (post.message.isNotEmpty) ...[
+            Text(
+              post.message,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.6,
+                color: p.text,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+          // 第一条经文：纯背景色包裹块，点击进入想法汇总页。
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openThoughts(context),
+            child: Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: p.accent.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                post.firstParagraph,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.6,
+                  color: p.text,
                 ),
               ),
             ),

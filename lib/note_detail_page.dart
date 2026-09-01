@@ -940,7 +940,13 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                           if (note.content.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             // 读经笔记分享帖：结构化渲染。
-                            if (SutraHighlightsPost.isHighlightsPost(note.content))
+                            if (SutraThoughtsPost.isThoughtsPost(note.content))
+                              SutraThoughtsPostView(
+                                post: SutraThoughtsPost.parse(note.content)!,
+                                noteId: note.id,
+                                sutraLibrary: _sutraLib,
+                              )
+                            else if (SutraHighlightsPost.isHighlightsPost(note.content))
                               SutraHighlightsPostView(
                                 post: SutraHighlightsPost.parse(note.content)!,
                                 noteId: note.id,
