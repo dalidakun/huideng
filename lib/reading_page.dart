@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
-import 'sutra_edit_page.dart' show editedSutraFilePath;
+import 'sutra_edit_page.dart' show editedSutraFilePath, SutraEditPage;
 import 'sutra_favorites.dart';
 import 'sutra_read_later.dart';
 import 'app_state.dart';
@@ -110,6 +110,11 @@ class _ReadingPageState extends State<ReadingPage>
   Map<int, bool> _paraShared = {}; // index -> 该段笔记是否已分享到菩提空间
   Map<int, String> _paraCloudIds = {}; // index -> 分享后的云端帖子 ID
   bool _paraNotesLoading = false;
+  // 更新排版后未能按原文重新定位到新段的原始 index 集合（保留数据并标记提示）。
+  Set<int> _unalignedIndices = {};
+  // 以 `。。。` 前缀标记、阅读时隐藏操作栏（AI译/想法/待办）的段落 index 集合。
+  Set<int> _hiddenActionParagraphs = {};
+  bool _isSutraAdmin = false; // 当前登录用户是否为管理员（决定菜单显示编辑经文/更新排版）
   int _activeNoteParagraphIndex = -1; // 正在编辑备注的段落（用于输入框）
   final TextEditingController _noteInputController = TextEditingController();
   late final String? _resolvedFilePath;
@@ -180,6 +185,13 @@ class _ReadingPageState extends State<ReadingPage>
     _loadReadState();
     _loadReadLaterState();
     _loadDisplayTitle();
+    // 异步获取管理员身份：管理员在菜单显示「编辑经文」，普通用户显示「更新排版」。
+    CloudNotesService.instance
+        .isAdmin()
+        .then((v) {
+      if (mounted) setState(() => _isSutraAdmin = v);
+    })
+        .catchError((_) {});
   }
 
   /// 把任意形式的经书路径规范化为打包资产路径（assets/sutras_ascii/...）：
@@ -519,7 +531,32 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   List<String> _parseParagraphs(String content) {
-    return content.split('\n').where((line) => line.trim().isNotEmpty).toList();
+    final out = <String>[];
+    _hiddenActionParagraphs.clear();
+    final lines = content.split('\n');
+    const mark = '。。。';
+    for (final line in lines) {
+      var trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      // `。。。` 标记：该段阅读时隐藏操作栏（AI译/想法/待办），标记本身不显示。
+      // 不限定位置，段首或段尾出现均可。
+      var hit = false;
+      if (trimmed.startsWith(mark)) {
+        trimmed = trimmed.substring(mark.length).trim();
+        hit = true;
+      } else if (trimmed.endsWith(mark)) {
+        trimmed = trimmed.substring(0, trimmed.length - mark.length).trim();
+        hit = true;
+      }
+      if (hit) {
+        if (trimmed.isEmpty) continue; // 仅标记无正文的行视为空段
+        _hiddenActionParagraphs.add(out.length);
+        out.add(trimmed);
+      } else {
+        out.add(trimmed);
+      }
+    }
+    return out;
   }
 
   /// 拉取本经所有段落的笔记与完成态（云端）到本地状态。
@@ -1156,6 +1193,25 @@ class _ReadingPageState extends State<ReadingPage>
                                                 child: Column(
                                                   crossAxisAlignment: CrossAxisAlignment.start,
                                                   children: [
+                                                    if (_unalignedIndices.contains(i))
+                                                      Padding(
+                                                        padding: const EdgeInsets.only(bottom: 6),
+                                                        child: Container(
+                                                          padding: const EdgeInsets.symmetric(
+                                                              horizontal: 8, vertical: 4),
+                                                          decoration: BoxDecoration(
+                                                            color: const Color(0xFFFFF3CD),
+                                                            borderRadius: BorderRadius.circular(6),
+                                                          ),
+                                                          child: const Text(
+                                                            '排版已变化，此处的想法/画线未能重新定位',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              color: Color(0xFF8a6d1a),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
                                                     SelectableText.rich(
                                                       TextSpan(
                                                         style: _paraBaseStyle(i),
@@ -1168,10 +1224,11 @@ class _ReadingPageState extends State<ReadingPage>
                                                       contextMenuBuilder: (context, editableTextState) =>
                                                           _buildSelectionToolbar(context, editableTextState, i),
                                                     ),
-                                                    Align(
-                                                      alignment: Alignment.centerLeft,
-                                                      child: _buildParagraphActions(i),
-                                                    ),
+                                                    if (!_hiddenActionParagraphs.contains(i))
+                                                      Align(
+                                                        alignment: Alignment.centerLeft,
+                                                        child: _buildParagraphActions(i),
+                                                      ),
                                                   ],
                                                 ),
                                               );
@@ -1197,30 +1254,31 @@ class _ReadingPageState extends State<ReadingPage>
                                                      contextMenuBuilder: (context, editableTextState) =>
                                                          _buildSelectionToolbar(context, editableTextState, i),
                                                     ),
-                                                     Align(
-                                                      alignment: Alignment.centerLeft,
-                                                      child: _buildParagraphActions(i),
-                                                    ),
+if (!_hiddenActionParagraphs.contains(i))
+                                                      Align(
+                                                       alignment: Alignment.centerLeft,
+                                                       child: _buildParagraphActions(i),
+                                                     ),
                                                  ],
                                                ),
                                              );
-                                          }),
-                                        ),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(
-                                    AppPalette.instance.isPlain && !_isDarkBg ? 2 : 3),
-                                child: LinearProgressIndicator(
+                                         }),
+                                       ),
+                               );
+                             },
+                           ),
+                         ),
+                       ),
+                     ),
+                     Padding(
+                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                       child: Row(
+                         children: [
+                           Expanded(
+                             child: ClipRRect(
+                               borderRadius: BorderRadius.circular(
+                                   AppPalette.instance.isPlain && !_isDarkBg ? 2 : 3),
+                               child: LinearProgressIndicator(
                                   value: _scrollProgress,
                                   minHeight: 5,
                                   backgroundColor: _isDarkBg
@@ -1277,6 +1335,14 @@ class _ReadingPageState extends State<ReadingPage>
                               ),
                               label: _isFavorite ? '取消收藏' : '收藏',
                               onTap: _toggleFavorite,
+                            ),
+                            _buildMoreMenuItem(
+                              icon: _isSutraAdmin
+                                  ? const Icon(Icons.warning_amber_rounded,
+                                      size: 18, color: Color(0xFFE53935))
+                                  : const Icon(Icons.sync, size: 18),
+                              label: _isSutraAdmin ? '编辑经文' : '更新排版',
+                              onTap: _isSutraAdmin ? _openEditor : _checkSutraUpdate,
                             ),
                             _buildMoreMenuItem(
                               icon: Icon(
@@ -1521,6 +1587,203 @@ class _ReadingPageState extends State<ReadingPage>
     );
   }
 
+  /// 管理员「编辑经文」：打开编辑页，保存后同步最新排版到云端 / GitHub。
+  Future<void> _openEditor() async {
+    final filePath = _resolvedFilePath ?? widget.filePath;
+    if (filePath == null) return;
+    setState(() => _showMoreMenu = false);
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SutraEditPage(
+          title: widget.title,
+          content: _content,
+          keyPath: filePath,
+        ),
+      ),
+    );
+    if (changed == true && mounted) {
+      await _loadContent();
+    }
+  }
+
+  /// 非管理员「更新排版」：从 GitHub / 云端拉取管理员编辑的最新排版并覆盖本地。
+  /// 若本地已有更好（更新）的版本则提示「此版已是最新版本」。
+  Future<void> _checkSutraUpdate() async {
+    setState(() => _showMoreMenu = false);
+    final filePath = _resolvedFilePath ?? widget.filePath;
+    final id = SutraDownloader.extractId(widget.title, filePath);
+    if (id == null || id.isEmpty) {
+      _toast('此经书不支持更新排版');
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final verKey = 'sutra_edit_ver_$id';
+    final meta = await CloudNotesService.instance.sutraEditMeta(id);
+    final remoteAt = (meta?['updatedAt'] as num?)?.toInt() ?? 0;
+    final localAt = prefs.getInt(verKey) ?? 0;
+    if (remoteAt <= 0 || remoteAt <= localAt) {
+      _toast('此版已是最新版本');
+      return;
+    }
+
+    // 保存旧段落快照用于想法/画线对齐，再下载新版内容。
+    final oldParagraphs = List<String>.from(_paragraphs);
+    setState(() {
+      _isDownloading = true;
+      _downloadProgress = 0;
+    });
+    try {
+      final file = await SutraDownloader.download(
+        id,
+        preferEdited: true,
+        force: true,
+        onProgress: (received, total) {
+          if (!mounted) return;
+          setState(() => _downloadProgress = total > 0 ? received / total : 0);
+        },
+      );
+      final content = await file.readAsString();
+      if (!mounted) return;
+      await prefs.setInt(verKey, remoteAt);
+      await _applyUpdatedLayout(oldParagraphs, content, remoteAt);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isDownloading = false);
+      _toast('更新排版失败，请检查网络后重试');
+    }
+  }
+
+  /// 应用更新后的排版：替换内容 + 把旧段的想法/画线按原文重新对齐到新段。
+  /// [oldParagraphs] 为更新前的段落列表；[updatedAt] 为新排版版本时间戳。
+  Future<void> _applyUpdatedLayout(
+      List<String> oldParagraphs, String newContent, int updatedAt) async {
+    // 先把当前段落的文字快照与画线区间按下标记录，供重新对齐。
+    setState(() {
+      _content = newContent;
+      _paragraphs = _parseParagraphs(newContent);
+      _isLoadingContent = false;
+      _isDownloading = false;
+      _unalignedIndices = {};
+    });
+
+    // 对齐：遍历旧段落中「有想法 / 有画线 / 已完成」的段落，按原文在新段里找包含它的段。
+    final migratedNotes = <int, String>{};
+    final migratedUnderlines = <int, List<Map<String, int>>>{};
+    final migratedDone = <int, bool>{};
+    final migratedShared = <int, bool>{};
+    final migratedCloudIds = <int, String>{};
+    final unmigratedOld = <int>{};
+
+    // 重新对齐每个受影响的旧段。
+    final affectedOld = <int>{
+      ..._paraNotes.keys,
+      ..._paraUnderlines.keys,
+      ..._paraDone.keys,
+      ..._paraShared.keys,
+      ..._paraCloudIds.keys,
+    };
+    for (final oldIdx in affectedOld) {
+      final oldText = oldIdx >= 0 && oldIdx < oldParagraphs.length
+          ? oldParagraphs[oldIdx]
+          : '';
+      final normalized = oldText.replaceAll(RegExp(r'\s'), '');
+      int newIdx = -1;
+      if (normalized.isNotEmpty) {
+        for (var j = 0; j < _paragraphs.length; j++) {
+          final cand = _paragraphs[j].replaceAll(RegExp(r'\s'), '');
+          if (cand.contains(normalized) ||
+              (normalized.contains(cand) && cand.isNotEmpty)) {
+            newIdx = j;
+            break;
+          }
+        }
+      }
+      if (newIdx < 0 || newIdx >= _paragraphs.length) {
+        // 新版找不到原文字：若原 index 仍在新段范围内则保留原位置并标记，避免丢数据。
+        if (oldIdx >= 0 && oldIdx < _paragraphs.length) {
+          newIdx = oldIdx;
+          unmigratedOld.add(oldIdx);
+        } else {
+          continue; // 完全越界，放弃该段（数据极少见）
+        }
+      }
+      if (_paraNotes.containsKey(oldIdx)) migratedNotes[newIdx] = _paraNotes[oldIdx]!;
+      if (_paraUnderlines.containsKey(oldIdx)) {
+        migratedUnderlines[newIdx] = _paraUnderlines[oldIdx]!;
+      }
+      if (_paraDone.containsKey(oldIdx)) migratedDone[newIdx] = _paraDone[oldIdx]!;
+      if (_paraShared.containsKey(oldIdx)) migratedShared[newIdx] = _paraShared[oldIdx]!;
+      if (_paraCloudIds.containsKey(oldIdx)) migratedCloudIds[newIdx] = _paraCloudIds[oldIdx]!;
+    }
+
+    setState(() {
+      _paraNotes = migratedNotes;
+      _paraUnderlines = migratedUnderlines;
+      _paraDone = migratedDone;
+      _paraShared = migratedShared;
+      _paraCloudIds = migratedCloudIds;
+      _unalignedIndices = unmigratedOld;
+    });
+
+    // 写回云端：删除旧 index 记录，用新 index 重写，保证跨设备一致。
+    await _writeBackAlignedParagraphNotes(migratedNotes, migratedUnderlines,
+        migratedDone, migratedShared, migratedCloudIds, affectedOld, unmigratedOld);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已更新到最新排版')),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+  }
+
+  /// 更新排版后把对齐结果写回云端（删除旧 index、写入新 index）。
+  Future<void> _writeBackAlignedParagraphNotes(
+    Map<int, String> notes,
+    Map<int, List<Map<String, int>>> underlines,
+    Map<int, bool> done,
+    Map<int, bool> shared,
+    Map<int, String> cloudIds,
+    Set<int> oldIndices,
+    Set<int> unmigratedOld,
+  ) async {
+    // 删除所有旧 index 的云端记录（含未能对齐、保留在原 index 的）。
+    for (final oldIdx in oldIndices) {
+      try {
+        await CloudNotesService.instance
+            .deleteParagraphNote(sutraKey: _sutraKey, index: oldIdx);
+      } catch (_) {}
+    }
+    // 用新 index 重写（仅那些成功迁移且有内容的段）。
+    for (final newIdx in notes.keys) {
+      if (newIdx < 0 || newIdx >= _paragraphs.length) continue;
+      final note = notes[newIdx] ?? '';
+      final under = underlines[newIdx] ?? [];
+      if (note.isEmpty && under.isEmpty) continue;
+      try {
+        await CloudNotesService.instance.saveParagraphNote(
+          sutraKey: _sutraKey,
+          index: newIdx,
+          text: newIdx < _paragraphs.length ? _paragraphs[newIdx] : '',
+          note: note,
+          shared: shared[newIdx] ?? false,
+          cloudId: cloudIds[newIdx] ?? '',
+          underlines: under,
+        );
+      } catch (_) {}
+    }
+    // 未对齐的段在新段里保留原 index 位置并重新保存（保留数据提示用）。
+    if (unmigratedOld.isNotEmpty) {
+      await _loadParagraphNotes();
+    }
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+    );
+  }
+
   /// 加载当前经书稍后阅读状态。
   Future<void> _loadReadLaterState() async {
     final rl = await SutraReadLater.isReadLater(
@@ -1531,7 +1794,6 @@ class _ReadingPageState extends State<ReadingPage>
       });
     }
   }
-
   /// 标记 / 取消稍后阅读当前经书。
   Future<void> _toggleReadLater() async {
     final nowRL = await SutraReadLater.toggle(
@@ -3243,10 +3505,11 @@ class _ReadingPageState extends State<ReadingPage>
             contextMenuBuilder: (context, editableTextState) =>
                 _buildSelectionToolbar(context, editableTextState, index),
           ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: _buildParagraphActions(index),
-          ),
+          if (!_hiddenActionParagraphs.contains(index))
+            Align(
+              alignment: Alignment.centerRight,
+              child: _buildParagraphActions(index),
+            ),
         ],
       ),
     );

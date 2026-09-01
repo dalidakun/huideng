@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app_palette.dart';
+import 'cloud_notes_service.dart';
+import 'sutra_downloader.dart';
 Future<String> editedSutraFilePath(String keyPath) async {
   final dir = await getApplicationDocumentsDirectory();
   final folder = Directory('${dir.path}/edited_sutras');
@@ -33,7 +35,6 @@ class SutraEditPage extends StatefulWidget {
 class _SutraEditPageState extends State<SutraEditPage> {
   late final TextEditingController _controller;
   late final FocusNode _focusNode;
-  bool _hasEdited = false;
   bool _positioned = false;
 
   @override
@@ -41,7 +42,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
     super.initState();
     _controller = TextEditingController(text: widget.content);
     _focusNode = FocusNode();
-    _checkEdited();
     // 将光标/滚动位置定位到与阅读进度一致的位置，便于直接编辑该处经文。
     final progress = widget.scrollProgress.clamp(0.0, 1.0);
     if (progress > 0) {
@@ -65,30 +65,32 @@ class _SutraEditPageState extends State<SutraEditPage> {
     super.dispose();
   }
 
-  Future<void> _checkEdited() async {
-    final path = await editedSutraFilePath(widget.keyPath);
-    if (mounted) {
-      setState(() {
-        _hasEdited = File(path).existsSync();
-      });
-    }
-  }
-
   Future<void> _save() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
     final path = await editedSutraFilePath(widget.keyPath);
     await File(path).writeAsString(_controller.text);
-    if (!mounted) return;
-    Navigator.of(context).pop(true);
-  }
 
-  Future<void> _restore() async {
-    final path = await editedSutraFilePath(widget.keyPath);
-    final file = File(path);
-    if (await file.exists()) {
-      await file.delete();
+    // 管理员保存时把最新排版同步到云端 / GitHub，供所有用户「更新排版」拉取。
+    // GitHub 由云函数代写（凭据存云函数环境变量，不进客户端）。
+    final id = SutraDownloader.extractId(null, widget.keyPath);
+    if (id != null && id.isNotEmpty) {
+      try {
+        await CloudNotesService.instance.saveSutraEdit(id, _controller.text);
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('已保存并发布最新排版')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(content: Text('已保存到本地，但发布失败：$e')),
+          );
+        }
+      }
     }
-    if (!mounted) return;
-    Navigator.of(context).pop(true);
+    if (mounted) navigator.pop(true);
   }
 
   @override
@@ -110,14 +112,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (_hasEdited)
-            TextButton(
-              onPressed: _restore,
-              child: Text(
-                '恢复原文',
-                style: TextStyle(color: AppPalette.p.textSec, fontSize: 13),
-              ),
-            ),
           TextButton(
             onPressed: _save,
             child: Text(

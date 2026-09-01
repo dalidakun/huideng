@@ -28,6 +28,11 @@ class SutraDownloader {
     'https://gh-proxy.com/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_ascii/',
   ];
 
+  /// 管理员「编辑经文」的新排版所在目录（原始版 sutras_ascii 不动）。
+  /// 结构同原始目录：sutras_edited/<卷>/<ID>.txt。镜像后缀与 [mirrors] 一一对应。
+  static String _editedBase(String base) =>
+      base.replaceAll('assets/sutras_ascii/', 'assets/sutras_edited/');
+
   static const String _kMirrorIndexKey = 'sutra_downloader_mirror_index';
 
   static final RegExp _idRe = RegExp(r'(T\d{2}n\d{4}[A-Za-z]?_\d{3})');
@@ -187,15 +192,21 @@ class SutraDownloader {
   /// 下载单本经书并保存到本地。成功后返回本地文件，失败抛出异常。
   /// 会依次尝试 [mirrors] 中的所有下载源，某个源成功即返回。
   ///
-  /// 如果本地已存在完整文件（非空），直接返回，不重新下载——
+  /// [preferEdited] 为 true 时（默认），优先从管理员「编辑经文」目录
+  /// （`assets/sutras_edited/`）下载；若编辑版不存在（各源均 404）则回退到
+  /// 原始版 `assets/sutras_ascii/`。用于「更新排版」获取管理员最新排版。
+  ///
+  /// 如果本地已存在完整文件（非空）且非 [force]，直接返回，不重新下载——
   /// 这是防止「已下载经文被误判为未下载而反复重下」的最终兜底。
   static Future<File> download(
     String id, {
     void Function(int received, int total)? onProgress,
+    bool preferEdited = false,
+    bool force = false,
   }) async {
     final file = await localFile(id);
     // 本地已有完整文件时直接返回，避免不必要的重复下载。
-    if (await file.exists() && (await file.length()) > 0) {
+    if (!force && await file.exists() && (await file.length()) > 0) {
       return file;
     }
     await file.parent.create(recursive: true);
@@ -206,9 +217,22 @@ class SutraDownloader {
     var bestTotal = 0;
     int lastReported = -1;
 
-    final sources = await _orderedSources();
-    for (final base in sources) {
-      final url = Uri.parse('$base$rel');
+    // 组建源顺序：若 preferEdited，先尝试编辑版目录的源；全部 404 后再回退原始目录。
+    Future<List<({String base, bool edited})>> buildOrderedSources() async {
+      final normal = await _orderedSources();
+      if (!preferEdited) {
+        return normal.map((b) => (base: b, edited: false)).toList();
+      }
+      final edited = [
+        for (final b in normal) (base: _editedBase(b), edited: true)
+      ];
+      // 编辑版优先：把原始版排在编辑版之后，整组尝试完后回退。
+      return [...edited, ...normal.map((b) => (base: b, edited: false))];
+    }
+
+    final sources = await buildOrderedSources();
+    for (final src in sources) {
+      final url = Uri.parse('${src.base}$rel');
       try {
         final ok = await _downloadFrom(url, part, (received, total) {
           if (total > bestTotal) bestTotal = total;
@@ -220,11 +244,11 @@ class SutraDownloader {
         if (ok) {
           if (await file.exists()) await file.delete();
           await part.rename(file.path);
-          await _rememberSource(base);
+          if (!src.edited) await _rememberSource(src.base);
           return file;
         }
       } catch (e) {
-        errors.add('$base $e');
+        errors.add('${src.base} $e');
       } finally {
         // 清理可能的残留分片，避免影响下一次尝试或误判。
         if (await part.exists()) {

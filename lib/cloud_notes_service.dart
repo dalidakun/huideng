@@ -880,6 +880,7 @@ class CloudNotesService {
       'saveParagraphNote',
       'toggleParagraphDone',
       'deleteParagraphNote',
+      'sutraEditSave',
     };
     return writes.contains(action);
   }
@@ -1789,6 +1790,22 @@ class CloudNotesService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// 取某部经文的编辑版元信息（是否有管理员编辑版及其更新时间 updatedAt）。
+  /// 返回 null 表示查询失败；否则 Map 含 found / updatedAt。
+  Future<Map<String, dynamic>?> sutraEditMeta(String id) async {
+    try {
+      final res = await _call('sutraEditMeta', params: {'id': id});
+      return res;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 管理员保存「编辑经文」的最新排版。
+  Future<void> saveSutraEdit(String id, String content) async {
+    await _call('sutraEditSave', params: {'id': id, 'content': content});
   }
 
   /// 管理员拉取反馈列表。

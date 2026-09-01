@@ -276,6 +276,98 @@ function callDeepSeek({ model, messages, maxTokens, timeoutMs }) {
   });
 }
 
+// ─────────────────────────────────────────────────────────
+// GitHub 写入：管理员「编辑经文」的新排版提交到仓库 assets/sutras_edited/。
+// 需在云函数环境变量配置 GITHUB_TOKEN（带仓库 push 权限的 Personal Access Token）。
+// 首次提交与更新均通过 Contents API（读当前 sha 后整体 PUT），FilePath 为提交路径。
+// ─────────────────────────────────────────────────────────
+function githubWriteFile({ repo, path, content, message }) {
+  const token = process.env.GITHUB_TOKEN || "";
+  if (!token) {
+    return Promise.reject(new Error("GitHub 未配置（缺少 GITHUB_TOKEN）"));
+  }
+  const apiBase = "https://api.github.com";
+  return new Promise((resolve, reject) => {
+    // 先用 GET 读该文件当前 sha（不存在则为 404，用 null 表示新建）。
+    const getSha = new Promise((res2) => {
+      const getOpt = {
+        hostname: "api.github.com",
+        path: `/repos/${repo}/contents/${encodeURIComponent(path).replace(
+          /%2F/g,
+          "/"
+        )}`,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "huideng-sutra/1.0",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      };
+      const req = https.get(getOpt, (r) => {
+        let body = "";
+        r.on("data", (c) => (body += c));
+        r.on("end", () => {
+          if (r.statusCode === 200) {
+            try {
+              res2(JSON.parse(body).sha || null);
+            } catch (e) {
+              res2(null);
+            }
+          } else {
+            res2(null);
+          }
+        });
+      });
+      req.on("error", () => res2(null));
+    });
+
+    getSha.then((sha) => {
+      const body = JSON.stringify({
+        message: message || "update sutra layout",
+        content: Buffer.from(content, "utf8").toString("base64"),
+        sha: sha || undefined,
+      });
+      const putOpt = {
+        hostname: "api.github.com",
+        path: `/repos/${repo}/contents/${encodeURIComponent(path).replace(
+          /%2F/g,
+          "/"
+        )}`,
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "huideng-sutra/1.0",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+      };
+      const req = https.request(putOpt, (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          if (res.statusCode === 200 || res.statusCode === 201) {
+            resolve({ ok: true });
+          } else {
+            let msg = "HTTP " + res.statusCode;
+            try {
+              const j = JSON.parse(data);
+              msg = (j && j.message) || msg;
+            } catch (e) {}
+            reject(new Error("GitHub 写入失败：" + msg));
+          }
+        });
+      });
+      req.on("error", (e) =>
+        reject(new Error("GitHub 写入失败：" + (e.code || e.message)))
+      );
+      req.end(body);
+    });
+  });
+}
+
 exports.main = async (event, context) => {
   const uid = await resolveUid(event, context);
 
@@ -318,6 +410,8 @@ exports.main = async (event, context) => {
   const aiTranslations = db.collection("aiTranslations");
   // 读经段落笔记/完成态：按 (user, sutraKey, index) 唯一，跨设备云端同步。
   const readingParagraphNotes = db.collection("readingParagraphNotes");
+  // 管理员编辑的经文：按 id（规范 ID，如 T01n0031_001）唯一，存最新排版与版本时间戳。
+  const sutraEdits = db.collection("sutraEdits");
 
   // 确保 aiTranslations 集合存在。
   async function ensureAiTranslations() {
@@ -429,6 +523,15 @@ exports.main = async (event, context) => {
       await db.createCollection("topicBans");
     } catch (e) {
       // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 确保 sutraEdits 集合存在（管理员编辑经文版本）。
+  async function ensureSutraEdits() {
+    try {
+      await db.createCollection("sutraEdits");
+    } catch (e) {
+      // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
     }
   }
 
@@ -2704,6 +2807,68 @@ exports.main = async (event, context) => {
         hotDiscussionsCache = null;
         hotSutraMentionsCache = null;
         return ok({});
+      }
+
+      // ==================== 管理员编辑经文 / 用户更新排版 ====================
+
+      // 管理员保存「编辑经文」的最新排版。
+      // 1. 写入 GitHub 仓库 assets/sutras_edited/<卷>/<ID>.txt（原始版 sutras_ascii 不动）
+      // 2. 在云端 sutraEdits 记录版本时间戳与内容，供「更新排版」实时判断是否有新版。
+      case "sutraEditSave": {
+        if (!uid) return fail("unauthorized");
+        await ensureAdmins();
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        const id = String(event.id || "").trim();
+        const content = String(event.content ?? "");
+        if (!/^T\d{2}n\d{4}[A-Za-z]?_\d{3}$/.test(id)) return fail("bad_request");
+        if (!content.trim()) return fail("empty_content");
+        const vol = id.substring(0, 3);
+        const gitPath = `assets/sutras_edited/${vol}/${id}.txt`;
+        const gitMsg = `编辑经文 ${id}：更新排版`;
+        try {
+          await githubWriteFile({
+            repo: "dalidakun/huideng",
+            path: gitPath,
+            content,
+            message: gitMsg,
+          });
+        } catch (e) {
+          return fail("github_write_failed:" + (e && e.message ? e.message : ""));
+        }
+        // 正文全文只存 GitHub（sutras_edited），与现有下载模式一致。
+        // 云端 sutraEdits 仅记录每部经的轻量版本时间戳（几十字节），
+        // 供「更新排版」实时判断是否有新版，避免 GitHub CDN 缓存导致判断滞后。
+        await ensureSutraEdits();
+        const updatedAt = now();
+        const existing = await sutraEdits.where({ id }).limit(1).get();
+        if (existing.data && existing.data.length > 0) {
+          await sutraEdits.doc(existing.data[0]._id).update({
+            updatedAt,
+            updatedBy: uid,
+          });
+        } else {
+          await sutraEdits.add({
+            id,
+            updatedAt,
+            updatedBy: uid,
+            createdAt: updatedAt,
+          });
+        }
+        return ok({ updatedAt });
+      }
+
+      // 取某部经文的编辑版元信息（是否有管理员编辑版及其更新时间）。
+      // 供「更新排版」判断：updatedAt 比本地记录的版本新，即代表有新版可用。
+      case "sutraEditMeta": {
+        const id = String(event.id || "").trim();
+        if (!id) return fail("bad_request");
+        await ensureSutraEdits();
+        const existing = await sutraEdits.where({ id }).limit(1).get();
+        if (existing.data && existing.data.length > 0) {
+          const r = existing.data[0];
+          return ok({ found: true, updatedAt: r.updatedAt || 0 });
+        }
+        return ok({ found: false, updatedAt: 0 });
       }
 
       // ==================== 举报 ====================
