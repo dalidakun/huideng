@@ -114,6 +114,8 @@ class _ReadingPageState extends State<ReadingPage>
   Set<int> _unalignedIndices = {};
   // 以 `。。。` 前缀标记、阅读时隐藏操作栏（AI译/想法/待办）的段落 index 集合。
   Set<int> _hiddenActionParagraphs = {};
+  // 以 `。。。///` 标记、该段与下一段之间不留间隔（不分段）的段落 index 集合。
+  Set<int> _tightParagraphs = {};
   bool _isSutraAdmin = false; // 当前登录用户是否为管理员（决定菜单显示编辑经文/更新排版）
   int _activeNoteParagraphIndex = -1; // 正在编辑备注的段落（用于输入框）
   final TextEditingController _noteInputController = TextEditingController();
@@ -125,6 +127,8 @@ class _ReadingPageState extends State<ReadingPage>
   bool _isFavorite = false;
   bool _isRead = false;
   bool _isReadLater = false;
+  // 管理员本机标记：该经排版是否已完成（点击「完成排版」后置位，标题栏显示徽标）。
+  bool _isLayoutDone = false;
   double? _savedPosition;
 
   /// 当前背景是否为深色（索引4 = 393536）。
@@ -184,6 +188,7 @@ class _ReadingPageState extends State<ReadingPage>
     _loadFavoriteState();
     _loadReadState();
     _loadReadLaterState();
+    _loadLayoutDoneState();
     _loadDisplayTitle();
     // 异步获取管理员身份：管理员在菜单显示「编辑经文」，普通用户显示「更新排版」。
     CloudNotesService.instance
@@ -533,27 +538,68 @@ class _ReadingPageState extends State<ReadingPage>
   List<String> _parseParagraphs(String content) {
     final out = <String>[];
     _hiddenActionParagraphs.clear();
+    _tightParagraphs.clear();
     final lines = content.split('\n');
-    const mark = '。。。';
+    const hideMark = '。。。';
+    // 不分段记号：支持半角 /// 与全角 ／／／。
+    const tightUnits = ['///', '／／／'];
     for (final line in lines) {
-      var trimmed = line.trim();
-      if (trimmed.isEmpty) continue;
-      // `。。。` 标记：该段阅读时隐藏操作栏（AI译/想法/待办），标记本身不显示。
-      // 不限定位置，段首或段尾出现均可。
-      var hit = false;
-      if (trimmed.startsWith(mark)) {
-        trimmed = trimmed.substring(mark.length).trim();
-        hit = true;
-      } else if (trimmed.endsWith(mark)) {
-        trimmed = trimmed.substring(0, trimmed.length - mark.length).trim();
-        hit = true;
+      var text = line.trim();
+      if (text.isEmpty) continue;
+      // 标记（段首或段尾均可）：
+      //   `。。。`        → 该段隐藏操作栏（AI译/想法/待办），标记本身不显示。
+      //   `。。。///`     → 同时该段与下一段之间不留间隔（不分段）。
+      var hide = false;
+      var tight = false;
+
+      // 尾部标记：正文[/]。。。[/]  或  正文。。。///
+      for (final u in tightUnits) {
+        if (text.endsWith(hideMark + u)) {
+          text = text.substring(0, text.length - hideMark.length - u.length);
+          hide = true;
+          tight = true;
+          break;
+        }
+        if (text.endsWith(u + hideMark)) {
+          text = text.substring(0, text.length - u.length - hideMark.length);
+          hide = true;
+          tight = true;
+          break;
+        }
       }
-      if (hit) {
-        if (trimmed.isEmpty) continue; // 仅标记无正文的行视为空段
+      if (!tight && text.endsWith(hideMark)) {
+        text = text.substring(0, text.length - hideMark.length);
+        hide = true;
+      }
+
+      // 头部标记：[/]。。。[/]正文
+      for (final u in tightUnits) {
+        if (text.startsWith(hideMark + u)) {
+          text = text.substring(hideMark.length + u.length);
+          hide = true;
+          tight = true;
+          break;
+        }
+        if (text.startsWith(u + hideMark)) {
+          text = text.substring(u.length + hideMark.length);
+          hide = true;
+          tight = true;
+          break;
+        }
+      }
+      if (!tight && text.startsWith(hideMark)) {
+        text = text.substring(hideMark.length);
+        hide = true;
+      }
+
+      text = text.trim();
+      if (text.isEmpty) continue; // 仅标记无正文的行视为空段
+      if (hide) {
         _hiddenActionParagraphs.add(out.length);
-        out.add(trimmed);
+        if (tight) _tightParagraphs.add(out.length);
+        out.add(text);
       } else {
-        out.add(trimmed);
+        out.add(text);
       }
     }
     return out;
@@ -686,20 +732,33 @@ class _ReadingPageState extends State<ReadingPage>
       _promptLoginForNotes();
       return;
     }
-    final newDone = !(_paraDone[index] ?? false);
-    setState(() => _paraDone[index] = newDone);
+    // 若该段属于 `。。。///` 连成的一体段簇，则整个簇一起切换完成态。
+    final cluster = _connectedTightCluster(index);
+    final allDone = cluster.every((k) => _paraDone[k] == true);
+    final newDone = !allDone;
+    setState(() {
+      for (final k in cluster) {
+        _paraDone[k] = newDone;
+      }
+    });
     try {
-      await CloudNotesService.instance.toggleParagraphDone(
-        sutraKey: _sutraKey,
-        index: index,
-        text: _paragraphs[index],
-        done: newDone,
-      );
+      for (final k in cluster) {
+        await CloudNotesService.instance.toggleParagraphDone(
+          sutraKey: _sutraKey,
+          index: k,
+          text: _paragraphs[k],
+          done: newDone,
+        );
+      }
     } catch (e) {
       debugPrint('[reading] 切换段落完成态失败: $e');
       if (!mounted) return;
       // 失败回滚，避免本地显示与云端不一致。
-      setState(() => _paraDone[index] = !newDone);
+      setState(() {
+        for (final k in cluster) {
+          _paraDone[k] = !newDone;
+        }
+      });
       final msg = e is CloudApiException ? e.message : '网络异常，请稍后重试';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('更新失败：$msg')),
@@ -983,6 +1042,35 @@ class _ReadingPageState extends State<ReadingPage>
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (_isSutraAdmin && _isLayoutDone)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: _isDarkBg
+                                ? const Color(0x33FFD54F)
+                                : const Color(0x1A43A047),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: _isDarkBg
+                                  ? const Color(0x66FFD54F)
+                                  : const Color(0x6643A047),
+                              width: 0.5,
+                            ),
+                          ),
+                          child: Text(
+                            '已完成排版',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
+                              color: _isDarkBg
+                                  ? const Color(0xFFFFD54F)
+                                  : const Color(0xFF43A047),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1189,7 +1277,8 @@ class _ReadingPageState extends State<ReadingPage>
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                            children: List.generate(_paragraphs.length, (i) {
                                               return Padding(
-                                                padding: const EdgeInsets.only(bottom: 24.0),
+                                                padding: EdgeInsets.only(
+                                                    bottom: _tightParagraphs.contains(i) ? 0 : 24.0),
                                                 child: Column(
                                                   crossAxisAlignment: CrossAxisAlignment.start,
                                                   children: [
@@ -1238,7 +1327,8 @@ class _ReadingPageState extends State<ReadingPage>
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                            children: List.generate(_paragraphs.length, (i) {
                                               return Padding(
-                                                padding: const EdgeInsets.only(bottom: 24.0),
+                                                padding: EdgeInsets.only(
+                                                    bottom: _tightParagraphs.contains(i) ? 0 : 24.0),
                                                 child: Column(
                                                   crossAxisAlignment: CrossAxisAlignment.start,
                                                   children: [
@@ -1327,6 +1417,30 @@ if (!_hiddenActionParagraphs.contains(i))
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _buildMoreMenuItem(
+                              icon: _isSutraAdmin
+                                  ? const Icon(Icons.warning_amber_rounded,
+                                      size: 18, color: Color(0xFFE53935))
+                                  : const Icon(Icons.sync, size: 18),
+                              label: _isSutraAdmin ? '编辑经文' : '更新排版',
+                              onTap: _isSutraAdmin ? _openEditor : _checkSutraUpdate,
+                            ),
+                            if (_isSutraAdmin)
+                              _buildMoreMenuItem(
+                                icon: Icon(
+                                  _isLayoutDone
+                                      ? Icons.check_circle
+                                      : Icons.check_circle_outline,
+                                  size: 18,
+                                  color: _isLayoutDone
+                                      ? (_isDarkBg
+                                          ? const Color(0xFFFFD54F)
+                                          : const Color(0xFF43A047))
+                                      : null,
+                                ),
+                                label: '完成排版',
+                                onTap: _toggleLayoutDone,
+                              ),
+                            _buildMoreMenuItem(
                               icon: Icon(
                                 _isFavorite
                                     ? Icons.favorite
@@ -1335,14 +1449,6 @@ if (!_hiddenActionParagraphs.contains(i))
                               ),
                               label: _isFavorite ? '取消收藏' : '收藏',
                               onTap: _toggleFavorite,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: _isSutraAdmin
-                                  ? const Icon(Icons.warning_amber_rounded,
-                                      size: 18, color: Color(0xFFE53935))
-                                  : const Icon(Icons.sync, size: 18),
-                              label: _isSutraAdmin ? '编辑经文' : '更新排版',
-                              onTap: _isSutraAdmin ? _openEditor : _checkSutraUpdate,
                             ),
                             _buildMoreMenuItem(
                               icon: Icon(
@@ -1592,18 +1698,25 @@ if (!_hiddenActionParagraphs.contains(i))
     final filePath = _resolvedFilePath ?? widget.filePath;
     if (filePath == null) return;
     setState(() => _showMoreMenu = false);
-    final changed = await Navigator.of(context).push<bool>(
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
       MaterialPageRoute(
         builder: (_) => SutraEditPage(
           title: widget.title,
           content: _content,
           keyPath: filePath,
+          scrollProgress: _scrollProgress,
         ),
       ),
     );
-    if (changed == true && mounted) {
-      await _loadContent();
-    }
+    if (result == null || result['changed'] != true || !mounted) return;
+    // 编辑页退出时的光标位置作为新进度，同步到阅读页。
+    _savedProgress = result['progress'] as double?;
+    _savedPosition = null;
+    // 内容可能已变化，作废旧的分页结果，重新分页并按进度定位。
+    _flipCacheKey = '';
+    _flipPages = [];
+    _flipPageRestored = false;
+    await _loadContent();
   }
 
   /// 非管理员「更新排版」：从 GitHub / 云端拉取管理员编辑的最新排版并覆盖本地。
@@ -1811,6 +1924,28 @@ if (!_hiddenActionParagraphs.contains(i))
     );
   }
 
+  /// 加载当前经书排版完成标记（管理员本机记录，仅管理员显示）。
+  Future<void> _loadLayoutDoneState() async {
+    final keyPath = _resolvedFilePath ?? widget.filePath;
+    if (keyPath == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final done = prefs.getBool('sutra_layout_done_$keyPath') ?? false;
+    if (mounted && done) setState(() => _isLayoutDone = true);
+  }
+
+  /// 管理员点击「完成排版」：标记该经排版已完成，标题栏显示徽标。
+  Future<void> _toggleLayoutDone() async {
+    final keyPath = _resolvedFilePath ?? widget.filePath;
+    if (keyPath == null) return;
+    setState(() {
+      _showMoreMenu = false;
+      _isLayoutDone = true;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('sutra_layout_done_$keyPath', true);
+    _toast('已完成排版');
+  }
+
   /// 加载当前经书阅读完成状态。
   Future<void> _loadReadState() async {
     try {
@@ -1910,12 +2045,15 @@ if (!_hiddenActionParagraphs.contains(i))
   }
 
   /// 点击某段的「AI译」：打开翻译面板并自动翻译该段。
+  /// 若该段与相邻段通过 `。。。///` 标记连成一体（无间隔），则把整个连段段落簇
+  /// 一起翻译，而不是只翻其中一小段。
   void _openAiTranslate(int index) {
     if (index < 0 || index >= _paragraphs.length) return;
-    final paragraph = _paragraphs[index];
+    final cluster = _connectedTightCluster(index);
+    final paragraph = cluster.map((k) => _paragraphs[k]).join('\n');
     // 收起阅读设置面板，避免与翻译面板重叠。
     _showStylePanel = false;
-    // 同步面板内「读经笔记」输入框为该段现有备注。
+    // 同步面板内「读经笔记」输入框为该段现有备注（用被点击的那段）。
     _noteInputController.text = _paraNotes[index] ?? '';
     setState(() {
       _aiParagraphIndex = index;
@@ -1927,6 +2065,18 @@ if (!_hiddenActionParagraphs.contains(i))
       _activeNoteParagraphIndex = index;
     });
     _requestAiTranslate();
+  }
+
+  /// 返回与 [index] 通过 `。。。///` 连成一体（无间隔）的连续段落下标簇。
+  /// `_tightParagraphs.contains(j)` 表示段落 j 与 j+1 之间无间隔；
+  /// 以 [index] 为中心向两侧扩张到整段紧密连段的两端。
+  List<int> _connectedTightCluster(int index) {
+    if (_paragraphs.length <= 1) return [index.clamp(0, _paragraphs.length - 1)];
+    var lo = index;
+    var hi = index;
+    while (lo > 0 && _tightParagraphs.contains(lo - 1)) lo--; // (lo-1) 连到 lo
+    while (hi < _paragraphs.length - 1 && _tightParagraphs.contains(hi)) hi++; // hi 连到 hi+1
+    return [for (var k = lo; k <= hi; k++) k];
   }
 
   /// 请求白话翻译（面板打开后/重试时调用）。
@@ -2372,8 +2522,7 @@ if (!_hiddenActionParagraphs.contains(i))
         ),
       );
     } else if (_aiTranslation != null) {
-      // 白话译文 + 底部读经笔记输入框（为该段添加备注）。
-      final note = (_paraNotes[_aiParagraphIndex] ?? '');
+      // 白话译文（只保留翻译区块，去掉底部「读经想法」输入区）。
       body = Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2387,83 +2536,6 @@ if (!_hiddenActionParagraphs.contains(i))
               letterSpacing: 0.5,
             ),
           ),
-          const SizedBox(height: 20),
-          const Divider(height: 1),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Icon(Icons.sticky_note_2_outlined,
-                  size: 16, color: subColor),
-              const SizedBox(width: 6),
-              Text('读经想法',
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: textColor)),
-              const Spacer(),
-              if (note.isNotEmpty)
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _deleteParagraphNote(_aiParagraphIndex),
-                  child: Text('删除',
-                      style: TextStyle(
-                          fontSize: 12, color: Colors.redAccent)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _noteInputController,
-            maxLines: 4,
-            minLines: 2,
-            decoration: InputDecoration(
-              hintText: '为这段经文写下你的想法…',
-              hintStyle: TextStyle(fontSize: 13, color: subColor),
-              filled: true,
-              fillColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF5F3EF),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
-              ),
-            ),
-            style: TextStyle(fontSize: 14, color: textColor),
-            onChanged: (_) {
-              if (_activeNoteParagraphIndex != _aiParagraphIndex) {
-                _activeNoteParagraphIndex = _aiParagraphIndex;
-              }
-            },
-          ),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              onPressed: () => _saveParagraphNote(
-                  _aiParagraphIndex, _noteInputController.text,
-                  shared: _paraShared[_aiParagraphIndex] == true,
-                  cloudId: _paraCloudIds[_aiParagraphIndex] ?? ''),
-              icon: const Icon(Icons.save_outlined, size: 16),
-              label: const Text('保存想法'),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppPalette.p.accent,
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-          ),
-          if (note.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: textColor.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                '已保存：$note',
-                style: TextStyle(fontSize: 12, height: 1.5, color: subColor),
-              ),
-            ),
-          ],
         ],
       );
     } else {
@@ -3489,7 +3561,7 @@ if (!_hiddenActionParagraphs.contains(i))
   /// 翻页模式下的单个段落（文本 + 右侧操作栏）。
   Widget _buildFlipParagraph(int index) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: EdgeInsets.only(bottom: _tightParagraphs.contains(index) ? 0 : 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

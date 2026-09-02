@@ -90,7 +90,12 @@ class _SutraEditPageState extends State<SutraEditPage> {
         }
       }
     }
-    if (mounted) navigator.pop(true);
+    if (mounted) navigator.pop({
+      'changed': true,
+      'progress': _controller.text.isEmpty
+          ? 0.0
+          : (_controller.selection.end / _controller.text.length).clamp(0.0, 1.0),
+    });
   }
 
   @override

@@ -6,6 +6,7 @@ build/
 *.iml
 .idea/
 .metadata
+.flutter-plugins-dependencies
 
 # macOS
 .DS_Store
