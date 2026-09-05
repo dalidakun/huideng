@@ -14,6 +14,7 @@ import 'app_palette.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'ai_translate_page.dart';
 
 /// 想法分享帖正文里的元数据哨兵前缀：后面紧跟 base64 编码的
 /// 「(经文,想法) 成对数组」JSON。展示时只显示第一条经文，点击色块用完整数据打开想法页。
@@ -562,6 +563,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                                               : _fg,
                                         ),
                                       ),
+                                      // 展开/收起（左下方）
                                       if (long)
                                         GestureDetector(
                                           behavior: HitTestBehavior.opaque,
@@ -592,6 +594,38 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                                             ),
                                           ),
                                         ),
+                                      // AI译按钮：紧贴经文短文右下角，靠右对齐
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: GestureDetector(
+                                          behavior: HitTestBehavior.opaque,
+                                          onTap: () => AiTranslatePage.open(
+                                            context,
+                                            paragraph: p,
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.only(
+                                                top: 2),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.auto_awesome,
+                                                    size: 13, color: accent),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  'AI译',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: accent,
+                                                    fontWeight:
+                                                        FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ),

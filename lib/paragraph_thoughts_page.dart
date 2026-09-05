@@ -112,10 +112,24 @@ class ParagraphThoughtsPage extends StatefulWidget {
                     right: 0,
                     top: top,
                     bottom: 0,
-                    child: ClipRRect(
-                      borderRadius:
-                          const BorderRadius.vertical(top: Radius.circular(18)),
-                      child: child,
+                    child: DecoratedBox(
+                      // 顶部阴影与 AI 翻译弹层一致：黑色 18% 透明度、上抛 4px。
+                      decoration: const BoxDecoration(
+                        borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(18)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Color(0x2E000000),
+                            blurRadius: 16,
+                            offset: Offset(0, -4),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(18)),
+                        child: child,
+                      ),
                     ),
                   );
                 },

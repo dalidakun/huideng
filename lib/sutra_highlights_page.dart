@@ -11,6 +11,7 @@ import 'app_palette.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'ai_translate_page.dart';
 
 /// 画线分享帖正文里的元数据哨兵前缀：后面紧跟 base64 编码的
 /// 「全部画线文字」JSON 数组。展示时只显示第一条，点击色块用完整数据打开画线页。
@@ -325,25 +326,63 @@ class _SutraHighlightsPageState extends State<SutraHighlightsPage> {
                             style: const TextStyle(fontSize: 14, height: 1.6, color: _fg),
                           ),
                           const SizedBox(height: 4),
+                          // 底行操作：复制 | AI译，右对齐并排。
                           Align(
                             alignment: Alignment.centerRight,
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: () => _copy(h),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.copy_outlined, size: 14, color: accent),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '复制',
-                                      style: TextStyle(fontSize: 12, color: accent),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // AI译
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => AiTranslatePage.open(
+                                    context,
+                                    paragraph: h,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 6),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.auto_awesome,
+                                            size: 14, color: accent),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'AI译',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: accent,
+                                              fontWeight: FontWeight.w500),
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(width: 4),
+                                // 复制
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => _copy(h),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 6),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.copy_outlined,
+                                            size: 14, color: accent),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '复制',
+                                          style: TextStyle(
+                                              fontSize: 12, color: accent),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],

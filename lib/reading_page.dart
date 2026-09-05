@@ -27,6 +27,7 @@ import 'reading_guide_page.dart';
 import 'reading_notes_page.dart';
 import 'reading_note_edit_page.dart';
 import 'paragraph_thoughts_page.dart';
+import 'ai_translate_page.dart';
 import 'sutra_highlights_page.dart';
 import 'cloud_notes_service.dart';
 import 'auth_service.dart';
@@ -73,14 +74,6 @@ class _ReadingPageState extends State<ReadingPage>
   bool _actionRowTapped = false; // 点击段落操作栏（AI译/笔记/方框）时置true，阻止外层Listener触发面板
   final GlobalKey _moreMenuKey = GlobalKey();
 
-  // ── AI 翻译面板状态 ─────────────────────────
-  String? _aiParagraph; // 当前选中要翻译的段落原文
-  int _aiParagraphIndex = -1; // 该段在 _paragraphs 中的下标
-  bool _aiPanelLoading = false; // 翻译请求进行中
-  String? _aiTranslation; // 已生成的白话译文
-  String? _aiError; // 错误信息
-  bool _aiDiagLoading = false; // 诊断请求进行中
-  String? _aiDiagText; // 诊断结果文本
   List<int> _searchMatches = [];
   int _currentMatchIndex = 0;
   double _scrollProgress = 0.0;
@@ -1236,8 +1229,6 @@ class _ReadingPageState extends State<ReadingPage>
                                 _selectionActiveAtDown = false;
                                 return;
                               }
-                              // AI 翻译面板打开时，点击仅用于收起面板，不触发表单切换。
-                              if (_aiParagraph != null) return;
                               setState(() {
                                 if (_showMoreMenu) {
                                   _showMoreMenu = false;
@@ -1552,22 +1543,6 @@ if (!_hiddenActionParagraphs.contains(i))
                       child: _buildQuickPanel(),
                     ),
                   ],
-
-                 if (_aiParagraph != null) ...[
-                  // 阅读区遮罩：点击面板上方空隙（未盖住的经文区）即可关闭。
-                  Positioned.fill(
-                    child: GestureDetector(
-                      onTap: _closeAiPanel,
-                    ),
-                  ),
-                  Positioned(
-                    top: 56, // 与标题栏底部间隔约一个标题栏高度，露出经文空隙
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: _buildAiPanel(),
-                  ),
-                ],
                 ],
               ),
             ),
@@ -2044,27 +2019,25 @@ if (!_hiddenActionParagraphs.contains(i))
     assistantVisible.value = !assistantVisible.value;
   }
 
-  /// 点击某段的「AI译」：打开翻译面板并自动翻译该段。
+  /// 点击某段的「AI译」：打开白话翻译弹层并自动翻译该段。
   /// 若该段与相邻段通过 `。。。///` 标记连成一体（无间隔），则把整个连段段落簇
   /// 一起翻译，而不是只翻其中一小段。
   void _openAiTranslate(int index) {
     if (index < 0 || index >= _paragraphs.length) return;
     final cluster = _connectedTightCluster(index);
     final paragraph = cluster.map((k) => _paragraphs[k]).join('\n');
-    // 收起阅读设置面板，避免与翻译面板重叠。
-    _showStylePanel = false;
-    // 同步面板内「读经笔记」输入框为该段现有备注（用被点击的那段）。
-    _noteInputController.text = _paraNotes[index] ?? '';
+    // 收起阅读设置 / 速览面板，避免与新弹层重叠。
     setState(() {
-      _aiParagraphIndex = index;
-      _aiParagraph = paragraph;
-      _aiTranslation = null;
-      _aiError = null;
-      _aiDiagText = null;
-      _aiPanelLoading = true;
-      _activeNoteParagraphIndex = index;
+      _showStylePanel = false;
+      _showQuickPanel = false;
     });
-    _requestAiTranslate();
+    AiTranslatePage.open(
+      context,
+      paragraph: paragraph,
+      fontSize: _fontSize,
+      lineHeight: _lineHeight,
+      isDark: _isDarkBg,
+    );
   }
 
   /// 返回与 [index] 通过 `。。。///` 连成一体（无间隔）的连续段落下标簇。
@@ -2079,91 +2052,8 @@ if (!_hiddenActionParagraphs.contains(i))
     return [for (var k = lo; k <= hi; k++) k];
   }
 
-  /// 请求白话翻译（面板打开后/重试时调用）。
-  Future<void> _requestAiTranslate() async {
-    final paragraph = _aiParagraph;
-    if (paragraph == null) return;
-    setState(() {
-      _aiPanelLoading = true;
-      _aiError = null;
-    });
-    try {
-      final text = await CloudNotesService.instance.aiTranslate(paragraph: paragraph);
-      if (!mounted) return;
-      setState(() {
-        _aiTranslation = _stripAnnotation(text);
-        _aiPanelLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _aiPanelLoading = false;
-        _aiError = e is CloudApiException ? e.message : '翻译失败，请稍后重试';
-      });
-    }
-  }
-
-  /// 剔除译文末尾的「注：…」等补充说明，只保留译文正文。
-  /// （模型在某些旧缓存/旧版本可能仍会输出这类标注。）
-  String _stripAnnotation(String text) {
-    if (text.isEmpty) return text;
-    // 匹配：行首或句末换行后出现的 注/说明/备注/注释 标注（可带【】、（）等装饰）。
-    final RegExp noteRe = RegExp(
-      r'(?:\r?\n|。|；)[　\s]*(?:【|\[|（|\(|〔|『)?(?:注\s*[:：]?\s*\d*|注\s*释[:：]|说明[:：]|備注[:：]|备注[:：]|注释[:：])',
-    );
-    final match = noteRe.firstMatch(text);
-    if (match != null) {
-      return text.substring(0, match.start).trim();
-    }
-    return text.trim();
-  }
-
-  /// 关闭 AI 翻译面板。
-  void _closeAiPanel() {
-    FocusScope.of(context).unfocus();
-    _noteInputController.clear();
-    setState(() {
-      _aiParagraph = null;
-      _aiParagraphIndex = -1;
-      _aiTranslation = null;
-      _aiError = null;
-      _aiPanelLoading = false;
-      _activeNoteParagraphIndex = -1;
-    });
-  }
-
-  /// 一键网络自诊断：检测云函数到大模型的连通性，把根因显示在面板里。
-  Future<void> _runAiDiag() async {
-    if (_aiDiagLoading) return;
-    setState(() {
-      _aiDiagLoading = true;
-      _aiDiagText = null;
-    });
-    try {
-      final res = await CloudNotesService.instance.aiNetProbe();
-      if (!mounted) return;
-      final b = StringBuffer();
-      b.writeln('密钥已配置：${res['keyConfigured'] == true ? '是' : '否'}');
-      b.writeln('域名解析(DNS)：${res['dns'] ?? '未测'} ${res['ip'] ?? ''}');
-      b.writeln('TCP连接：${res['tcp'] ?? '未测'}${res['tcp'] == 'fail' ? ' ${res['tcpError'] ?? ''}' : ''}');
-      b.writeln('TLS握手：${res['tls'] ?? '未测'}${res['tls'] == 'fail' ? ' ${res['tlsError'] ?? ''}' : ''}');
-      b.writeln('结论：${res['conclusion'] ?? '未知'}');
-      setState(() {
-        _aiDiagText = b.toString();
-        _aiDiagLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _aiDiagText = '诊断失败：${e is CloudApiException ? e.message : e}';
-        _aiDiagLoading = false;
-      });
-    }
-  }
-
   /// 段落右侧的操作栏（同一水平位）：待办圆圈 | AI译 | 笔记。
   Widget _buildParagraphActions(int index) {
-    final isActive = _aiParagraphIndex == index && _aiParagraph != null;
     final fg = _isDarkBg ? Colors.white.withOpacity(0.6) : const Color(0xFF9A9A9A);
     final activeFg = AppPalette.p.accent;
     final hasNote = (_paraNotes[index] ?? '').isNotEmpty;
@@ -2224,14 +2114,14 @@ if (!_hiddenActionParagraphs.contains(i))
                    Icon(
                     Icons.auto_awesome,
                     size: 13,
-                    color: isActive ? activeFg : fg,
+                    color: fg,
                   ),
                   const SizedBox(width: 2),
                   Text(
                     'AI译',
                     style: TextStyle(
                       fontSize: 13,
-                      color: isActive ? activeFg : fg,
+                      color: fg,
                     ),
                   ),
                 ],
@@ -2268,17 +2158,8 @@ if (!_hiddenActionParagraphs.contains(i))
   }
 
   /// 点击「想法」：打开该段经文所有用户想法的汇总底部弹层。
-  /// （若 AI 翻译面板正显示该段且用户在看笔记输入框，则仍聚焦到笔记输入框。）
   void _onParagraphNoteTap(int index) {
     if (index < 0 || index >= _paragraphs.length) return;
-    // 若 AI 翻译面板正显示该段，切到笔记输入框。
-    if (_aiParagraphIndex == index && _aiParagraph != null) {
-      setState(() {
-        _activeNoteParagraphIndex = index;
-        _noteInputController.text = _paraNotes[index] ?? '';
-      });
-      return;
-    }
     ParagraphThoughtsPage.open(
       context,
       sutraTitle: _titleShown,
@@ -2446,180 +2327,60 @@ if (!_hiddenActionParagraphs.contains(i))
     );
   }
 
-  /// 全屏白话翻译面板（不含原文与讨论，译文大字号，仅右上角×号可关闭）。
-  /// 底部白话翻译面板：从下方滑出、顶边左右圆角、不触碰标题栏，
-  /// 译文字号/行距跟随正文设置；仅右上角×号可关闭。
-  Widget _buildAiPanel() {
-    final isDark = _isDarkBg;
-    final panelBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
-    final textColor = isDark ? Colors.white : const Color(0xFF212121);
-    final subColor = isDark ? Colors.white.withOpacity(0.6) : const Color(0xFF999999);
-
-    Widget body;
-    if (_aiPanelLoading) {
-      body = Padding(
-        padding: const EdgeInsets.symmetric(vertical: 48),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(strokeWidth: 3),
-              const SizedBox(height: 12),
-              Text('正在把这段翻译成白话文…',
-                  style: TextStyle(fontSize: 14, color: subColor)),
-            ],
-          ),
-        ),
-      );
-    } else if (_aiError != null) {
-      body = Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, color: Colors.redAccent, size: 28),
-            const SizedBox(height: 8),
-            Text(
-              _aiError!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.redAccent, fontSize: 15),
-            ),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: _requestAiTranslate,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('重试'),
-            ),
-            const SizedBox(height: 4),
-            TextButton.icon(
-              onPressed: _runAiDiag,
-              icon: _aiDiagLoading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.network_check, size: 18),
-              label: Text(_aiDiagLoading ? '诊断中…' : '一键诊断'),
-              style: TextButton.styleFrom(foregroundColor: AppPalette.p.accent),
-            ),
-            if (_aiDiagText != null) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: textColor.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _aiDiagText!,
-                  style: TextStyle(fontSize: 12, height: 1.5, color: subColor),
-                ),
-              ),
-            ],
-          ],
-        ),
-      );
-    } else if (_aiTranslation != null) {
-      // 白话译文（只保留翻译区块，去掉底部「读经想法」输入区）。
-      body = Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SelectableText(
-            _aiTranslation!,
-            style: TextStyle(
-              color: textColor,
-              fontSize: _fontSize,
-              height: _lineHeight,
-              letterSpacing: 0.5,
-            ),
-          ),
-        ],
-      );
-    } else {
-      body = const SizedBox.shrink();
+  /// 根据当前阅读背景色索引，返回面板渐进式配色。
+  Map<String, Color> _panelColors() {
+    switch (_bgColorIndex) {
+      case 1: // 暖黄 #EDDAB9
+        return {
+          'panelBg': const Color(0xFFFFF3E4),
+          'textColor': const Color(0xFF3E2723),
+          'subText': const Color(0xFFA08070),
+          'dragBar': const Color(0xFFDDD0C0),
+          'accent': AppPalette.p.accent,
+          'checkIcon': const Color(0xFF3E2723),
+        };
+      case 2: // 米灰 #E6DED4
+        return {
+          'panelBg': const Color(0xFFF0E8DE),
+          'textColor': const Color(0xFF3E302A),
+          'subText': const Color(0xFFA09080),
+          'dragBar': const Color(0xFFDDD0C8),
+          'accent': AppPalette.p.accent,
+          'checkIcon': const Color(0xFF3E302A),
+        };
+      case 3: // 豆绿 #CCDAC0
+        return {
+          'panelBg': const Color(0xFFE4ECE0),
+          'textColor': const Color(0xFF2A3828),
+          'subText': const Color(0xFF809080),
+          'dragBar': const Color(0xFFC8D8C0),
+          'accent': AppPalette.p.accent,
+          'checkIcon': const Color(0xFF2A3828),
+        };
+      case 4: // 深色 #393536
+        return {
+          'panelBg': const Color(0xFF1E1E1E),
+          'textColor': Colors.white,
+          'subText': Colors.white.withOpacity(0.6),
+          'dragBar': Colors.white.withOpacity(0.2),
+          'accent': const Color(0xFFC0A880),
+          'checkIcon': Colors.white,
+        };
+      default: // 默认白 #F5F5F5
+        return {
+          'panelBg': Colors.white,
+          'textColor': const Color(0xFF212121),
+          'subText': const Color(0xFF999999),
+          'dragBar': const Color(0xFFD0D0D0),
+          'accent': AppPalette.p.accent,
+          'checkIcon': const Color(0xFF212121),
+        };
     }
-
-    // 屏幕尺寸在 builder 外取好：builder 里调 MediaQuery.of 会随键盘
-    // 弹出/收起反复注册 InheritedWidget 依赖，保存笔记时触发
-    // 「_dependents.isEmpty」断言错误。
-    final screenSize = MediaQuery.of(context).size;
-    return TweenAnimationBuilder<Offset>(
-      tween: Tween(begin: const Offset(0, 1), end: Offset.zero),
-      duration: const Duration(milliseconds: 240),
-      curve: Curves.easeOutCubic,
-      child: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: BoxDecoration(
-          color: panelBg,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.18),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          bottom: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 顶部栏：标题 + 右上角小号关闭（仅此处可关闭）
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 8, 2),
-                child: Row(
-                  children: [
-                    Text(
-                      '白话翻译',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: _closeAiPanel,
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 20,
-                      tooltip: '关闭',
-                      color: subColor,
-                      padding: const EdgeInsets.all(4),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                  child: body,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      builder: (context, offset, child) => Transform.translate(
-        offset: Offset(
-          offset.dx * screenSize.width,
-          offset.dy * screenSize.height,
-        ),
-        child: child,
-      ),
-    );
   }
 
-  /// 点击正文中部弹出的「速览面板」：画线 / 想法 / 阅读设置 并排三个按钮。
   Widget _buildQuickPanel() {
-    final isDark = _isDarkBg;
-    final panelBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final c = _panelColors();
+    final panelBg = c['panelBg']!;
 
     return GestureDetector(
       // 吞掉面板内的点击，避免穿透到下面的收起遮罩。
@@ -2670,9 +2431,9 @@ if (!_hiddenActionParagraphs.contains(i))
     required String label,
     required VoidCallback onTap,
   }) {
-    final isDark = _isDarkBg;
-    final textColor = isDark ? Colors.white : const Color(0xFF212121);
-    final accentColor = AppPalette.p.accent;
+    final c = _panelColors();
+    final textColor = c['textColor']!;
+    final accentColor = c['accent']!;
     return Expanded(
       child: InkWell(
         onTap: onTap,
@@ -2698,7 +2459,7 @@ if (!_hiddenActionParagraphs.contains(i))
     required String label,
     required VoidCallback onTap,
   }) {
-    final fg = _isDarkBg ? Colors.white : AppPalette.p.primary;
+    final fg = _panelColors()['textColor']!;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -2718,11 +2479,11 @@ if (!_hiddenActionParagraphs.contains(i))
 
   /// 底部弹出的「阅读设置」面板：字号、行间距、夜间模式、背景、翻页方式。
   Widget _buildReadingSettingsPanel() {
-    final isDark = _isDarkBg;
-    final panelBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final textColor = isDark ? Colors.white : const Color(0xFF212121);
-    final subTextColor = isDark ? Colors.white.withOpacity(0.6) : const Color(0xFF999999);
-    final accentColor = AppPalette.p.accent;
+    final c = _panelColors();
+    final panelBg = c['panelBg']!;
+    final textColor = c['textColor']!;
+    final subTextColor = c['subText']!;
+    final accentColor = c['accent']!;
 
     return GestureDetector(
       // 吞掉面板内的点击，避免穿透到下面的收起遮罩。
@@ -2751,7 +2512,7 @@ if (!_hiddenActionParagraphs.contains(i))
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.2) : const Color(0xFFD0D0D0),
+                    color: c['dragBar']!,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -2928,7 +2689,7 @@ if (!_hiddenActionParagraphs.contains(i))
                             ),
                             child: selected
                                 ? Icon(Icons.check, size: 14,
-                                    color: i == 4 ? Colors.white : const Color(0xFF212121))
+                                    color: c['checkIcon']!)
                                 : null,
                           ),
                         ),
@@ -2981,8 +2742,9 @@ if (!_hiddenActionParagraphs.contains(i))
     required bool selected,
     required VoidCallback onTap,
   }) {
-    final isDark = _isDarkMode;
-    final accentColor = AppPalette.p.accent;
+    final c = _panelColors();
+    final accentColor = c['accent']!;
+    final subTextColor = c['subText']!;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -2990,8 +2752,8 @@ if (!_hiddenActionParagraphs.contains(i))
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           color: selected
-              ? accentColor.withOpacity(isDark ? 0.3 : 0.15)
-              : (isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFF0F0F0)),
+              ? accentColor.withOpacity(_isDarkBg ? 0.3 : 0.15)
+              : (_isDarkBg ? Colors.white.withOpacity(0.08) : const Color(0xFFF0F0F0)),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected ? accentColor : Colors.transparent,
@@ -3003,7 +2765,7 @@ if (!_hiddenActionParagraphs.contains(i))
           style: TextStyle(
             fontSize: 13,
             fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            color: selected ? accentColor : (isDark ? Colors.white.withOpacity(0.6) : const Color(0xFF999999)),
+            color: selected ? accentColor : subTextColor,
           ),
         ),
       ),

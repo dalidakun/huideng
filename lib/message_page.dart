@@ -458,7 +458,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
               ),
               const SizedBox(width: 10),
               Text(
-                '通知',
+                '消息',
                 style: TextStyle(
                   color: p.text,
                   fontSize: 17,
