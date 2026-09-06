@@ -77,6 +77,10 @@ class SyncService with WidgetsBindingObserver {
     'user_login_uid',
     'user_login_phone',
     'user_login_nickname',
+    // 「精读经文」锁定状态：设备本地的当前精读指针。用户显式解锁后绝不因
+    // 云端旧值复活（本地删除不上传，冷启动恢复若从云端补写会让锁又被锁上）。
+    'locked_sutra_title',
+    'locked_sutra_file_path',
   };
 
   static const int _maxFileChars = 400000;

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:lunar/lunar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
@@ -12,6 +13,15 @@ Color get _text => AppPalette.p.text;
 Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _border => AppPalette.p.border;
+
+/// 农历信息封装：十斋日标记、节气名、农历日期文字。
+class _LunarInfo {
+  final bool isZhaiRi;
+  final String jieQi;
+  final String lunarDay;
+  const _LunarInfo({required this.isZhaiRi, required this.jieQi, required this.lunarDay});
+}
+
 class CalendarPage extends StatefulWidget {
   const CalendarPage({super.key});
 
@@ -541,7 +551,7 @@ class _CalendarPageState extends State<CalendarPage> {
       final dayWidgets = <Widget>[];
       for (var d = 0; d < 7; d++) {
         if ((w == 0 && d < weekdayOfFirst) || dayCounter > daysInMonth) {
-          dayWidgets.add(const Expanded(child: SizedBox(height: 40)));
+          dayWidgets.add(const Expanded(child: SizedBox(height: 58)));
         } else {
           final day = dayCounter;
           final dateStr = '${_currentMonth.year}-${_currentMonth.month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
@@ -557,41 +567,80 @@ class _CalendarPageState extends State<CalendarPage> {
     return weeks;
   }
 
+  /// 获取某天的农历信息：是否十斋日、节气名、农历日期文字。
+  _LunarInfo _getLunarInfo(DateTime date) {
+    final solar = Solar.fromYmd(date.year, date.month, date.day);
+    final lunar = solar.getLunar();
+    final foto = Foto.fromLunar(lunar);
+    final isZhaiRi = foto.isDayZhaiTen();
+    final jieQi = lunar.getJieQi();
+    final lunarDay = lunar.getDayInChinese();
+    return _LunarInfo(isZhaiRi: isZhaiRi, jieQi: jieQi, lunarDay: lunarDay);
+  }
+
   Widget _buildDayCell(int day, bool hasCheckIn, bool isToday, bool isSelected, String dateStr) {
+    final lunarInfo = _getLunarInfo(DateTime.parse(dateStr));
+
+    // 第2行文字：十斋日 > 节气 > 农历日期
+    String subText;
+    Color subColor;
+    if (lunarInfo.isZhaiRi) {
+      subText = '十斋日';
+      subColor = const Color(0xFFD4851E);
+    } else if (lunarInfo.jieQi.isNotEmpty) {
+      subText = lunarInfo.jieQi;
+      subColor = const Color(0xFF5C8A4D);
+    } else {
+      subText = lunarInfo.lunarDay;
+      subColor = _textHint;
+    }
+
     return Expanded(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () =>
             setState(() => _selectedDate = _selectedDate == dateStr ? null : dateStr),
         onLongPress: () => _backfillDate(dateStr),
-        child: Container(
-          height: 40,
-          alignment: Alignment.center,
-          child: Stack(
-            alignment: Alignment.center,
+        child: SizedBox(
+          height: 58,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (isToday)
-                Container(
-                  width: 32, height: 32,
-                  decoration: BoxDecoration(
-                    color: _primary.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              Container(
-                width: 32, height: 32,
-                decoration: BoxDecoration(
-                  color: hasCheckIn ? _primary : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                  border: isSelected ? Border.all(color: _gold, width: 2) : null,
-                ),
+              // 第1行：公历日期（背景色只包住这个小圆角方块）
+              Stack(
                 alignment: Alignment.center,
-                child: Text('$day', style: TextStyle(
-                  fontSize: 14,
-                  color: hasCheckIn ? Colors.white : (isToday ? _primary : _text),
-                  fontWeight: hasCheckIn || isToday ? FontWeight.w600 : FontWeight.w400,
-                )),
+                children: [
+                  if (isToday)
+                    Container(
+                      width: 30, height: 30,
+                      decoration: BoxDecoration(
+                        color: _primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  Container(
+                    width: 30, height: 30,
+                    decoration: BoxDecoration(
+                      color: hasCheckIn ? _primary : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: isSelected ? Border.all(color: _gold, width: 2) : null,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text('$day', style: TextStyle(
+                      fontSize: 15,
+                      color: hasCheckIn ? Colors.white : (isToday ? _primary : _text),
+                      fontWeight: hasCheckIn || isToday ? FontWeight.w700 : FontWeight.w600,
+                    )),
+                  ),
+                ],
               ),
+              const SizedBox(height: 1),
+              // 第2行：农历/节气/十斋日
+              Text(subText, style: TextStyle(
+                fontSize: 10,
+                color: hasCheckIn ? subColor.withValues(alpha: 0.7) : subColor,
+                fontWeight: FontWeight.w500,
+              ), maxLines: 1, overflow: TextOverflow.ellipsis),
             ],
           ),
         ),
