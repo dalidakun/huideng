@@ -20,7 +20,7 @@ Color get _textHint => AppPalette.p.textHint;
 Color get _gold => AppPalette.p.accent;
 
 /// 「新建笔记」编辑框提示语：说明 $ 经文 / # 话题 / @ 同修 三种输入方式。
-/// 仅在正文为空时显示，与「读经想法」输入框（无提示词）严格区分。
+/// 仅在正文为空时显示，与「读经感想」输入框（无提示词）严格区分。
 String get _contentHint =>
     '开始记录……\n输入 \$ 引用经文\n输入 # 添加话题\n输入 @ 提及同修';
 
@@ -1118,7 +1118,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
 /// 「新建笔记」编辑框控制器：重写 [buildTextSpan]，在输入时把
 /// `$经文`、`#话题`、`@同修` 标记显示为彩色，正文其余内容保持普通颜色。
-/// 仅用于「新建笔记」页，与「读经想法」页的纯文本输入框严格区分。
+/// 仅用于「新建笔记」页，与「读经感想」页的纯文本输入框严格区分。
 class _ColoredNoteController extends TextEditingController {
   _ColoredNoteController({super.text});
 

@@ -14,6 +14,21 @@ Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _border => AppPalette.p.border;
 
+/// 今天是否十斋日（农历），与打卡日历的标记逻辑一致。
+bool isTodayZhaiRi() {
+  final now = DateTime.now();
+  final solar = Solar.fromYmd(now.year, now.month, now.day);
+  return Foto.fromLunar(solar.getLunar()).isDayZhaiTen();
+}
+
+/// 今天的农历「月日」文字（如「四月初五」），供十斋日提醒文案使用。
+String todayLunarMonthDay() {
+  final now = DateTime.now();
+  final solar = Solar.fromYmd(now.year, now.month, now.day);
+  final lunar = solar.getLunar();
+  return '${lunar.getMonthInChinese()}月${lunar.getDayInChinese()}';
+}
+
 /// 农历信息封装：十斋日标记、节气名、农历日期文字。
 class _LunarInfo {
   final bool isZhaiRi;

@@ -945,18 +945,21 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                 post: SutraThoughtsPost.parse(note.content)!,
                                 noteId: note.id,
                                 sutraLibrary: _sutraLib,
+                                authorName: note.authorName,
                               )
                             else if (SutraHighlightsPost.isHighlightsPost(note.content))
                               SutraHighlightsPostView(
                                 post: SutraHighlightsPost.parse(note.content)!,
                                 noteId: note.id,
                                 sutraLibrary: _sutraLib,
+                                authorName: note.authorName,
                               )
                             else if (ReadingNotePost.isReadingNote(note.content))
                               ReadingNotePostView(
                                 note: ReadingNotePost.parse(note.content)!,
                                 noteId: note.id,
                                 sutraLibrary: _sutraLib,
+                                authorName: note.authorName,
                               )
                             else
                             // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。

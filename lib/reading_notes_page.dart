@@ -13,18 +13,19 @@ import 'package:printing/printing.dart';
 import 'app_palette.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'pdf_export.dart';
 import 'login_page.dart';
 import 'ai_translate_page.dart';
 
-/// 想法分享帖正文里的元数据哨兵前缀：后面紧跟 base64 编码的
-/// 「(经文,想法) 成对数组」JSON。展示时只显示第一条经文，点击色块用完整数据打开想法页。
+/// 感想分享帖正文里的元数据哨兵前缀：后面紧跟 base64 编码的
+/// 「(经文,感想) 成对数组」JSON。展示时只显示第一条经文，点击色块用完整数据打开感想页。
 const String kSutraThoughtsMetaPrefix = '\u00a7\u00a7TS\u00a7\u00a7';
 
-/// 「读经想法」汇总页：列出本经所有带想法（备注）的段落，经文与想法成组展示。
+/// 「读经感想」汇总页：列出本经所有带感想（备注）的段落，经文与感想成组展示。
 /// 样式与「画线归集」页一致（米白底 + 白色卡片）；只读展示：
 ///   - 经文较长时可点击折叠 / 展开
 ///   - 右上角三点可导出 PDF / 分享到菩提空间
-/// 该页同时被菩提空间的想法分享帖复用（点击色块进入）。
+/// 该页同时被菩提空间的感想分享帖复用（点击色块进入）。
 class ReadingNotesPage extends StatefulWidget {
   /// 经名。
   final String title;
@@ -32,7 +33,7 @@ class ReadingNotesPage extends StatefulWidget {
   /// 各段经文（与 [notes] 一一对应）。
   final List<String> paragraphs;
 
-  /// 各段想法（与 [paragraphs] 一一对应）。
+  /// 各段感想（与 [paragraphs] 一一对应）。
   final List<String> notes;
 
   const ReadingNotesPage({
@@ -56,7 +57,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
   // 已展开的卡片下标。
   final Set<int> _expanded = {};
 
-  /// 有想法的「经文+想法」成对列表（过滤空想法）。
+  /// 有感想的「经文+感想」成对列表（过滤空感想）。
   List<(String, String)> get _pairs {
     final pairs = <(String, String)>[];
     final n = widget.paragraphs.length < widget.notes.length
@@ -85,22 +86,22 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     });
   }
 
-  /// 导出 PDF：经文与想法成组，每组先「经文」后「想法」，视觉上明显区分。
+  /// 导出 PDF：经文与感想成组，每组先「经文」后「感想」，视觉上明显区分。
+  /// 为避免生成过重卡死，只导出第一条「经文,感想」。
   Future<void> _exportPdf() async {
     if (_exporting) return;
     final pairs = _pairs;
     if (pairs.isEmpty) {
-      _toast('没有可导出的想法');
+      _toast('没有可导出的感想');
       return;
     }
     setState(() => _exporting = true);
     try {
-      final html = _buildHtml(pairs);
-      // 用系统 WebView 把 HTML 渲染为 PDF（自带 CJK 字体，无需额外打包字体）。
-      // ignore: deprecated_member_use
-      final pdf = await Printing.convertHtml(
-        html: html,
-        format: PdfPageFormat.a4,
+      // 用纯 Dart 直接排版 PDF（内置中文字体），不依赖系统 WebView，
+      // 避免 convertHtml 在部分安卓设备上永不回调导致按钮一直转圈。
+      final pdf = await PdfExporter.buildReadingNotesPdf(
+        sutraName: _sutraName,
+        pairs: [pairs.first],
       );
       if (pdf.isEmpty) {
         _toast('生成失败：内容为空');
@@ -121,7 +122,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     final safeTitle = _sutraName
         .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
         .replaceAll(RegExp(r'\s+'), '');
-    final filename = '${safeTitle}_想法.pdf';
+    final filename = '${safeTitle}_感想.pdf';
     // 优先：用原生保存对话框，由插件写入用户选择的位置。
     try {
       final savedPath = await FlutterFileDialog.saveFile(
@@ -172,75 +173,14 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     );
   }
 
-  /// 把经文+想法分组渲染为 HTML：每组一块，经文与想法用不同色块区分。
-  String _buildHtml(List<(String, String)> pairs) {
-    final now = DateTime.now();
-    final madeOn =
-        '${now.year}年${now.month}月${now.day}日 ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-
-    final sb = StringBuffer()
-      ..writeln('<!DOCTYPE html><html><head><meta charset="utf-8"/>')
-      ..writeln('<meta name="viewport" content="width=device-width, initial-scale=1"/>')
-      ..writeln('<title>读经想法 - $_sutraName</title>')
-      ..writeln('<style>')
-      ..writeln('@page { size: A4; margin: 16mm 15mm; }')
-      ..writeln('html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }')
-      ..writeln('body { font-family: -apple-system, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif; color: #2C1F18; line-height: 1.7; font-size: 13px; }')
-      ..writeln('.cover { text-align: center; padding: 40mm 0 18mm; page-break-after: always; }')
-      ..writeln('.cover h1 { font-size: 24px; letter-spacing: 2px; margin: 0 0 8px; }')
-      ..writeln('.cover .sutra { font-size: 15px; color: #8B6B5A; margin-bottom: 24px; }')
-      ..writeln('.cover .meta { font-size: 13px; color: #B59B86; }')
-      ..writeln('.cover .count { margin-top: 22px; font-size: 13px; color: #6F5142; }')
-      ..writeln('.group { margin: 0 0 16px; border: 1px solid #EADFD2; border-radius: 8px; page-break-inside: avoid; overflow: hidden; }')
-      ..writeln('.group .label { padding: 6px 12px; font-size: 12px; font-weight: 600; letter-spacing: 1px; }')
-      ..writeln('.group .label.sutra { background: #F3E9DF; color: #5C4033; }')
-      ..writeln('.group .label.idea { background: #EAF0E7; color: #3D5C3A; }')
-      ..writeln('.group .body { padding: 8px 12px 10px; white-space: pre-wrap; word-break: break-word; }')
-      ..writeln('.group .body.sutra { color: #5C4033; }')
-      ..writeln('.group .body.idea { color: #3D5C3A; }')
-      ..writeln('</style></head><body>');
-
-    sb
-      ..writeln('<section class="cover">')
-      ..writeln('<h1>读经想法</h1>')
-      ..writeln('<div class="sutra">$_sutraName</div>')
-      ..writeln('<div class="meta">导出于 $madeOn</div>')
-      ..writeln('<div class="count">共 ${pairs.length} 组（每组建 经文 + 想法）</div>')
-      ..writeln('</section>');
-
-    for (final (p, note) in pairs) {
-      sb
-        ..writeln('<section class="group">')
-        ..writeln('<div class="label sutra">经文</div>')
-        ..writeln('<div class="body sutra">${_m(p)}</div>')
-        ..writeln('<div class="label idea">想法</div>')
-        ..writeln('<div class="body idea">${_m(note)}</div>')
-        ..writeln('</section>');
-    }
-
-    sb.writeln('</body></html>');
-    return sb.toString();
-  }
-
-  static String _m(String text) => _h(text).replaceAll('\n', '<br/>');
-
-  static String _h(String s) {
-    return s
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-  }
-
   /// 构建发布到菩提空间的分享帖正文（与画线分享同构）：
   ///   $经文名
   ///   <空行>
   ///   第一条经文
   ///   <空行>
-  ///   §§TS§§ + base64((经文,想法) 成对数组 JSON)
+  ///   §§TS§§ + base64((经文,感想) 成对数组 JSON)
   ///   <空行> 留言（可空）
-  /// 展示时只显示第一条经文（色块），点击色块用完整数据打开想法页。
+  /// 展示时只显示第一条经文（色块），点击色块用完整数据打开感想页。
   String _buildShareContent(
       List<(String, String)> pairs, String message) {
     final first = pairs.isNotEmpty ? pairs.first.$1 : '';
@@ -254,7 +194,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     return lines.join('\n\n');
   }
 
-  /// 把「经文,想法」成对数组编码为 base64 JSON。
+  /// 把「经文,感想」成对数组编码为 base64 JSON。
   static String _encodePairs(List<(String, String)> pairs) {
     final arr = [
       for (final (p, t) in pairs)
@@ -421,7 +361,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                 Navigator.of(ctx).push(MaterialPageRoute(
                   builder: (_) => _PdfViewerPage(
                     bytes: pdfBytes,
-                    title: '读经想法 PDF',
+                    title: '读经感想 PDF',
                   ),
                 ));
               },
@@ -480,7 +420,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
         backgroundColor: _bg,
         foregroundColor: _fg,
         elevation: 0,
-        title: Text('想法：$_sutraName',
+        title: Text('感想：$_sutraName',
             style: const TextStyle(fontSize: 16, color: _fg)),
         actions: [
           IconButton(
@@ -494,7 +434,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
           pairs.isEmpty
               ? Center(
                   child: Text(
-                    '还没有为《$_sutraName》添加想法\n点击每段右侧的「想法」按钮即可记录',
+                    '还没有为《$_sutraName》添加感想\n点击每段右侧的「感想」按钮即可记录',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                         fontSize: 14, height: 1.6, color: Colors.black38),
@@ -632,7 +572,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                               ],
                             ),
                             const SizedBox(height: 8),
-                            // 想法
+                            // 感想
                             Container(
                               width: double.infinity,
                               padding: const EdgeInsets.symmetric(

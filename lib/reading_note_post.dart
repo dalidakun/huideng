@@ -8,6 +8,7 @@ import 'post_rich_content.dart';
 import 'reading_notes_page.dart';
 import 'sutra_highlights_page.dart';
 import 'sutra_paragraph_page.dart';
+import 'sutra_underline.dart';
 
 /// 读经笔记分享帖的解析与渲染。
 ///
@@ -64,9 +65,9 @@ class ReadingNotePost {
       return null;
     }
     // 两个分享入口用空行区分：
-    // - 读经想法（ReadingNoteEditPage）：`$经名\n\n段原文\n\n笔记`（空行分隔）
+    // - 读经感想（ReadingNoteEditPage）：`$经名\n\n段原文\n\n笔记`（空行分隔）
     // - 普通笔记（主页新建 NoteEditPage）：`$经名\n笔记`（单换行，无段原文）
-    // 只有读经想法分享（标题后紧跟空行）才区块包裹段原文；普通笔记不包裹。
+    // 只有读经感想分享（标题后紧跟空行）才区块包裹段原文；普通笔记不包裹。
     if (nl + 1 >= trimmed.length || trimmed[nl + 1] != '\n') {
       return null;
     }
@@ -98,12 +99,15 @@ class ReadingNotePostView extends StatelessWidget {
   final ReadingNotePost note;
   final String noteId;
   final Map<String, dynamic> sutraLibrary;
+  // 帖子作者昵称，用于在经文色块顶部标注「xxx的感想」（选择性文字分享）。
+  final String? authorName;
 
   const ReadingNotePostView({
     super.key,
     required this.note,
     required this.noteId,
     required this.sutraLibrary,
+    this.authorName,
   });
 
   void _openDetail(BuildContext context) async {
@@ -163,7 +167,7 @@ class ReadingNotePostView extends StatelessWidget {
               ),
             ),
           ),
-          // 笔记内容（用户的想法，放在经文色块上方）
+          // 笔记内容（用户的感想，放在经文色块上方）
           if (note.noteText.isNotEmpty) ...[
             Text(
               note.noteText,
@@ -187,13 +191,29 @@ class ReadingNotePostView extends StatelessWidget {
                 color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text(
-                note.paragraph,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: p.text,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (authorName != null && authorName!.trim().isNotEmpty) ...[
+                    Text(
+                      '$authorName的感想',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                  Text(
+                    note.paragraph,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.6,
+                      color: p.text,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -293,12 +313,15 @@ class SutraHighlightsPostView extends StatelessWidget {
   final SutraHighlightsPost post;
   final String noteId;
   final Map<String, dynamic> sutraLibrary;
+  // 帖子作者昵称，用于在画线色块顶部标注「xxx的所有画线」（画线页分享）。
+  final String? authorName;
 
   const SutraHighlightsPostView({
     super.key,
     required this.post,
     required this.noteId,
     required this.sutraLibrary,
+    this.authorName,
   });
 
   void _openDetail(BuildContext context) async {
@@ -380,17 +403,30 @@ class SutraHighlightsPostView extends StatelessWidget {
                 color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text(
-                post.firstHighlight,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: p.text,
-                  decoration: TextDecoration.underline,
-                  decorationColor:
-                      p.accent.withValues(alpha: 0.6),
-                  decorationThickness: 1.2,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (authorName != null && authorName!.trim().isNotEmpty) ...[
+                    Text(
+                      '$authorName的所有画线',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                  SutraUnderlineText(
+                    text: post.firstHighlight,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.6,
+                      color: p.text,
+                    ),
+                    lineColor: p.accent.withValues(alpha: 0.8),
+                  ),
+                ],
               ),
             ),
           ),
@@ -400,15 +436,15 @@ class SutraHighlightsPostView extends StatelessWidget {
   }
 }
 
-/// 想法分享帖的解析。
+/// 感想分享帖的解析。
 ///
 /// 分享时 `ReadingNotesPage._buildShareContent()` 生成的正文格式：
 ///   $经书名
 ///   <空行>
 ///   第一条经文
 ///   <空行>
-///   §§TS§§ + base64((经文,想法) 成对数组 JSON)
-/// 展示时只显示第一条经文（背景色包裹块），点击色块用完整数据打开想法页。
+///   §§TS§§ + base64((经文,感想) 成对数组 JSON)
+/// 展示时只显示第一条经文（背景色包裹块），点击色块用完整数据打开感想页。
 class SutraThoughtsPost {
   final String sutraTitle;
   final String firstParagraph;
@@ -427,7 +463,7 @@ class SutraThoughtsPost {
   static bool isThoughtsPost(String content) =>
       content.contains(kSutraThoughtsMetaPrefix);
 
-  /// 解析 base64 元数据为「经文,想法」成对数组。
+  /// 解析 base64 元数据为「经文,感想」成对数组。
   static List<(String, String)> _decodePairs(String base) {
     final pairs = <(String, String)>[];
     try {
@@ -491,22 +527,76 @@ class SutraThoughtsPost {
   }
 }
 
-/// 想法分享帖渲染组件。
+/// 把读经「画线 / 感想」分享帖正文转成适合纯文本（如 PDF 导出）的洁净文本。
+///
+/// 这种帖子末尾带一段 base64 元数据（哨兵 `§§HS§§` / `§§TS§§` 编码的成对
+/// 数组），直接导出会显示乱码。这里按分享帖结构还原成可读文本：
+///   - 感想帖：`$经名` + 第一条「经文/感想」
+///   - 画线帖：`$经名` + 第一条画线文字
+///   - 用户的留言单独放在最后的「【留言】」小节，与经文列表区分开
+/// 只导出第一条，避免整页感想/画线全部导出导致 PDF 生成过重卡死。
+/// 非分享帖返回 null。
+String? sutraPostPlainText(String content) {
+  final thoughts = SutraThoughtsPost.parse(content);
+  if (thoughts != null) {
+    final lines = <String>[
+      if (thoughts.sutraTitle.isNotEmpty) '\$${thoughts.sutraTitle}',
+    ];
+    if (thoughts.pairs.isNotEmpty) {
+      // 只导出第一条「经文,感想」。
+      final (p, t) = thoughts.pairs.first;
+      final seg = <String>[];
+      final pTrim = p.trim();
+      final tTrim = t.trim();
+      if (pTrim.isNotEmpty) seg.add('经文：$pTrim');
+      if (tTrim.isNotEmpty) seg.add('感想：$tTrim');
+      if (seg.isNotEmpty) lines.add(seg.join('\n'));
+    } else if (thoughts.firstParagraph.trim().isNotEmpty) {
+      // 极端历史数据：无成对元数据但展示块里有首条经文。
+      lines.add(thoughts.firstParagraph.trim());
+    }
+    final msg = thoughts.message.trim();
+    if (msg.isNotEmpty) lines.add('【留言】\n$msg');
+    return lines.isEmpty ? null : lines.join('\n\n');
+  }
+  final highlights = SutraHighlightsPost.parse(content);
+  if (highlights != null) {
+    final lines = <String>[
+      if (highlights.sutraTitle.isNotEmpty) '\$${highlights.sutraTitle}',
+    ];
+    if (highlights.highlights.isNotEmpty) {
+      // 只导出第一条画线。
+      final h = highlights.highlights.first.trim();
+      if (h.isNotEmpty) lines.add(h);
+    } else if (highlights.firstHighlight.trim().isNotEmpty) {
+      lines.add(highlights.firstHighlight.trim());
+    }
+    final msg = highlights.message.trim();
+    if (msg.isNotEmpty) lines.add('【留言】\n$msg');
+    return lines.isEmpty ? null : lines.join('\n\n');
+  }
+  return null;
+}
+
+/// 感想分享帖渲染组件。
 /// 样式与画线分享帖完全一致：
 ///   - $经名 → 经文讨论页
-///   - 第一条经文（背景色块）→ 打开该经书想法汇总页（展示分享时发布的完整想法）
+///   - 第一条经文（背景色块）→ 打开该经书感想汇总页（展示分享时发布的完整感想）
 ///   - 留言 → 显示在色块上方
 ///   - 其余区域 → 笔记详情页
 class SutraThoughtsPostView extends StatelessWidget {
   final SutraThoughtsPost post;
   final String noteId;
   final Map<String, dynamic> sutraLibrary;
+  // 帖子作者昵称，用于在经文色块顶部标注「xxx的所有感想」（感想汇总页分享）。
+  final String? authorName;
 
   const SutraThoughtsPostView({
     super.key,
     required this.post,
     required this.noteId,
     required this.sutraLibrary,
+    this.authorName,
   });
 
   void _openDetail(BuildContext context) async {
@@ -577,7 +667,7 @@ class SutraThoughtsPostView extends StatelessWidget {
             ),
             const SizedBox(height: 10),
           ],
-          // 第一条经文：纯背景色包裹块，点击进入想法汇总页。
+          // 第一条经文：纯背景色包裹块，点击进入感想汇总页。
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openThoughts(context),
@@ -589,13 +679,29 @@ class SutraThoughtsPostView extends StatelessWidget {
                 color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text(
-                post.firstParagraph,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: p.text,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (authorName != null && authorName!.trim().isNotEmpty) ...[
+                    Text(
+                      '$authorName的所有感想',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                  Text(
+                    post.firstParagraph,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.6,
+                      color: p.text,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

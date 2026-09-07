@@ -1,11 +1,11 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'cloud_notes_service.dart';
 
 /// AI 白话翻译底部弹层：展示某段经文的 AI 白话译文。
 ///
-/// 与「段落想法」弹层交互一致：
+/// 与「段落感想」弹层交互一致：
 /// - 从底部上滑出现，顶部圆角 + 阴影；
 /// - 顶部标题栏（含拖拽条）可向下拖动关闭，点击标题栏也可关闭；
 /// - 作为路由压栈，侧滑 / 系统返回可直接回到阅读页；

@@ -203,7 +203,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
               decoration: InputDecoration(
                 labelText: '签名',
                 labelStyle: TextStyle(color: sTextSec),
-                hintText: '一句修学想法',
+                hintText: '一句修学感想',
                 hintStyle: TextStyle(color: sTextHint),
               ),
             ),

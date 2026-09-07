@@ -755,8 +755,8 @@ class CloudNotesService {
     return const [];
   }
 
-  /// 拉取「所有用户」对某段经文的想法：菩提空间公开帖中符合
-  /// `$经名\n\n段原文\n\n想法` 格式、且段原文与 [paragraph] 匹配的帖子。
+  /// 拉取「所有用户」对某段经文的感想：菩提空间公开帖中符合
+  /// `$经名\n\n段原文\n\n感想` 格式、且段原文与 [paragraph] 匹配的帖子。
   /// 返回分页列表 + 是否还有更多 + 总条数。
   Future<(List<PlazaNote>, bool hasMore, int total)> getParagraphThoughts(
     String paragraph, {

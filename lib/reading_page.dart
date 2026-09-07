@@ -64,7 +64,7 @@ class _ReadingPageState extends State<ReadingPage>
   bool _showSearchBar = false;
   bool _showMoreMenu = false;
   bool _showStylePanel = false;
-  bool _showQuickPanel = false; // 点击正文中部弹出的 画线/想法/阅读设置 面板
+  bool _showQuickPanel = false; // 点击正文中部弹出的 画线/感想/阅读设置 面板
   bool _selectionActiveAtDown = false; // 按下时正文是否有文字选中或长按浮层菜单打开
   Offset? _pointerDownPos;
   DateTime? _pointerDownTime;
@@ -87,15 +87,15 @@ class _ReadingPageState extends State<ReadingPage>
   // 长按选中时的菜单是否已弹出（防止拖动句柄时重复插入 Overlay）。
   OverlayEntry? _selectionMenuEntry;
   // 所有仍处于显示中的浮层菜单条目（长按选中 + 单击画线），
-  // 打开其他页面（如想法输入页）前统一移除，避免残留弹窗。
+  // 打开其他页面（如感想输入页）前统一移除，避免残留弹窗。
   final List<OverlayEntry> _activeMenuEntries = [];
   // 每一次长按选中的菜单请求序号。用于丢弃切换页面 / 关闭弹窗后仍排队的
-  // addPostFrameCallback，避免其在想法输入页上重新插入残留的「复制/画线」弹窗。
+  // addPostFrameCallback，避免其在感想输入页上重新插入残留的「复制/画线」弹窗。
   int _menuRequestId = 0;
-  // 本页之上有其他路由（想法编辑页等）时为 true：期间禁止重建浮层菜单，
+  // 本页之上有其他路由（感想编辑页等）时为 true：期间禁止重建浮层菜单，
   // 否则选区收起会再次触发 contextMenuBuilder，把弹窗插到新页面上方。
   bool _coveredByRoute = false;
-  // 长按选中的 EditableTextState，用于点 画线/想法/复制 时读取实时选区。
+  // 长按选中的 EditableTextState，用于点 画线/感想/复制 时读取实时选区。
   EditableTextState? _selectionTextState;
   // 每次选区变化时更新的最新范围（长按初始为单字，拖动句柄后为完整范围）。
   (int, int)? _selectionRange;
@@ -105,7 +105,7 @@ class _ReadingPageState extends State<ReadingPage>
   bool _paraNotesLoading = false;
   // 更新排版后未能按原文重新定位到新段的原始 index 集合（保留数据并标记提示）。
   Set<int> _unalignedIndices = {};
-  // 以 `。。。` 前缀标记、阅读时隐藏操作栏（AI译/想法/待办）的段落 index 集合。
+  // 以 `。。。` 前缀标记、阅读时隐藏操作栏（AI译/感想/待办）的段落 index 集合。
   Set<int> _hiddenActionParagraphs = {};
   // 以 `。。。///` 标记、该段与下一段之间不留间隔（不分段）的段落 index 集合。
   Set<int> _tightParagraphs = {};
@@ -281,7 +281,7 @@ class _ReadingPageState extends State<ReadingPage>
   @override
   void didPushNext() {
     ReadingTimeService.instance.stop();
-    // 有新页面盖在本页上（如想法编辑页）：清掉浮层菜单并禁止其重建。
+    // 有新页面盖在本页上（如感想编辑页）：清掉浮层菜单并禁止其重建。
     // 否则失焦导致选区收起时 contextMenuBuilder 会再次回调，
     // 把「复制/画线」弹窗重新插到新页面上方，形成残留。
     _clearSelectionMenu();
@@ -540,7 +540,7 @@ class _ReadingPageState extends State<ReadingPage>
       var text = line.trim();
       if (text.isEmpty) continue;
       // 标记（段首或段尾均可）：
-      //   `。。。`        → 该段隐藏操作栏（AI译/想法/待办），标记本身不显示。
+      //   `。。。`        → 该段隐藏操作栏（AI译/感想/待办），标记本身不显示。
       //   `。。。///`     → 同时该段与下一段之间不留间隔（不分段）。
       var hide = false;
       var tight = false;
@@ -714,7 +714,7 @@ class _ReadingPageState extends State<ReadingPage>
   /// 未登录时点击笔记/勾选/读经笔记的统一提示。
   void _promptLoginForNotes() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('登录后才能保存读经想法与画线（跨设备同步），请先在「我的」页面登录')),
+      const SnackBar(content: Text('登录后才能保存读经感想与画线（跨设备同步），请先在「我的」页面登录')),
     );
   }
 
@@ -1241,7 +1241,7 @@ class _ReadingPageState extends State<ReadingPage>
                                   _currentMatchIndex = 0;
                                 }
                               });
-                              // 干净单击正文中部：弹出 画线/想法/阅读设置 底部面板。
+                              // 干净单击正文中部：弹出 画线/感想/阅读设置 底部面板。
                               _openQuickPanel();
                             },
                             child: LayoutBuilder(
@@ -1266,85 +1266,18 @@ class _ReadingPageState extends State<ReadingPage>
                                   child: _searchController.text.isEmpty
                                       ? Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
-                                           children: List.generate(_paragraphs.length, (i) {
-                                              return Padding(
-                                                padding: EdgeInsets.only(
-                                                    bottom: _tightParagraphs.contains(i) ? 0 : 24.0),
-                                                child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  children: [
-                                                    if (_unalignedIndices.contains(i))
-                                                      Padding(
-                                                        padding: const EdgeInsets.only(bottom: 6),
-                                                        child: Container(
-                                                          padding: const EdgeInsets.symmetric(
-                                                              horizontal: 8, vertical: 4),
-                                                          decoration: BoxDecoration(
-                                                            color: const Color(0xFFFFF3CD),
-                                                            borderRadius: BorderRadius.circular(6),
-                                                          ),
-                                                          child: const Text(
-                                                            '排版已变化，此处的想法/画线未能重新定位',
-                                                            style: TextStyle(
-                                                              fontSize: 12,
-                                                              color: Color(0xFF8a6d1a),
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    SelectableText.rich(
-                                                      TextSpan(
-                                                        style: _paraBaseStyle(i),
-                                                        children: _buildParagraphSpans(i),
-                                                      ),
-                                                      onSelectionChanged: (sel, cause) {
-                                                        _hasTextSelection = !sel.isCollapsed;
-                                                        _onSelectionChanged(sel);
-                                                      },
-                                                      contextMenuBuilder: (context, editableTextState) =>
-                                                          _buildSelectionToolbar(context, editableTextState, i),
-                                                    ),
-                                                    if (!_hiddenActionParagraphs.contains(i))
-                                                      Align(
-                                                        alignment: Alignment.centerLeft,
-                                                        child: _buildParagraphActions(i),
-                                                      ),
-                                                  ],
-                                                ),
-                                              );
-                                          }),
+                                           children: [
+                                             for (final group in _allClusterGroups())
+                                               _buildClusterParagraph(group, showUnaligned: true),
+                                           ],
                                         )
                                       : Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
-                                           children: List.generate(_paragraphs.length, (i) {
-                                              return Padding(
-                                                padding: EdgeInsets.only(
-                                                    bottom: _tightParagraphs.contains(i) ? 0 : 24.0),
-                                                child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  children: [
-                                                    SelectableText.rich(
-                                                     TextSpan(
-                                                       style: _paraBaseStyle(i),
-                                                       children: _buildParagraphSpans(i),
-                                                     ),
-                                                     onSelectionChanged: (sel, cause) {
-                                                       _hasTextSelection = !sel.isCollapsed;
-                                                       _onSelectionChanged(sel);
-                                                     },
-                                                     contextMenuBuilder: (context, editableTextState) =>
-                                                         _buildSelectionToolbar(context, editableTextState, i),
-                                                    ),
-if (!_hiddenActionParagraphs.contains(i))
-                                                      Align(
-                                                       alignment: Alignment.centerLeft,
-                                                       child: _buildParagraphActions(i),
-                                                     ),
-                                                 ],
-                                               ),
-                                             );
-                                         }),
-                                       ),
+                                           children: [
+                                             for (final group in _allClusterGroups())
+                                               _buildClusterParagraph(group, showUnaligned: false),
+                                           ],
+                                        ),
                                );
                              },
                            ),
@@ -1714,7 +1647,7 @@ if (!_hiddenActionParagraphs.contains(i))
       return;
     }
 
-    // 保存旧段落快照用于想法/画线对齐，再下载新版内容。
+    // 保存旧段落快照用于感想/画线对齐，再下载新版内容。
     final oldParagraphs = List<String>.from(_paragraphs);
     setState(() {
       _isDownloading = true;
@@ -1741,7 +1674,7 @@ if (!_hiddenActionParagraphs.contains(i))
     }
   }
 
-  /// 应用更新后的排版：替换内容 + 把旧段的想法/画线按原文重新对齐到新段。
+  /// 应用更新后的排版：替换内容 + 把旧段的感想/画线按原文重新对齐到新段。
   /// [oldParagraphs] 为更新前的段落列表；[updatedAt] 为新排版版本时间戳。
   Future<void> _applyUpdatedLayout(
       List<String> oldParagraphs, String newContent, int updatedAt) async {
@@ -1754,7 +1687,7 @@ if (!_hiddenActionParagraphs.contains(i))
       _unalignedIndices = {};
     });
 
-    // 对齐：遍历旧段落中「有想法 / 有画线 / 已完成」的段落，按原文在新段里找包含它的段。
+    // 对齐：遍历旧段落中「有感想 / 有画线 / 已完成」的段落，按原文在新段里找包含它的段。
     final migratedNotes = <int, String>{};
     final migratedUnderlines = <int, List<Map<String, int>>>{};
     final migratedDone = <int, bool>{};
@@ -2052,6 +1985,138 @@ if (!_hiddenActionParagraphs.contains(i))
     return [for (var k = lo; k <= hi; k++) k];
   }
 
+  /// 把一段连续段落下标列表按 `。。。///` 紧密连段切成多个「渲染簇」：
+  /// 每簇内相邻段落两两相连（无间隔），须渲染成同一个可选文本才可跨段拖动选择。
+  List<List<int>> _clusterGroups(List<int> indices) {
+    final groups = <List<int>>[];
+    var cur = <int>[];
+    for (var i = 0; i < indices.length; i++) {
+      final idx = indices[i];
+      cur.add(idx);
+      final nextIdx = i + 1 < indices.length ? indices[i + 1] : -1;
+      // 仅当本段与下一段在数据上相邻（idx+1）且用标记连在一起时才继续并入同簇。
+      if (nextIdx != idx + 1 || !_tightParagraphs.contains(idx)) {
+        groups.add(cur);
+        cur = <int>[];
+      }
+    }
+    if (cur.isNotEmpty) groups.add(cur);
+    return groups;
+  }
+
+  /// 渲染簇的合并文本：段落间用 `\n` 连接（与编辑器的「不分段」视觉一致）。
+  String _clusterText(List<int> cluster) =>
+      cluster.map((k) => _paragraphs[k]).join('\n');
+
+  /// 把簇内选区 [ss,ee)（合并文本坐标）按段落切成多段局部区间
+  /// (段落下标, 段内start, 段内end)，用于画线 / 感想时逐段落处理。
+  List<(int, int, int)> _clusterLocalSegments(List<int> cluster, int ss, int ee) {
+    final out = <(int, int, int)>[];
+    var off = 0;
+    for (final k in cluster) {
+      final len = _paragraphs[k].length;
+      final lo = ss < off ? off : ss;
+      final hi = ee > off + len ? off + len : ee;
+      if (hi > lo) out.add((k, lo - off, hi - off));
+      off += len + 1; // +1 = 段间 `\n`
+    }
+    return out;
+  }
+
+  /// 簇内选区按段落逐段调 `_toggleUnderline`（每段独立云端写入）。
+  Future<void> _toggleUnderlineCluster(List<int> cluster, int ss, int ee) async {
+    for (final (k, ls, le) in _clusterLocalSegments(cluster, ss, ee)) {
+      if (ls < le) await _toggleUnderline(k, ls, le);
+    }
+  }
+
+  /// 簇内选区开感想：作用到选区所在的第一段。
+  void _openIdeaFromRangeCluster(List<int> cluster, int ss, int ee) {
+    final segs = _clusterLocalSegments(cluster, ss, ee);
+    if (segs.isEmpty) return;
+    final (k, ls, le) = segs.first;
+    _openIdeaFromRange(k, ls, le);
+  }
+
+  /// 「本段全选」作用于整簇：合并文本整段选中。
+  void _selectFullCluster(List<int> cluster) {
+    final state = _selectionTextState;
+    if (state != null) {
+      state.selectAll(SelectionChangedCause.tap);
+      _selectionRange = (0, _clusterText(cluster).length);
+    }
+  }
+
+  /// 渲染簇的完整 TextSpan：每段各自带基础样式（含完成态置灰），段间 `\n`。
+  List<TextSpan> _buildClusterSpans(List<int> cluster) {
+    final spans = <TextSpan>[];
+    for (var k = 0; k < cluster.length; k++) {
+      final i = cluster[k];
+      spans.add(
+        TextSpan(style: _paraBaseStyle(i), children: _buildParagraphSpans(i)),
+      );
+      if (k != cluster.length - 1) spans.add(const TextSpan(text: '\n'));
+    }
+    return spans;
+  }
+
+  /// 排版变化提示横幅（画线/感想未能重新定位的段落）。
+  Widget _unalignedBanner() => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF3CD),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: const Text(
+            '排版已变化，此处的感想/画线未能重新定位',
+            style: TextStyle(fontSize: 12, color: Color(0xFF8a6d1a)),
+          ),
+        ),
+      );
+
+  /// 一个渲染簇（≥1 连续紧密段落）的正文块：合并成一个 SelectableText 使
+  /// 「本段全选 / 拖动选择」都能跨段作用；单段时保留原段落行为与操作栏。
+  Widget _buildClusterParagraph(
+    List<int> group, {
+    required bool showUnaligned,
+    bool actionsRight = false,
+  }) {
+    final last = group.last;
+    final bottom = _tightParagraphs.contains(last) ? 0.0 : 24.0;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottom),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (showUnaligned)
+            for (final idx in group)
+              if (_unalignedIndices.contains(idx)) _unalignedBanner(),
+          SelectableText.rich(
+            TextSpan(children: _buildClusterSpans(group)),
+            onSelectionChanged: (sel, cause) {
+              _hasTextSelection = !sel.isCollapsed;
+              _onSelectionChanged(sel);
+            },
+            contextMenuBuilder: (context, editableTextState) =>
+                _buildSelectionToolbar(context, editableTextState, group),
+          ),
+          if (!_hiddenActionParagraphs.contains(last))
+            Align(
+              alignment:
+                  actionsRight ? Alignment.centerRight : Alignment.centerLeft,
+              child: _buildParagraphActions(last),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 全部段落下标的渲染簇划分（滚动模式的全文列表）。
+  List<List<int>> _allClusterGroups() =>
+      _clusterGroups([for (var i = 0; i < _paragraphs.length; i++) i]);
+
   /// 段落右侧的操作栏（同一水平位）：待办圆圈 | AI译 | 笔记。
   Widget _buildParagraphActions(int index) {
     final fg = _isDarkBg ? Colors.white.withOpacity(0.6) : const Color(0xFF9A9A9A);
@@ -2142,7 +2207,7 @@ if (!_hiddenActionParagraphs.contains(i))
                   ),
                    const SizedBox(width: 2),
                   Text(
-                    '所有想法',
+                    '所有感想',
                     style: TextStyle(
                       fontSize: 13,
                       color: hasNote ? activeFg : fg,
@@ -2157,7 +2222,7 @@ if (!_hiddenActionParagraphs.contains(i))
     );
   }
 
-  /// 点击「想法」：打开该段经文所有用户想法的汇总底部弹层。
+  /// 点击「感想」：打开该段经文所有用户感想的汇总底部弹层。
   void _onParagraphNoteTap(int index) {
     if (index < 0 || index >= _paragraphs.length) return;
     ParagraphThoughtsPage.open(
@@ -2169,12 +2234,12 @@ if (!_hiddenActionParagraphs.contains(i))
     );
   }
 
-  /// 进入「读经想法」编辑页。默认显示整段原文；
-  /// [displayText] 非空时顶部显示被选中的具体文字（由长按/单击画线的想法入口传入）。
+  /// 进入「读经感想」编辑页。默认显示整段原文；
+  /// [displayText] 非空时顶部显示被选中的具体文字（由长按/单击画线的感想入口传入）。
   Future<void> _showNoteDialog(int index, {String? displayText}) async {
     if (index < 0 || index >= _paragraphs.length) return;
     // 跳转前先禁用浮层菜单：push 之后本页失焦、选区收起，
-    // contextMenuBuilder 可能再次回调，把「复制/画线」弹窗插到想法页上方。
+    // contextMenuBuilder 可能再次回调，把「复制/画线」弹窗插到感想页上方。
     _clearSelectionMenu();
     _coveredByRoute = true;
     FocusScope.of(context).unfocus();
@@ -2246,7 +2311,7 @@ if (!_hiddenActionParagraphs.contains(i))
     });
   }
 
-  /// 打开「读经笔记」页：列出本经所有段落想法，点击某段可跳回该段。
+  /// 打开「读经笔记」页：列出本经所有段落感想，点击某段可跳回该段。
   Future<void> _openReadingNotes() async {
     setState(() {
       _showMoreMenu = false;
@@ -2255,7 +2320,7 @@ if (!_hiddenActionParagraphs.contains(i))
     // 先同步一次最新云端状态，避免跳转前笔记页数据过期。
     await _loadParagraphNotes();
     if (!mounted) return;
-    // 汇总所有带想法（备注非空）的段落为「经文+想法」成对数据。
+    // 汇总所有带感想（备注非空）的段落为「经文+感想」成对数据。
     final pairs = <int, String>{};
     for (final i in _paraNotes.keys) {
       final note = (_paraNotes[i] ?? '').trim();
@@ -2274,7 +2339,7 @@ if (!_hiddenActionParagraphs.contains(i))
     );
   }
 
-  /// 干净单击正文中部：弹出 画线/想法/阅读设置 速览面板。
+  /// 干净单击正文中部：弹出 画线/感想/阅读设置 速览面板。
   void _openQuickPanel() {
     if (_showQuickPanel) return;
     setState(() {
@@ -2409,7 +2474,7 @@ if (!_hiddenActionParagraphs.contains(i))
                   onTap: _openHighlightsPage,
                 ),                _buildQuickPanelItem(
                   icon: Icons.sticky_note_2_outlined,
-                  label: '想法',
+                  label: '感想',
                   onTap: _openReadingNotes,
                 ),
                 _buildQuickPanelItem(
@@ -2845,7 +2910,7 @@ if (!_hiddenActionParagraphs.contains(i))
       );
 
   /// 将第 i 段文字切成多个 TextSpan：叠加「画线」下划线 与 搜索结果高亮。
-  /// 已画线的文字区域带 Tap 识别器，单击即弹出 复制 / 擦除(buy) / 想法 菜单。
+  /// 已画线的文字区域带 Tap 识别器，单击即弹出 复制 / 擦除(buy) / 感想 菜单。
   List<TextSpan> _buildParagraphSpans(int i) {
     final text = _paragraphs[i];
     final len = text.length;
@@ -2942,6 +3007,7 @@ if (!_hiddenActionParagraphs.contains(i))
         recognizer: recognizer,
         style: TextStyle(
           decoration: TextDecoration.underline,
+          decorationStyle: TextDecorationStyle.dotted,
           decorationColor:
               _isDarkBg ? Colors.white : const Color(0xFF212121),
           decorationThickness: 1.4,
@@ -2958,6 +3024,7 @@ if (!_hiddenActionParagraphs.contains(i))
         recognizer: recognizer,
         style: TextStyle(
           decoration: TextDecoration.underline,
+          decorationStyle: TextDecorationStyle.dotted,
           decorationColor:
               _isDarkBg ? Colors.white : const Color(0xFF212121),
           decorationThickness: 1.4,
@@ -2967,10 +3034,11 @@ if (!_hiddenActionParagraphs.contains(i))
     return spans;
   }
 
-  /// 统一的菜单卡片：横向的 复制 / 画线(擦除) / 本段全选 / 想法（每项图标上文字下）。
+  /// 统一的菜单卡片：横向的 复制 / 画线(擦除) / 本段全选 / 感想（每项图标上文字下）。
   /// 单击画线（Overlay）与长按选中（contextMenuBuilder）共用，保证两者 UI 一致。
-  /// [close] 在需要关闭弹窗时调用（复制 / 想法）；画线与全选不关闭，可继续操作。
+  /// [close] 在需要关闭弹窗时调用（复制 / 感想）；画线与全选不关闭，可继续操作。
   /// [onResolveRange] 为空时用 [start,end]（单击画线）；否则用它实时取当前选区（长按选中）。
+  /// [cluster] 非空时选区为「紧密连段簇」合并文本的坐标：画线/感想会按段逐个作用。
   Widget _buildMenuCard({
     required int para,
     required int start,
@@ -2978,7 +3046,35 @@ if (!_hiddenActionParagraphs.contains(i))
     required VoidCallback close,
     (int, int)? Function()? onResolveRange,
     VoidCallback? onSelectFull,
+    List<int>? cluster,
   }) {
+    final multi = cluster != null && cluster.length > 1;
+    if (multi) {
+      final text = _clusterText(cluster);
+      final s = start.clamp(0, text.length);
+      final e = end.clamp(0, text.length);
+      // 画线按钮初始态：选区覆盖的任一段有画线即视为「已画线（可擦除）」。
+      final underlined = _clusterLocalSegments(cluster, s, e).any((seg) =>
+          (_paraUnderlines[seg.$1] ?? const <Map<String, int>>[]).any((u) =>
+              seg.$2 < (u['end'] ?? 0) && seg.$3 > (u['start'] ?? 0)));
+      final hasIdea = _clusterLocalSegments(cluster, s, e)
+          .any((seg) => (_paraNotes[seg.$1] ?? '').isNotEmpty);
+
+      return _IdeaMenuCard(
+        para: para,
+        paragraph: text,
+        initialStart: s,
+        initialEnd: e,
+        initialUnderlined: underlined,
+        initialHasIdea: hasIdea,
+        isDarkBg: _isDarkBg,
+        close: close,
+        onSelectFull: onSelectFull,
+        onResolveRange: onResolveRange,
+        onDrawUnderline: (ss, ee) => _toggleUnderlineCluster(cluster, ss, ee),
+        onOpenNote: (ss, ee) => _openIdeaFromRangeCluster(cluster, ss, ee),
+      );
+    }
     if (para < 0 || para >= _paragraphs.length) return const SizedBox.shrink();
     final p = _paragraphs[para];
     final s = start.clamp(0, p.length);
@@ -3008,8 +3104,8 @@ if (!_hiddenActionParagraphs.contains(i))
     if (entry.mounted) entry.remove();
   }
 
-  /// 打开「想法」编辑页前，确保所有长按选中 / 单击画线的浮层弹窗已被移除，
-  /// 避免弹窗残留显示在新的想法输入界面上。
+  /// 打开「感想」编辑页前，确保所有长按选中 / 单击画线的浮层弹窗已被移除，
+  /// 避免弹窗残留显示在新的感想输入界面上。
   void _clearSelectionMenu() {
     // 递增请求序号，作废仍在排队的 addPostFrameCallback，防止其在跳转后
     // 重新插入菜单弹窗。
@@ -3023,7 +3119,7 @@ if (!_hiddenActionParagraphs.contains(i))
     _selectionRange = null;
   }
 
-  /// 根据当前选中的 [start,end) 区间打开「想法」编辑页，顶部显示被选中的文字。
+  /// 根据当前选中的 [start,end) 区间打开「感想」编辑页，顶部显示被选中的文字。
   void _openIdeaFromRange(int para, int start, int end) {
     _clearSelectionMenu();
     if (para < 0 || para >= _paragraphs.length) return;
@@ -3035,12 +3131,13 @@ if (!_hiddenActionParagraphs.contains(i))
     _showNoteDialog(para, displayText: display);
   }
 
-  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 本段全选 / 想法）。
+  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 本段全选 / 感想）。
   /// 会测量卡片实际尺寸并夹在屏幕安全区内，优先显示在选中处上方、居中；
   /// 空间不足则自动转下方。
   /// [showBarrier]：为 true 时点击菜单外关闭（单击画线场景）；为 false 时不遮罩、
   /// 允许继续拖动选中句柄，通过选区折叠自动关闭（长按选中场景）。
   /// [onResolveRange]：返回当前应作用的目标区间；为空时用 [start,end]（单击画线场景）。
+  /// [cluster] 非空时 [start,end]/[onResolveRange] 均为紧密连段簇合并文本的坐标。
   OverlayEntry? _showFloatingMenu({
     required int para,
     required int start,
@@ -3050,6 +3147,7 @@ if (!_hiddenActionParagraphs.contains(i))
     bool showBarrier = true,
     (int, int)? Function()? onResolveRange,
     VoidCallback? onSelectFull,
+    List<int>? cluster,
   }) {
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return null;
@@ -3088,6 +3186,7 @@ if (!_hiddenActionParagraphs.contains(i))
                 },
                 onResolveRange: onResolveRange,
                 onSelectFull: onSelectFull,
+                cluster: cluster,
               ),
             ),
           ),
@@ -3141,7 +3240,7 @@ if (!_hiddenActionParagraphs.contains(i))
     );
   }
 
-  /// 选区变化：更新最新范围，供浮层 画线/想法/复制 使用；
+  /// 选区变化：更新最新范围，供浮层 画线/感想/复制 使用；
   /// 当长按选中浮层打开、而用户把选区折叠（点击空白 / 清空）时，
   /// 关闭浮层并恢复为正常阅读页（无遮罩场景下的“点外关闭”）。
   void _onSelectionChanged(TextSelection sel) {
@@ -3158,7 +3257,7 @@ if (!_hiddenActionParagraphs.contains(i))
   }
 
   /// 「本段全选」：把当前选中文字所在整个段落的蓝色高亮扩展到整段，
-  /// 并更新 [_selectionRange] 供后续画线/想法作用于整段。
+  /// 并更新 [_selectionRange] 供后续画线/感想作用于整段。
   void _selectFullParagraph(int i) {
     if (i < 0 || i >= _paragraphs.length) return;
     final p = _paragraphs[i];
@@ -3171,22 +3270,24 @@ if (!_hiddenActionParagraphs.contains(i))
   }
 
   /// 长按选中文字后的菜单：与「单击画线」共用同一个卡片 UI
-  /// （复制 / 画线(擦除) / 本段全选 / 想法，每项图标上文字下）。
+  /// （复制 / 画线(擦除) / 本段全选 / 感想，每项图标上文字下）。
   /// 不直接把卡片返回给框架（那样会铺满整屏变白屏），而是返回空组件，
   /// 由 [Overlay] 在选中处上方独立弹出同一张卡片，经文保持可见。
-  /// 不使用全屏遮罩，句柄仍可拖动调整选区；点 画线/想法 时读取实时选区，
+  /// 不使用全屏遮罩，句柄仍可拖动调整选区；点 画线/感想 时读取实时选区，
   /// 确保画线覆盖的就是当前可见的高亮范围（而非长按时的初始单字）。
+  /// [cluster] 为多段紧密连段簇时，选区坐标基于簇的合并文本；单段则传入单元素簇。
   Widget _buildSelectionToolbar(
-      BuildContext context, EditableTextState editableTextState, int i) {
-    // 本页被其他路由覆盖（如想法编辑页）时不再弹任何菜单，
+      BuildContext context, EditableTextState editableTextState,
+      List<int> cluster) {
+    // 本页被其他路由覆盖（如感想编辑页）时不再弹任何菜单，
     // 也不记录选区状态：直接返回空组件即可。
     if (_coveredByRoute) return const SizedBox.shrink();
     // 每次长按都视为一次新的菜单请求；用递增序号作废切换页面后仍排队的旧回调。
     final myId = ++_menuRequestId;
-    final p = _paragraphs[i];
+    final len = _clusterText(cluster).length;
     final sel = editableTextState.textEditingValue.selection;
-    final start = sel.isValid ? sel.start.clamp(0, p.length) : 0;
-    final end = sel.isValid ? sel.end.clamp(0, p.length) : 0;
+    final start = sel.isValid ? sel.start.clamp(0, len) : 0;
+    final end = sel.isValid ? sel.end.clamp(0, len) : 0;
     final anchor = editableTextState.contextMenuAnchors.primaryAnchor;
     _selectionTextState = editableTextState;
 
@@ -3195,28 +3296,30 @@ if (!_hiddenActionParagraphs.contains(i))
         return;
       }
       _selectionMenuEntry = _showFloatingMenu(
-        para: i,
+        para: cluster.first,
         start: start,
         end: end,
         anchor: anchor,
         showBarrier: false,
-        // 读取当前最新选区（随句柄拖动即时更新），保证画线/想法作用于用户当前高亮的整段。
+        cluster: cluster,
+        // 读取当前最新选区（随句柄拖动即时更新），保证画线/感想作用于用户当前高亮的整段。
         onResolveRange: () {
           final r = _selectionRange;
           if (r != null) {
-            final cs = r.$1.clamp(0, p.length);
-            final ce = r.$2.clamp(0, p.length);
+            final cs = r.$1.clamp(0, len);
+            final ce = r.$2.clamp(0, len);
             if (ce > cs) return (cs, ce);
           }
           final s0 = _selectionTextState?.textEditingValue.selection;
           if (s0 == null || !s0.isValid || s0.isCollapsed) return null;
-          final cs2 = s0.start.clamp(0, p.length);
-          final ce2 = s0.end.clamp(0, p.length);
+          final cs2 = s0.start.clamp(0, len);
+          final ce2 = s0.end.clamp(0, len);
           if (ce2 <= cs2) return null;
           return (cs2, ce2);
         },
-        // 「本段全选」：把视觉高亮扩大到整段（真实选中整段文字），并置后续画线/想法作用整段。
-        onSelectFull: () => _selectFullParagraph(i),
+        // 「本段全选」：把视觉高亮扩大到整段（真实选中整段文字），并置后续画线/感想作用整段。
+        onSelectFull: () =>
+            cluster.length > 1 ? _selectFullCluster(cluster) : _selectFullParagraph(cluster.first),
         onDismiss: () {
           _selectionMenuEntry = null;
     _selectionTextState = null;
@@ -3308,50 +3411,24 @@ if (!_hiddenActionParagraphs.contains(i))
     await prefs.setDouble('progress_$keyPath', _scrollProgress);
   }
 
-  /// 翻页模式的某一页：按段落逐段渲染（每段文本 + 各自操作栏）。
+  /// 翻页模式的某一页：按渲染簇分组渲染。簇内紧密段落合并成一个可选文本块，
+  /// 跨段拖动选择 / 本段全选不再被段边界卡住；操作栏仍按每段各自显示。
   Widget _buildFlipPage(List<int> paras, int pageIndex) {
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final i in paras) _buildFlipParagraph(i),
-        ],
-      ),
-    );
-  }
-
-  /// 翻页模式下的单个段落（文本 + 右侧操作栏）。
-  Widget _buildFlipParagraph(int index) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: _tightParagraphs.contains(index) ? 0 : 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SelectableText.rich(
-            TextSpan(
-              style: _paraBaseStyle(index),
-              children: _buildParagraphSpans(index),
-            ),
-            onSelectionChanged: (sel, cause) {
-              _hasTextSelection = !sel.isCollapsed;
-              _onSelectionChanged(sel);
-            },
-            contextMenuBuilder: (context, editableTextState) =>
-                _buildSelectionToolbar(context, editableTextState, index),
-          ),
-          if (!_hiddenActionParagraphs.contains(index))
-            Align(
-              alignment: Alignment.centerRight,
-              child: _buildParagraphActions(index),
-            ),
+          for (final group in _clusterGroups(paras))
+            _buildClusterParagraph(group,
+                showUnaligned: false, actionsRight: true),
         ],
       ),
     );
   }
 }
 
-/// 长按选中 / 单击画线的统一菜单卡片：横向 复制 / 画线(擦除) / 全选 / 想法。
-/// 画线与全选时不关闭弹窗，可继续点击想法（针对当前选中的文字）。
+/// 长按选中 / 单击画线的统一菜单卡片：横向 复制 / 画线(擦除) / 全选 / 感想。
+/// 画线与全选时不关闭弹窗，可继续点击感想（针对当前选中的文字）。
 class _IdeaMenuCard extends StatefulWidget {
   final int para;
   final String paragraph;
@@ -3391,7 +3468,7 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
   late int _start;
   late int _end;
   late bool _underlined;
-  // 点击「本段全选」后置真：之后画线/想法作用于整段，不再依赖实时选区。
+  // 点击「本段全选」后置真：之后画线/感想作用于整段，不再依赖实时选区。
   bool _overrideFull = false;
 
   @override
@@ -3473,7 +3550,7 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             // 同步把屏幕上的选中高亮扩展到整段（长按选中场景）。
             widget.onSelectFull?.call();
           }),
-          _item(Icons.edit_note, widget.initialHasIdea ? '修改想法' : '想法', () {
+          _item(Icons.edit_note, widget.initialHasIdea ? '编辑感想' : '感想', () {
             final (s, e) = _activeRange;
             widget.close();
             widget.onOpenNote(s, e);

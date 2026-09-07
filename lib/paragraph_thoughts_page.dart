@@ -8,9 +8,9 @@ import 'reading_badges.dart';
 import 'reading_note_post.dart';
 import 'user_avatar.dart';
 
-/// 单条想法的展示数据（兼容云端已分享想法与本地未分享想法）。
+/// 单条感想的展示数据（兼容云端已分享感想与本地未分享感想）。
 class _Thought {
-  /// 云端想法 id；本地想法（未分享）为空串，表示不可点赞。
+  /// 云端感想 id；本地感想（未分享）为空串，表示不可点赞。
   final String noteId;
   final String text;
   final String authorUserId;
@@ -49,22 +49,22 @@ class _Thought {
       );
 }
 
-/// 「段落想法」汇总底部弹层：列出该段经文下所有用户分享的想法，
-/// 并附带当前用户自己在本段记录的想法（无论是否分享到菩提空间）。
+/// 「段落感想」汇总底部弹层：列出该段经文下所有用户分享的感想，
+/// 并附带当前用户自己在本段记录的感想（无论是否分享到菩提空间）。
 ///
 /// 打开时从底部向上滑出，顶部只停在标题栏下方一个标题栏高度的位置
 /// （`顶部安全区 + 2 倍标题栏高度`），且路由透明白色不遮挡：
 /// 上方的经文仍清晰可见，也不会出现黑色蒙层。
-/// 每个想法展示：头像 + 昵称/认证/@账户 + 阅藏百分比 + 想法正文（可折叠），
+/// 每个感想展示：头像 + 昵称/认证/@账户 + 阅藏百分比 + 感想正文（可折叠），
 /// 只有一个「喜欢」指标，并按其数量从高到低排序。
 class ParagraphThoughtsPage extends StatefulWidget {
   final String sutraTitle;
   final String paragraph;
 
-  /// 经书 filePath（sutra key），用于拉取当前用户本段本地想法。
+  /// 经书 filePath（sutra key），用于拉取当前用户本段本地感想。
   final String sutraKey;
 
-  /// 当前段落在本经中的下标，用于匹配本地想法。
+  /// 当前段落在本经中的下标，用于匹配本地感想。
   final int paragraphIndex;
 
   const ParagraphThoughtsPage({
@@ -156,15 +156,15 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
   int _total = 0;
   String? _error;
 
-  /// 当前用户自己的昵称/账号/认证（为本地未分享想法渲染用）。
+  /// 当前用户自己的昵称/账号/认证（为本地未分享感想渲染用）。
   String _myName = '同修';
   String _myAccount = '';
   bool _myVerified = false;
 
-  /// 折叠状态：key 为想法正文，true 表示展开全文。
+  /// 折叠状态：key 为感想正文，true 表示展开全文。
   final Set<String> _expanded = {};
 
-  /// 本地（未分享）想法的本地点赞状态：key 为想法正文。
+  /// 本地（未分享）感想的本地点赞状态：key 为感想正文。
   final Map<String, bool> _myLocalLiked = {};
 
   /// 下拉关闭：手指向下拖动的距离。
@@ -218,7 +218,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
           .getParagraphThoughts(widget.paragraph, page: _page, pageSize: 20);
       final thoughts = list.map(_toThought).whereType<_Thought>().toList();
 
-      // 把当前用户自己在本段记录的想法（无论是否分享）合并进来，
+      // 把当前用户自己在本段记录的感想（无论是否分享）合并进来，
       // 避免出现「已经记录却不在本页显示」。
       final ownNote = await _findOwnNoteText();
       if (!mounted) return;
@@ -254,8 +254,8 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     }
   }
 
-  /// 拉取当前用户在本段的本地想法（正文 + 更新时间 + 云端分享 id）；
-  /// 没有则返回 null。cloudId 非空表示该想法已分享，可用于点赞。
+  /// 拉取当前用户在本段的本地感想（正文 + 更新时间 + 云端分享 id）；
+  /// 没有则返回 null。cloudId 非空表示该感想已分享，可用于点赞。
   Future<(String, int, String)?> _findOwnNoteText() async {
     if (widget.sutraKey.isEmpty || widget.paragraphIndex < 0) return null;
     if (AuthService.instance.cachedUserId == null) return null;
@@ -277,7 +277,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     return null;
   }
 
-  /// 把当前用户自己的想法合并进列表；若内容与云端已展示的重复则跳过。
+  /// 把当前用户自己的感想合并进列表；若内容与云端已展示的重复则跳过。
   void _mergeOwnThought(String text, int createdAt, String noteId) {
     final me = AuthService.instance.currentUser.value;
     if (me == null) return;
@@ -299,7 +299,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     ));
   }
 
-  /// 是否已喜欢：云端想法看全局已赞集合，本地（未分享）想法看本地点赞状态。
+  /// 是否已喜欢：云端感想看全局已赞集合，本地（未分享）感想看本地点赞状态。
   bool _isLiked(_Thought t) {
     if (t.noteId.isNotEmpty) {
       return CloudNotesService.instance.likedNoteIds.contains(t.noteId);
@@ -307,7 +307,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     return _myLocalLiked[t.text] ?? false;
   }
 
-  /// 有效喜欢数：本地（未分享）想法在本地点赞时 +1。
+  /// 有效喜欢数：本地（未分享）感想在本地点赞时 +1。
   int _effectiveLikeCount(_Thought t) {
     if (t.noteId.isEmpty && (_myLocalLiked[t.text] ?? false)) {
       return t.likeCount + 1;
@@ -316,7 +316,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
   }
 
   Future<void> _toggleLike(_Thought t) async {
-    // 本地（未分享）想法：本地点赞，即时生效并增加数量。
+    // 本地（未分享）感想：本地点赞，即时生效并增加数量。
     if (t.noteId.isEmpty) {
       setState(() {
         _myLocalLiked[t.text] = !(_myLocalLiked[t.text] ?? false);
@@ -433,7 +433,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '本段所有想法·$_total条',
+                        '本段所有感想·$_total条',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -492,7 +492,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
               Icon(Icons.auto_stories_outlined, size: 40, color: p.textHint),
               const SizedBox(height: 12),
               Text(
-                '还没有同修记录想法。\n选择文字，记录想法。',
+                '还没有同修记录感想。\n选择文字，记录感想。',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, height: 1.6, color: p.textSec),
               ),
@@ -604,7 +604,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                // 想法正文：与昵称左对齐（同在右侧列）
+                // 感想正文：与昵称左对齐（同在右侧列）
                 _buildCollapsibleText(t.text),
                 const SizedBox(height: 8),
                 // 底部一行：时间戳在左侧，喜欢在右侧，二者不相邻。
@@ -654,7 +654,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     );
   }
 
-  /// 想法正文，超过 5 行可折叠；点击「显示更多/收起」切换展开。
+  /// 感想正文，超过 5 行可折叠；点击「显示更多/收起」切换展开。
   Widget _buildCollapsibleText(String text) {
     final p = AppPalette.p;
     final expanded = _expanded.contains(text);

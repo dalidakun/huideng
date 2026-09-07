@@ -109,6 +109,11 @@ class StudyHubPageState extends State<StudyHubPage>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
 
+  /// 十斋日提醒条动画：今天为十斋日时在主页顶部显示约 5 秒后淡出。
+  late final AnimationController _zhaiCtrl;
+  Timer? _zhaiHideTimer;
+  String _zhaiLunarText = '';
+
   @override
   void initState() {
     super.initState();
@@ -117,6 +122,16 @@ class StudyHubPageState extends State<StudyHubPage>
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(
         CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
+    _zhaiCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 450));
+    if (isTodayZhaiRi()) {
+      _zhaiLunarText = todayLunarMonthDay();
+      _zhaiCtrl.forward();
+      // 显示约 5 秒后淡出并收起提醒条。
+      _zhaiHideTimer = Timer(const Duration(seconds: 5), () {
+        _zhaiCtrl.reverse();
+      });
+    }
     ReadingTimeService.instance.ensureLoaded();
     _loadData();
   }
@@ -137,6 +152,8 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
+    _zhaiHideTimer?.cancel();
+    _zhaiCtrl.dispose();
     _pulseController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -872,6 +889,7 @@ class StudyHubPageState extends State<StudyHubPage>
           padding: EdgeInsets.fromLTRB(16, 4, 16,
               MediaQuery.of(context).padding.bottom + 10),
           children: [
+            _zhaiBannerSlot(),
             _buildCurrentSutraCard(),
             const SizedBox(height: 14),
             _buildCheckInCard(),
@@ -1555,6 +1573,113 @@ class StudyHubPageState extends State<StudyHubPage>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ---------- 十斋日提醒条 ----------
+
+  Color get _zhaiIcon => const Color(0xFFD4851E);
+
+  Color get _zhaiBg1 => AppPalette.instance.isPlain
+      ? const Color(0xFFF1F5ED)
+      : const Color(0xFFFCF4E5);
+
+  Color get _zhaiBg2 => AppPalette.instance.isPlain
+      ? const Color(0xFFDFEAD3)
+      : const Color(0xFFF6E7C9);
+
+  Color get _zhaiBorder => AppPalette.instance.isPlain
+      ? const Color(0xFFD2DEC8)
+      : const Color(0xFFEBD9B6);
+
+  /// 十斋日提醒条：今天为十斋日时在主页顶部展示约 5 秒后淡出收起。
+  Widget _zhaiBannerSlot() {
+    return AnimatedBuilder(
+      animation: _zhaiCtrl,
+      builder: (context, child) {
+        final t = _zhaiCtrl.value;
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeInOut,
+          alignment: Alignment.topCenter,
+          child: t > 0.02
+              ? Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Opacity(
+                    opacity: t.clamp(0.0, 1.0),
+                    child: Transform.translate(
+                      offset: Offset(0, 10 * (1 - t)),
+                      child: _buildZhaiRiBanner(),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        );
+      },
+    );
+  }
+
+  Widget _buildZhaiRiBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_zhaiBg1, _zhaiBg2],
+        ),
+        border: Border.all(color: _zhaiBorder, width: 0.6),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // 圆形小徽章：莲花静坐图标。
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.85),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.self_improvement, color: _zhaiIcon, size: 21),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '今天是十斋日',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: _text,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '农历$_zhaiLunarText · 持斋清净，身心安定',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _textSec,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

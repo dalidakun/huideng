@@ -1555,6 +1555,7 @@ class _PostBlockState extends State<PostBlock> {
                         noteId: displayNoteId ?? '',
                         sutraLibrary:
                             NoteSutraCatalog.cachedTitleMap ?? const {},
+                        authorName: displayNickname,
                       ),
                     ] else if (SutraHighlightsPost.isHighlightsPost(content)) ...[
                       SutraHighlightsPostView(
@@ -1562,6 +1563,7 @@ class _PostBlockState extends State<PostBlock> {
                         noteId: displayNoteId ?? '',
                         sutraLibrary:
                             NoteSutraCatalog.cachedTitleMap ?? const {},
+                        authorName: displayNickname,
                       ),
                     ] else if (ReadingNotePost.isReadingNote(content)) ...[
                       ReadingNotePostView(
@@ -1569,6 +1571,7 @@ class _PostBlockState extends State<PostBlock> {
                         noteId: displayNoteId ?? '',
                         sutraLibrary:
                             NoteSutraCatalog.cachedTitleMap ?? const {},
+                        authorName: displayNickname,
                       ),
                     ] else
                       LayoutBuilder(

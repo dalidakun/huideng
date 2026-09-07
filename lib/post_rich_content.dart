@@ -1189,18 +1189,21 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       post: SutraThoughtsPost.parse(n.content)!,
                       noteId: n.id,
                       sutraLibrary: _sutraLibrary,
+                      authorName: n.authorName,
                     )
                   else if (SutraHighlightsPost.isHighlightsPost(n.content))
                     SutraHighlightsPostView(
                       post: SutraHighlightsPost.parse(n.content)!,
                       noteId: n.id,
                       sutraLibrary: _sutraLibrary,
+                      authorName: n.authorName,
                     )
                   else if (ReadingNotePost.isReadingNote(n.content))
                     ReadingNotePostView(
                       note: ReadingNotePost.parse(n.content)!,
                       noteId: n.id,
                       sutraLibrary: _sutraLibrary,
+                      authorName: n.authorName,
                     )
                   else
                   buildPostRichText(
@@ -2214,6 +2217,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                                     n.content)!,
                                                         noteId: n.id,
                                                         sutraLibrary: const {},
+                                                        authorName: n.authorName,
                                                       )
                                                     else if (SutraHighlightsPost
                                                         .isHighlightsPost(
@@ -2225,6 +2229,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                                     n.content)!,
                                                         noteId: n.id,
                                                         sutraLibrary: const {},
+                                                        authorName: n.authorName,
                                                       )
                                                     else if (ReadingNotePost
                                                         .isReadingNote(
@@ -2235,6 +2240,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                         noteId: n.id,
                                                         sutraLibrary:
                                                             const {},
+                                                        authorName: n.authorName,
                                                       )
                                                     else
                                                     buildPostRichText(

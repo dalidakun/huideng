@@ -12,6 +12,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'ai_translate_page.dart';
+import 'sutra_underline.dart';
 
 /// 画线分享帖正文里的元数据哨兵前缀：后面紧跟 base64 编码的
 /// 「全部画线文字」JSON 数组。展示时只显示第一条，点击色块用完整数据打开画线页。
@@ -196,16 +197,14 @@ class _SutraHighlightsPageState extends State<SutraHighlightsPage> {
                           color: accent.withValues(alpha: 0.06),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Text(
-                          first,
-                          style: TextStyle(
+                        child: SutraUnderlineText(
+                          text: first,
+                          style: const TextStyle(
                             fontSize: 14,
                             height: 1.6,
                             color: _fg,
-                            decoration: TextDecoration.underline,
-                            decorationColor: accent.withValues(alpha: 0.6),
-                            decorationThickness: 1.2,
                           ),
+                          lineColor: accent.withValues(alpha: 0.8),
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -321,10 +320,16 @@ class _SutraHighlightsPageState extends State<SutraHighlightsPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            h,
-                            style: const TextStyle(fontSize: 14, height: 1.6, color: _fg),
+                          SutraUnderlineText(
+                            text: h,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              height: 1.6,
+                              color: _fg,
+                            ),
+                            lineColor: accent.withValues(alpha: 0.8),
                           ),
+                          const SizedBox(height: 8),
                           const SizedBox(height: 4),
                           // 底行操作：复制 | AI译，右对齐并排。
                           Align(

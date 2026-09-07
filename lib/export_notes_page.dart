@@ -12,6 +12,8 @@ import 'package:printing/printing.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'note_sutra_links.dart';
+import 'pdf_export.dart';
+import 'reading_note_post.dart';
 import 'settings_widgets.dart';
 
 import 'app_palette.dart';
@@ -23,7 +25,7 @@ Color get _enTextHint => AppPalette.p.textHint;
 Color get _enBorder => AppPalette.p.border;
 Color get _enCard => AppPalette.p.card;
 Color get _enBg => AppPalette.p.bg;
-/// 进入时拉取全部帖子并按年份分组，可勾选年份，亦可“全部导出”。
+/// 进入时拉取全部帖子并按年份分组，可单选某一整年导出为 PDF。
 class ExportNotesPage extends StatefulWidget {
   const ExportNotesPage({super.key});
 
@@ -38,9 +40,8 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
   /// 按年份倒序的全部帖子（仅本人发布，去掉回复类）。
   final Map<int, List<PlazaNote>> _byYear = {};
 
-  /// 已勾选的年份集合（为空且 _selectAll=true 表示全部）。
-  final Set<int> _selected = {};
-  bool _selectAll = true;
+  /// 已选中的导出年份（单选，默认最近的年份）。
+  int? _selectedYear;
 
   bool _exporting = false;
 
@@ -101,6 +102,10 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
           _byYear
             ..clear()
             ..addAll(map);
+          // 默认选中最近的年份（单选）。
+          if (map.isNotEmpty) {
+            _selectedYear ??= map.keys.reduce((a, b) => a > b ? a : b);
+          }
           _loading = false;
         });
       }
@@ -117,15 +122,10 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
   List<int> get _yearsDesc =>
       _byYear.keys.toList()..sort((a, b) => b.compareTo(a));
 
-  int get _totalCount => _byYear.values.fold(0, (s, l) => s + l.length);
-
   int get _selectedCount {
-    if (_selectAll) return _totalCount;
-    int c = 0;
-    for (final y in _selected) {
-      c += _byYear[y]?.length ?? 0;
-    }
-    return c;
+    final y = _selectedYear;
+    if (y == null) return 0;
+    return _byYear[y]?.length ?? 0;
   }
 
   void _toast(String msg) {
@@ -202,60 +202,12 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
                 child: Text(
-                  '你的笔记都已经保存在云端，账号不丢失，数据就会保存；但如果你想保存到本地，可以选择导出pdf文件，永久保存。',
+                  '你的笔记都已经保存在云端，账号不丢失，数据就会保存；但如果你想保存到本地，可以选择导出 pdf 文件，本地保存。',
                   style: TextStyle(fontSize: 12, color: _enTextHint),
                 ),
               ),
               SettingsCard(
                 children: [
-                  InkWell(
-                    onTap: () {
-                      setState(() {
-                        _selectAll = true;
-                        _selected.clear();
-                      });
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 14),
-                      child: Row(
-                        children: [
-                          _radioBox(_selectAll),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('全部导出',
-                                    style: TextStyle(
-                                        fontSize: 16,
-                                        color: _enText,
-                                        fontWeight: FontWeight.w600)),
-                                SizedBox(height: 2),
-                                Text('共全部年份的帖子',
-                                    style: TextStyle(
-                                        fontSize: 12, color: _enTextHint)),
-                              ],
-                            ),
-                          ),
-                          Text('$_totalCount 篇',
-                              style: TextStyle(
-                                  fontSize: 13, color: _enTextSec)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SettingsDivider(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-                    child: Text(
-                      '按年份选择',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: _enTextSec,
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ),
                   for (final y in years) _yearRow(y),
                   const SizedBox(height: 6),
                 ],
@@ -270,22 +222,10 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
 
   Widget _yearRow(int year) {
     final count = _byYear[year]?.length ?? 0;
-    final selected = !_selectAll && _selected.contains(year);
+    final selected = _selectedYear == year;
     return InkWell(
       onTap: () {
-        setState(() {
-          if (_selectAll) {
-            _selectAll = false;
-          }
-          if (_selected.contains(year)) {
-            _selected.remove(year);
-          } else {
-            _selected.add(year);
-          }
-          if (_selected.isEmpty) {
-            _selectAll = true;
-          }
-        });
+        setState(() => _selectedYear = year);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
@@ -341,9 +281,9 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
           children: [
             Expanded(
               child: Text(
-                _selectAll
-                    ? '将导出全部 $_totalCount 篇帖子'
-                    : '已选 ${_selected.length} 年，共 $_selectedCount 篇',
+                _selectedCount == 0
+                    ? '请选择要导出的年份'
+                    : '$_selectedYear 年，共 $_selectedCount 篇',
                 style: TextStyle(fontSize: 13, color: _enTextSec),
               ),
             ),
@@ -379,8 +319,9 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
 
   Future<void> _onExport() async {
     if (_exporting) return;
-    if (_selectedCount == 0) {
-      _toast('请至少选择一个年份');
+    final year = _selectedYear;
+    if (year == null || _selectedCount == 0) {
+      _toast('请先选择要导出的年份');
       return;
     }
     if (!AuthService.instance.isLoggedIn) {
@@ -389,27 +330,16 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
     }
     setState(() => _exporting = true);
     try {
-      final notes = <PlazaNote>[];
-      if (_selectAll) {
-        for (final y in _yearsDesc) {
-          notes.addAll(_byYear[y]!);
-        }
-      } else {
-        final ys = _selected.toList()..sort((a, b) => b.compareTo(a));
-        for (final y in ys) {
-          notes.addAll(_byYear[y] ?? []);
-        }
-      }
-      notes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      final html = _buildHtml(notes);
-      final filenameBase = _selectAll
-          ? '我的全部笔记'
-          : (_selected.length == 1 ? '${_selected.first}年笔记' : '我的笔记');
-      // 用系统 WebView 把 HTML 渲染为 PDF（自带 CJK 字体，无需额外打包字体）。
-      // ignore: deprecated_member_use
-      final pdf = await Printing.convertHtml(
-        html: html,
-        format: PdfPageFormat.a4,
+      final List<PlazaNote> notes = [
+        ...(_byYear[year] ?? const <PlazaNote>[]),
+      ];
+      final me = AuthService.instance.currentUser.value;
+      final filenameBase = '$year年笔记';
+      // 用纯 Dart 直接排版 PDF（内置中文字体），不依赖系统 WebView，
+      // 避免 convertHtml 在部分安卓设备上永不回调导致按钮一直转圈。
+      final pdf = await PdfExporter.buildNotesPdf(
+        author: me?.nickname ?? '我',
+        years: _buildYears(notes),
       );
       if (pdf.isEmpty) {
         _toast('生成失败：内容为空');
@@ -557,79 +487,108 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
     timer = Timer(const Duration(seconds: 10), dismiss);
   }
 
-  /// 把帖子按年份分组渲染为 HTML（使用系统 WebView 自带 CJK 字体）。
-  String _buildHtml(List<PlazaNote> notes) {
-    final me = AuthService.instance.currentUser.value;
-    final author = me?.nickname ?? '我';
-    final now = DateTime.now();
-    final madeOn =
-        '${now.year}年${now.month}月${now.day}日 ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-
+  /// 把选中的帖子按年份分组，交给纯 Dart PDF 排版。
+  /// 时间倒序：最近的年份在前、同年内最新发的写在前（最上面）。
+  List<PdfNotesYear> _buildYears(List<PlazaNote> notes) {
+    final sorted = [...notes]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final byYear = <int, List<PlazaNote>>{};
-    for (final n in notes) {
+    for (final n in sorted) {
       if (n.createdAt <= 0) continue;
       final y = DateTime.fromMillisecondsSinceEpoch(n.createdAt).year;
       byYear.putIfAbsent(y, () => []).add(n);
     }
-    final years = byYear.keys.toList()..sort();
+    final years = byYear.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [
+      for (final y in years)
+        PdfNotesYear(
+          year: y,
+          posts: [
+            for (final n in byYear[y]!)
+              () {
+                final parts = _pdfBodyParts(n);
+                return PdfNotesPost(
+                  date: _formatFull(n.createdAt),
+                  body: parts.body,
+                  verse: parts.verse,
+                  thought: parts.thought,
+                  footer: '点赞 ${n.likeCount} · 评论 ${n.commentCount} · '
+                      '转发 ${n.repostCount} · 阅读 ${n.viewCount}',
+                );
+              }(),
+          ],
+        ),
+    ];
+  }
 
-    final sb = StringBuffer()
-      ..writeln('<!DOCTYPE html><html><head><meta charset="utf-8"/>')
-      ..writeln('<meta name="viewport" content="width=device-width, initial-scale=1"/>')
-      ..writeln('<title>$author 的笔记</title>')
-      ..writeln('<style>')
-      ..writeln('@page { size: A4; margin: 18mm 16mm; }')
-      ..writeln('html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }')
-      ..writeln('body { font-family: -apple-system, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif; color: #2C1F18; line-height: 1.7; font-size: 14px; }')
-      ..writeln('.cover { text-align: center; padding: 40mm 0 18mm; page-break-after: always; }')
-      ..writeln('.cover h1 { font-size: 26px; letter-spacing: 2px; margin: 0 0 8px; }')
-      ..writeln('.cover .author { font-size: 15px; color: #8B6B5A; margin-bottom: 24px; }')
-      ..writeln('.cover .meta { font-size: 13px; color: #B59B86; }')
-      ..writeln('.cover .count { margin-top: 22px; font-size: 13px; color: #6F5142; }')
-      ..writeln('.year-block { page-break-before: always; }')
-      ..writeln('.year-block:first-of-type { page-break-before: auto; }')
-      ..writeln('.year-title { font-size: 22px; color: #5C4033; font-weight: 700; margin: 0 0 14px; border-bottom: 1px solid #EADFD2; padding-bottom: 8px; }')
-      ..writeln('.post { margin: 0 0 18px; padding: 14px 16px; border: 1px solid #EADFD2; border-radius: 8px; page-break-inside: avoid; }')
-      ..writeln('.post .date { font-size: 12px; color: #B59B86; margin-bottom: 8px; }')
-      ..writeln('.post .content { font-size: 14px; color: #2C1F18; white-space: pre-wrap; word-break: break-word; }')
-      ..writeln('.post .footer { margin-top: 10px; font-size: 11px; color: #9C7F6E; }')
-      ..writeln('</style></head><body>');
-
-    sb
-      ..writeln('<section class="cover">')
-      ..writeln('<h1>我的笔记</h1>')
-      ..writeln('<div class="author">$author</div>')
-      ..writeln('<div class="meta">导出于 $madeOn</div>')
-      ..writeln('<div class="count">共 ${notes.length} 篇帖子 · 涉及 ${years.length} 个年份</div>')
-      ..writeln('</section>');
-
-    if (notes.isEmpty) {
-      sb.writeln('<p style="color:#888;text-align:center;padding:24px 0">所选范围无内容</p>');
-    } else {
-      for (final y in years) {
-        sb
-          ..writeln('<section class="year-block">')
-          ..writeln('<div class="year-title">$y 年</div>');
-        for (final n in byYear[y]!) {
-          sb
-            ..writeln('<article class="post">')
-            ..writeln('<div class="date">${_formatFull(n.createdAt)}</div>');
-          final body = NoteSutraLinks.plainText(n.content);
-          if (body.trim().isNotEmpty) {
-            sb.writeln(
-                '<div class="content">${_multilineToHtml(body)}</div>');
-          }
-          sb.writeln('<div class="footer">'
-              '点赞 ${n.likeCount} · 评论 ${n.commentCount} · '
-              '转发 ${n.repostCount} · 阅读 ${n.viewCount}'
-              '</div>');
-          sb.writeln('</article>');
-        }
-        sb.writeln('</section>');
-      }
+  /// 把帖子正文拆成「常规文字 + 经文色块 + 感想色块」三部分，交给 PDF 排版。
+  ///
+  /// 阅读界面的「画线 / 感想」分享帖正文末尾带一段 base64 元数据（哨兵
+  /// `§§HS§§` / `§§TS§§` 编码的成对数组），直接导出会显示乱码。这里解析后：
+  ///   - 感想汇总页分享帖：$经名 + 留言在上，经文色块 + 感想色块（只取第一条）
+  ///   - 画线归集页分享帖：$经名 + 留言在上，第一条画线当作经文色块
+  ///   - 选择文字直接分享：感想/留言在上，段原文当作经文色块
+  ///   - 普通帖走 @经书 纯文本化
+  static ({String body, String? verse, String? thought}) _pdfBodyParts(
+      PlazaNote n) {
+    // 感想汇总页分享帖（§§TS§§）。
+    final thoughts = SutraThoughtsPost.parse(n.content);
+    if (thoughts != null) {
+      final lines = <String>[
+        if (thoughts.sutraTitle.isNotEmpty) '\$${thoughts.sutraTitle}',
+      ];
+      final msg = thoughts.message.trim();
+      if (msg.isNotEmpty) lines.add(msg);
+      // 只导出第一条「经文,感想」。
+      final verse = thoughts.pairs.isNotEmpty
+          ? thoughts.pairs.first.$1.trim()
+          : thoughts.firstParagraph.trim();
+      final thought = thoughts.pairs.isNotEmpty
+          ? thoughts.pairs.first.$2.trim()
+          : '';
+      return (
+        body: lines.join('\n\n'),
+        verse: verse.isEmpty ? null : verse,
+        thought: thought.isEmpty ? null : thought,
+      );
     }
-    sb.writeln('</body></html>');
-    return sb.toString();
+    // 画线归集页分享帖（§§HS§§）。
+    final highlights = SutraHighlightsPost.parse(n.content);
+    if (highlights != null) {
+      final lines = <String>[
+        if (highlights.sutraTitle.isNotEmpty) '\$${highlights.sutraTitle}',
+      ];
+      final msg = highlights.message.trim();
+      if (msg.isNotEmpty) lines.add(msg);
+      // 只导出第一条画线，当作经文色块。
+      final verse = highlights.highlights.isNotEmpty
+          ? highlights.highlights.first.trim()
+          : highlights.firstHighlight.trim();
+      return (
+        body: lines.join('\n\n'),
+        verse: verse.isEmpty ? null : verse,
+        thought: null,
+      );
+    }
+    // 选择文字直接分享的感想（ReadingNotePost）。
+    final rn = ReadingNotePost.parse(n.content);
+    if (rn != null) {
+      final lines = <String>[
+        if (rn.sutraTitle.isNotEmpty) '\$${rn.sutraTitle}',
+      ];
+      if (rn.noteText.trim().isNotEmpty) lines.add(rn.noteText.trim());
+      return (
+        body: lines.join('\n\n'),
+        verse: rn.paragraph.trim().isEmpty ? null : rn.paragraph.trim(),
+        thought: null,
+      );
+    }
+    // 普通帖子：整段纯文本。
+    return (
+      body: NoteSutraLinks.plainText(n.content),
+      verse: null,
+      thought: null,
+    );
   }
 
   static String _formatFull(int ms) {
@@ -637,20 +596,6 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
         '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-  }
-
-  static String _multilineToHtml(String text) {
-    // 不破坏 _h 的转义，仅在转义后把换行替换为 <br/>。
-    return _h(text).replaceAll('\n', '<br/>');
-  }
-
-  static String _h(String s) {
-    return s
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
   }
 }
 
