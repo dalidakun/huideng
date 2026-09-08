@@ -431,6 +431,15 @@ exports.main = async (event, context) => {
     }
   }
 
+  // 确保 notes（菩提空间帖子）集合存在。
+  async function ensureNotesCollection() {
+    try {
+      await db.createCollection("notes");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
   // 按 (ownerUserId, sutraKey, index) 定位该段记录（无则 null）。index 统一存字符串，避免类型不一致。
   async function findReadingParagraph(owner, sutraKey, index) {
     const { data } = await readingParagraphNotes
@@ -3591,14 +3600,46 @@ exports.main = async (event, context) => {
       // ==================== 读经段落笔记 / 完成态 ====================
       // 以 (ownerUserId, sutraKey, 段落index) 唯一。sutraKey 一般为经名（widget.title），
       // 同一用户同一本经的每段各有一条记录，跨设备云端同步。
+      // 可选 userId：菩提空间分享帖以「作者当前最新画线/感想」为准时，按作者查询。
+      // 为避免变成可枚举任意用户读经笔记的接口，非本人请求要求该作者确实公开分享过
+      // 这本经的「画线/感想」页面帖（content 以 $经名 开头且带 \u00a7\u00a7HS\u00a7\u00a7 /
+      // \u00a7\u00a7TS\u00a7\u00a7 哨兵）。
       case "getParagraphNotes": {
-        if (!uid) return fail("unauthorized");
         const sutraKey = event.sutraKey;
         if (!sutraKey) return fail("缺少经名参数");
+        const target = String(event.userId || "").trim() || uid;
+        // 未登录且未指定查看对象（拿自己数据）时拒绝；未登录查看他人分享的帖子，
+        // 走下方「确有公开页面分享帖」的隐私校验后放行。
+        if (!target) return fail("unauthorized");
         try {
           await ensureReadingParagraphNotes();
+          if (target !== uid) {
+            // 作者本人以外：确认该作者确有这本经的「画线/感想」页面分享帖后才放行。
+            // 帖子标题是展示名（基础经名 / 基础经名+「卷X」），而读经页保存段笔记的
+            // key 可能是带 CBETA 编号的完整标题 / 加「卷X」的完整标题；核对时先归一到
+            // 「基础经名」再匹配，避免同一部经因 key 形态不同被误判为 unauthorized，
+            // 让分享帖实时同步能取到作者以其它 key 保存的当前画线/感想。
+            const dollar = "$";
+            const hs = "\u00a7\u00a7HS\u00a7\u00a7";
+            const ts = "\u00a7\u00a7TS\u00a7\u00a7";
+            const baseKey = String(sutraKey)
+              .replace(/T\d+n[0-9A-Za-z]+_\d+$/, "")
+              .replace(/卷[\u4e00-\u9fa5]+$/, "")
+              .trim() || sutraKey;
+            await ensureNotesCollection();
+            const { data: pubs } = await notes
+              .where({ ownerUserId: target, status: "normal" })
+              .limit(50)
+              .get();
+            const pageShared = (pubs || []).some((n) => {
+              const c = String(n.content || "");
+              return (c.includes(hs) || c.includes(ts)) &&
+                (c.includes(dollar + sutraKey) || c.includes(dollar + baseKey));
+            });
+            if (!pageShared) return fail("forbidden");
+          }
           const { data } = await readingParagraphNotes
-            .where({ ownerUserId: uid, sutraKey })
+            .where({ ownerUserId: target, sutraKey })
             .limit(1000)
             .get();
           const list = (data || []).map((d) => ({

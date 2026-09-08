@@ -22,6 +22,7 @@ import 'user_avatar.dart';
 import 'user_space_page.dart';
 
 import 'app_palette.dart';
+
 Color get _primary => AppPalette.p.primary;
 Color get _primaryLight => AppPalette.p.textSec;
 Color get _gold => AppPalette.p.accent;
@@ -31,6 +32,7 @@ Color get _text => AppPalette.p.text;
 Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _border => AppPalette.p.border;
+
 /// 最长显示 10 秒自动消失；点击「点击查看」立即关闭并进入帖子详情页，点 X 仅关闭。
 /// [noteId] 为空时（如回复帖创建失败只留评论）不显示跳转入口，点击仅关闭。
 void showPostPublishedToast(BuildContext context, String noteId) {
@@ -71,8 +73,8 @@ void showPostPublishedToast(BuildContext context, String noteId) {
                     child: Text.rich(
                       TextSpan(
                         text: '已发表，',
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 13),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 13),
                         children: [
                           if (canOpen)
                             TextSpan(
@@ -92,8 +94,7 @@ void showPostPublishedToast(BuildContext context, String noteId) {
                     onTap: dismiss,
                     child: const Padding(
                       padding: EdgeInsets.all(4),
-                      child: Icon(Icons.close,
-                          size: 16, color: Colors.white70),
+                      child: Icon(Icons.close, size: 16, color: Colors.white70),
                     ),
                   ),
                 ],
@@ -216,7 +217,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       unawaited(CloudNotesService.instance.refreshFavoriteNoteIds());
       unawaited(CloudNotesService.instance.refreshFollowStates());
       // 浏览量+1 失败不影响阅读：纯 fire-and-forget，不更新 UI 数字。
-      unawaited(CloudNotesService.instance.incView(widget.noteId).catchError((_) => 0));
+      unawaited(CloudNotesService.instance
+          .incView(widget.noteId)
+          .catchError((_) => 0));
       // 经书目录后台并行加载，得到后立刻刷一次，让 $经名 链接可用。
       NoteSutraCatalog.titleMap().then((lib) {
         if (!mounted) return;
@@ -526,9 +529,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             visibility: note.visibility,
             status: note.status,
             likeCount: note.likeCount,
-            commentCount: note.commentCount > 0
-                ? note.commentCount - 1
-                : 0,
+            commentCount: note.commentCount > 0 ? note.commentCount - 1 : 0,
             viewCount: note.viewCount,
             repostCount: note.repostCount,
             repostOf: note.repostOf,
@@ -865,8 +866,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     // 评论与回复统一列表（回复流程双写时按同作者/同内容/时间相近去重）。
     final entries = _buildDetailEntries();
     final showAll = _commentsShowAll || entries.length <= 2;
-    final visibleEntries =
-        showAll ? entries : entries.sublist(0, 2);
+    final visibleEntries = showAll ? entries : entries.sublist(0, 2);
     // 回复帖模式：独立 CustomScrollView 布局——回复节点所在 sliver 设为
     // center 锚点（滚动零点），祖先链放在锚点之前的负偏移区：进入即回复贴顶，
     // 祖先下滑才可见；不依赖测量/跳转，网络时机与内容高度都不会破坏定位。
@@ -890,195 +890,211 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               // 公告帖：与话题页「发起人」帖同款，顶部帖子用圆角卡片
               // 包裹（右上角已带「公告」标签）。
               _wrapAnnouncementPost(
-                  note,
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // X 式转发角标（最顶部，与内容列对齐）
-                      if (note.repostOf.isNotEmpty &&
-                          note.repostKind != 'reply') ...[
-                        Padding(
-                          padding: const EdgeInsets.only(left: 32),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
+                note,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // X 式转发角标（最顶部，与内容列对齐）
+                    if (note.repostOf.isNotEmpty &&
+                        note.repostKind != 'reply') ...[
+                      Padding(
+                        padding: const EdgeInsets.only(left: 32),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.repeat,
+                                size: 12, color: Color(0xFF8C8C8C)),
+                            const SizedBox(width: 4),
+                            Text('你已转帖',
+                                style: TextStyle(
+                                    fontSize: 12, color: Color(0xFF8C8C8C))),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            final uid = note.ownerUserId;
+                            if (uid.isNotEmpty) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => UserSpacePage(
+                                        userId: uid,
+                                        userName: note.authorName)),
+                              );
+                            }
+                          },
+                          child:
+                              UserAvatar(userId: note.ownerUserId, radius: 22),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.repeat, size: 12, color: Color(0xFF8C8C8C)),
-                              const SizedBox(width: 4),
-                              Text('你已转帖',
-                                  style: TextStyle(
+                              _buildUserNameRow(note),
+                              if (note.content.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                // 读经笔记分享帖：结构化渲染。
+                                if (SutraThoughtsPost.isThoughtsPost(
+                                    note.content))
+                                  SutraThoughtsPostView(
+                                    post:
+                                        SutraThoughtsPost.parse(note.content)!,
+                                    noteId: note.id,
+                                    sutraLibrary: _sutraLib,
+                                    authorName: note.authorName,
+                                    ownerUserId: note.ownerUserId,
+                                  )
+                                else if (SutraHighlightsPost.isHighlightsPost(
+                                    note.content))
+                                  SutraHighlightsPostView(
+                                    post: SutraHighlightsPost.parse(
+                                        note.content)!,
+                                    noteId: note.id,
+                                    sutraLibrary: _sutraLib,
+                                    authorName: note.authorName,
+                                    ownerUserId: note.ownerUserId,
+                                  )
+                                else if (ReadingNotePost.isReadingNote(
+                                    note.content))
+                                  ReadingNotePostView(
+                                    note: ReadingNotePost.parse(note.content)!,
+                                    noteId: note.id,
+                                    sutraLibrary: _sutraLib,
+                                    authorName: note.authorName,
+                                  )
+                                else
+                                  // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。
+                                  LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final noteExpanded = _noteContentExpanded;
+                                      final tp = TextPainter(
+                                        text: TextSpan(
+                                          text: note.content,
+                                          style: TextStyle(
+                                              fontSize: 16,
+                                              color: _text,
+                                              height: 1.75),
+                                        ),
+                                        maxLines: 8,
+                                        ellipsis: '…',
+                                        textDirection: TextDirection.ltr,
+                                      )..layout(maxWidth: constraints.maxWidth);
+                                      final overflow = tp.didExceedMaxLines;
+                                      return Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          buildPostRichText(
+                                            note.content,
+                                            style: TextStyle(
+                                                fontSize: 16,
+                                                color: _text,
+                                                height: 1.75),
+                                            library: _sutraLib,
+                                            multiVolumeBases: NoteSutraCatalog
+                                                .cachedMultiVolumeBases,
+                                            onUserTap: (uid) {
+                                              if (uid.isNotEmpty) {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                      builder: (_) =>
+                                                          UserSpacePage(
+                                                              userId: uid)),
+                                                );
+                                              }
+                                            },
+                                            onSutraTap: (title, filePath) {
+                                              Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        SutraDiscussionPage(
+                                                            title: title,
+                                                            filePath:
+                                                                filePath)),
+                                              );
+                                            },
+                                            onTopicTap: (topic) {
+                                              Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                    builder: (_) => TopicPage(
+                                                        topic: topic)),
+                                              );
+                                            },
+                                            maxLines: noteExpanded ? null : 8,
+                                            overflow: noteExpanded
+                                                ? null
+                                                : TextOverflow.ellipsis,
+                                          ),
+                                          if (overflow && !noteExpanded)
+                                            GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
+                                              onTap: _toggleNoteContent,
+                                              child: const Padding(
+                                                padding:
+                                                    EdgeInsets.only(top: 4),
+                                                child: Text('显示更多',
+                                                    style: TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color:
+                                                            Color(0xFF70867A))),
+                                              ),
+                                            ),
+                                          if (noteExpanded)
+                                            GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
+                                              onTap: _toggleNoteContent,
+                                              child: const Padding(
+                                                padding:
+                                                    EdgeInsets.only(top: 4),
+                                                child: Text('收起',
+                                                    style: TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color:
+                                                            Color(0xFF70867A))),
+                                              ),
+                                            ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                              ],
+                              // 与首页帖子同款时间戳：内容与引用框之间。
+                              const SizedBox(height: 6),
+                              Text(_feedTime(note.createdAt),
+                                  style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF8C8C8C))),
+                              if (note.repostOf.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                QuoteBox(note: note),
+                              ],
                             ],
                           ),
                         ),
-                        const SizedBox(height: 4),
                       ],
-                      Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () {
-                        final uid = note.ownerUserId;
-                        if (uid.isNotEmpty) {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => UserSpacePage(
-                                    userId: uid,
-                                    userName: note.authorName)),
-                          );
-                        }
-                      },
-                      child: UserAvatar(userId: note.ownerUserId, radius: 22),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildUserNameRow(note),
-                          if (note.content.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            // 读经笔记分享帖：结构化渲染。
-                            if (SutraThoughtsPost.isThoughtsPost(note.content))
-                              SutraThoughtsPostView(
-                                post: SutraThoughtsPost.parse(note.content)!,
-                                noteId: note.id,
-                                sutraLibrary: _sutraLib,
-                                authorName: note.authorName,
-                              )
-                            else if (SutraHighlightsPost.isHighlightsPost(note.content))
-                              SutraHighlightsPostView(
-                                post: SutraHighlightsPost.parse(note.content)!,
-                                noteId: note.id,
-                                sutraLibrary: _sutraLib,
-                                authorName: note.authorName,
-                              )
-                            else if (ReadingNotePost.isReadingNote(note.content))
-                              ReadingNotePostView(
-                                note: ReadingNotePost.parse(note.content)!,
-                                noteId: note.id,
-                                sutraLibrary: _sutraLib,
-                                authorName: note.authorName,
-                              )
-                            else
-                            // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。
-                            LayoutBuilder(
-                              builder: (context, constraints) {
-                                final noteExpanded = _noteContentExpanded;
-                                final tp = TextPainter(
-                                  text: TextSpan(
-                                    text: note.content,
-                                    style: TextStyle(
-                                        fontSize: 16,
-                                        color: _text,
-                                        height: 1.75),
-                                  ),
-                                  maxLines: 8,
-                                  ellipsis: '…',
-                                  textDirection: TextDirection.ltr,
-                                )..layout(maxWidth: constraints.maxWidth);
-                                final overflow = tp.didExceedMaxLines;
-                                return Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    buildPostRichText(
-                                      note.content,
-                                      style: TextStyle(
-                                          fontSize: 16,
-                                          color: _text,
-                                          height: 1.75),
-                                      library: _sutraLib,
-                                      multiVolumeBases: NoteSutraCatalog
-                                          .cachedMultiVolumeBases,
-                                      onUserTap: (uid) {
-                                        if (uid.isNotEmpty) {
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                                builder: (_) =>
-                                                    UserSpacePage(
-                                                        userId: uid)),
-                                          );
-                                        }
-                                      },
-                                      onSutraTap: (title, filePath) {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                              builder: (_) =>
-                                                  SutraDiscussionPage(
-                                                      title: title,
-                                                      filePath: filePath)),
-                                        );
-                                      },
-                                      onTopicTap: (topic) {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                              builder: (_) =>
-                                                  TopicPage(topic: topic)),
-                                        );
-                                      },
-                                      maxLines: noteExpanded ? null : 8,
-                                      overflow: noteExpanded
-                                          ? null
-                                          : TextOverflow.ellipsis,
-                                    ),
-                                    if (overflow && !noteExpanded)
-                                      GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: _toggleNoteContent,
-                                        child: const Padding(
-                                          padding: EdgeInsets.only(top: 4),
-                                          child: Text('显示更多',
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: Color(0xFF70867A))),
-                                        ),
-                                      ),
-                                    if (noteExpanded)
-                                      GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: _toggleNoteContent,
-                                        child: const Padding(
-                                          padding: EdgeInsets.only(top: 4),
-                                          child: Text('收起',
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: Color(0xFF70867A))),
-                                        ),
-                                      ),
-                                  ],
-                                );
-                              },
-                            ),
-                          ],
-                          // 与首页帖子同款时间戳：内容与引用框之间。
-                          const SizedBox(height: 6),
-                          Text(_feedTime(note.createdAt),
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF8C8C8C))),
-                          if (note.repostOf.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            QuoteBox(note: note),
-                          ],
-                        ],
-                      ),
-                    ),
+                    // 公告帖：四个指标（讨论/转发/喜欢/阅读）一并收进白色卡片内。
+                    if (_isAnnouncementNote(note)) ...[
+                      const SizedBox(height: 10),
+                      _buildActionsRow(note, liked),
+                    ],
                   ],
                 ),
-                      // 公告帖：四个指标（讨论/转发/喜欢/阅读）一并收进白色卡片内。
-                      if (_isAnnouncementNote(note)) ...[
-                        const SizedBox(height: 10),
-                        _buildActionsRow(note, liked),
-                      ],
-                    ],
-                  ),
-                ),
+              ),
               // 普通帖：操作行保持卡片外原样式；公告帖已在白卡内渲染，避免重复两排。
               if (!_isAnnouncementNote(note)) ...[
                 const SizedBox(height: 8),
@@ -1173,8 +1189,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     for (var i = 0; i < ancestors.length; i++) {
       final anc = ancestors[i];
       if (anc != null &&
-          CloudNotesService.instance.blockedUserIds
-              .contains(anc.ownerUserId)) {
+          CloudNotesService.instance.blockedUserIds.contains(anc.ownerUserId)) {
         chainEnd = i + 1;
         break;
       }
@@ -1337,15 +1352,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (ids.isEmpty) return;
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
-        final profiles = await CloudNotesService.instance
-            .getUserProfiles(ids.toList(),
-                timeout: const Duration(seconds: 25));
+        final profiles = await CloudNotesService.instance.getUserProfiles(
+            ids.toList(),
+            timeout: const Duration(seconds: 25));
         if (!mounted) return;
         setState(() {
           // 合并而非清空：_loadReplies 也会往此 Map 写入回复作者资料，
           // clear 会清掉回复作者数据导致回复帖账号再次丢失。
-          _commentAuthorProfiles
-              .addAll({for (final p in profiles) p.id: p});
+          _commentAuthorProfiles.addAll({for (final p in profiles) p.id: p});
         });
         return;
       } catch (_) {
@@ -1401,7 +1415,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     return entries;
   }
 
-
   /// 展开/收起某条评论/回复的长内容全文。
   void _toggleContent(String entryId) {
     setState(() {
@@ -1418,8 +1431,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
 
   /// 评论/回复内容行：默认折叠为 5 行，超长时出现「显示更多」。
   /// [maxWidth] 为内容区实际宽度（调用处 LayoutBuilder 提供），用于测溢出。
-  Widget _buildCommentContent(String content, _DetailEntry e,
-      TextStyle contentStyle, double maxWidth) {
+  Widget _buildCommentContent(
+      String content, _DetailEntry e, TextStyle contentStyle, double maxWidth) {
     final expanded = _expandedContentIds.contains(e.id);
     final tp = TextPainter(
       text: TextSpan(text: content, style: contentStyle),
@@ -1540,8 +1553,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (me == null || userId.isEmpty || _isOwn(userId)) return;
     final following =
         CloudNotesService.instance.followingUserIds.contains(userId);
-    final blocked =
-        CloudNotesService.instance.blockedUserIds.contains(userId);
+    final blocked = CloudNotesService.instance.blockedUserIds.contains(userId);
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: _card,
@@ -1568,8 +1580,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
             postMenuItem(ctx, following ? 'unfollow' : 'follow',
                 Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
-            postMenuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
-                blocked ? '取消屏蔽' : '屏蔽该用户'),
+            postMenuItem(ctx, blocked ? 'unblock' : 'block',
+                Icons.block_outlined, blocked ? '取消屏蔽' : '屏蔽该用户'),
             const SizedBox(height: 8),
           ],
         ),
@@ -1619,9 +1631,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     // 评论与回复统一用 authorId 查预取资料，避免回复帖丢失账号兜底。
     final profile = _commentAuthorProfiles[e.authorId];
     final isOwn = me != null && e.authorId == me.id;
-    final verified = e.verified ||
-        (profile?.verified ?? false) ||
-        (isOwn && _myVerified);
+    final verified =
+        e.verified || (profile?.verified ?? false) || (isOwn && _myVerified);
     final account = e.account.isNotEmpty
         ? e.account
         : ((profile?.account.isNotEmpty ?? false)
@@ -1636,12 +1647,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     // 回复帖优先取帖子自带数据）。
     final pct = postCanonPercent(
       isSelf: isOwn,
-      cloudRead: reply != null
-          ? reply.canonRead
-          : (profile?.canonRead ?? 0),
-      cloudTotal: reply != null
-          ? reply.canonTotal
-          : (profile?.canonTotal ?? 0),
+      cloudRead: reply != null ? reply.canonRead : (profile?.canonRead ?? 0),
+      cloudTotal: reply != null ? reply.canonTotal : (profile?.canonTotal ?? 0),
     );
     final contentStyle = TextStyle(fontSize: 15, color: _text, height: 1.6);
     return Padding(
@@ -1657,9 +1664,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               if (uid.isNotEmpty) {
                 Navigator.push(
                   context,
-                    MaterialPageRoute(
-                        builder: (_) => UserSpacePage(
-                            userId: uid, userName: displayName)),
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          UserSpacePage(userId: uid, userName: displayName)),
                 );
               }
             },
@@ -1792,7 +1799,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       liked: liked,
       onComment: () => replyToThisNote(),
       onRepost: _reposting ? null : _repost,
-      onLike: _commentLiking.contains(c.id) ? null : () => _toggleCommentLike(c),
+      onLike:
+          _commentLiking.contains(c.id) ? null : () => _toggleCommentLike(c),
     );
   }
 
@@ -1903,8 +1911,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     : Icons.bookmark_border_rounded,
                 favorited ? '取消收藏' : '收藏笔记'),
             postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
-            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
-                pinned ? '取消置顶' : '置顶'),
+            postMenuItem(
+                ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -1962,8 +1970,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text('删除回复',
             style: TextStyle(
                 fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
@@ -2068,7 +2075,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         createdAt: n.createdAt,
         updatedAt: n.updatedAt,
       );
-
 
   /// 点赞/取消点赞评论：云端持久化，点赞数与点亮状态随服务端返回更新。
   Future<void> _toggleCommentLike(PlazaComment c) async {
@@ -2263,8 +2269,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                       : Icons.bookmark_border_rounded,
                   favorited ? '取消收藏' : '收藏笔记'),
               _menuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
-              _menuItem(ctx, 'pin', Icons.push_pin_outlined,
-                  pinned ? '取消置顶' : '置顶'),
+              _menuItem(
+                  ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
               _menuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
               _menuItem(ctx, 'delete', Icons.delete_outline, '删除'),
               const SizedBox(height: 8),

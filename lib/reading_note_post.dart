@@ -1,12 +1,16 @@
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
+import 'auth_service.dart';
+import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
 import 'reading_notes_page.dart';
 import 'sutra_highlights_page.dart';
+import 'sutra_live_sync.dart';
 import 'sutra_paragraph_page.dart';
 import 'sutra_underline.dart';
 
@@ -76,9 +80,8 @@ class ReadingNotePost {
     // 剩余内容按空行（\n\n）分割：第一段为段原文，其余为笔记。
     final parts = rest.split(RegExp(r'\n\s*\n'));
     final paragraph = parts.isNotEmpty ? parts[0].trim() : '';
-    final noteText = parts.length > 1
-        ? parts.sublist(1).join('\n\n').trim()
-        : '';
+    final noteText =
+        parts.length > 1 ? parts.sublist(1).join('\n\n').trim() : '';
     if (paragraph.isEmpty) return null;
     return ReadingNotePost(
       sutraTitle: sutraTitle,
@@ -185,8 +188,7 @@ class ReadingNotePostView extends StatelessWidget {
             onTap: () => _openParagraph(context),
             child: Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),
@@ -263,8 +265,8 @@ class SutraHighlightsPost {
 
     // 解析哨兵之后的元数据。
     final metaIdx = trimmed.indexOf(kSutraHighlightsMetaPrefix);
-    var metaSection = trimmed.substring(
-        metaIdx + kSutraHighlightsMetaPrefix.length);
+    var metaSection =
+        trimmed.substring(metaIdx + kSutraHighlightsMetaPrefix.length);
     final metaEnd = metaSection.indexOf('\n');
     if (metaEnd >= 0) metaSection = metaSection.substring(0, metaEnd);
     final highlights = <String>[];
@@ -316,12 +318,16 @@ class SutraHighlightsPostView extends StatelessWidget {
   // 帖子作者昵称，用于在画线色块顶部标注「xxx的所有画线」（画线页分享）。
   final String? authorName;
 
+  /// 帖子作者 userId：作者本人查看自己的分享帖时，画线页加载实时数据而非快照。
+  final String ownerUserId;
+
   const SutraHighlightsPostView({
     super.key,
     required this.post,
     required this.noteId,
     required this.sutraLibrary,
     this.authorName,
+    this.ownerUserId = '',
   });
 
   void _openDetail(BuildContext context) async {
@@ -331,12 +337,85 @@ class SutraHighlightsPostView extends StatelessWidget {
     );
   }
 
-  void _openHighlights(BuildContext context) {
+  /// 打开画线归集页：以「作者当前最新画线」为准（对所有查看者）。
+  /// 无法定位作者或加载不到经文时，才回退到分享时的快照。
+  Future<void> _openHighlights(BuildContext context) async {
+    final meId = AuthService.instance.cachedUserId;
+    final isOwner = meId != null && meId.isNotEmpty && ownerUserId == meId;
+
+    var highlights = List.of(post.highlights);
+    var items = <LiveHighlightItem>[];
+    var canDelete = false;
+    var liveLoaded = false;
+    var liveEmpty = false;
+    String? emptyHint;
+    String? syncNotice;
+    Future<bool> Function(List<LiveHighlightSegment>)? deleteCb;
+
+    if (ownerUserId.isNotEmpty) {
+      try {
+        final loaded = await loadSutraTightByTitle(post.sutraTitle,
+            filePath: post.filePath);
+        final paragraphs = loaded?.paragraphs;
+        if (paragraphs != null) {
+          // 帖子标题是展示名，与读经页存笔记的 key 未必逐字相等；
+          // 用候选 key 并集拉取作者当前笔记，避免误判「作者已删除全部画线」。
+          final union = await fetchParagraphNotesUnion(post.sutraTitle,
+              ownerUserId,
+              filePath: loaded!.filePath);
+          final cloudItems = union.items;
+          // 重建计算放后台隔离区：巨量画线/大幅合并也只影响耗时，不卡 UI。
+          List<LiveHighlightItem>? computed;
+          try {
+            computed = await Isolate.run(
+                () => buildLiveHighlights(paragraphs, loaded!.tight, cloudItems));
+          } catch (e, st) {
+            debugPrint('[highlights] 实时重建失败: $e\n$st');
+          }
+          if (computed == null) {
+            syncNotice = '画线重建失败，展示分享时画线';
+          } else {
+            items = computed;
+            debugPrint('[highlights-post] 实时 ${computed.length} 条, notesKey=${union.key}');
+            canDelete = isOwner && items.isNotEmpty;
+            liveLoaded = true;
+            liveEmpty = items.isEmpty;
+            if (isOwner) {
+              final paragraphsRef = paragraphs;
+              final notesKey = union.key;
+              deleteCb = (segs) => deleteLiveUnderline(
+                  sutraKey: notesKey,
+                  paragraphs: paragraphsRef,
+                  segments: segs);
+            }
+          }
+        } else {
+          syncNotice = '未能定位经文正文，展示分享时画线';
+        }
+      } catch (e) {
+        // 实时数据加载失败（含云端拒绝/网络异常），回退到分享快照并明示原因。
+        liveLoaded = false;
+        syncNotice =
+            e is CloudApiException ? '云端同步失败：${e.message}' : '云端同步失败，展示分享时画线';
+      }
+      if (liveLoaded) {
+        highlights = [for (final it in items) it.text];
+        if (liveEmpty) emptyHint = '作者已删除全部画线\n该分享帖已同步为空';
+      }
+    }
+
+    if (!context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SutraHighlightsPage(
           title: post.sutraTitle,
-          highlights: List.of(post.highlights),
+          highlights: highlights,
+          canDelete: canDelete,
+          sutraKey: post.sutraTitle,
+          itemSegments: [for (final it in items) it.segments],
+          onDeleteUnderline: deleteCb,
+          emptyHint: emptyHint,
+          syncNotice: syncNotice,
         ),
       ),
     );
@@ -397,8 +476,7 @@ class SutraHighlightsPostView extends StatelessWidget {
             onTap: () => _openHighlights(context),
             child: Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),
@@ -497,8 +575,8 @@ class SutraThoughtsPost {
     if (sutraTitle.isEmpty) return null;
 
     final metaIdx = trimmed.indexOf(kSutraThoughtsMetaPrefix);
-    var metaSection = trimmed.substring(
-        metaIdx + kSutraThoughtsMetaPrefix.length);
+    var metaSection =
+        trimmed.substring(metaIdx + kSutraThoughtsMetaPrefix.length);
     final metaEnd = metaSection.indexOf('\n');
     if (metaEnd >= 0) metaSection = metaSection.substring(0, metaEnd);
     final pairs = _decodePairs(metaSection);
@@ -591,12 +669,16 @@ class SutraThoughtsPostView extends StatelessWidget {
   // 帖子作者昵称，用于在经文色块顶部标注「xxx的所有感想」（感想汇总页分享）。
   final String? authorName;
 
+  /// 帖子作者 userId：作者本人查看自己的分享帖时，感想页加载实时数据而非快照。
+  final String ownerUserId;
+
   const SutraThoughtsPostView({
     super.key,
     required this.post,
     required this.noteId,
     required this.sutraLibrary,
     this.authorName,
+    this.ownerUserId = '',
   });
 
   void _openDetail(BuildContext context) async {
@@ -606,13 +688,87 @@ class SutraThoughtsPostView extends StatelessWidget {
     );
   }
 
-  void _openThoughts(BuildContext context) {
+  /// 打开感想汇总页：以「作者当前最新感想」为准（对所有查看者）。
+  /// 无法定位作者或加载不到经文时，才回退到分享时的快照。
+  Future<void> _openThoughts(BuildContext context) async {
+    final meId = AuthService.instance.cachedUserId;
+    final isOwner = meId != null && meId.isNotEmpty && ownerUserId == meId;
+
+    var paragraphs = [for (final (p, _) in post.pairs) p];
+    var notes = [for (final (_, t) in post.pairs) t];
+    var itemIndexes = const <int>[];
+    var canDelete = false;
+    var liveLoaded = false;
+    var liveEmpty = false;
+    String? emptyHint;
+    String? syncNotice;
+    Future<bool> Function(int)? deleteCb;
+
+    if (ownerUserId.isNotEmpty) {
+      try {
+        final loaded = await loadSutraTightByTitle(post.sutraTitle,
+            filePath: post.filePath);
+        final allParagraphs = loaded?.paragraphs;
+        if (allParagraphs != null) {
+          // 帖子标题是展示名，与读经页存笔记的 key 未必逐字相等；
+          // 用候选 key 并集拉取作者当前感想，避免误判「作者已删除全部感想」。
+          final union = await fetchParagraphNotesUnion(post.sutraTitle,
+              ownerUserId,
+              filePath: loaded!.filePath);
+          final cloudItems = union.items;
+          // 重建计算放后台隔离区：巨量感想/大幅合并也只影响耗时，不卡 UI。
+          List<LiveThoughtItem>? computed;
+          try {
+            computed = await Isolate.run(() =>
+                buildLiveThoughts(allParagraphs, loaded!.tight, cloudItems));
+          } catch (e, st) {
+            debugPrint('[thoughts] 实时重建失败: $e\n$st');
+          }
+          if (computed == null) {
+            syncNotice = '感想重建失败，展示分享时感想';
+          } else {
+            final items = computed;
+            paragraphs = [for (final it in items) it.paragraph];
+            notes = [for (final it in items) it.note];
+            itemIndexes = [for (final it in items) it.para];
+            canDelete = isOwner && items.isNotEmpty;
+            liveLoaded = true;
+            liveEmpty = items.isEmpty;
+            if (isOwner) {
+              final paragraphsRef = allParagraphs;
+              final notesKey = union.key;
+              deleteCb = (p) =>
+                  deleteLiveNote(sutraKey: notesKey, paragraphs: paragraphsRef, index: p);
+            }
+          }
+        } else {
+          syncNotice = '未能定位经文正文，展示分享时感想';
+        }
+      } catch (e) {
+        // 实时数据加载失败则回退到分享快照并明示原因。
+        liveLoaded = false;
+        syncNotice =
+            e is CloudApiException ? '云端同步失败：${e.message}' : '云端同步失败，展示分享时感想';
+      }
+      if (liveLoaded && liveEmpty) {
+        emptyHint = '作者已删除全部感想\n该分享帖已同步为空';
+      }
+    }
+
+    if (!context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ReadingNotesPage(
           title: post.sutraTitle,
-          paragraphs: [for (final (p, _) in post.pairs) p],
-          notes: [for (final (_, t) in post.pairs) t],
+          paragraphs:
+              liveLoaded ? paragraphs : [for (final (p, _) in post.pairs) p],
+          notes: liveLoaded ? notes : [for (final (_, t) in post.pairs) t],
+          canDelete: canDelete,
+          sutraKey: post.sutraTitle,
+          itemParagraphIndexes: liveLoaded ? itemIndexes : const <int>[],
+          onDeleteNote: deleteCb,
+          emptyHint: emptyHint,
+          syncNotice: syncNotice,
         ),
       ),
     );
@@ -673,8 +829,7 @@ class SutraThoughtsPostView extends StatelessWidget {
             onTap: () => _openThoughts(context),
             child: Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: p.accent.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(10),

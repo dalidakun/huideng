@@ -23,6 +23,7 @@ import 'user_avatar.dart';
 import 'user_space_page.dart';
 
 import 'app_palette.dart';
+
 Color get _gold => AppPalette.p.accent;
 Color get _bg => AppPalette.p.bg;
 Color get _card => AppPalette.p.card;
@@ -37,10 +38,12 @@ Color get _border => AppPalette.p.border;
 /// 互动量权重与云端一致：阅读 + 赞×3 + 评论×5 + 转发×8；
 /// 经书讨论没有阅读/评论计数，只按 赞×3 折算，让两路来源能用同一把尺子混排。
 double discussionHotScore(int createdAt, int engagement) {
-  final ageHours = ((DateTime.now().millisecondsSinceEpoch - createdAt) / 3600000)
-      .clamp(0, double.infinity);
+  final ageHours =
+      ((DateTime.now().millisecondsSinceEpoch - createdAt) / 3600000)
+          .clamp(0, double.infinity);
   return (1 + engagement) / pow(ageHours + 2, 1.3);
 }
+
 /// `[@账号](user:用户ID)` 提及用户、`$经书名` 引用经文、`#话题名` 话题；
 /// 兼容旧式 `[@经名](路径)` 与 `@经书名`。
 ///
@@ -146,8 +149,8 @@ Widget buildPostRichText(
                 ? NoteSutraCatalog.cachedVolumePath(t, trailingVolume)
                 : null) ??
             library[t]!.filePath;
-        spans.add(linkSpan(text[i] + t + trailing + supplement,
-            () => onSutraTap(t, tapPath)));
+        spans.add(linkSpan(
+            text[i] + t + trailing + supplement, () => onSutraTap(t, tapPath)));
         i += 1 + t.length + trailing.length;
         litStart = i;
         continue;
@@ -268,8 +271,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       if (id != null) t = '${widget.title}$id';
     }
     _discussionVolume = sutraVolumeOf(t);
-    _discussionKey =
-        sutraDisplayNameWithVolume(t, multiVolumeBases: bases);
+    _discussionKey = sutraDisplayNameWithVolume(t, multiVolumeBases: bases);
   }
 
   /// 经书展示名：从带卷标的链接进入时（filePath 指向具体卷）显示具体卷标；
@@ -515,8 +517,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
         try {
           final (legacy, _, _) = await CloudNotesService.instance
               .getSutraDiscussions(sutraTitle: base, pageSize: _pageSize);
-          final ids =
-              merged.map((c) => c['id']?.toString()).toSet();
+          final ids = merged.map((c) => c['id']?.toString()).toSet();
           merged = [
             ...merged,
             ...legacy.where((c) => !ids.contains(c['id']?.toString())),
@@ -878,8 +879,8 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                           padding: const EdgeInsets.symmetric(vertical: 24),
                           child: Center(
                             child: Text('还没有讨论，来分享你的体会吧',
-                                style: TextStyle(
-                                    fontSize: 13, color: _textHint)),
+                                style:
+                                    TextStyle(fontSize: 13, color: _textHint)),
                           ),
                         )
                       else
@@ -1057,8 +1058,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
               ),
               const SizedBox(height: 4),
               Text(c['content']?.toString() ?? '',
-                  style:
-                      TextStyle(fontSize: 15, color: _text, height: 1.6)),
+                  style: TextStyle(fontSize: 15, color: _text, height: 1.6)),
               // 发布时间：放在内容和指标行之间（与主页帖子同款）。
               const SizedBox(height: 6),
               Text(
@@ -1190,6 +1190,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       noteId: n.id,
                       sutraLibrary: _sutraLibrary,
                       authorName: n.authorName,
+                      ownerUserId: n.ownerUserId,
                     )
                   else if (SutraHighlightsPost.isHighlightsPost(n.content))
                     SutraHighlightsPostView(
@@ -1197,6 +1198,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       noteId: n.id,
                       sutraLibrary: _sutraLibrary,
                       authorName: n.authorName,
+                      ownerUserId: n.ownerUserId,
                     )
                   else if (ReadingNotePost.isReadingNote(n.content))
                     ReadingNotePostView(
@@ -1206,43 +1208,42 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       authorName: n.authorName,
                     )
                   else
-                  buildPostRichText(
-                    n.content,
-                    style: TextStyle(
-                        fontSize: 15, color: _text, height: 1.6),
-                    library: _sutraLibrary,
-                    multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    onUserTap: (uid) {
-                      if (uid.isNotEmpty) {
+                    buildPostRichText(
+                      n.content,
+                      style: TextStyle(fontSize: 15, color: _text, height: 1.6),
+                      library: _sutraLibrary,
+                      multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                      onUserTap: (uid) {
+                        if (uid.isNotEmpty) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => UserSpacePage(userId: uid)),
+                          );
+                        }
+                      },
+                      onSutraTap: (title, path) {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (_) => UserSpacePage(userId: uid)),
-                        );
-                      }
-                    },
-                    onSutraTap: (title, path) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => SutraDiscussionPage(
-                                title: title, filePath: path)),
-                      ).then((_) {
-                        if (mounted) _loadRelatedNotes();
-                      });
-                    },
-                    onTopicTap: (topic) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => TopicPage(topic: topic)),
-                      ).then((_) {
-                        if (mounted) _loadRelatedNotes();
-                      });
-                    },
-                  ),
+                              builder: (_) => SutraDiscussionPage(
+                                  title: title, filePath: path)),
+                        ).then((_) {
+                          if (mounted) _loadRelatedNotes();
+                        });
+                      },
+                      onTopicTap: (topic) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => TopicPage(topic: topic)),
+                        ).then((_) {
+                          if (mounted) _loadRelatedNotes();
+                        });
+                      },
+                    ),
                   // 发布时间：放在内容和指标行之间（与主页帖子同款）。
                   const SizedBox(height: 6),
                   Text(_fmtTime(n.createdAt),
@@ -1898,13 +1899,11 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
         // 「我刚发布」的帖子短暂置顶（仅本次刚发的这一条、30 分钟内有效，
         // 历史帖一律不置顶），组内保持热度序。
         bool fresh(PlazaNote n) =>
-            n.id != _pinnedId &&
-            CloudNotesService.isRecentlyPublished(n.id);
+            n.id != _pinnedId && CloudNotesService.isRecentlyPublished(n.id);
         final mine = list.where(fresh).toList();
         // 发起人帖已在最顶部展示，列表里排除避免重复显示。
-        final others = list
-            .where((n) => n.id != _pinnedId && !fresh(n))
-            .toList();
+        final others =
+            list.where((n) => n.id != _pinnedId && !fresh(n)).toList();
         // 展示顺序：发起人帖 → 刚发布的帖子 → 其余帖子（云端热度序）。
         _notes = [
           ...initiator,
@@ -1933,7 +1932,9 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
         elevation: 0,
         title: Text('#${widget.topic}',
             style: TextStyle(
-                color: const Color(0xFFcf9e66), fontSize: 18, fontWeight: FontWeight.w600)),
+                color: const Color(0xFFcf9e66),
+                fontSize: 18,
+                fontWeight: FontWeight.w600)),
       ),
       // 底部输入框：直接发布带 #话题 的帖子（与经书讨论页同款）。
       body: Column(
@@ -2001,8 +2002,8 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                     return _buildNewPostBanner(
                                         key: _topSectionKey);
                                   }
-                                  final n = _notes[
-                                      index - (_newPostCount > 0 && index > 1 ? 1 : 0)];
+                                  final n = _notes[index -
+                                      (_newPostCount > 0 && index > 1 ? 1 : 0)];
                                   final me =
                                       AuthService.instance.currentUser.value;
                                   final isSelf =
@@ -2211,13 +2212,14 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                         .isThoughtsPost(
                                                             n.content))
                                                       SutraThoughtsPostView(
-                                                        post:
-                                                            SutraThoughtsPost
-                                                                .parse(
-                                                                    n.content)!,
+                                                        post: SutraThoughtsPost
+                                                            .parse(n.content)!,
                                                         noteId: n.id,
                                                         sutraLibrary: const {},
-                                                        authorName: n.authorName,
+                                                        authorName:
+                                                            n.authorName,
+                                                        ownerUserId:
+                                                            n.ownerUserId,
                                                       )
                                                     else if (SutraHighlightsPost
                                                         .isHighlightsPost(
@@ -2229,7 +2231,10 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                                     n.content)!,
                                                         noteId: n.id,
                                                         sutraLibrary: const {},
-                                                        authorName: n.authorName,
+                                                        authorName:
+                                                            n.authorName,
+                                                        ownerUserId:
+                                                            n.ownerUserId,
                                                       )
                                                     else if (ReadingNotePost
                                                         .isReadingNote(
@@ -2238,57 +2243,57 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                         note: ReadingNotePost
                                                             .parse(n.content)!,
                                                         noteId: n.id,
-                                                        sutraLibrary:
-                                                            const {},
-                                                        authorName: n.authorName,
+                                                        sutraLibrary: const {},
+                                                        authorName:
+                                                            n.authorName,
                                                       )
                                                     else
-                                                    buildPostRichText(
-                                                      n.content,
-                                                      style: TextStyle(
-                                                          fontSize: 15,
-                                                          color: _text,
-                                                          height: 1.6),
-                                                      library: const {},
-                                                      maxLines: 4,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      onUserTap: (uid) {
-                                                        if (uid.isNotEmpty) {
+                                                      buildPostRichText(
+                                                        n.content,
+                                                        style: TextStyle(
+                                                            fontSize: 15,
+                                                            color: _text,
+                                                            height: 1.6),
+                                                        library: const {},
+                                                        maxLines: 4,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        onUserTap: (uid) {
+                                                          if (uid.isNotEmpty) {
+                                                            Navigator.push(
+                                                              context,
+                                                              MaterialPageRoute(
+                                                                  builder: (_) =>
+                                                                      UserSpacePage(
+                                                                          userId:
+                                                                              uid)),
+                                                            );
+                                                          }
+                                                        },
+                                                        onSutraTap:
+                                                            (title, path) {
                                                           Navigator.push(
                                                             context,
                                                             MaterialPageRoute(
                                                                 builder: (_) =>
-                                                                    UserSpacePage(
-                                                                        userId:
-                                                                            uid)),
+                                                                    SutraDiscussionPage(
+                                                                        title:
+                                                                            title,
+                                                                        filePath:
+                                                                            path)),
                                                           );
-                                                        }
-                                                      },
-                                                      onSutraTap:
-                                                          (title, path) {
-                                                        Navigator.push(
-                                                          context,
-                                                          MaterialPageRoute(
-                                                              builder: (_) =>
-                                                                  SutraDiscussionPage(
-                                                                      title:
-                                                                          title,
-                                                                      filePath:
-                                                                          path)),
-                                                        );
-                                                      },
-                                                      onTopicTap: (topic) {
-                                                        Navigator.push(
-                                                          context,
-                                                          MaterialPageRoute(
-                                                              builder: (_) =>
-                                                                  TopicPage(
-                                                                      topic:
-                                                                          topic)),
-                                                        );
-                                                      },
-                                                    ),
+                                                        },
+                                                        onTopicTap: (topic) {
+                                                          Navigator.push(
+                                                            context,
+                                                            MaterialPageRoute(
+                                                                builder: (_) =>
+                                                                    TopicPage(
+                                                                        topic:
+                                                                            topic)),
+                                                          );
+                                                        },
+                                                      ),
                                                     // 发布时间：放在内容和指标行之间（与主页帖子同款）。
                                                     const SizedBox(height: 6),
                                                     Text(_fmt(n.createdAt),
@@ -2566,8 +2571,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
       _promptLogin();
       return;
     }
-    final favorited =
-        CloudNotesService.instance.favoriteNoteIds.contains(n.id);
+    final favorited = CloudNotesService.instance.favoriteNoteIds.contains(n.id);
     if (me.id == n.ownerUserId) {
       final choice = await showModalBottomSheet<String>(
         context: context,

@@ -1,5 +1,3 @@
-import 'dart:ui' show BoxHeightStyle, BoxWidthStyle;
-
 import 'package:flutter/material.dart';
 
 /// 画线文字的「每行点线」：文字正常排版，随后在每一行的字形底部下方
@@ -8,8 +6,11 @@ import 'package:flutter/material.dart';
 ///
 /// Flutter 自带的 `TextDecoration.underline` 固定在文字基线处、无法调整
 /// 与文字的距离（中文字形底部恰在基线，导致点线压在笔画上），因此这里
-/// 用 TextPainter 逐行取字形包围盒（`getBoxesForSelection`）定位，每行
-/// 各自画一条从该行首字到末字的点线，杜绝行与行之间错位或划满整行。
+/// 用 TextPainter 逐行取行度量（`computeLineMetrics`，整体 O(n) 线性耗时），
+/// 每行各自画一条从该行首字到末字的点线，杜绝行与行之间错位或划满整行。
+/// 不使用逐行 `getBoxesForSelection`（每次调用 O(文本长度)、逐行调用累计
+/// 为 O(n²)）：紧连段簇合并出几百行的画线文本时能卡死界面，本实现从根源
+/// 上避免该问题，任何规模都只做线性布局。
 class SutraUnderlineText extends StatelessWidget {
   const SutraUnderlineText({
     super.key,
@@ -34,6 +35,7 @@ class SutraUnderlineText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (text.isEmpty) return const SizedBox.shrink();
     return LayoutBuilder(
       builder: (context, constraints) {
         final painter = TextPainter(
@@ -41,29 +43,16 @@ class SutraUnderlineText extends StatelessWidget {
           textDirection: TextDirection.ltr,
         )..layout(maxWidth: constraints.maxWidth);
 
-        // 逐行取字形包围盒：left/right 决定点线长度，bottom 决定点线高度。
+        // 逐行取行度量：left/width 决定点线长度，baseline 决定点线高度
+        //（中文字形底端落在基线上，点线从基线再往下 gap 处绘制）。
         final lines = <({double left, double right, double bottom})>[];
-        var pos = 0;
-        while (pos < text.length) {
-          final b = painter.getLineBoundary(TextPosition(offset: pos));
-          if (b.isCollapsed) break;
-          final boxes = painter.getBoxesForSelection(
-            TextSelection(baseOffset: b.start, extentOffset: b.end),
-            boxHeightStyle: BoxHeightStyle.tight,
-            boxWidthStyle: BoxWidthStyle.tight,
-          );
-          if (boxes.isNotEmpty) {
-            var left = boxes.first.left;
-            var right = boxes.first.right;
-            var bottom = boxes.first.bottom;
-            for (final box in boxes) {
-              if (box.left < left) left = box.left;
-              if (box.right > right) right = box.right;
-              if (box.bottom > bottom) bottom = box.bottom;
-            }
-            lines.add((left: left, right: right, bottom: bottom));
-          }
-          pos = b.end;
+        for (final m in painter.computeLineMetrics()) {
+          if (m.width <= 0) continue;
+          lines.add((
+            left: m.left,
+            right: m.left + m.width,
+            bottom: m.baseline,
+          ));
         }
 
         return SizedBox(

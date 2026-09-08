@@ -36,11 +36,36 @@ class ReadingNotesPage extends StatefulWidget {
   /// 各段感想（与 [paragraphs] 一一对应）。
   final List<String> notes;
 
+  /// 是否显示删除按钮：仅当从读经页（用户自己的数据）进入时才为 true。
+  final bool canDelete;
+
+  /// 经书 filePath（sutra key），删除感想时云端同步用。
+  final String sutraKey;
+
+  /// 每条「经文+感想」对应的段落下标（与 [paragraphs] 一一对应，仅删除时需要）。
+  final List<int> itemParagraphIndexes;
+
+  /// 删除某段感想后，由读经页负责真正落地（更新本地状态 + 云端同步）。
+  /// 返回 true 表示删除生效，页面可立即移除该条。
+  final Future<bool> Function(int paragraphIndex)? onDeleteNote;
+
+  /// 空态自定义提示（菩提空间分享帖：作者已删除全部感想时显示）；为空用默认引导文案。
+  final String? emptyHint;
+
+  /// 非空时在页面顶部显示同步失败提示条（实时数据加载失败、回退到分享快照）。
+  final String? syncNotice;
+
   const ReadingNotesPage({
     super.key,
     required this.title,
     required this.paragraphs,
     required this.notes,
+    this.canDelete = false,
+    this.sutraKey = '',
+    this.itemParagraphIndexes = const <int>[],
+    this.onDeleteNote,
+    this.emptyHint,
+    this.syncNotice,
   });
 
   @override
@@ -52,23 +77,45 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
   static const _card = Colors.white;
   static const _fg = Color(0xFF212121);
 
+  /// 淡红色（删除按钮用），与整体米白 + accent 绿色系协调。
+  static const _red = Color(0xFFDD6B6B);
+
   bool _showMenu = false;
   bool _exporting = false;
   // 已展开的卡片下标。
   final Set<int> _expanded = {};
 
-  /// 有感想的「经文+感想」成对列表（过滤空感想）。
-  List<(String, String)> get _pairs {
-    final pairs = <(String, String)>[];
+  /// 当前展示的「经文+感想」项（删除时原地移除；每项自带段落下标）。
+  late List<({String paragraph, String note, int para})> _items;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = _buildItems();
+  }
+
+  /// 展示用「经文+感想」成对列表（与 [_items] 一一对应）。
+  List<(String, String)> get _pairs =>
+      [for (final it in _items) (it.paragraph, it.note)];
+
+  /// 有感想的「经文+感想」项（过滤空感想，并记录段落下标）。
+  List<({String paragraph, String note, int para})> _buildItems() {
+    final items = <({String paragraph, String note, int para})>[];
     final n = widget.paragraphs.length < widget.notes.length
         ? widget.paragraphs.length
         : widget.notes.length;
     for (var i = 0; i < n; i++) {
       final t = widget.notes[i].trim();
       if (t.isEmpty) continue;
-      pairs.add((widget.paragraphs[i], t));
+      items.add((
+        paragraph: widget.paragraphs[i],
+        note: t,
+        para: i < widget.itemParagraphIndexes.length
+            ? widget.itemParagraphIndexes[i]
+            : -1,
+      ));
     }
-    return pairs;
+    return items;
   }
 
   String get _sutraName => widget.title;
@@ -84,6 +131,48 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
         _expanded.add(i);
       }
     });
+  }
+
+  /// 删除第 [index] 条「经文+感想」：二次确认后交由读经页落地（更新阅读页 + 云端）。
+  Future<void> _confirmDelete(int index) async {
+    if (!widget.canDelete || index >= _items.length) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除这段感想？', style: TextStyle(fontSize: 16)),
+        content: Text(
+          '删除后阅读页的这段感想也会一并移除',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF666666)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消', style: TextStyle(color: Color(0xFF666666))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('删除', style: TextStyle(color: _red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final callback = widget.onDeleteNote;
+    if (callback == null) return;
+    final para = _items[index].para;
+    var ok = false;
+    try {
+      ok = await callback(para);
+    } catch (_) {}
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _items.removeAt(index));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已删除'), duration: Duration(seconds: 1)),
+      );
+    }
   }
 
   /// 导出 PDF：经文与感想成组，每组先「经文」后「感想」，视觉上明显区分。
@@ -181,8 +270,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
   ///   §§TS§§ + base64((经文,感想) 成对数组 JSON)
   ///   <空行> 留言（可空）
   /// 展示时只显示第一条经文（色块），点击色块用完整数据打开感想页。
-  String _buildShareContent(
-      List<(String, String)> pairs, String message) {
+  String _buildShareContent(List<(String, String)> pairs, String message) {
     final first = pairs.isNotEmpty ? pairs.first.$1 : '';
     final meta = _encodePairs(pairs);
     final lines = <String>[
@@ -197,8 +285,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
   /// 把「经文,感想」成对数组编码为 base64 JSON。
   static String _encodePairs(List<(String, String)> pairs) {
     final arr = [
-      for (final (p, t) in pairs)
-        {'p': p, 't': t},
+      for (final (p, t) in pairs) {'p': p, 't': t},
     ];
     return base64Encode(utf8.encode(jsonEncode(arr)));
   }
@@ -227,7 +314,8 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
       builder: (ctx) {
         final ctrl = TextEditingController();
         return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
           child: SafeArea(
             child: StatefulBuilder(
               builder: (ctx, setSheet) {
@@ -324,8 +412,8 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已分享到菩提空间'),
-            duration: Duration(seconds: 2)),
+        const SnackBar(
+            content: Text('已分享到菩提空间'), duration: Duration(seconds: 2)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -429,219 +517,288 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
           ),
         ],
       ),
-      body: Stack(
+      body: Column(
         children: [
-          pairs.isEmpty
-              ? Center(
-                  child: Text(
-                    '还没有为《$_sutraName》添加感想\n点击每段右侧的「感想」按钮即可记录',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontSize: 14, height: 1.6, color: Colors.black38),
-                  ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                  itemCount: pairs.length,
-                  itemBuilder: (context, i) {
-                    final (p, note) = pairs[i];
-                    final long = p.length > _foldThreshold;
-                    final expanded = _expanded.contains(i);
-                    final isDark = AppPalette.instance.isPlain &&
-                        Theme.of(context).brightness == Brightness.dark;
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        color: _card,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // 经文（长文可折叠展开）
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.only(top: 2, right: 8),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: accent.withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: const Text(
-                                      '经文',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF5C4033),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Column(
+          if (widget.syncNotice != null && widget.syncNotice!.trim().isNotEmpty)
+            _SyncNoticeBar(text: widget.syncNotice!),
+          Expanded(
+            child: Stack(
+              children: [
+                pairs.isEmpty
+                    ? Center(
+                        child: Text(
+                          widget.emptyHint ??
+                              '还没有为《$_sutraName》添加感想\n点击每段右侧的「感想」按钮即可记录',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 14, height: 1.6, color: Colors.black38),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                        itemCount: pairs.length,
+                        itemBuilder: (context, i) {
+                          final (p, note) = pairs[i];
+                          final long = p.length > _foldThreshold;
+                          final expanded = _expanded.contains(i);
+                          final isDark = AppPalette.instance.isPlain &&
+                              Theme.of(context).brightness == Brightness.dark;
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            decoration: BoxDecoration(
+                              color: _card,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(14, 12, 12, 12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // 经文（长文可折叠展开）
+                                  Row(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        p,
-                                        maxLines: long && !expanded ? 3 : null,
-                                        overflow: long && !expanded
-                                            ? TextOverflow.ellipsis
-                                            : TextOverflow.visible,
-                                        style: TextStyle(
-                                          fontSize: 13.5,
-                                          height: 1.6,
-                                          color: isDark
-                                              ? Colors.white70
-                                              : _fg,
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                            top: 2, right: 8),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                accent.withValues(alpha: 0.12),
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                          ),
+                                          child: const Text(
+                                            '经文',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFF5C4033),
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                      // 展开/收起（左下方）
-                                      if (long)
-                                        GestureDetector(
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => _toggleExpand(i),
-                                          child: Padding(
-                                            padding: const EdgeInsets.only(
-                                                top: 2),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text(
-                                                  expanded ? '收起' : '展开',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: accent,
-                                                    fontWeight:
-                                                        FontWeight.w500,
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              p,
+                                              maxLines:
+                                                  long && !expanded ? 3 : null,
+                                              overflow: long && !expanded
+                                                  ? TextOverflow.ellipsis
+                                                  : TextOverflow.visible,
+                                              style: TextStyle(
+                                                fontSize: 13.5,
+                                                height: 1.6,
+                                                color: isDark
+                                                    ? Colors.white70
+                                                    : _fg,
+                                              ),
+                                            ),
+                                            // 展开/收起（左下方）
+                                            if (long)
+                                              GestureDetector(
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                onTap: () => _toggleExpand(i),
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 2),
+                                                  child: Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Text(
+                                                        expanded ? '收起' : '展开',
+                                                        style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: accent,
+                                                          fontWeight:
+                                                              FontWeight.w500,
+                                                        ),
+                                                      ),
+                                                      Icon(
+                                                        expanded
+                                                            ? Icons.expand_less
+                                                            : Icons.expand_more,
+                                                        size: 16,
+                                                        color: accent,
+                                                      ),
+                                                    ],
                                                   ),
                                                 ),
-                                                Icon(
-                                                  expanded
-                                                      ? Icons.expand_less
-                                                      : Icons.expand_more,
-                                                  size: 16,
-                                                  color: accent,
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      // AI译按钮：紧贴经文短文右下角，靠右对齐
-                                      Align(
-                                        alignment: Alignment.centerRight,
-                                        child: GestureDetector(
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => AiTranslatePage.open(
-                                            context,
-                                            paragraph: p,
-                                          ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.only(
-                                                top: 2),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Icon(Icons.auto_awesome,
-                                                    size: 13, color: accent),
-                                                const SizedBox(width: 3),
-                                                Text(
-                                                  'AI译',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: accent,
-                                                    fontWeight:
-                                                        FontWeight.w500,
+                                              ),
+                                            // AI译按钮：紧贴经文短文右下角，靠右对齐
+                                            Align(
+                                              alignment: Alignment.centerRight,
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  GestureDetector(
+                                                    behavior:
+                                                        HitTestBehavior.opaque,
+                                                    onTap: () =>
+                                                        AiTranslatePage.open(
+                                                      context,
+                                                      paragraph: p,
+                                                    ),
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              top: 2),
+                                                      child: Row(
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
+                                                        children: [
+                                                          Icon(
+                                                              Icons
+                                                                  .auto_awesome,
+                                                              size: 13,
+                                                              color: accent),
+                                                          const SizedBox(
+                                                              width: 3),
+                                                          Text(
+                                                            'AI译',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              color: accent,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
                                                   ),
-                                                ),
-                                              ],
+                                                  if (widget.canDelete) ...[
+                                                    const SizedBox(width: 16),
+                                                    // 删除（淡红，位于 AI译 之后）
+                                                    GestureDetector(
+                                                      behavior: HitTestBehavior
+                                                          .opaque,
+                                                      onTap: () =>
+                                                          _confirmDelete(i),
+                                                      child: Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(top: 2),
+                                                        child: Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            Icon(
+                                                                Icons
+                                                                    .delete_outline,
+                                                                size: 13,
+                                                                color: _red),
+                                                            const SizedBox(
+                                                                width: 3),
+                                                            Text(
+                                                              '删除',
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                color: _red,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w500,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
                                             ),
-                                          ),
+                                          ],
                                         ),
                                       ),
                                     ],
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(height: 8),
+                                  // 感想
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF3F0EA),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      note,
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        height: 1.6,
+                                        color: isDark
+                                            ? Colors.white
+                                            : const Color(0xFF3D5C3A),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 8),
-                            // 感想
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF3F0EA),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                note,
-                                style: TextStyle(
-                                  fontSize: 13.5,
-                                  height: 1.6,
-                                  color: isDark
-                                      ? Colors.white
-                                      : const Color(0xFF3D5C3A),
-                                ),
-                              ),
+                          );
+                        },
+                      ),
+                if (_showMenu)
+                  Positioned(
+                    top: 4,
+                    right: 16,
+                    child: Material(
+                      elevation: 6,
+                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 6),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildMenuTile(
+                              icon: _exporting
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.picture_as_pdf_outlined,
+                                      size: 18),
+                              label: '导出PDF',
+                              onTap: () {
+                                setState(() => _showMenu = false);
+                                _exportPdf();
+                              },
+                            ),
+                            _buildMenuTile(
+                              icon: const Icon(Icons.share_outlined, size: 18),
+                              label: '分享',
+                              onTap: () {
+                                setState(() => _showMenu = false);
+                                _share();
+                              },
                             ),
                           ],
                         ),
                       ),
-                    );
-                  },
-                ),
-          if (_showMenu)
-            Positioned(
-              top: 4,
-              right: 16,
-              child: Material(
-                elevation: 6,
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.white,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildMenuTile(
-                        icon: _exporting
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2),
-                              )
-                            : const Icon(Icons.picture_as_pdf_outlined,
-                                size: 18),
-                        label: '导出PDF',
-                        onTap: () {
-                          setState(() => _showMenu = false);
-                          _exportPdf();
-                        },
-                      ),
-                      _buildMenuTile(
-                        icon: const Icon(Icons.share_outlined, size: 18),
-                        label: '分享',
-                        onTap: () {
-                          setState(() => _showMenu = false);
-                          _share();
-                        },
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+              ],
             ),
+          ),
         ],
       ),
     );
@@ -665,6 +822,39 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
             Text(label, style: const TextStyle(color: _fg, fontSize: 14)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 实时同步失败提示条：数据仍展示分享时的内容，仅作提示。
+class _SyncNoticeBar extends StatelessWidget {
+  const _SyncNoticeBar({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 16, color: Color(0xFFB26A00)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                  fontSize: 12.5, height: 1.4, color: Color(0xFF8A5400)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -694,8 +884,8 @@ class _PdfViewerPageState extends State<_PdfViewerPage> {
 
   Future<void> _render() async {
     try {
-      await for (final page in Printing.raster(widget.bytes,
-          dpi: PdfPageFormat.inch * 2)) {
+      await for (final page
+          in Printing.raster(widget.bytes, dpi: PdfPageFormat.inch * 2)) {
         if (!mounted) return;
         setState(() {
           _pages.add(page);

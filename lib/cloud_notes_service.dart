@@ -202,8 +202,7 @@ class PopularSutraItem {
     this.filePath = '',
   });
 
-  factory PopularSutraItem.fromJson(Map<String, dynamic> e) =>
-      PopularSutraItem(
+  factory PopularSutraItem.fromJson(Map<String, dynamic> e) => PopularSutraItem(
         title: e['title']?.toString() ?? '',
         count: (e['count'] as num?)?.toInt() ?? 0,
         filePath: e['filePath']?.toString() ?? '',
@@ -393,7 +392,8 @@ class PlazaActivity {
 /// 消息中心：单条「收到的互动」（点赞/评论/回复评论/转发/收藏/关注/@提及）。
 class NotificationItem {
   final String id;
-  final String type; // like_me | reply | comment_reply | repost_me | favorite_me | follow_me | mention
+  final String
+      type; // like_me | reply | comment_reply | repost_me | favorite_me | follow_me | mention
   final String noteId;
   final String noteTitle;
   final String content;
@@ -741,8 +741,17 @@ class CloudNotesService {
 
   /// 读取某本经的全部段落笔记/完成态（跨设备云端同步）。
   /// 返回 [{index, note, underlines, done, updatedAt}]。
-  Future<List<Map<String, dynamic>>> getParagraphNotes(String sutraKey) async {
-    final res = await _call('getParagraphNotes', params: {'sutraKey': sutraKey});
+  /// [userId] 不为空时按该作者查询（用于菩提空间分享帖展示作者当前最新数据）；
+  /// 为空则取当前登录用户自己的数据。
+  Future<List<Map<String, dynamic>>> getParagraphNotes(
+    String sutraKey, {
+    String? userId,
+  }) async {
+    final params = {
+      'sutraKey': sutraKey,
+      if (userId != null && userId.isNotEmpty) 'userId': userId,
+    };
+    final res = await _call('getParagraphNotes', params: params);
     final items = res['items'];
     if (items is List) {
       return items.map((it) {
@@ -783,8 +792,12 @@ class CloudNotesService {
     final result = <Map<String, int>>[];
     for (final u in raw) {
       if (u is Map) {
-        final start = (u['start'] is int) ? u['start'] as int : int.tryParse('${u['start']}') ?? 0;
-        final end = (u['end'] is int) ? u['end'] as int : int.tryParse('${u['end']}') ?? 0;
+        final start = (u['start'] is int)
+            ? u['start'] as int
+            : int.tryParse('${u['start']}') ?? 0;
+        final end = (u['end'] is int)
+            ? u['end'] as int
+            : int.tryParse('${u['end']}') ?? 0;
         if (start >= 0 && end >= start) {
           result.add({'start': start, 'end': end});
         }
@@ -836,7 +849,8 @@ class CloudNotesService {
     required String sutraKey,
     required int index,
   }) async {
-    await _call('deleteParagraphNote', params: {'sutraKey': sutraKey, 'index': index});
+    await _call('deleteParagraphNote',
+        params: {'sutraKey': sutraKey, 'index': index});
   }
 
   Future<Map<String, dynamic>> _call(
@@ -847,7 +861,7 @@ class CloudNotesService {
     return _doCall(action, params: params, timeout: timeout);
   }
 
-    /// 写操作名单：已登录但 token 拿不到时，这些动作绝不能静默以匿名身份执行
+  /// 写操作名单：已登录但 token 拿不到时，这些动作绝不能静默以匿名身份执行
   /// （否则评论/回复/转发/关注会被写成共享 uid "anon"，@账号 全部丢失）。
   static bool _isWriteAction(String action) {
     const writes = <String>{
@@ -1165,10 +1179,11 @@ class CloudNotesService {
   Future<(List<HotDiscussionItem>, List<HotDiscussionItem>)>
       getHotDiscussions() async {
     final res = await _call('getHotDiscussions');
-    List<HotDiscussionItem> parse(String key) => (res[key] as List<dynamic>? ?? [])
-        .whereType<Map<String, dynamic>>()
-        .map(HotDiscussionItem.fromJson)
-        .toList();
+    List<HotDiscussionItem> parse(String key) =>
+        (res[key] as List<dynamic>? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .map(HotDiscussionItem.fromJson)
+            .toList();
     return (parse('topics'), parse('sutras'));
   }
 
@@ -1435,8 +1450,8 @@ class CloudNotesService {
     Duration? timeout,
   }) async {
     if (ids.isEmpty) return [];
-    final res = await _call('getUserProfiles',
-        params: {'ids': ids}, timeout: timeout);
+    final res =
+        await _call('getUserProfiles', params: {'ids': ids}, timeout: timeout);
     return (res['users'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
         .map(UserProfile.fromJson)
@@ -1549,8 +1564,8 @@ class CloudNotesService {
     if (!AuthService.instance.isLoggedIn) {
       throw const CloudApiException('请先登录');
     }
-    final res = await _call('toggleCommentLike',
-        params: {'commentId': commentId});
+    final res =
+        await _call('toggleCommentLike', params: {'commentId': commentId});
     final liked = res['liked'] == true;
     final count = (res['likeCount'] as num?)?.toInt() ?? 0;
     return (liked, count);
@@ -1641,7 +1656,8 @@ class CloudNotesService {
 
   /// 删除自己发表的经书讨论。
   Future<void> deleteSutraDiscussion(String discussionId) async {
-    await _call('deleteSutraDiscussion', params: {'discussionId': discussionId});
+    await _call('deleteSutraDiscussion',
+        params: {'discussionId': discussionId});
   }
 
   /// 删除评论（仅评论作者或笔记作者）。
@@ -1718,7 +1734,8 @@ class CloudNotesService {
             .map((e) => NotificationItem.fromJson(e as Map<String, dynamic>))
             .toList()
         : <NotificationItem>[];
-    debugPrint('[Notif] getNotifications page=$page rawKeys=${res.keys.toList()} count=${items.length} hasMore=${res['hasMore']}');
+    debugPrint(
+        '[Notif] getNotifications page=$page rawKeys=${res.keys.toList()} count=${items.length} hasMore=${res['hasMore']}');
     if (items.isEmpty) {
       debugPrint('[Notif] empty! total=${res['total']} ok=${res['ok']}');
     }
@@ -1742,7 +1759,8 @@ class CloudNotesService {
   }
 
   /// 标记通知已读：传 ids 标记指定通知；[all] 为 true 时全部标记已读。
-  Future<void> markNotificationsRead(List<String> ids, {bool all = false}) async {
+  Future<void> markNotificationsRead(List<String> ids,
+      {bool all = false}) async {
     if (!AuthService.instance.isLoggedIn) return;
     if (all) {
       await _call('markNotificationsRead', params: {'all': true});

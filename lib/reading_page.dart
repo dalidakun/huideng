@@ -1,8 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:path_provider/path_provider.dart';
@@ -29,10 +30,12 @@ import 'reading_note_edit_page.dart';
 import 'paragraph_thoughts_page.dart';
 import 'ai_translate_page.dart';
 import 'sutra_highlights_page.dart';
+import 'sutra_live_sync.dart' show LiveHighlightSegment;
 import 'cloud_notes_service.dart';
 import 'auth_service.dart';
 
 import 'app_palette.dart';
+
 class ReadingPage extends StatefulWidget {
   final String title;
   final String? filePath;
@@ -67,7 +70,6 @@ class _ReadingPageState extends State<ReadingPage>
   bool _showQuickPanel = false; // 点击正文中部弹出的 画线/感想/阅读设置 面板
   bool _selectionActiveAtDown = false; // 按下时正文是否有文字选中或长按浮层菜单打开
   Offset? _pointerDownPos;
-  DateTime? _pointerDownTime;
   bool _longPressActive = false;
   bool _menuOpenAtDown = false;
   bool _hasTextSelection = false;
@@ -80,10 +82,14 @@ class _ReadingPageState extends State<ReadingPage>
 
   // ── 读经段落笔记 / 完成态（云端同步） ─────────
   Map<int, String> _paraNotes = {}; // index -> 备注文本（空串表示无）
-  Map<int, List<Map<String, int>>> _paraUnderlines = {}; // index -> 该段已画线的文字区间 [{start,end}]
-  // 单击已画线文字时触发弹窗的手势识别器容器（随 build 重建）。
-  final List<TapGestureRecognizer> _underlineTapRecognizers = [];
-  Offset? _underlineTapPos;
+  Map<int, List<Map<String, int>>> _paraUnderlines =
+      {}; // index -> 该段已画线的文字区间 [{start,end}]
+  // 每个渲染簇（以首段下标为键）的 GlobalKey：单击画线段落时按几何命中判定
+  // 「是否点在画线文字上」，不依赖手势竞技场时序，行为恒定。
+  final Map<int, GlobalKey> _paraTapKeys = {};
+  // 画线/感想归集页是否正在打开（防止重复点击导致路由栈叠加）。
+  bool _openingHighlights = false;
+  bool _openingNotes = false;
   // 长按选中时的菜单是否已弹出（防止拖动句柄时重复插入 Overlay）。
   OverlayEntry? _selectionMenuEntry;
   // 所有仍处于显示中的浮层菜单条目（长按选中 + 单击画线），
@@ -184,12 +190,9 @@ class _ReadingPageState extends State<ReadingPage>
     _loadLayoutDoneState();
     _loadDisplayTitle();
     // 异步获取管理员身份：管理员在菜单显示「编辑经文」，普通用户显示「更新排版」。
-    CloudNotesService.instance
-        .isAdmin()
-        .then((v) {
+    CloudNotesService.instance.isAdmin().then((v) {
       if (mounted) setState(() => _isSutraAdmin = v);
-    })
-        .catchError((_) {});
+    }).catchError((_) {});
   }
 
   /// 把任意形式的经书路径规范化为打包资产路径（assets/sutras_ascii/...）：
@@ -219,13 +222,15 @@ class _ReadingPageState extends State<ReadingPage>
       await prefs.setStringList('recent_sutras', recent);
 
       final now = DateTime.now();
-      final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final today =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       final raw = prefs.getString('daily_sutra_history') ?? '{}';
       final Map<String, dynamic> history = jsonDecode(raw);
       final List<dynamic> dayList = (history[today] as List<dynamic>?) ?? [];
       dayList.removeWhere((e) => e['filePath'] == savePath);
       final progress = prefs.getDouble('progress_$savePath') ?? 0.0;
-      dayList.insert(0, {'title': widget.title, 'filePath': savePath, 'progress': progress});
+      dayList.insert(0,
+          {'title': widget.title, 'filePath': savePath, 'progress': progress});
       history[today] = dayList;
       await prefs.setString('daily_sutra_history', jsonEncode(history));
     });
@@ -309,10 +314,7 @@ class _ReadingPageState extends State<ReadingPage>
     _pageController?.dispose();
     _searchController.dispose();
     _noteInputController.dispose();
-    for (final r in _underlineTapRecognizers) {
-      r.dispose();
-    }
-    _underlineTapRecognizers.clear();
+    _paraTapKeys.clear();
     _clearSelectionMenu();
     _selectionTextState = null;
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
@@ -329,7 +331,8 @@ class _ReadingPageState extends State<ReadingPage>
     if (maxScroll <= 0) {
       if (_restoreAttempts < 20) {
         _restoreAttempts++;
-        WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _scheduleRestoreScroll());
       }
       return;
     }
@@ -347,7 +350,9 @@ class _ReadingPageState extends State<ReadingPage>
       _scrollController.jumpTo(target);
       // Sync displayed progress to real position.
       setState(() {
-        _scrollProgress = maxScroll <= 0 ? 0.0 : (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
+        _scrollProgress = maxScroll <= 0
+            ? 0.0
+            : (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
       });
     }
   }
@@ -374,8 +379,10 @@ class _ReadingPageState extends State<ReadingPage>
       // 兼容历史数据里存成 int 的取值（如 fontSize），统一转 double。
       _fontSize = (prefs.get('fontSize') as num?)?.toDouble() ?? 16.0;
       _isDarkMode = prefs.getBool('isDarkMode') ?? false;
-      _lineHeight = (prefs.get('reader_line_height') as num?)?.toDouble() ?? 1.8;
-      _pageMode = prefs.getInt('reader_page_mode') ?? ReaderPreferences.pageModeScroll;
+      _lineHeight =
+          (prefs.get('reader_line_height') as num?)?.toDouble() ?? 1.8;
+      _pageMode =
+          prefs.getInt('reader_page_mode') ?? ReaderPreferences.pageModeScroll;
       _bgColorIndex = prefs.getInt('reader_bg_color') ?? 0;
     });
     // 同步全局夜间模式信号，消息中心等页面跟随切换浅色/深色配色。
@@ -423,7 +430,8 @@ class _ReadingPageState extends State<ReadingPage>
               _paragraphs = _parseParagraphs(content);
               _isLoadingContent = false;
             });
-            WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _scheduleRestoreScroll());
           }
           return;
         } catch (_) {
@@ -456,7 +464,8 @@ class _ReadingPageState extends State<ReadingPage>
               _paragraphs = _parseParagraphs(content);
               _isLoadingContent = false;
             });
-            WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _scheduleRestoreScroll());
           }
           return;
         } catch (_) {
@@ -464,19 +473,24 @@ class _ReadingPageState extends State<ReadingPage>
         }
       }
 
-      // 3. 再回退到打包资源
+      // 3. 再回退到打包资源。管理员「编辑经文」版放在 assets/sutras_edited/
+      // （与原始版 assets/sutras_ascii/ 同结构）。两者都打进安装包时优先显示
+      // 编辑版：重装/首次安装默认即最新排版，与云端发布一致，管理员账号也
+      // 无需再另走「更新排版」；编辑版未打包时回退原始版。
       if (filePath.startsWith('assets/')) {
+        String content;
         try {
-          String content = await rootBundle.loadString(filePath);
-          if (mounted) {
-            setState(() {
-              _content = content;
-              _paragraphs = _parseParagraphs(content);
-              _isLoadingContent = false;
-            });
-            WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
-          }
+          content = await _loadPackagedContent(filePath);
         } catch (e) {
+          // 打包与本地均无正文（经文正文本就不打安装包，按需下载）：
+          // 自动拉取管理员「编辑经文」发布的编辑版展示；云端无编辑版时
+          // download 会自动回退原始版。这样重装/首次安装默认即编辑排版，
+          // 管理员与普通用户都无需再逐部经书手动「更新排版」。
+          final id = SutraDownloader.extractId(widget.title, filePath);
+          if (id != null && id.isNotEmpty) {
+            final ok = await _autoFetchEditedContent(id);
+            if (ok || !mounted) return;
+          }
           if (mounted) {
             setState(() {
               _content = '该经文正文尚未下载，请点击上方"下载"按钮获取后再阅读。';
@@ -485,6 +499,16 @@ class _ReadingPageState extends State<ReadingPage>
               _needsDownload = true;
             });
           }
+          return;
+        }
+        if (mounted) {
+          setState(() {
+            _content = content;
+            _paragraphs = _parseParagraphs(content);
+            _isLoadingContent = false;
+          });
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _scheduleRestoreScroll());
         }
       } else {
         try {
@@ -497,7 +521,8 @@ class _ReadingPageState extends State<ReadingPage>
                 _paragraphs = _parseParagraphs(content);
                 _isLoadingContent = false;
               });
-              WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+              WidgetsBinding.instance
+                  .addPostFrameCallback((_) => _scheduleRestoreScroll());
             }
           } else if (mounted) {
             setState(() {
@@ -525,6 +550,43 @@ class _ReadingPageState extends State<ReadingPage>
           _isLoadingContent = false;
         });
       }
+    }
+  }
+
+  /// 打包资源正文：优先读管理员「编辑经文」版（assets/sutras_edited/…），
+  /// 与原始版 assets/sutras_ascii/… 同结构；编辑版在包中不存在或读取失败时
+  /// 回退到原始版。这样重装/首次安装默认展示最新排版，无需逐部经书手动拉取。
+  Future<String> _loadPackagedContent(String assetPath) async {
+    if (assetPath.startsWith('assets/sutras_ascii/')) {
+      final rel = assetPath.substring('assets/sutras_ascii/'.length);
+      final edited = 'assets/sutras_edited/$rel';
+      try {
+        return await rootBundle.loadString(edited);
+      } catch (_) {
+        // 编辑版未打包进此安装包，回退原始版。
+      }
+    }
+    return rootBundle.loadString(assetPath);
+  }
+
+  /// 本地/打包都没有正文时，自动下载管理员「编辑经文」发布的版本来展示。
+  /// 成功则 setState 加载并返回 true；失败返回 false（由调用方显示下载提示）。
+  Future<bool> _autoFetchEditedContent(String id) async {
+    try {
+      final file = await SutraDownloader.download(id, preferEdited: true);
+      final content = await file.readAsString();
+      if (!mounted) return false;
+      setState(() {
+        _content = content;
+        _paragraphs = _parseParagraphs(content);
+        _isLoadingContent = false;
+        _needsDownload = false;
+      });
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _scheduleRestoreScroll());
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -603,12 +665,14 @@ class _ReadingPageState extends State<ReadingPage>
     if (_paraNotesLoading) return;
     setState(() => _paraNotesLoading = true);
     try {
-      final items = await CloudNotesService.instance.getParagraphNotes(_sutraKey);
+      final items =
+          await CloudNotesService.instance.getParagraphNotes(_sutraKey);
       if (!mounted) return;
       setState(() {
         _paraNotes = {
           for (final it in items)
-            if (it['index'] is int) it['index'] as int: (it['note'] ?? '').toString(),
+            if (it['index'] is int)
+              it['index'] as int: (it['note'] ?? '').toString(),
         };
         // 画线：仅当云端明确返回 underlines 字段时才覆盖本地，避免旧后端/未部署
         // 返回空字段时把刚画好的线冲掉。合并时以各段现有本地值为基础。
@@ -628,7 +692,8 @@ class _ReadingPageState extends State<ReadingPage>
                         : int.tryParse('${u['end']}') ?? 0,
                   })
               .where((u) =>
-                  (u['start'] ?? 0) >= 0 && (u['end'] ?? 0) >= (u['start'] ?? 0))
+                  (u['start'] ?? 0) >= 0 &&
+                  (u['end'] ?? 0) >= (u['start'] ?? 0))
               .toList();
           if (raw.isEmpty) {
             merged.remove(idx);
@@ -662,7 +727,9 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 保存某段备注文本到云端并更新本地状态。
   Future<void> _saveParagraphNote(int index, String note,
-      {bool shared = false, String cloudId = '', List<Map<String, int>>? underlines}) async {
+      {bool shared = false,
+      String cloudId = '',
+      List<Map<String, int>>? underlines}) async {
     if (index < 0 || index >= _paragraphs.length) return;
     // 段落笔记存云端、按用户隔离：未登录直接提示，避免白白弹错误窗。
     if (!AuthService.instance.isLoggedIn) {
@@ -761,7 +828,8 @@ class _ReadingPageState extends State<ReadingPage>
 
   Future<void> _downloadContent() async {
     if (_isDownloading) return;
-    final id = SutraDownloader.extractId(widget.title, _resolvedFilePath ?? widget.filePath);
+    final id = SutraDownloader.extractId(
+        widget.title, _resolvedFilePath ?? widget.filePath);
     if (id == null) return;
     // 本地已有完整文件时直接重新加载内容，不重新下载。
     // 防止上游误判 _needsDownload=true（如路径恢复竞态）导致已下载经文被重下。
@@ -893,7 +961,8 @@ class _ReadingPageState extends State<ReadingPage>
     if (trimmed.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('没有可导出的内容'), duration: Duration(seconds: 2)),
+          const SnackBar(
+              content: Text('没有可导出的内容'), duration: Duration(seconds: 2)),
         );
       }
       return;
@@ -919,7 +988,9 @@ class _ReadingPageState extends State<ReadingPage>
       if (savedPath != null && savedPath.isNotEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已保存：$savedPath'), duration: const Duration(seconds: 3)),
+            SnackBar(
+                content: Text('已保存：$savedPath'),
+                duration: const Duration(seconds: 3)),
           );
         }
         return;
@@ -936,13 +1007,17 @@ class _ReadingPageState extends State<ReadingPage>
         type: FileType.custom,
         allowedExtensions: const ['txt'],
       );
-      if (savePath != null && savePath.isNotEmpty && !savePath.startsWith('content:')) {
+      if (savePath != null &&
+          savePath.isNotEmpty &&
+          !savePath.startsWith('content:')) {
         final file = File(savePath);
         await file.parent.create(recursive: true);
         await file.writeAsBytes(bytes, flush: true);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已保存：$savePath'), duration: const Duration(seconds: 3)),
+            SnackBar(
+                content: Text('已保存：$savePath'),
+                duration: const Duration(seconds: 3)),
           );
         }
         return;
@@ -958,13 +1033,16 @@ class _ReadingPageState extends State<ReadingPage>
       await file.writeAsBytes(bytes, flush: true);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已保存到应用目录：${file.path}'), duration: const Duration(seconds: 4)),
+          SnackBar(
+              content: Text('已保存到应用目录：${file.path}'),
+              duration: const Duration(seconds: 4)),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('保存失败：$e'), duration: const Duration(seconds: 4)),
+          SnackBar(
+              content: Text('保存失败：$e'), duration: const Duration(seconds: 4)),
         );
       }
     }
@@ -979,11 +1057,8 @@ class _ReadingPageState extends State<ReadingPage>
 
   @override
   Widget build(BuildContext context) {
-    // 每帧重建前释放上一帧的画线点击识别器，避免其指向旧的 TextSpan。
-    for (final r in _underlineTapRecognizers) {
-      r.dispose();
-    }
-    _underlineTapRecognizers.clear();
+    // 单击画线改为在正文 Listener 上按几何命中判定（见 _resolveUnderlineHit），
+    // 不再依赖 TextSpan 识别器，无需在这里维护识别器生命周期。
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -996,239 +1071,261 @@ class _ReadingPageState extends State<ReadingPage>
         }
       },
       child: Scaffold(
-            backgroundColor: Color(ReaderPreferences.bgColors[_bgColorIndex]),
-            appBar: AppBar(
-              backgroundColor: ReaderPreferences.appBarColor(_bgColorIndex),
-              elevation: 0,
-              leadingWidth: 48,
-              titleSpacing: 0,
-              iconTheme: IconThemeData(color: _isDarkBg ? Colors.white.withOpacity(0.7) : const Color(0xFF212121)),
-              title: GestureDetector(
-                onTap: () {
-                  final now = DateTime.now();
-                  final last = _lastTitleTap;
-                  _lastTitleTap = now;
-                  if (last != null &&
-                      now.difference(last) < const Duration(milliseconds: 350)) {
-                    _scrollToStart();
-                  }
-                },
-                onLongPress: () {
-                  Clipboard.setData(ClipboardData(text: _titleShown));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('已复制到剪贴板'),
-                      duration: Duration(seconds: 1),
+        backgroundColor: Color(ReaderPreferences.bgColors[_bgColorIndex]),
+        appBar: AppBar(
+          backgroundColor: ReaderPreferences.appBarColor(_bgColorIndex),
+          elevation: 0,
+          leadingWidth: 48,
+          titleSpacing: 0,
+          iconTheme: IconThemeData(
+              color: _isDarkBg
+                  ? Colors.white.withOpacity(0.7)
+                  : const Color(0xFF212121)),
+          title: GestureDetector(
+            onTap: () {
+              final now = DateTime.now();
+              final last = _lastTitleTap;
+              _lastTitleTap = now;
+              if (last != null &&
+                  now.difference(last) < const Duration(milliseconds: 350)) {
+                _scrollToStart();
+              }
+            },
+            onLongPress: () {
+              Clipboard.setData(ClipboardData(text: _titleShown));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('已复制到剪贴板'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+            },
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    _titleShown,
+                    style: TextStyle(
+                      color: _isDarkMode
+                          ? Colors.white.withOpacity(0.7)
+                          : const Color(0xFF212121),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
                     ),
-                  );
-                },
-                child: Row(
-                  children: [
-                    Flexible(
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (_isSutraAdmin && _isLayoutDone)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: _isDarkBg
+                            ? const Color(0x33FFD54F)
+                            : const Color(0x1A43A047),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: _isDarkBg
+                              ? const Color(0x66FFD54F)
+                              : const Color(0x6643A047),
+                          width: 0.5,
+                        ),
+                      ),
                       child: Text(
-                        _titleShown,
+                        '已完成排版',
                         style: TextStyle(
-                          color: _isDarkMode ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (_isSutraAdmin && _isLayoutDone)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: _isDarkBg
-                                ? const Color(0x33FFD54F)
-                                : const Color(0x1A43A047),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: _isDarkBg
-                                  ? const Color(0x66FFD54F)
-                                  : const Color(0x6643A047),
-                              width: 0.5,
-                            ),
-                          ),
-                          child: Text(
-                            '已完成排版',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: _isDarkBg
-                                  ? const Color(0xFFFFD54F)
-                                  : const Color(0xFF43A047),
-                            ),
-                          ),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                          color: _isDarkBg
+                              ? const Color(0xFFFFD54F)
+                              : const Color(0xFF43A047),
                         ),
                       ),
-                  ],
-                ),
-              ),
-              actions: [
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: IconButton(
-                    icon: const Icon(Icons.search, size: 18),
-                    onPressed: _toggleSearch,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    splashRadius: 16,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: SizedBox(
-                    width: 32,
-                    height: 32,
-                    child: IconButton(
-                      icon: const Icon(Icons.more_horiz, size: 20),
-                      onPressed: _toggleMoreMenu,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      splashRadius: 16,
                     ),
                   ),
-                ),
               ],
             ),
-            body: SafeArea(
-              child: Listener(
-                onPointerDown: (event) {
-                  if (_showMoreMenu && !_isPointerInsideMenu(event.position)) {
-                    // 标记这次点击是用来收起菜单的，内容区收到抬起后不弹面板。
-                    _menuOpenAtDown = true;
-                    setState(() {
-                      _showMoreMenu = false;
-                    });
-                  }
-                },
-                child: Stack(
-                children: [
-                  Column(
-                    children: [
-                      if (_showSearchBar)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          color: Colors.transparent,
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _searchController,
-                                  decoration: InputDecoration(
-                                    hintText: '搜索内容',
-                                    hintStyle: const TextStyle(
-                                      color: Color(0xFF999999),
-                                      fontSize: 14,
-                                    ),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: _isDarkBg
-                                          ? BorderSide.none
-                                          : const BorderSide(color: Color(0xFFD9D9D9), width: 1),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                    isDense: true,
-                                  ),
-                                  style: const TextStyle(
-                                    color: Color(0xFF212121),
+          ),
+          actions: [
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: IconButton(
+                icon: const Icon(Icons.search, size: 18),
+                onPressed: _toggleSearch,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                splashRadius: 16,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: IconButton(
+                  icon: const Icon(Icons.more_horiz, size: 20),
+                  onPressed: _toggleMoreMenu,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  splashRadius: 16,
+                ),
+              ),
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: Listener(
+            onPointerDown: (event) {
+              if (_showMoreMenu && !_isPointerInsideMenu(event.position)) {
+                // 标记这次点击是用来收起菜单的，内容区收到抬起后不弹面板。
+                _menuOpenAtDown = true;
+                setState(() {
+                  _showMoreMenu = false;
+                });
+              }
+            },
+            child: Stack(
+              children: [
+                Column(
+                  children: [
+                    if (_showSearchBar)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        color: Colors.transparent,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _searchController,
+                                decoration: InputDecoration(
+                                  hintText: '搜索内容',
+                                  hintStyle: const TextStyle(
+                                    color: Color(0xFF999999),
                                     fontSize: 14,
                                   ),
-                                  onChanged: _performSearch,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: _isDarkBg
+                                        ? BorderSide.none
+                                        : const BorderSide(
+                                            color: Color(0xFFD9D9D9), width: 1),
+                                  ),
+                                  filled: true,
+                                  fillColor: Colors.white,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  isDense: true,
                                 ),
+                                style: const TextStyle(
+                                  color: Color(0xFF212121),
+                                  fontSize: 14,
+                                ),
+                                onChanged: _performSearch,
                               ),
-                              if (_searchMatches.isNotEmpty)
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                                      child: Text(
-                                        '${_currentMatchIndex + 1}/${_searchMatches.length}',
-                                        style: TextStyle(
-                          color: _isDarkBg ? Colors.white.withOpacity(0.7) : const Color(0xFF212121),
-                                          fontSize: 14,
-                                        ),
+                            ),
+                            if (_searchMatches.isNotEmpty)
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12),
+                                    child: Text(
+                                      '${_currentMatchIndex + 1}/${_searchMatches.length}',
+                                      style: TextStyle(
+                                        color: _isDarkBg
+                                            ? Colors.white.withOpacity(0.7)
+                                            : const Color(0xFF212121),
+                                        fontSize: 14,
                                       ),
                                     ),
-                                    IconButton(
-                                      icon: const Icon(Icons.keyboard_arrow_up, size: 20),
-                                      onPressed: _goToPreviousMatch,
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.keyboard_arrow_down, size: 20),
-                                      onPressed: _goToNextMatch,
-                                    ),
-                                  ],
-                                ),
-                            ],
-                          ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.keyboard_arrow_up,
+                                        size: 20),
+                                    onPressed: _goToPreviousMatch,
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.keyboard_arrow_down,
+                                        size: 20),
+                                    onPressed: _goToNextMatch,
+                                  ),
+                                ],
+                              ),
+                          ],
                         ),
-                      _buildDownloadBanner(),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Listener(
-                            onPointerDown: (event) {
-                              // 注意：此处绝不重置 _actionRowTapped ——
-                              // 指针事件按「从内到外」派发，操作栏的内层 Listener
-                              // 先把标记置 true，若这里再清掉，onPointerUp 就拦不住了。
-                              _pointerDownPos = event.position;
-                              _pointerDownTime = DateTime.now();
-                              _longPressActive = false;
-                              // 记录按下时文字是否已选中 / 长按浮层是否已打开：
-                              // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
-                              _selectionActiveAtDown =
-                                  _selectionMenuEntry != null || _hasTextSelection;
-                              // 300ms 后若手指仍未抬起，视为长按（文字选择）。
-                              Future.delayed(const Duration(milliseconds: 300), () {
-                                if (_pointerDownPos != null && mounted) {
-                                  _longPressActive = true;
-                                }
-                              });
-                            },
-                            // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
-                            onPointerCancel: (_) {
+                      ),
+                    _buildDownloadBanner(),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Listener(
+                          onPointerDown: (event) {
+                            // 注意：此处绝不重置 _actionRowTapped ——
+                            // 指针事件按「从内到外」派发，操作栏的内层 Listener
+                            // 先把标记置 true，若这里再清掉，onPointerUp 就拦不住了。
+                            _pointerDownPos = event.position;
+                            _longPressActive = false;
+                            // 记录按下时文字是否已选中 / 长按浮层是否已打开：
+                            // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
+                            // 擦除等浮层菜单只进 _activeMenuEntries（不设 _selectionMenuEntry），
+                            // 因此用 _activeMenuEntries 一并覆盖：首点只关菜单，二次点击才弹面板。
+                            _selectionActiveAtDown =
+                                _selectionMenuEntry != null ||
+                                    _activeMenuEntries.isNotEmpty ||
+                                    _hasTextSelection;
+                            // 300ms 后若手指仍未抬起，视为长按（文字选择）。
+                            Future.delayed(const Duration(milliseconds: 300),
+                                () {
+                              if (_pointerDownPos != null && mounted) {
+                                _longPressActive = true;
+                              }
+                            });
+                          },
+                          // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
+                          onPointerCancel: (_) {
+                            _actionRowTapped = false;
+                          },
+                          onPointerUp: (event) {
+                            // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
+                            if (_actionRowTapped) {
                               _actionRowTapped = false;
-                            },
-                            onPointerUp: (event) {
-                              // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
-                              if (_actionRowTapped) {
-                                _actionRowTapped = false;
-                                // 同步清理按下状态，避免残留影响 300ms 长按计时器。
-                                _pointerDownPos = null;
-                                _pointerDownTime = null;
-                                _longPressActive = false;
-                                _selectionActiveAtDown = false;
-                                return;
-                              }
-                              // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
-                              final menuOpenAtDown = _menuOpenAtDown;
-                              _menuOpenAtDown = false;
-                              final downPos = _pointerDownPos;
+                              // 同步清理按下状态，避免残留影响 300ms 长按计时器。
                               _pointerDownPos = null;
-                              _pointerDownTime = null;
-                              // 长按或滑动均不触发面板。
-                              if (_longPressActive) {
-                                _longPressActive = false;
-                                _selectionActiveAtDown = false;
-                                return;
-                              }
-                              if (downPos != null &&
-                                  (event.position - downPos).distance > 10) return;
-                              // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
-                              if (menuOpenAtDown) return;
-                              // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
-                              // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
-                              if (_selectionActiveAtDown || _hasTextSelection) {
-                                _selectionActiveAtDown = false;
-                                return;
-                              }
+                              _longPressActive = false;
+                              _selectionActiveAtDown = false;
+                              return;
+                            }
+                            // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
+                            final menuOpenAtDown = _menuOpenAtDown;
+                            _menuOpenAtDown = false;
+                            final downPos = _pointerDownPos;
+                            _pointerDownPos = null;
+                            // 长按或滑动均不触发面板。
+                            if (_longPressActive) {
+                              _longPressActive = false;
+                              _selectionActiveAtDown = false;
+                              return;
+                            }
+                            if (downPos != null &&
+                                (event.position - downPos).distance > 10)
+                              return;
+                            // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
+                            if (menuOpenAtDown) return;
+                            // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
+                            // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
+                            if (_selectionActiveAtDown || _hasTextSelection) {
+                              _selectionActiveAtDown = false;
+                              return;
+                            }
+                            // 延迟到事件分发结束后再决定面板：单击画线的判定完全按
+                            // 几何命中（_resolveUnderlineHit），不依赖手势竞技场时序，
+                            // 避免「有时弹擦除卡片、有时弹底部面板」的时好时坏。
+                            Timer.run(() {
+                              if (!mounted) return;
                               setState(() {
                                 if (_showMoreMenu) {
                                   _showMoreMenu = false;
@@ -1241,90 +1338,111 @@ class _ReadingPageState extends State<ReadingPage>
                                   _currentMatchIndex = 0;
                                 }
                               });
-                              // 干净单击正文中部：弹出 画线/感想/阅读设置 底部面板。
+                              // 点击画线段落：按几何命中决定行为。
+                              //  - 命中画线文字 → 只弹「擦除」小菜单，不弹底部面板；
+                              //  - 命中带画线的段落（但不在画线文字上）→ 不弹任何面板；
+                              //  - 纯正文段落 → 弹底部 画线/感想/阅读设置 面板。
+                              final hit = _resolveUnderlineHit(event.position);
+                              if (hit != null) {
+                                if (hit.start >= 0) {
+                                  _showUnderlineMenu(
+                                      hit.para, hit.start, hit.end,
+                                      event.position);
+                                }
+                                return;
+                              }
                               _openQuickPanel();
+                            });
+                          },
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              if (_isLoadingContent) {
+                                return const Center(
+                                    child: CircularProgressIndicator());
+                              }
+                              if (_pageMode == ReaderPreferences.pageModeFlip &&
+                                  _searchController.text.isEmpty) {
+                                final pages = _getFlipPages(
+                                    constraints.maxWidth,
+                                    constraints.maxHeight);
+                                return PageView.builder(
+                                  controller: _pageController,
+                                  itemCount: pages.length,
+                                  onPageChanged: _onFlipPageChanged,
+                                  itemBuilder: (context, index) =>
+                                      _buildFlipPage(pages[index], index),
+                                );
+                              }
+                              return SingleChildScrollView(
+                                controller: _scrollController,
+                                child: _searchController.text.isEmpty
+                                    ? Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          for (final group
+                                              in _allClusterGroups())
+                                            _buildClusterParagraph(group,
+                                                showUnaligned: true),
+                                        ],
+                                      )
+                                    : Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          for (final group
+                                              in _allClusterGroups())
+                                            _buildClusterParagraph(group,
+                                                showUnaligned: false),
+                                        ],
+                                      ),
+                              );
                             },
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                if (_isLoadingContent) {
-                                  return const Center(child: CircularProgressIndicator());
-                                }
-                                if (_pageMode == ReaderPreferences.pageModeFlip &&
-                                    _searchController.text.isEmpty) {
-                                  final pages = _getFlipPages(
-                                      constraints.maxWidth, constraints.maxHeight);
-                                  return PageView.builder(
-                                    controller: _pageController,
-                                    itemCount: pages.length,
-                                    onPageChanged: _onFlipPageChanged,
-                                    itemBuilder: (context, index) =>
-                                        _buildFlipPage(pages[index], index),
-                                  );
-                                }
-                                return SingleChildScrollView(
-                                  controller: _scrollController,
-                                  child: _searchController.text.isEmpty
-                                      ? Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                           children: [
-                                             for (final group in _allClusterGroups())
-                                               _buildClusterParagraph(group, showUnaligned: true),
-                                           ],
-                                        )
-                                      : Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                           children: [
-                                             for (final group in _allClusterGroups())
-                                               _buildClusterParagraph(group, showUnaligned: false),
-                                           ],
-                                        ),
-                               );
-                             },
-                           ),
-                         ),
-                       ),
-                     ),
-                     Padding(
-                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                       child: Row(
-                         children: [
-                           Expanded(
-                             child: ClipRRect(
-                               borderRadius: BorderRadius.circular(
-                                   AppPalette.instance.isPlain && !_isDarkBg ? 2 : 3),
-                               child: LinearProgressIndicator(
-                                  value: _scrollProgress,
-                                  minHeight: 5,
-                                  backgroundColor: _isDarkBg
-                                      ? Colors.white.withOpacity(0.15)
-                                      : AppPalette.instance.isPlain
-                                          ? AppPalette.p.border
-                                          : const Color(0xFFE8D9C4),
-                                  valueColor:
-                                      AlwaysStoppedAnimation<Color>(!_isDarkBg &&
-                                              AppPalette.instance.isPlain
-                                          ? const Color(0xFF4A4A4A)
-                                          : AppPalette.p.accent),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${(_scrollProgress * 100).toStringAsFixed(1)}%',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: _isDarkBg
-                                    ? Colors.white.withOpacity(0.7)
-                                    : AppPalette.p.textSec,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                       ),
-                    ],
-                  ),
-
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(
+                                  AppPalette.instance.isPlain && !_isDarkBg
+                                      ? 2
+                                      : 3),
+                              child: LinearProgressIndicator(
+                                value: _scrollProgress,
+                                minHeight: 5,
+                                backgroundColor: _isDarkBg
+                                    ? Colors.white.withOpacity(0.15)
+                                    : AppPalette.instance.isPlain
+                                        ? AppPalette.p.border
+                                        : const Color(0xFFE8D9C4),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    !_isDarkBg && AppPalette.instance.isPlain
+                                        ? const Color(0xFF4A4A4A)
+                                        : AppPalette.p.accent),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${(_scrollProgress * 100).toStringAsFixed(1)}%',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _isDarkBg
+                                  ? Colors.white.withOpacity(0.7)
+                                  : AppPalette.p.textSec,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
                 if (_showMoreMenu)
                   Positioned(
                     top: 4,
@@ -1335,7 +1453,8 @@ class _ReadingPageState extends State<ReadingPage>
                       borderRadius: BorderRadius.circular(12),
                       color: _isDarkBg ? const Color(0xFF2c2c2c) : Colors.white,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 6),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1346,7 +1465,9 @@ class _ReadingPageState extends State<ReadingPage>
                                       size: 18, color: Color(0xFFE53935))
                                   : const Icon(Icons.sync, size: 18),
                               label: _isSutraAdmin ? '编辑经文' : '更新排版',
-                              onTap: _isSutraAdmin ? _openEditor : _checkSutraUpdate,
+                              onTap: _isSutraAdmin
+                                  ? _openEditor
+                                  : _checkSutraUpdate,
                             ),
                             if (_isSutraAdmin)
                               _buildMoreMenuItem(
@@ -1416,7 +1537,8 @@ class _ReadingPageState extends State<ReadingPage>
                       onTap: _openAssistant,
                       child: const Text(
                         'AI',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ),
@@ -1444,42 +1566,42 @@ class _ReadingPageState extends State<ReadingPage>
                       ),
                     ),
                   ),
-                 ),
-                  if (_showStylePanel) ...[
-                    // 阅读设置面板打开时，点阅读区任意位置收起。
-                    Positioned.fill(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTap: () => setState(() => _showStylePanel = false),
-                      ),
+                ),
+                if (_showStylePanel) ...[
+                  // 阅读设置面板打开时，点阅读区任意位置收起。
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => setState(() => _showStylePanel = false),
                     ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: _buildReadingSettingsPanel(),
-                    ),
-                  ],
-                  if (_showQuickPanel) ...[
-                    // 速览面板打开时，点面板外任意位置收起。
-                    // opaque：吞掉点击，避免下层正文的单击处理再弹面板。
-                    Positioned.fill(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => setState(() => _showQuickPanel = false),
-                      ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: _buildQuickPanel(),
-                    ),
-                  ],
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: _buildReadingSettingsPanel(),
+                  ),
                 ],
-              ),
+                if (_showQuickPanel) ...[
+                  // 速览面板打开时，点面板外任意位置收起。
+                  // opaque：吞掉点击，避免下层正文的单击处理再弹面板。
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => setState(() => _showQuickPanel = false),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: _buildQuickPanel(),
+                  ),
+                ],
+              ],
             ),
           ),
+        ),
       ),
     );
   }
@@ -1728,13 +1850,17 @@ class _ReadingPageState extends State<ReadingPage>
           continue; // 完全越界，放弃该段（数据极少见）
         }
       }
-      if (_paraNotes.containsKey(oldIdx)) migratedNotes[newIdx] = _paraNotes[oldIdx]!;
+      if (_paraNotes.containsKey(oldIdx))
+        migratedNotes[newIdx] = _paraNotes[oldIdx]!;
       if (_paraUnderlines.containsKey(oldIdx)) {
         migratedUnderlines[newIdx] = _paraUnderlines[oldIdx]!;
       }
-      if (_paraDone.containsKey(oldIdx)) migratedDone[newIdx] = _paraDone[oldIdx]!;
-      if (_paraShared.containsKey(oldIdx)) migratedShared[newIdx] = _paraShared[oldIdx]!;
-      if (_paraCloudIds.containsKey(oldIdx)) migratedCloudIds[newIdx] = _paraCloudIds[oldIdx]!;
+      if (_paraDone.containsKey(oldIdx))
+        migratedDone[newIdx] = _paraDone[oldIdx]!;
+      if (_paraShared.containsKey(oldIdx))
+        migratedShared[newIdx] = _paraShared[oldIdx]!;
+      if (_paraCloudIds.containsKey(oldIdx))
+        migratedCloudIds[newIdx] = _paraCloudIds[oldIdx]!;
     }
 
     setState(() {
@@ -1747,14 +1873,21 @@ class _ReadingPageState extends State<ReadingPage>
     });
 
     // 写回云端：删除旧 index 记录，用新 index 重写，保证跨设备一致。
-    await _writeBackAlignedParagraphNotes(migratedNotes, migratedUnderlines,
-        migratedDone, migratedShared, migratedCloudIds, affectedOld, unmigratedOld);
+    await _writeBackAlignedParagraphNotes(
+        migratedNotes,
+        migratedUnderlines,
+        migratedDone,
+        migratedShared,
+        migratedCloudIds,
+        affectedOld,
+        unmigratedOld);
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('已更新到最新排版')),
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleRestoreScroll());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _scheduleRestoreScroll());
   }
 
   /// 更新排版后把对齐结果写回云端（删除旧 index、写入新 index）。
@@ -1815,6 +1948,7 @@ class _ReadingPageState extends State<ReadingPage>
       });
     }
   }
+
   /// 标记 / 取消稍后阅读当前经书。
   Future<void> _toggleReadLater() async {
     final nowRL = await SutraReadLater.toggle(
@@ -1887,8 +2021,7 @@ class _ReadingPageState extends State<ReadingPage>
     final newRead = !wasRead;
     if (idx >= 0) {
       list[idx]['isRead'] = newRead;
-      list[idx]['readTime'] =
-          newRead ? DateTime.now().toIso8601String() : null;
+      list[idx]['readTime'] = newRead ? DateTime.now().toIso8601String() : null;
     } else {
       list.add({
         'title': title,
@@ -1977,11 +2110,13 @@ class _ReadingPageState extends State<ReadingPage>
   /// `_tightParagraphs.contains(j)` 表示段落 j 与 j+1 之间无间隔；
   /// 以 [index] 为中心向两侧扩张到整段紧密连段的两端。
   List<int> _connectedTightCluster(int index) {
-    if (_paragraphs.length <= 1) return [index.clamp(0, _paragraphs.length - 1)];
+    if (_paragraphs.length <= 1)
+      return [index.clamp(0, _paragraphs.length - 1)];
     var lo = index;
     var hi = index;
     while (lo > 0 && _tightParagraphs.contains(lo - 1)) lo--; // (lo-1) 连到 lo
-    while (hi < _paragraphs.length - 1 && _tightParagraphs.contains(hi)) hi++; // hi 连到 hi+1
+    while (hi < _paragraphs.length - 1 && _tightParagraphs.contains(hi))
+      hi++; // hi 连到 hi+1
     return [for (var k = lo; k <= hi; k++) k];
   }
 
@@ -2010,7 +2145,8 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 把簇内选区 [ss,ee)（合并文本坐标）按段落切成多段局部区间
   /// (段落下标, 段内start, 段内end)，用于画线 / 感想时逐段落处理。
-  List<(int, int, int)> _clusterLocalSegments(List<int> cluster, int ss, int ee) {
+  List<(int, int, int)> _clusterLocalSegments(
+      List<int> cluster, int ss, int ee) {
     final out = <(int, int, int)>[];
     var off = 0;
     for (final k in cluster) {
@@ -2024,7 +2160,8 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   /// 簇内选区按段落逐段调 `_toggleUnderline`（每段独立云端写入）。
-  Future<void> _toggleUnderlineCluster(List<int> cluster, int ss, int ee) async {
+  Future<void> _toggleUnderlineCluster(
+      List<int> cluster, int ss, int ee) async {
     for (final (k, ls, le) in _clusterLocalSegments(cluster, ss, ee)) {
       if (ls < le) await _toggleUnderline(k, ls, le);
     }
@@ -2095,6 +2232,7 @@ class _ReadingPageState extends State<ReadingPage>
               if (_unalignedIndices.contains(idx)) _unalignedBanner(),
           SelectableText.rich(
             TextSpan(children: _buildClusterSpans(group)),
+            key: _paraTapKey(group.first),
             onSelectionChanged: (sel, cause) {
               _hasTextSelection = !sel.isCollapsed;
               _onSelectionChanged(sel);
@@ -2119,7 +2257,8 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 段落右侧的操作栏（同一水平位）：待办圆圈 | AI译 | 笔记。
   Widget _buildParagraphActions(int index) {
-    final fg = _isDarkBg ? Colors.white.withOpacity(0.6) : const Color(0xFF9A9A9A);
+    final fg =
+        _isDarkBg ? Colors.white.withOpacity(0.6) : const Color(0xFF9A9A9A);
     final activeFg = AppPalette.p.accent;
     final hasNote = (_paraNotes[index] ?? '').isNotEmpty;
     final done = _paraDone[index] == true;
@@ -2162,7 +2301,9 @@ class _ReadingPageState extends State<ReadingPage>
                     child: done
                         ? Icon(Icons.check,
                             size: 9,
-                            color: _isDarkBg ? const Color(0xFF1A1A1A) : Colors.white)
+                            color: _isDarkBg
+                                ? const Color(0xFF1A1A1A)
+                                : Colors.white)
                         : null,
                   ),
                 ),
@@ -2176,7 +2317,7 @@ class _ReadingPageState extends State<ReadingPage>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                   Icon(
+                  Icon(
                     Icons.auto_awesome,
                     size: 13,
                     color: fg,
@@ -2200,12 +2341,14 @@ class _ReadingPageState extends State<ReadingPage>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                   Icon(
-                    hasNote ? Icons.sticky_note_2 : Icons.sticky_note_2_outlined,
+                  Icon(
+                    hasNote
+                        ? Icons.sticky_note_2
+                        : Icons.sticky_note_2_outlined,
                     size: 14,
                     color: hasNote ? activeFg : fg,
                   ),
-                   const SizedBox(width: 2),
+                  const SizedBox(width: 2),
                   Text(
                     '所有感想',
                     style: TextStyle(
@@ -2265,7 +2408,9 @@ class _ReadingPageState extends State<ReadingPage>
     final shared = result['shared'] == true;
     final cloudId = (result['cloudId'] as String?) ?? '';
     await _saveParagraphNote(index, note,
-        shared: shared, cloudId: cloudId, underlines: _paraUnderlines[index] ?? const []);
+        shared: shared,
+        cloudId: cloudId,
+        underlines: _paraUnderlines[index] ?? const []);
   }
 
   /// 删除某段备注（保留完成态）。
@@ -2296,7 +2441,8 @@ class _ReadingPageState extends State<ReadingPage>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('删除失败：${e is CloudApiException ? e.message : e}')),
+        SnackBar(
+            content: Text('删除失败：${e is CloudApiException ? e.message : e}')),
       );
     }
   }
@@ -2312,31 +2458,77 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   /// 打开「读经笔记」页：列出本经所有段落感想，点击某段可跳回该段。
+  /// 计算在后台隔离区进行并严格有界，任何规模的感想数据都不可能卡死界面。
   Future<void> _openReadingNotes() async {
-    setState(() {
+    if (_openingNotes) return;
+    _openingNotes = true;
+    try {
+      // 不 setState：避免触发整个读经页重建与路由转场竞争。
       _showMoreMenu = false;
       _showQuickPanel = false;
-    });
-    // 先同步一次最新云端状态，避免跳转前笔记页数据过期。
-    await _loadParagraphNotes();
-    if (!mounted) return;
-    // 汇总所有带感想（备注非空）的段落为「经文+感想」成对数据。
-    final pairs = <int, String>{};
-    for (final i in _paraNotes.keys) {
-      final note = (_paraNotes[i] ?? '').trim();
-      if (note.isEmpty || i >= _paragraphs.length) continue;
-      pairs[i] = note;
-    }
-    final idxs = pairs.keys.toList()..sort();
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ReadingNotesPage(
-          title: _titleShown,
-          paragraphs: [for (final i in idxs) _paragraphs[i]],
-          notes: [for (final i in idxs) pairs[i]!],
+      if (!mounted) return;
+      final paragraphs = List<String>.of(_paragraphs);
+      final notes = <int, String>{..._paraNotes};
+      final tight = <int>{..._tightParagraphs};
+      final noteCount =
+          notes.values.where((n) => n.trim().isNotEmpty).length;
+      final result = await _runCompute(
+        () => _buildNotesSnapshot(
+          paragraphs: paragraphs,
+          notes: notes,
+          tight: tight,
         ),
-      ),
+        isolateIf: noteCount > 200 || paragraphs.length > 3000,
+        loadingText: '感想整理中…',
+      );
+      if (!mounted) return;
+      debugPrint('[thoughts] open: paras=${paragraphs.length} '
+          'notes=$noteCount');
+      if (result == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('感想整理失败，请稍后重试')),
+        );
+        return;
+      }
+      final (displayParagraphs, idxs) = result;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ReadingNotesPage(
+            title: _titleShown,
+            paragraphs: displayParagraphs,
+            notes: [for (final i in idxs) (_paraNotes[i] ?? '').trim()],
+            canDelete: idxs.isNotEmpty,
+            sutraKey: _sutraKey,
+            itemParagraphIndexes: idxs,
+            onDeleteNote: _deleteNoteFromReadingNotes,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      // 返回读经页后刷新一次，确保删除后阅读页感想同步消失。
+      await _loadParagraphNotes();
+    } finally {
+      _openingNotes = false;
+    }
+  }
+
+  /// 从感想汇总页删除某段感想（只清感想，保留该段画线；更新阅读页 + 云端）。
+  Future<bool> _deleteNoteFromReadingNotes(int index) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return false;
+    }
+    if (index < 0 || index >= _paragraphs.length) return false;
+    final note = (_paraNotes[index] ?? '').trim();
+    if (note.isEmpty) return false;
+    await _saveParagraphNote(
+      index,
+      '',
+      shared: _paraShared[index] == true,
+      cloudId: _paraCloudIds[index] ?? '',
+      underlines: _paraUnderlines[index] ?? const [],
     );
+    return true;
   }
 
   /// 干净单击正文中部：弹出 画线/感想/阅读设置 速览面板。
@@ -2348,48 +2540,253 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   /// 打开「画线归集」页：把这部经里所有被画线的文字汇总展示。
+  /// 同一 `。。。///` 连段簇内的画线合并为一条（段间 `\n`），每条带各段区间，
+  /// 以便删除时逐段落落地。
+  /// 计算在后台隔离区进行并严格有界：任何规模的画线数据都不可能卡死界面。
   Future<void> _openHighlightsPage() async {
-    setState(() => _showQuickPanel = false);
-    // 先同步一次最新云端状态（含画线区间），避免归集页数据过期。
-    await _loadParagraphNotes();
-    if (!mounted) return;
-    // 把各段画线区间展开成画线文字列表（合并重叠，仅取被画线部分）。
-    final highlights = <String>[];
-    for (var i = 0; i < _paragraphs.length; i++) {
-      final raw = _paraUnderlines[i] ?? const <Map<String, int>>[];
-      if (raw.isEmpty) continue;
-      final text = _paragraphs[i];
-      final len = text.length;
-      final merged = <(int, int)>[];
-      for (final u in raw) {
-        final s = (u['start'] ?? 0).clamp(0, len);
-        final e = (u['end'] ?? 0).clamp(0, len);
-        if (e > s) merged.add((s, e));
+    if (_openingHighlights) return;
+    _openingHighlights = true;
+    try {
+      // 不 setState：避免触发整个读经页重建与路由转场竞争。
+      _showQuickPanel = false;
+      if (!mounted) return;
+      final paragraphs = List<String>.of(_paragraphs);
+      final underlines = <int, List<Map<String, int>>>{
+        for (final e in _paraUnderlines.entries) e.key: List.of(e.value),
+      };
+      final tight = <int>{..._tightParagraphs};
+      final totalRanges =
+          underlines.values.fold<int>(0, (a, v) => a + v.length);
+      final result = await _runCompute(
+        () => _buildHighlightsSnapshot(
+          paragraphs: paragraphs,
+          underlines: underlines,
+          tight: tight,
+        ),
+        // 门槛放宽：经文稍长/画线稍多即走隔离区，UI 永远不参与计算。
+        isolateIf: totalRanges > 500 ||
+            paragraphs.length > 3000 ||
+            tight.length > 1000,
+        loadingText: '画线整理中…',
+      );
+      if (!mounted) return;
+      debugPrint('[highlights] open: paras=${paragraphs.length} '
+          'ranges=$totalRanges tight=${tight.length}');
+      if (result == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('画线整理失败，请稍后重试')),
+        );
+        return;
       }
-      merged.sort((a, b) => a.$1.compareTo(b.$1));
-      final consolidated = <(int, int)>[];
-      for (final r in merged) {
-        if (consolidated.isNotEmpty && r.$1 <= consolidated.last.$2) {
-          final last = consolidated.removeLast();
-          consolidated.add((last.$1, r.$2 > last.$2 ? r.$2 : last.$2));
-        } else {
-          consolidated.add(r);
-        }
-      }
-      for (final r in consolidated) {
-        final s = r.$1.clamp(0, len);
-        final e = r.$2.clamp(0, len);
-        if (e > s) highlights.add(text.substring(s, e));
+      final (highlights, itemSegments) = result;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SutraHighlightsPage(
+            title: _titleShown,
+            highlights: highlights,
+            canDelete: highlights.isNotEmpty,
+            sutraKey: _sutraKey,
+            itemSegments: itemSegments,
+            onDeleteUnderline: _deleteUnderlineFromHighlights,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      // 返回读经页后刷新一次，确保删除后阅读页划线同步消失。
+      await _loadParagraphNotes();
+    } finally {
+      _openingHighlights = false;
+    }
+  }
+
+  /// 运行 [compute]：小数据直接在主线程计算（快且无感）；
+  /// [isolateIf] 为真时改在独立隔离区计算，期间用全屏 loading 路由提示，
+  /// 结束后自动移除。任何规模的数据都只影响耗时，不阻塞 UI。
+  Future<T?> _runCompute<T>(T Function() compute,
+      {required bool isolateIf, String loadingText = '整理中…'}) async {
+    if (!isolateIf) {
+      try {
+        final r = compute();
+        debugPrint('[compute] 主线程完成');
+        return r;
+      } catch (e, st) {
+        debugPrint('[compute] 失败: $e\n$st');
+        return null;
       }
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SutraHighlightsPage(
-          title: _titleShown,
-          highlights: highlights,
+    debugPrint('[compute] 进入隔离区…');
+    final stopwatch = Stopwatch()..start();
+    final nav = Navigator.of(context, rootNavigator: true);
+    nav.push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black38,
+          body: Center(
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(loadingText),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
+    try {
+      final result = await Isolate.run(() => compute());
+      debugPrint('[compute] 耗时 ${stopwatch.elapsedMilliseconds}ms');
+      return result;
+    } catch (e, st) {
+      debugPrint('[compute] 失败: $e\n$st');
+      return null;
+    } finally {
+      if (nav.canPop()) nav.pop();
+    }
+  }
+
+  // ── 归集页数据快照计算（纯函数，可在隔离区安全运行） ────────────
+  static const int kMaxHighlightItems = 2000;
+  static const int kMaxRangesPerPara = 5000;
+  static const int kMaxCharsPerItem = 100000;
+
+  /// 汇总画线为「紧密连段分组」条目。严格有界：至多 [kMaxHighlightItems] 条、
+  /// 每段至多 [kMaxRangesPerPara] 个区间、每条至多 [kMaxCharsPerItem] 字符，
+  /// 超出即截断——保证任何数据下都能在有限时间内结束。
+  static (List<String>, List<List<LiveHighlightSegment>>)
+      _buildHighlightsSnapshot({
+    required List<String> paragraphs,
+    required Map<int, List<Map<String, int>>> underlines,
+    required Set<int> tight,
+  }) {
+    final highlights = <String>[];
+    final itemSegments = <List<LiveHighlightSegment>>[];
+    final n = paragraphs.length;
+    var i = 0;
+    while (i < n && highlights.length < kMaxHighlightItems) {
+      // 同一紧密连段簇：[i..j]（段 k 连到 k+1 当且仅当 tight 含 k）。
+      var j = i;
+      while (j + 1 < n && tight.contains(j)) j++;
+      final textParts = <String>[];
+      final segs = <LiveHighlightSegment>[];
+      var textLen = 0;
+      for (var k = i; k <= j; k++) {
+        final raw = underlines[k];
+        if (raw == null || raw.isEmpty) continue;
+        final text = paragraphs[k];
+        final len = text.length;
+        final merged = <(int, int)>[];
+        var count = 0;
+        for (final u in raw) {
+          if (count++ >= kMaxRangesPerPara) break;
+          final s = (u['start'] ?? 0).clamp(0, len);
+          final e = (u['end'] ?? 0).clamp(0, len);
+          if (e > s) merged.add((s, e));
+        }
+        merged.sort((a, b) => a.$1.compareTo(b.$1));
+        final consolidated = <(int, int)>[];
+        for (final r in merged) {
+          if (consolidated.isNotEmpty && r.$1 <= consolidated.last.$2) {
+            final last = consolidated.removeLast();
+            consolidated.add((last.$1, r.$2 > last.$2 ? r.$2 : last.$2));
+          } else {
+            consolidated.add(r);
+          }
+        }
+        for (final r in consolidated) {
+          if (textLen >= kMaxCharsPerItem) break;
+          final s = r.$1.clamp(0, len);
+          final e = r.$2.clamp(0, len);
+          if (e > s) {
+            textParts.add(text.substring(s, e));
+            textLen += e - s;
+            segs.add((para: k, start: s, end: e));
+          }
+        }
+      }
+      if (textParts.isNotEmpty) {
+        var joined = textParts.join('\n');
+        if (joined.length > kMaxCharsPerItem) {
+          joined = joined.substring(0, kMaxCharsPerItem) + '……';
+        }
+        highlights.add(joined);
+        itemSegments.add(segs);
+      }
+      i = j + 1;
+    }
+    return (highlights, itemSegments);
+  }
+
+  /// 汇总感想段为「经文（连段簇合并展示）+ 段落下标」数据。
+  static (List<String>, List<int>) _buildNotesSnapshot({
+    required List<String> paragraphs,
+    required Map<int, String> notes,
+    required Set<int> tight,
+  }) {
+    final idxs = <int>[
+      for (final e in notes.entries)
+        if (e.key >= 0 &&
+            e.key < paragraphs.length &&
+            (e.value ?? '').trim().isNotEmpty)
+          e.key,
+    ]..sort();
+    final display = <String>[];
+    for (final i in idxs) {
+      final group = _connectedTightClusterSnapshot(i, paragraphs, tight);
+      display.add(group.length > 1
+          ? group.map((k) => paragraphs[k]).join('\n')
+          : paragraphs[i]);
+    }
+    return (display, idxs);
+  }
+
+  static List<int> _connectedTightClusterSnapshot(
+      int index, List<String> paragraphs, Set<int> tight) {
+    if (paragraphs.length <= 1)
+      return [index.clamp(0, paragraphs.length - 1)];
+    var lo = index;
+    var hi = index;
+    while (lo > 0 && tight.contains(lo - 1)) lo--;
+    while (hi < paragraphs.length - 1 && tight.contains(hi)) hi++;
+    return [for (var k = lo; k <= hi; k++) k];
+  }
+
+  /// 从画线归集页删除 [segments] 内各段 [start,end) 区间中的全部画线（更新阅读页 + 云端）。
+  Future<bool> _deleteUnderlineFromHighlights(
+      List<LiveHighlightSegment> segments) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return false;
+    }
+    var changed = false;
+    for (final seg in segments) {
+      final index = seg.para;
+      if (index < 0 || index >= _paragraphs.length) continue;
+      final current =
+          List<Map<String, int>>.from(_paraUnderlines[index] ?? const []);
+      final next = current.where((u) {
+        final us = (u['start'] ?? 0);
+        final ue = (u['end'] ?? 0);
+        // 移除此区间相交的所有画线（渲染端合并出的整块都消失）。
+        return !(ue > seg.start && us < seg.end);
+      }).toList();
+      if (next.length == current.length) continue;
+      changed = true;
+      await _saveParagraphNote(
+        index,
+        _paraNotes[index] ?? '',
+        shared: _paraShared[index] == true,
+        cloudId: _paraCloudIds[index] ?? '',
+        underlines: next,
+      );
+    }
+    return changed;
   }
 
   /// 根据当前阅读背景色索引，返回面板渐进式配色。
@@ -2472,7 +2869,8 @@ class _ReadingPageState extends State<ReadingPage>
                   icon: Icons.border_color,
                   label: '画线',
                   onTap: _openHighlightsPage,
-                ),                _buildQuickPanelItem(
+                ),
+                _buildQuickPanelItem(
                   icon: Icons.sticky_note_2_outlined,
                   label: '感想',
                   onTap: _openReadingNotes,
@@ -2588,214 +2986,241 @@ class _ReadingPageState extends State<ReadingPage>
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-              // 字号滑块
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    Icon(Icons.text_fields, size: 18, color: subTextColor),
-                    const SizedBox(width: 8),
-                    Text('字号', style: TextStyle(fontSize: 14, color: textColor)),
-                    const SizedBox(width: 8),
-                    Text('${_fontSize.toStringAsFixed(0)}',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: accentColor)),
-                    Expanded(
-                      child: Slider(
-                        value: _fontSize,
-                        min: 12,
-                        max: 32,
-                        divisions: 20,
-                        activeColor: accentColor,
-                        inactiveColor: accentColor.withOpacity(0.2),
-                        onChanged: (v) {
-                          setState(() => _fontSize = v);
-                          ReaderPreferences.setFontSize(v);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // 行间距滑块
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    Icon(Icons.format_line_spacing, size: 18, color: subTextColor),
-                    const SizedBox(width: 8),
-                    Text('行距', style: TextStyle(fontSize: 14, color: textColor)),
-                    const SizedBox(width: 8),
-                    Text('${_lineHeight.toStringAsFixed(1)}',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: accentColor)),
-                    Expanded(
-                      child: Slider(
-                        value: _lineHeight,
-                        min: 1.2,
-                        max: 2.5,
-                        divisions: 13,
-                        activeColor: accentColor,
-                        inactiveColor: accentColor.withOpacity(0.2),
-                        onChanged: (v) {
-                          setState(() => _lineHeight = v);
-                          ReaderPreferences.setLineHeight(v);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // 夜间/白天模式：太阳 + 月亮两个图标
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-                child: Row(
-                  children: [
-                    Icon(_isDarkBg ? Icons.dark_mode : Icons.light_mode,
-                        size: 18, color: subTextColor),
-                    const SizedBox(width: 8),
-                    Text(_isDarkBg ? '夜间模式' : '白天模式',
-                        style: TextStyle(fontSize: 14, color: textColor)),
-                    const Spacer(),
-                    // 太阳（白天模式）
-                    GestureDetector(
-                      onTap: _isDarkBg
-                          ? () {
-                              setState(() => _bgColorIndex = 0);
-                              _isDarkMode = false;
-                              appDarkMode.value = false;
-                              _saveSettings();
-                            }
-                          : null,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: !_isDarkBg
-                              ? const Color(0xFFF5A623).withOpacity(0.2)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Icon(
-                          Icons.light_mode,
-                          size: 22,
-                          color: !_isDarkBg
-                              ? const Color(0xFFF5A623)
-                              : subTextColor,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // 月亮（夜间模式）
-                    GestureDetector(
-                      onTap: !_isDarkBg
-                          ? () {
-                              setState(() => _bgColorIndex = 4);
-                              _isDarkMode = true;
-                              appDarkMode.value = true;
-                              _saveSettings();
-                            }
-                          : null,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: _isDarkBg
-                              ? const Color(0xFF4A90D9).withOpacity(0.2)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Icon(
-                          Icons.dark_mode,
-                          size: 22,
-                          color: _isDarkBg
-                              ? const Color(0xFF7BAFF7)
-                              : subTextColor,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // 背景五色选择
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
-                child: Row(
-                  children: [
-                    Icon(Icons.palette_outlined, size: 18, color: subTextColor),
-                    const SizedBox(width: 8),
-                    Text('背景', style: TextStyle(fontSize: 14, color: textColor)),
-                    const Spacer(),
-                    ...List.generate(5, (i) {
-                      final selected = _bgColorIndex == i;
-                      return Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: GestureDetector(
-                          onTap: () {
-                            setState(() => _bgColorIndex = i);
-                            _isDarkMode = (i == 4);
-                            appDarkMode.value = _isDarkMode;
-                            _saveSettings();
-                          },
-                          child: Container(
-                            width: 30,
-                            height: 30,
-                            decoration: BoxDecoration(
-                              color: Color(ReaderPreferences.bgColors[i]),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: selected ? accentColor : Colors.transparent,
-                                width: 2,
+                      // 字号滑块
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          children: [
+                            Icon(Icons.text_fields,
+                                size: 18, color: subTextColor),
+                            const SizedBox(width: 8),
+                            Text('字号',
+                                style:
+                                    TextStyle(fontSize: 14, color: textColor)),
+                            const SizedBox(width: 8),
+                            Text('${_fontSize.toStringAsFixed(0)}',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: accentColor)),
+                            Expanded(
+                              child: Slider(
+                                value: _fontSize,
+                                min: 12,
+                                max: 32,
+                                divisions: 20,
+                                activeColor: accentColor,
+                                inactiveColor: accentColor.withOpacity(0.2),
+                                onChanged: (v) {
+                                  setState(() => _fontSize = v);
+                                  ReaderPreferences.setFontSize(v);
+                                },
                               ),
-                              boxShadow: selected
-                                  ? [
-                                      BoxShadow(
-                                        color: accentColor.withOpacity(0.3),
-                                        blurRadius: 4,
-                                      )
-                                    ]
-                                  : null,
                             ),
-                            child: selected
-                                ? Icon(Icons.check, size: 14,
-                                    color: c['checkIcon']!)
-                                : null,
-                          ),
+                          ],
                         ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              // 翻页方式选择
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
-                child: Row(
-                  children: [
-                    Icon(Icons.menu_book_outlined, size: 18, color: subTextColor),
-                    const SizedBox(width: 8),
-                    Text('翻页', style: TextStyle(fontSize: 14, color: textColor)),
-                    const Spacer(),
-                    _buildToggleChip(
-                      label: '纵向滚动',
-                      selected: _pageMode == ReaderPreferences.pageModeScroll,
-                      onTap: () {
-                        _switchPageMode(ReaderPreferences.pageModeScroll);
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    _buildToggleChip(
-                      label: '左右翻页',
-                      selected: _pageMode == ReaderPreferences.pageModeFlip,
-                      onTap: () {
-                        _switchPageMode(ReaderPreferences.pageModeFlip);
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            ), // inner Column
-          ), // SingleChildScrollView
-        ), // Flexible
-          ], // outer Column children
-        ), // outer Column
+                      ),
+                      // 行间距滑块
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          children: [
+                            Icon(Icons.format_line_spacing,
+                                size: 18, color: subTextColor),
+                            const SizedBox(width: 8),
+                            Text('行距',
+                                style:
+                                    TextStyle(fontSize: 14, color: textColor)),
+                            const SizedBox(width: 8),
+                            Text('${_lineHeight.toStringAsFixed(1)}',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: accentColor)),
+                            Expanded(
+                              child: Slider(
+                                value: _lineHeight,
+                                min: 1.2,
+                                max: 2.5,
+                                divisions: 13,
+                                activeColor: accentColor,
+                                inactiveColor: accentColor.withOpacity(0.2),
+                                onChanged: (v) {
+                                  setState(() => _lineHeight = v);
+                                  ReaderPreferences.setLineHeight(v);
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // 夜间/白天模式：太阳 + 月亮两个图标
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 6),
+                        child: Row(
+                          children: [
+                            Icon(_isDarkBg ? Icons.dark_mode : Icons.light_mode,
+                                size: 18, color: subTextColor),
+                            const SizedBox(width: 8),
+                            Text(_isDarkBg ? '夜间模式' : '白天模式',
+                                style:
+                                    TextStyle(fontSize: 14, color: textColor)),
+                            const Spacer(),
+                            // 太阳（白天模式）
+                            GestureDetector(
+                              onTap: _isDarkBg
+                                  ? () {
+                                      setState(() => _bgColorIndex = 0);
+                                      _isDarkMode = false;
+                                      appDarkMode.value = false;
+                                      _saveSettings();
+                                    }
+                                  : null,
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: !_isDarkBg
+                                      ? const Color(0xFFF5A623).withOpacity(0.2)
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Icon(
+                                  Icons.light_mode,
+                                  size: 22,
+                                  color: !_isDarkBg
+                                      ? const Color(0xFFF5A623)
+                                      : subTextColor,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            // 月亮（夜间模式）
+                            GestureDetector(
+                              onTap: !_isDarkBg
+                                  ? () {
+                                      setState(() => _bgColorIndex = 4);
+                                      _isDarkMode = true;
+                                      appDarkMode.value = true;
+                                      _saveSettings();
+                                    }
+                                  : null,
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: _isDarkBg
+                                      ? const Color(0xFF4A90D9).withOpacity(0.2)
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Icon(
+                                  Icons.dark_mode,
+                                  size: 22,
+                                  color: _isDarkBg
+                                      ? const Color(0xFF7BAFF7)
+                                      : subTextColor,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // 背景五色选择
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
+                        child: Row(
+                          children: [
+                            Icon(Icons.palette_outlined,
+                                size: 18, color: subTextColor),
+                            const SizedBox(width: 8),
+                            Text('背景',
+                                style:
+                                    TextStyle(fontSize: 14, color: textColor)),
+                            const Spacer(),
+                            ...List.generate(5, (i) {
+                              final selected = _bgColorIndex == i;
+                              return Padding(
+                                padding: const EdgeInsets.only(left: 6),
+                                child: GestureDetector(
+                                  onTap: () {
+                                    setState(() => _bgColorIndex = i);
+                                    _isDarkMode = (i == 4);
+                                    appDarkMode.value = _isDarkMode;
+                                    _saveSettings();
+                                  },
+                                  child: Container(
+                                    width: 30,
+                                    height: 30,
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Color(ReaderPreferences.bgColors[i]),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: selected
+                                            ? accentColor
+                                            : Colors.transparent,
+                                        width: 2,
+                                      ),
+                                      boxShadow: selected
+                                          ? [
+                                              BoxShadow(
+                                                color: accentColor
+                                                    .withOpacity(0.3),
+                                                blurRadius: 4,
+                                              )
+                                            ]
+                                          : null,
+                                    ),
+                                    child: selected
+                                        ? Icon(Icons.check,
+                                            size: 14, color: c['checkIcon']!)
+                                        : null,
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                      // 翻页方式选择
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
+                        child: Row(
+                          children: [
+                            Icon(Icons.menu_book_outlined,
+                                size: 18, color: subTextColor),
+                            const SizedBox(width: 8),
+                            Text('翻页',
+                                style:
+                                    TextStyle(fontSize: 14, color: textColor)),
+                            const Spacer(),
+                            _buildToggleChip(
+                              label: '纵向滚动',
+                              selected:
+                                  _pageMode == ReaderPreferences.pageModeScroll,
+                              onTap: () {
+                                _switchPageMode(
+                                    ReaderPreferences.pageModeScroll);
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            _buildToggleChip(
+                              label: '左右翻页',
+                              selected:
+                                  _pageMode == ReaderPreferences.pageModeFlip,
+                              onTap: () {
+                                _switchPageMode(ReaderPreferences.pageModeFlip);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ), // inner Column
+                ), // SingleChildScrollView
+              ), // Flexible
+            ], // outer Column children
+          ), // outer Column
         ), // SafeArea
       ), // Container
     ); // GestureDetector
@@ -2818,7 +3243,9 @@ class _ReadingPageState extends State<ReadingPage>
         decoration: BoxDecoration(
           color: selected
               ? accentColor.withOpacity(_isDarkBg ? 0.3 : 0.15)
-              : (_isDarkBg ? Colors.white.withOpacity(0.08) : const Color(0xFFF0F0F0)),
+              : (_isDarkBg
+                  ? Colors.white.withOpacity(0.08)
+                  : const Color(0xFFF0F0F0)),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected ? accentColor : Colors.transparent,
@@ -2867,7 +3294,9 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   void _scrollToMatch(int index) {
-    if (index >= 0 && index < _searchMatches.length && _scrollController.hasClients) {
+    if (index >= 0 &&
+        index < _searchMatches.length &&
+        _scrollController.hasClients) {
       final position = _searchMatches[index];
       _scrollController.animateTo(
         position.toDouble(),
@@ -2879,7 +3308,9 @@ class _ReadingPageState extends State<ReadingPage>
 
   void _goToPreviousMatch() {
     if (_searchMatches.isNotEmpty) {
-      final newIndex = _currentMatchIndex > 0 ? _currentMatchIndex - 1 : _searchMatches.length - 1;
+      final newIndex = _currentMatchIndex > 0
+          ? _currentMatchIndex - 1
+          : _searchMatches.length - 1;
       setState(() {
         _currentMatchIndex = newIndex;
       });
@@ -2984,17 +3415,12 @@ class _ReadingPageState extends State<ReadingPage>
     return spans;
   }
 
-  /// 已画线区间的 span：整段加下划线，内部按搜索高亮细分；每个 sub span
-  /// 都带上同一个 Tap 识别器，单击触发该画线的弹窗。
+/// 已画线区间的 span：整段加下划线，内部按搜索高亮细分。
+  /// 单击判定不在 TextSpan 上挂识别器，而是由正文 Listener 按几何命中完成
+  /// （见 _tapInUnderlinedCluster），行为恒定且与 SelectableText 的选择手势不冲突。
   List<TextSpan> _underlineSpans(
       String text, int para, int s, int e, List<bool> isSrch) {
     final spans = <TextSpan>[];
-    final recognizer = TapGestureRecognizer()
-      ..onTapDown = (d) {
-        _underlineTapPos = d.globalPosition;
-      }
-      ..onTap = () => _onUnderlineTap(para, s, e);
-    _underlineTapRecognizers.add(recognizer);
     var start = s;
     while (start < e) {
       final se0 = isSrch[start];
@@ -3004,12 +3430,10 @@ class _ReadingPageState extends State<ReadingPage>
       }
       spans.add(TextSpan(
         text: text.substring(start, end),
-        recognizer: recognizer,
         style: TextStyle(
           decoration: TextDecoration.underline,
           decorationStyle: TextDecorationStyle.dotted,
-          decorationColor:
-              _isDarkBg ? Colors.white : const Color(0xFF212121),
+          decorationColor: _isDarkBg ? Colors.white : const Color(0xFF212121),
           decorationThickness: 1.4,
           backgroundColor: se0
               ? (_isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow)
@@ -3021,12 +3445,10 @@ class _ReadingPageState extends State<ReadingPage>
     if (spans.isEmpty) {
       spans.add(TextSpan(
         text: text.substring(s, e),
-        recognizer: recognizer,
         style: TextStyle(
           decoration: TextDecoration.underline,
           decorationStyle: TextDecorationStyle.dotted,
-          decorationColor:
-              _isDarkBg ? Colors.white : const Color(0xFF212121),
+          decorationColor: _isDarkBg ? Colors.white : const Color(0xFF212121),
           decorationThickness: 1.4,
         ),
       ));
@@ -3047,6 +3469,7 @@ class _ReadingPageState extends State<ReadingPage>
     (int, int)? Function()? onResolveRange,
     VoidCallback? onSelectFull,
     List<int>? cluster,
+    void Function(int start, int end)? drawUnderline,
   }) {
     final multi = cluster != null && cluster.length > 1;
     if (multi) {
@@ -3055,8 +3478,8 @@ class _ReadingPageState extends State<ReadingPage>
       final e = end.clamp(0, text.length);
       // 画线按钮初始态：选区覆盖的任一段有画线即视为「已画线（可擦除）」。
       final underlined = _clusterLocalSegments(cluster, s, e).any((seg) =>
-          (_paraUnderlines[seg.$1] ?? const <Map<String, int>>[]).any((u) =>
-              seg.$2 < (u['end'] ?? 0) && seg.$3 > (u['start'] ?? 0)));
+          (_paraUnderlines[seg.$1] ?? const <Map<String, int>>[]).any(
+              (u) => seg.$2 < (u['end'] ?? 0) && seg.$3 > (u['start'] ?? 0)));
       final hasIdea = _clusterLocalSegments(cluster, s, e)
           .any((seg) => (_paraNotes[seg.$1] ?? '').isNotEmpty);
 
@@ -3079,8 +3502,8 @@ class _ReadingPageState extends State<ReadingPage>
     final p = _paragraphs[para];
     final s = start.clamp(0, p.length);
     final e = end.clamp(0, p.length);
-    final underlined = (_paraUnderlines[para] ?? const <Map<String, int>>[]).any(
-        (u) => s < (u['end'] ?? 0) && e > (u['start'] ?? 0));
+    final underlined = (_paraUnderlines[para] ?? const <Map<String, int>>[])
+        .any((u) => s < (u['end'] ?? 0) && e > (u['start'] ?? 0));
 
     return _IdeaMenuCard(
       para: para,
@@ -3093,7 +3516,8 @@ class _ReadingPageState extends State<ReadingPage>
       close: close,
       onSelectFull: onSelectFull,
       onResolveRange: onResolveRange,
-      onDrawUnderline: (ss, ee) => _toggleUnderline(para, ss, ee),
+      onDrawUnderline:
+          drawUnderline ?? (ss, ee) => _toggleUnderline(para, ss, ee),
       onOpenNote: (ss, ee) => _openIdeaFromRange(para, ss, ee),
     );
   }
@@ -3126,8 +3550,7 @@ class _ReadingPageState extends State<ReadingPage>
     final p = _paragraphs[para];
     final s = start.clamp(0, p.length);
     final e = end.clamp(0, p.length);
-    final display =
-        (s < e && e <= p.length) ? p.substring(s, e) : p;
+    final display = (s < e && e <= p.length) ? p.substring(s, e) : p;
     _showNoteDialog(para, displayText: display);
   }
 
@@ -3148,6 +3571,7 @@ class _ReadingPageState extends State<ReadingPage>
     (int, int)? Function()? onResolveRange,
     VoidCallback? onSelectFull,
     List<int>? cluster,
+    void Function(int start, int end)? drawUnderline,
   }) {
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return null;
@@ -3187,6 +3611,7 @@ class _ReadingPageState extends State<ReadingPage>
                 onResolveRange: onResolveRange,
                 onSelectFull: onSelectFull,
                 cluster: cluster,
+                drawUnderline: drawUnderline,
               ),
             ),
           ),
@@ -3198,11 +3623,108 @@ class _ReadingPageState extends State<ReadingPage>
     return entry;
   }
 
-  /// 单击已画线文字：在点击处弹出与长按选中相同的菜单。
-  void _onUnderlineTap(int para, int start, int end) {
-    final target = _underlineTapPos ??
-        MediaQuery.of(context).size.center(Offset.zero);
-    _showFloatingMenu(para: para, start: start, end: end, anchor: target);
+  /// 单击已画线文字的擦除菜单：由正文 Listener 的几何判定调用（见 Timer.run），
+  /// 判定为命中画线段落后显示；命中点在画线文字外时由 _tapInUnderlinedCluster
+  /// 拦截面板，不弹任何菜单。
+  void _showUnderlineMenu(int para, int start, int end, Offset anchor) {
+    if (!mounted) return;
+    _clearSelectionMenu();
+    _showFloatingMenu(
+      para: para,
+      start: start,
+      end: end,
+      anchor: anchor,
+      drawUnderline: (ss, ee) => _removeUnderlineRange(para, ss, ee),
+    );
+  }
+
+  /// 渲染簇的 GlobalKey（以首段下标为键，跨帧复用）。
+  GlobalKey _paraTapKey(int para) =>
+      _paraTapKeys.putIfAbsent(para, GlobalKey.new);
+
+  /// 判定全局坐标 [global] 是否落在某个包含画线的段落内（含画线文字上和段落空白处）。
+  /// 按渲染簇的 paintBounds 做粗粒度命中：只要有任意段落含画线，该簇内
+  /// 的点击一律由正文 Listener 拦截（不弹底部面板）。
+  /// 点在画线文字上时额外返回 (para, start, end)，供弹出「擦除」小菜单；
+  /// 点在非画线区域时返回 (para, -1, -1)，仅抑制面板，不弹菜单。
+  /// 采用几何命中，行为恒定，不依赖手势竞技场结算时序。
+  ({int para, int start, int end})? _resolveUnderlineHit(Offset global) {
+    for (final group in _allClusterGroups()) {
+      final key = _paraTapKeys[group.first];
+      if (key == null) continue;
+      final box = key.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) continue;
+      final local = box.globalToLocal(global);
+      if (!box.paintBounds.contains(local)) continue;
+      // 点在该渲染簇内。若簇内有任何段落有画线，该簇的点击不弹底部面板。
+      for (final i in group) {
+        if ((_paraUnderlines[i] ?? const <Map<String, int>>[]).isEmpty) continue;
+        // 该簇存在画线段落：用 y 坐标估算点在哪个段落，
+        // 再逐区间匹配精确范围（命中 → 擦除菜单；未命中 → 仅抑制面板）。
+        final r = _underlineRangeAt(i, local, box);
+        if (r != null) return (para: i, start: r.$1, end: r.$2);
+        // 点在有画线段落内但不在具体画线上：抑制面板、不弹菜单。
+        return (para: i, start: -1, end: -1);
+      }
+    }
+    return null;
+  }
+
+  /// 估算点 [local]（渲染簇内局部坐标）是否落在段落 [i] 的某个画线区间内。
+  /// 返回命中区间 (start, end)；未命中返回 null。
+  (int, int)? _underlineRangeAt(int i, Offset local, RenderBox clusterBox) {
+    final len = _paragraphs[i].length;
+    if (len == 0) return null;
+    final raws = <(int, int)>[];
+    for (final u in _paraUnderlines[i] ?? const <Map<String, int>>[]) {
+      final s = (u['start'] ?? 0).clamp(0, len);
+      final e = (u['end'] ?? 0).clamp(0, len);
+      if (e > s) raws.add((s, e));
+    }
+    if (raws.isEmpty) return null;
+    raws.sort((a, b) => a.$1.compareTo(b.$1));
+    final merged = <(int, int)>[];
+    for (final r in raws) {
+      if (merged.isNotEmpty && r.$1 <= merged.last.$2) {
+        final last = merged.removeLast();
+        merged.add((last.$1, r.$2 > last.$2 ? r.$2 : last.$2));
+      } else {
+        merged.add(r);
+      }
+    }
+    // 用 TextPainter 测量簇内文字，逐行定位点所在的段落内字符偏移，
+    // 再与画线区间比对。仅在命中簇且簇有画线时才触发（低频）。
+    try {
+      final allText = [
+        for (final idx
+            in _allClusterGroups()
+                .firstWhere((g) => g.contains(i), orElse: () => [i]))
+          _paragraphs[idx]
+      ].join('\n');
+      final tp = TextPainter(
+        text: TextSpan(text: allText),
+        textDirection: TextDirection.ltr,
+        maxLines: null,
+      )..layout(maxWidth: clusterBox.paintBounds.width);
+      if (!tp.didExceedMaxLines) {
+        final pos = tp.getPositionForOffset(local);
+        var base = 0;
+        for (final idx
+            in _allClusterGroups()
+                .firstWhere((g) => g.contains(i), orElse: () => [i])) {
+          final pLen = _paragraphs[idx].length;
+          if (idx == i && pos.offset >= base && pos.offset < base + pLen) {
+            final localOff = pos.offset - base;
+            for (final r in merged) {
+              if (localOff >= r.$1 && localOff < r.$2) return r;
+            }
+          }
+          base += pLen + 1;
+        }
+      }
+      tp.dispose();
+    } catch (_) {}
+    return null;
   }
 
   /// 画线 / 取消画线：给第 i 段 [start,end) 区间添加或移除下划线，并云端同步。
@@ -3216,8 +3738,7 @@ class _ReadingPageState extends State<ReadingPage>
     final current = List<Map<String, int>>.from(_paraUnderlines[i] ?? const []);
     // 选中范围是否已被某条画线完整覆盖（此时视为“擦除”）。
     final covering = current
-        .where((u) =>
-            (u['start'] ?? 0) <= start && (u['end'] ?? 0) >= end)
+        .where((u) => (u['start'] ?? 0) <= start && (u['end'] ?? 0) >= end)
         .toList();
     List<Map<String, int>> next;
     if (covering.isNotEmpty) {
@@ -3228,9 +3749,36 @@ class _ReadingPageState extends State<ReadingPage>
       ];
     } else {
       // 新增整段选中范围；与既有画线重叠的部分会在渲染时自动合并。
-      next = [...current, {'start': start, 'end': end}];
+      next = [
+        ...current,
+        {'start': start, 'end': end}
+      ];
     }
     next.sort((a, b) => (a['start'] ?? 0).compareTo(b['start'] ?? 0));
+    await _saveParagraphNote(
+      i,
+      _paraNotes[i] ?? '',
+      shared: _paraShared[i] == true,
+      cloudId: _paraCloudIds[i] ?? '',
+      underlines: next,
+    );
+  }
+
+  /// 移除第 i 段与 [start,end) 相交的全部画线（单击画线菜单的「擦除」）。
+  /// 语义与画线归集页 / 分享帖的删除一致：点击的那条可见画线整条消失；
+  /// 无画线被实际移除时直接返回，不落云端。
+  Future<void> _removeUnderlineRange(int i, int start, int end) async {
+    if (start >= end) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return;
+    }
+    final current = List<Map<String, int>>.from(_paraUnderlines[i] ?? const []);
+    final next = current
+        .where((u) =>
+            !(((u['end'] ?? 0) > start) && ((u['start'] ?? 0) < end)))
+        .toList();
+    if (next.length == current.length) return;
     await _saveParagraphNote(
       i,
       _paraNotes[i] ?? '',
@@ -3276,9 +3824,8 @@ class _ReadingPageState extends State<ReadingPage>
   /// 不使用全屏遮罩，句柄仍可拖动调整选区；点 画线/感想 时读取实时选区，
   /// 确保画线覆盖的就是当前可见的高亮范围（而非长按时的初始单字）。
   /// [cluster] 为多段紧密连段簇时，选区坐标基于簇的合并文本；单段则传入单元素簇。
-  Widget _buildSelectionToolbar(
-      BuildContext context, EditableTextState editableTextState,
-      List<int> cluster) {
+  Widget _buildSelectionToolbar(BuildContext context,
+      EditableTextState editableTextState, List<int> cluster) {
     // 本页被其他路由覆盖（如感想编辑页）时不再弹任何菜单，
     // 也不记录选区状态：直接返回空组件即可。
     if (_coveredByRoute) return const SizedBox.shrink();
@@ -3318,12 +3865,13 @@ class _ReadingPageState extends State<ReadingPage>
           return (cs2, ce2);
         },
         // 「本段全选」：把视觉高亮扩大到整段（真实选中整段文字），并置后续画线/感想作用整段。
-        onSelectFull: () =>
-            cluster.length > 1 ? _selectFullCluster(cluster) : _selectFullParagraph(cluster.first),
+        onSelectFull: () => cluster.length > 1
+            ? _selectFullCluster(cluster)
+            : _selectFullParagraph(cluster.first),
         onDismiss: () {
           _selectionMenuEntry = null;
-    _selectionTextState = null;
-    _selectionRange = null;
+          _selectionTextState = null;
+          _selectionRange = null;
           _selectionRange = null;
         },
       );
@@ -3373,9 +3921,7 @@ class _ReadingPageState extends State<ReadingPage>
     _flipCacheKey = key;
     _flipPages = _paginateParagraphs(width, height);
 
-    if (!_flipPageRestored &&
-        _savedProgress != null &&
-        _flipPages.length > 1) {
+    if (!_flipPageRestored && _savedProgress != null && _flipPages.length > 1) {
       _flipPageRestored = true;
       final target = (_savedProgress! * _flipPages.length)
           .floor()
@@ -3396,7 +3942,8 @@ class _ReadingPageState extends State<ReadingPage>
   void _onFlipPageChanged(int index) {
     setState(() {
       _currentFlipPage = index;
-      _scrollProgress = _flipPages.length > 1 ? (index + 1) / _flipPages.length : 1.0;
+      _scrollProgress =
+          _flipPages.length > 1 ? (index + 1) / _flipPages.length : 1.0;
     });
     _saveFlipProgress();
     if (index == _flipPages.length - 1) {
@@ -3533,8 +4080,7 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
               );
             }
           }),
-          _item(
-              _underlined ? Icons.undo : Icons.format_underlined,
+          _item(_underlined ? Icons.undo : Icons.format_underlined,
               _underlined ? '擦除' : '画线', () {
             final (s, e) = _activeRange;
             setState(() => _underlined = !_underlined);
