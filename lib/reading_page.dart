@@ -1345,9 +1345,8 @@ class _ReadingPageState extends State<ReadingPage>
                               final hit = _resolveUnderlineHit(event.position);
                               if (hit != null) {
                                 if (hit.start >= 0) {
-                                  _showUnderlineMenu(
-                                      hit.para, hit.start, hit.end,
-                                      event.position);
+                                  _showUnderlineMenu(hit.cluster, hit.para,
+                                      hit.start, hit.end, event.position);
                                 }
                                 return;
                               }
@@ -2167,12 +2166,17 @@ class _ReadingPageState extends State<ReadingPage>
     }
   }
 
-  /// 簇内选区开感想：作用到选区所在的第一段。
+  /// 簇内选区开感想：存到选区所在的第一段，但预览经文显示完整跨段选中文字，
+  /// 避免合并整段（```。。。///```）全选时只显示第一段。
   void _openIdeaFromRangeCluster(List<int> cluster, int ss, int ee) {
     final segs = _clusterLocalSegments(cluster, ss, ee);
     if (segs.isEmpty) return;
-    final (k, ls, le) = segs.first;
-    _openIdeaFromRange(k, ls, le);
+    final (k, _, _) = segs.first;
+    // 逐段拼接选中文字，段间换行；避开簇坐标 `\n` 边界，不产生首尾多余换行。
+    final display = segs
+        .map((seg) => _paragraphs[seg.$1].substring(seg.$2, seg.$3))
+        .join('\n');
+    _showNoteDialog(k, displayText: display);
   }
 
   /// 「本段全选」作用于整簇：合并文本整段选中。
@@ -3494,7 +3498,10 @@ class _ReadingPageState extends State<ReadingPage>
         close: close,
         onSelectFull: onSelectFull,
         onResolveRange: onResolveRange,
-        onDrawUnderline: (ss, ee) => _toggleUnderlineCluster(cluster, ss, ee),
+        // 有显式 drawUnderline（如单击画线的「擦除整簇」）时优先使用；
+        // 长按选中路径未传，回退到逐段画线/擦除开关。
+        onDrawUnderline: drawUnderline ??
+            (ss, ee) => _toggleUnderlineCluster(cluster, ss, ee),
         onOpenNote: (ss, ee) => _openIdeaFromRangeCluster(cluster, ss, ee),
       );
     }
@@ -3623,18 +3630,34 @@ class _ReadingPageState extends State<ReadingPage>
     return entry;
   }
 
-  /// 单击已画线文字的擦除菜单：由正文 Listener 的几何判定调用（见 Timer.run），
-  /// 判定为命中画线段落后显示；命中点在画线文字外时由 _tapInUnderlinedCluster
-  /// 拦截面板，不弹任何菜单。
-  void _showUnderlineMenu(int para, int start, int end, Offset anchor) {
+  /// 单击已画线文字的擦除菜单：由正文 Listener 的几何判定调用（见 Timer.run）。
+  /// 紧密连段簇（```。。。///``` 合并整段）时 [cluster].length > 1：
+  ///  - 预览经文为整簇，复制/感想作用于整簇选区；
+  ///  - 「擦除」作用于整簇（整段一次性清除），而非仅命中的单个段落。
+  void _showUnderlineMenu(
+      List<int> cluster, int para, int start, int end, Offset anchor) {
     if (!mounted) return;
     _clearSelectionMenu();
+    final multi = cluster.length > 1;
+    // 把段落内坐标换算成簇合并文本坐标，供整簇菜单使用。
+    var paraOffset = 0;
+    if (multi) {
+      for (final idx in cluster) {
+        if (idx == para) break;
+        paraOffset += _paragraphs[idx].length + 1;
+      }
+    }
+    final ss = paraOffset + start;
+    final ee = paraOffset + end;
     _showFloatingMenu(
       para: para,
-      start: start,
-      end: end,
+      start: ss,
+      end: ee,
       anchor: anchor,
-      drawUnderline: (ss, ee) => _removeUnderlineRange(para, ss, ee),
+      cluster: multi ? cluster : null,
+      drawUnderline: (s, e) => multi
+          ? _removeUnderlineCluster(cluster)
+          : _removeUnderlineRange(para, s, e),
     );
   }
 
@@ -3647,8 +3670,10 @@ class _ReadingPageState extends State<ReadingPage>
   /// 的点击一律由正文 Listener 拦截（不弹底部面板）。
   /// 点在画线文字上时额外返回 (para, start, end)，供弹出「擦除」小菜单；
   /// 点在非画线区域时返回 (para, -1, -1)，仅抑制面板，不弹菜单。
-  /// 采用几何命中，行为恒定，不依赖手势竞技场结算时序。
-  ({int para, int start, int end})? _resolveUnderlineHit(Offset global) {
+  /// 采用几何命中：用与正文完全一致的 span 重新排版，把点击点映射到字符，
+  /// 再定位到具体段落及画线区间，行为恒定、不依赖手势竞技场时序。
+  ({List<int> cluster, int para, int start, int end})? _resolveUnderlineHit(
+      Offset global) {
     for (final group in _allClusterGroups()) {
       final key = _paraTapKeys[group.first];
       if (key == null) continue;
@@ -3656,32 +3681,51 @@ class _ReadingPageState extends State<ReadingPage>
       if (box is! RenderBox || !box.hasSize) continue;
       final local = box.globalToLocal(global);
       if (!box.paintBounds.contains(local)) continue;
-      // 点在该渲染簇内。若簇内有任何段落有画线，该簇的点击不弹底部面板。
-      for (final i in group) {
-        if ((_paraUnderlines[i] ?? const <Map<String, int>>[]).isEmpty) continue;
-        // 该簇存在画线段落：用 y 坐标估算点在哪个段落，
-        // 再逐区间匹配精确范围（命中 → 擦除菜单；未命中 → 仅抑制面板）。
-        final r = _underlineRangeAt(i, local, box);
-        if (r != null) return (para: i, start: r.$1, end: r.$2);
-        // 点在有画线段落内但不在具体画线上：抑制面板、不弹菜单。
-        return (para: i, start: -1, end: -1);
+      // 簇内无任何画线 → 该簇是普通正文，可正常弹底部面板。
+      final hasAny = group.any((i) =>
+          (_paraUnderlines[i] ?? const <Map<String, int>>[]).isNotEmpty);
+      if (!hasAny) continue;
+      // 用与正文同一组 span 重新排版，把点击点映射为合并文本字符偏移，
+      // 再定位到具体段落及画线区间（命中 → 擦除菜单；未命中 → 仅抑制面板）。
+      var off = 0;
+      final tp = TextPainter(
+        text: TextSpan(children: _buildClusterSpans(group)),
+        textDirection: TextDirection.ltr,
+        maxLines: null,
+      )..layout(maxWidth: box.size.width);
+      if (!tp.didExceedMaxLines) {
+        try {
+          off = tp.getPositionForOffset(local).offset;
+        } catch (_) {}
       }
+      tp.dispose();
+      var base = 0;
+      for (final i in group) {
+        final len = _paragraphs[i].length;
+        if (off >= base && off < base + len) {
+          final r = _underlineRangeCovering(i, off - base);
+          if (r != null) {
+            return (cluster: group, para: i, start: r.$1, end: r.$2);
+          }
+          return (cluster: group, para: i, start: -1, end: -1);
+        }
+        base += len + 1; // 簇内段落间以 `\n` 连接（见 _buildClusterSpans）。
+      }
+      return (cluster: group, para: group.last, start: -1, end: -1);
     }
     return null;
   }
 
-  /// 估算点 [local]（渲染簇内局部坐标）是否落在段落 [i] 的某个画线区间内。
-  /// 返回命中区间 (start, end)；未命中返回 null。
-  (int, int)? _underlineRangeAt(int i, Offset local, RenderBox clusterBox) {
+  /// 段落 [i] 中覆盖第 [o] 个字符的合并画线区间；不在画线上返回 null。
+  (int, int)? _underlineRangeCovering(int i, int o) {
     final len = _paragraphs[i].length;
-    if (len == 0) return null;
+    if (o < 0 || o >= len) return null;
     final raws = <(int, int)>[];
     for (final u in _paraUnderlines[i] ?? const <Map<String, int>>[]) {
       final s = (u['start'] ?? 0).clamp(0, len);
       final e = (u['end'] ?? 0).clamp(0, len);
       if (e > s) raws.add((s, e));
     }
-    if (raws.isEmpty) return null;
     raws.sort((a, b) => a.$1.compareTo(b.$1));
     final merged = <(int, int)>[];
     for (final r in raws) {
@@ -3692,39 +3736,17 @@ class _ReadingPageState extends State<ReadingPage>
         merged.add(r);
       }
     }
-    // 用 TextPainter 测量簇内文字，逐行定位点所在的段落内字符偏移，
-    // 再与画线区间比对。仅在命中簇且簇有画线时才触发（低频）。
-    try {
-      final allText = [
-        for (final idx
-            in _allClusterGroups()
-                .firstWhere((g) => g.contains(i), orElse: () => [i]))
-          _paragraphs[idx]
-      ].join('\n');
-      final tp = TextPainter(
-        text: TextSpan(text: allText),
-        textDirection: TextDirection.ltr,
-        maxLines: null,
-      )..layout(maxWidth: clusterBox.paintBounds.width);
-      if (!tp.didExceedMaxLines) {
-        final pos = tp.getPositionForOffset(local);
-        var base = 0;
-        for (final idx
-            in _allClusterGroups()
-                .firstWhere((g) => g.contains(i), orElse: () => [i])) {
-          final pLen = _paragraphs[idx].length;
-          if (idx == i && pos.offset >= base && pos.offset < base + pLen) {
-            final localOff = pos.offset - base;
-            for (final r in merged) {
-              if (localOff >= r.$1 && localOff < r.$2) return r;
-            }
-          }
-          base += pLen + 1;
-        }
-      }
-      tp.dispose();
-    } catch (_) {}
+    for (final r in merged) {
+      if (o >= r.$1 && o < r.$2) return r;
+    }
     return null;
+  }
+
+  /// 整块（紧密连段簇）擦除：清除簇内所有段落的全部画线。
+  Future<void> _removeUnderlineCluster(List<int> cluster) async {
+    for (final i in cluster) {
+      await _removeUnderlineRange(i, 0, _paragraphs[i].length);
+    }
   }
 
   /// 画线 / 取消画线：给第 i 段 [start,end) 区间添加或移除下划线，并云端同步。

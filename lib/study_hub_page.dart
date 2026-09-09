@@ -880,25 +880,37 @@ class StudyHubPageState extends State<StudyHubPage>
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        color: _gold,
-        child: ListView(
-          controller: _scrollController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(16, 4, 16,
-              MediaQuery.of(context).padding.bottom + 10),
-          children: [
-            _zhaiBannerSlot(),
-            _buildCurrentSutraCard(),
-            const SizedBox(height: 14),
-            _buildCheckInCard(),
-            const SizedBox(height: 14),
-            _buildHistoryStatsCard(),
-            const SizedBox(height: 14),
-            _buildDedicationBlock(),
-          ],
-        ),
+      body: Stack(
+        children: [
+          RefreshIndicator(
+            onRefresh: _loadData,
+            color: _gold,
+            child: ListView(
+              controller: _scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(16, 4, 16,
+                  MediaQuery.of(context).padding.bottom + 10),
+              children: [
+                _buildCurrentSutraCard(),
+                const SizedBox(height: 14),
+                _buildCheckInCard(),
+                const SizedBox(height: 14),
+                _buildHistoryStatsCard(),
+                const SizedBox(height: 14),
+                _buildDedicationBlock(),
+              ],
+            ),
+          ),
+          Positioned(
+            top: 0,
+            left: 16,
+            right: 16,
+            child: SafeArea(
+              bottom: false,
+              child: _zhaiBannerSlot(),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1589,10 +1601,6 @@ class StudyHubPageState extends State<StudyHubPage>
       ? const Color(0xFFDFEAD3)
       : const Color(0xFFF6E7C9);
 
-  Color get _zhaiBorder => AppPalette.instance.isPlain
-      ? const Color(0xFFD2DEC8)
-      : const Color(0xFFEBD9B6);
-
   /// 十斋日提醒条：今天为十斋日时在主页顶部展示约 5 秒后淡出收起。
   Widget _zhaiBannerSlot() {
     return AnimatedBuilder(
@@ -1631,7 +1639,6 @@ class StudyHubPageState extends State<StudyHubPage>
           end: Alignment.bottomRight,
           colors: [_zhaiBg1, _zhaiBg2],
         ),
-        border: Border.all(color: _zhaiBorder, width: 0.6),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),

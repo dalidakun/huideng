@@ -23,6 +23,7 @@ import 'hot_ranking_page.dart';
 import 'note_sutra_links.dart';
 
 import 'app_palette.dart';
+import 'sutra_descriptions.dart';
 
 /// 用于监听路由返回（例如从阅读页 pop 回来时刷新“最近阅读”）。
 final RouteObserver<ModalRoute<void>> routeObserver =
@@ -3451,7 +3452,7 @@ class SutraListPageState extends State<SutraListPage>
               ),
             )
           else
-            ...sutras.map((s) => _buildSutraTile(context, s)),
+            ...sutras.map((s) => _buildSutraTile(context, s, compact: true)),
           const SizedBox(height: 8),
         ],
       ),
@@ -3747,32 +3748,80 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  Widget _buildSutraTile(BuildContext ctx, Sutra sutra, {bool showFolder = false}) {
+  Widget _buildSutraTile(BuildContext ctx, Sutra sutra, {bool showFolder = false, bool compact = false}) {
     final folderName = _folderDisplayNames[sutra.folder] ?? sutra.folder;
+    final charText = sutra.charCount > 0 ? '${sutra.charCount}字' : null;
+    final titleWidget = Row(
+      children: [
+        Expanded(
+          child: Text(
+            _displayTitle(sutra.title),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: sutra.isRead ? const Color(0xFFcf9e66) : AppPalette.p.primary,
+              fontSize: compact ? 13.5 : 14.5,
+              fontWeight: sutra.isRead ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
+        ),
+        if (compact && charText != null) ...[
+          const SizedBox(width: 6),
+          Text(charText,
+              style: const TextStyle(color: Color(0xFF999999), fontSize: 11)),
+        ],
+      ],
+    );
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      decoration: BoxDecoration(
-        color: AppPalette.p.card,
-        borderRadius: BorderRadius.circular(8),
-      ),
+      margin: EdgeInsets.symmetric(horizontal: compact ? 0 : 12, vertical: 2),
+      decoration: compact
+          ? null
+          : BoxDecoration(
+              color: AppPalette.p.card,
+              borderRadius: BorderRadius.circular(8),
+            ),
       child: ListTile(
         dense: true,
         minVerticalPadding: 4,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-        title: Text(
-          _displayTitle(sutra.title),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: sutra.isRead ? const Color(0xFFcf9e66) : AppPalette.p.primary,
-            fontSize: 14.5,
-            fontWeight: sutra.isRead ? FontWeight.w600 : FontWeight.w500,
-          ),
-        ),
-        subtitle: showFolder && folderName != null
-            ? Text(folderName, style: const TextStyle(color: Color(0xFF999999), fontSize: 11))
+        contentPadding: EdgeInsets.symmetric(horizontal: compact ? 12 : 12, vertical: 2),
+        leading: compact
+            ? null
+            : Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0F0F0),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.menu_book_rounded,
+                  size: 17,
+                  color: sutra.isRead ? const Color(0xFFcf9e66) : const Color(0xFF71867A),
+                ),
+              ),
+        title: titleWidget,
+        subtitle: !compact && ((showFolder && folderName != null) || charText != null)
+            ? Row(
+                children: [
+                  if (showFolder && folderName != null)
+                    Text(folderName,
+                        style: const TextStyle(color: Color(0xFF999999), fontSize: 11)),
+                  if (showFolder && folderName != null && charText != null)
+                    const Text(' · ',
+                        style: TextStyle(color: Color(0xFF999999), fontSize: 11)),
+                  if (charText != null)
+                    Text(charText,
+                        style: const TextStyle(color: Color(0xFF999999), fontSize: 11)),
+                ],
+              )
             : null,
-        trailing: _buildDownloadTrailing(sutra),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildDownloadTrailing(sutra),
+            Icon(Icons.chevron_right, size: 16, color: AppPalette.p.textHint),
+          ],
+        ),
         onTap: () => _openSutra(sutra),
         onLongPress: () => _showBottomSheet(ctx, sutra),
       ),
@@ -4187,6 +4236,7 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
     final read = _sutras.where((s) => s.isRead).length;
     final downloading = widget.parent._folderDownloadTotal[widget.folderName] != null;
     final isPlain = AppPalette.instance.isPlain;
+    final desc = kSutraDescriptions[widget.folderName];
     return Scaffold(
       backgroundColor: AppPalette.p.bg,
       appBar: AppBar(
@@ -4195,32 +4245,15 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
         shadowColor: Colors.transparent,
         iconTheme: IconThemeData(color: AppPalette.p.primary),
         actionsPadding: const EdgeInsets.only(right: 24),
-        title: Row(
-          children: [
-            Flexible(
-              child: Text(
-                widget.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppPalette.p.primary,
-                  fontSize: 16.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '已读 $read/$total 册',
-              style: TextStyle(
-                color: isPlain
-                    ? const Color(0xFF5d7c5a)
-                    : const Color(0xFFba8e82),
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
+        title: Text(
+          '已读 $read/$total 册',
+          style: TextStyle(
+            color: isPlain
+                ? const Color(0xFF5d7c5a)
+                : const Color(0xFFba8e82),
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
         ),
         actions: [
           if (downloading)
@@ -4255,9 +4288,77 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
             )
           : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: total,
-              itemBuilder: (ctx, i) => widget.parent._buildSutraTile(ctx, _sutras[i]),
+              itemCount: total + (desc != null ? 1 : 0),
+              itemBuilder: (ctx, i) {
+                if (desc != null && i == 0) {
+                  return _buildDescriptionCard(desc, isPlain);
+                }
+                final sutraIndex = desc != null ? i - 1 : i;
+                return widget.parent._buildSutraTile(ctx, _sutras[sutraIndex]);
+              },
             ),
+    );
+  }
+
+  Widget _buildDescriptionCard(String desc, bool isPlain) {
+    final accent = isPlain ? const Color(0xFF5d7c5a) : const Color(0xFFba8e82);
+    final bgStart = isPlain
+        ? const Color(0xFFF0F5EC)
+        : const Color(0xFFFAF0E0);
+    final bgEnd = isPlain
+        ? const Color(0xFFF7FAF5)
+        : const Color(0xFFFCF7EF);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [bgStart, bgEnd],
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 3,
+              margin: const EdgeInsets.only(top: 2, right: 12),
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.circular(2),
+              ),
+              height: 48,
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.displayName,
+                    style: TextStyle(
+                      color: AppPalette.p.primary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    desc,
+                    style: TextStyle(
+                      color: AppPalette.p.textSec,
+                      fontSize: 13.5,
+                      height: 1.6,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
