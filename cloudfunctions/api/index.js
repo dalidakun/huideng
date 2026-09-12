@@ -3658,6 +3658,32 @@ exports.main = async (event, context) => {
         }
       }
 
+      // 拉取某本经所有有感想（任意用户）的段落下标集合，用于阅读页操作栏「所有感想」变绿。
+      // 返回 {indices: [int]} — 只含下标，不含笔记内容，轻量高效。
+      case "getParagraphsWithThoughts": {
+        const sutraKey = event.sutraKey;
+        if (!sutraKey) return fail("缺少经名参数");
+        try {
+          await ensureReadingParagraphNotes();
+          // 查所有用户对该经有非空 note 的记录，只取 index 字段。
+          const { data } = await readingParagraphNotes
+            .where({
+              sutraKey,
+              note: _.neq(""),
+            })
+            .field({ index: true })
+            .limit(5000)
+            .get();
+          const indices = (data || [])
+            .map((d) => parseInt(d.index, 10))
+            .filter((n) => !isNaN(n));
+          return ok({ indices: [...new Set(indices)] });
+        } catch (e) {
+          console.error("[api] getParagraphsWithThoughts error:", e && e.message ? e.message : e);
+          return ok({ indices: [] });
+        }
+      }
+
       // 保存某段的备注文本（note 为 '' 表示清除该段备注）。
       // 按「段原文」聚合所有用户对该段的读经想法（菩提空间公开帖中
       // 符合 $经名\n\n段原文\n\n想法 格式、且段原文与给定段落匹配的帖子）。

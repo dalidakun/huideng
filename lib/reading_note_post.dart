@@ -690,7 +690,7 @@ class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
             debugPrint('[highlights] 实时重建失败: $e\n$st');
           }
           if (computed == null) {
-            syncNotice = '画线重建失败，展示分享时画线';
+            // 重建失败：静默回退到分享时快照，不打扰用户。
           } else {
             items = computed;
             debugPrint('[highlights-post] 实时 ${computed.length} 条, notesKey=${union.key}');
@@ -707,13 +707,11 @@ class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
             }
           }
         } else {
-          syncNotice = '未能定位经文正文，展示分享时画线';
+          // 无法定位经文正文：静默回退到分享时快照。
         }
       } catch (e) {
-        // 实时数据加载失败（含云端拒绝/网络异常），回退到分享快照并明示原因。
+        // 实时数据加载失败：静默回退到分享快照。
         liveLoaded = false;
-        syncNotice =
-            e is CloudApiException ? '云端同步失败：${e.message}' : '云端同步失败，展示分享时画线';
       }
       if (liveLoaded) {
         highlights = [for (final it in items) it.text];
@@ -1102,7 +1100,7 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
             debugPrint('[thoughts] 实时重建失败: $e\n$st');
           }
           if (computed == null) {
-            syncNotice = '感想重建失败，展示分享时感想';
+            // 重建失败：静默回退到分享时快照，不打扰用户。
           } else {
             final items = computed;
             paragraphs = [for (final it in items) it.paragraph];
@@ -1119,13 +1117,11 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
             }
           }
         } else {
-          syncNotice = '未能定位经文正文，展示分享时感想';
+          // 无法定位经文正文：静默回退到分享时快照。
         }
       } catch (e) {
-        // 实时数据加载失败则回退到分享快照并明示原因。
+        // 实时数据加载失败：静默回退到分享快照。
         liveLoaded = false;
-        syncNotice =
-            e is CloudApiException ? '云端同步失败：${e.message}' : '云端同步失败，展示分享时感想';
       }
       if (liveLoaded && liveEmpty) {
         emptyHint = '作者已删除全部感想\n该分享帖已同步为空';

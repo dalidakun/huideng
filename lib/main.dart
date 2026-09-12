@@ -527,9 +527,9 @@ class _MainPageState extends State<MainPage>
   List<BottomNavigationBarItem> get _bottomNavItems => [
     BottomNavigationBarItem(
       icon: Image.asset(navIconAsset('assets/images/study.png'),
-          width: 24, height: 24),
+          width: 22, height: 22),
       activeIcon: Image.asset(navIconAsset('assets/images/study_selected.png'),
-          width: 24, height: 24),
+          width: 22, height: 22),
       label: '',
     ),
     BottomNavigationBarItem(
@@ -539,10 +539,10 @@ class _MainPageState extends State<MainPage>
     ),
     BottomNavigationBarItem(
       icon: Image.asset(navIconAsset('assets/images/sutra_book.png'),
-          width: 24, height: 24),
+          width: 22, height: 22),
       activeIcon:
           Image.asset(navIconAsset('assets/images/sutra_book_selected.png'),
-              width: 24, height: 24),
+              width: 22, height: 22),
       label: '',
     ),
     BottomNavigationBarItem(
@@ -552,9 +552,9 @@ class _MainPageState extends State<MainPage>
     ),
     BottomNavigationBarItem(
       icon: Image.asset(navIconAsset('assets/images/my.png'),
-          width: 21.5, height: 21.5),
+          width: 19.5, height: 19.5),
       activeIcon: Image.asset(navIconAsset('assets/images/my_selected.png'),
-          width: 21.5, height: 21.5),
+          width: 19.5, height: 19.5),
       label: '',
     ),
   ];
@@ -918,8 +918,8 @@ class _BodhiTabIcon extends StatelessWidget {
                   : (active
                       ? 'assets/images/mi2.png'
                       : 'assets/images/mi1.png'),
-              width: 27,
-              height: 27,
+              width: 25,
+              height: 25,
             ),
             if (count > 0)
               Positioned(
@@ -994,8 +994,8 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
           navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
               : 'assets/images/chat.png'),
-          width: 24,
-          height: 24,
+          width: 22,
+          height: 22,
         ),
         Positioned(
           top: -6,

@@ -18,6 +18,7 @@ import 'note_detail_page.dart';
 import 'note_edit_page.dart';
 import 'pdf_export.dart';
 import 'login_page.dart';
+import 'sutra_list_page.dart' show routeObserver;
 
 /// 读经笔记分享帖的元数据哨兵前缀：用于标识这是读经笔记汇总帖。
 /// 菩提空间展示时只显示第一篇笔记，点击色块用完整数据打开笔记汇总页。
@@ -69,7 +70,8 @@ class _NoteItem {
   });
 }
 
-class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage> {
+class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
+    with RouteAware {
   static const _bg = Color(0xFFFAF7F2);
   static const _card = Colors.white;
   static const _fg = Color(0xFF212121);
@@ -98,11 +100,35 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage> {
         (meId != null && meId.isNotEmpty && widget.ownerUserId == meId);
   }
 
+  bool _routeSubscribed = false;
+
   @override
   void initState() {
     super.initState();
     _loadNotes();
     if (_isOwner) _loadShareCloudId();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null && !_routeSubscribed) {
+      _routeSubscribed = true;
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPopNext() {
+    // 从菩提空间返回时刷新笔记列表
+    if (_isOwner) _loadNotes();
+  }
+
+  @override
+  void dispose() {
+    if (_routeSubscribed) routeObserver.unsubscribe(this);
+    super.dispose();
   }
 
   String get _sutraName => widget.title;

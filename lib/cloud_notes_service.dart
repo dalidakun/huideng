@@ -764,6 +764,24 @@ class CloudNotesService {
     return const [];
   }
 
+  /// 拉取某本经所有有感想（任意用户）的段落下标集合，用于阅读页操作栏「所有感想」变绿。
+  /// 返回 {index} — 只含下标，不含笔记内容，轻量高效。
+  Future<Set<int>> getParagraphsWithThoughts(String sutraKey) async {
+    try {
+      final res = await _call('getParagraphsWithThoughts', params: {
+        'sutraKey': sutraKey,
+      });
+      final indices = res['indices'];
+      if (indices is List) {
+        return {
+          for (final it in indices)
+            if (it is int) it,
+        };
+      }
+    } catch (_) {}
+    return const {};
+  }
+
   /// 拉取「所有用户」对某段经文的感想：菩提空间公开帖中符合
   /// `$经名\n\n段原文\n\n感想` 格式、且段原文与 [paragraph] 匹配的帖子。
   /// 返回分页列表 + 是否还有更多 + 总条数。

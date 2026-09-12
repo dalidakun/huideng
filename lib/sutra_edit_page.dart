@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app_palette.dart';
@@ -42,7 +43,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
     super.initState();
     _controller = TextEditingController(text: widget.content);
     _focusNode = FocusNode();
-    // 优先按段落文本定位：取前 15 个非空字符做子串匹配。
     final targetText = widget.topParagraphText;
     int? targetOffset;
     if (targetText != null && targetText.trim().isNotEmpty) {
@@ -51,7 +51,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
         final raw = _controller.text.replaceAll(RegExp(r'\s+'), '');
         final idx = raw.indexOf(key);
         if (idx >= 0) {
-          // 在原始文本中找到对应位置（回推真实偏移）。
           targetOffset = _offsetInOriginal(idx, raw.length);
         }
       }
@@ -82,7 +81,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
     super.dispose();
   }
 
-  /// 将去除空白后的索引 [rawIdx] 映射回原始文本的偏移。
   int _offsetInOriginal(int rawIdx, int rawLength) {
     final original = _controller.text;
     var rawCount = 0;
@@ -91,6 +89,15 @@ class _SutraEditPageState extends State<SutraEditPage> {
       if (rawCount > rawIdx) return i;
     }
     return original.length;
+  }
+
+  void _insertText(String text, {int cursorOffset = 0}) {
+    final sel = _controller.selection;
+    final start = sel.start.clamp(0, _controller.text.length);
+    final end = sel.end.clamp(0, _controller.text.length);
+    _controller.text = '${_controller.text.substring(0, start)}$text${_controller.text.substring(end)}';
+    _controller.selection = TextSelection.collapsed(offset: start + (cursorOffset == 0 ? text.length : cursorOffset));
+    _focusNode.requestFocus();
   }
 
   Future<void> _save() async {
@@ -105,7 +112,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
       );
     }
     if (mounted) {
-      // 根据光标位置提取当前段落文本，供阅读页同步定位。
       String? cursorParagraphText;
       if (_controller.text.isNotEmpty) {
         final cursor = _controller.selection.end.clamp(0, _controller.text.length);
@@ -128,17 +134,18 @@ class _SutraEditPageState extends State<SutraEditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.p;
     return Scaffold(
-      backgroundColor: AppPalette.p.bg,
+      backgroundColor: p.bg,
       appBar: AppBar(
-        backgroundColor: AppPalette.p.bg,
+        backgroundColor: p.bg,
         elevation: 0,
         shadowColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF212121)),
+        iconTheme: IconThemeData(color: p.text),
         title: Text(
           widget.title,
-          style: const TextStyle(
-            color: Color(0xFF212121),
+          style: TextStyle(
+            color: p.text,
             fontSize: 16,
             fontWeight: FontWeight.w500,
           ),
@@ -149,39 +156,110 @@ class _SutraEditPageState extends State<SutraEditPage> {
             onPressed: _save,
             child: Text(
               '保存',
-              style: TextStyle(color: AppPalette.p.primary, fontSize: 14, fontWeight: FontWeight.w600),
+              style: TextStyle(color: p.primary, fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
+        child: Column(
+          children: [
+            _buildToolbar(p),
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
+                  keyboardType: TextInputType.multiline,
+                  style: const TextStyle(
+                    color: Color(0xFF212121),
+                    fontSize: 16,
+                    height: 1.8,
+                    letterSpacing: 0.5,
+                  ),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.all(16),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolbar(PaletteData p) {
+    final items = [
+      _ToolbarItem(symbol: '。。。', label: '隐藏翻译', tooltip: '隐藏操作栏'),
+      _ToolbarItem(symbol: '///', label: '不分段', tooltip: '与下段连排'),
+      _ToolbarItem(symbol: 'bbb', label: '加粗', tooltip: '加粗显示'),
+      _ToolbarItem(symbol: '@@@@', label: '备注', tooltip: '插入备注（绿色小字）', cursorOffset: 2),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: p.tintBg,
+        border: Border(
+          bottom: BorderSide(color: p.border, width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < items.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            _buildToolButton(p, items[i]),
+          ],
+          const Spacer(),
+          Text(
+            '光标处插入',
+            style: TextStyle(fontSize: 11, color: p.textHint),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToolButton(PaletteData p, _ToolbarItem item) {
+    return Tooltip(
+      message: item.tooltip,
+      child: GestureDetector(
+        onTap: () => _insertText(item.symbol, cursorOffset: item.cursorOffset),
         child: Container(
-          margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: p.border, width: 0.5),
           ),
-          child: TextField(
-            controller: _controller,
-            focusNode: _focusNode,
-            maxLines: null,
-            expands: true,
-            textAlignVertical: TextAlignVertical.top,
-            keyboardType: TextInputType.multiline,
-            style: const TextStyle(
-              color: Color(0xFF212121),
-              fontSize: 16,
-              height: 1.8,
-              letterSpacing: 0.5,
-            ),
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.all(16),
+          child: Text(
+            item.label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: p.primary,
             ),
           ),
         ),
       ),
     );
   }
+}
+
+class _ToolbarItem {
+  final String symbol;
+  final String label;
+  final String tooltip;
+  final int cursorOffset;
+  const _ToolbarItem({required this.symbol, required this.label, required this.tooltip, this.cursorOffset = 0});
 }

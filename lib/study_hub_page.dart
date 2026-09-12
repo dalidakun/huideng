@@ -99,6 +99,10 @@ class StudyHubPageState extends State<StudyHubPage>
   Set<String> _multiVolumeBases = const {};
   /// 精读经文卡小字元信息（部类 · 总字数），如「阿含部 · 12345 字」。
   String _sutraMeta = '';
+  /// 底部「今日读经 / 累积读经」徽章行 Key：用于测量其宽度，
+  /// 让上方的读经进度条与徽章行等宽。
+  final GlobalKey _jingDuBadgesKey = GlobalKey();
+  double _jingDuBarWidth = 0;
   /// 是否允许他人在主页查看我的「精读」（在读经书）。
   bool _allowReadingShare = false;
   List<Map<String, dynamic>> _customTypes = [];
@@ -214,8 +218,18 @@ class StudyHubPageState extends State<StudyHubPage>
     // 命不中按卷取，仍取不到才退全书）。
     String sutraMeta = '';
     if (title != null && title.isNotEmpty) {
-      final base = sutraBaseTitle(title);
-      final volume = sutraVolumeOf(title);
+      var base = sutraBaseTitle(title);
+      var volume = sutraVolumeOf(title);
+      // 兼容带中文卷标的标题（如「地藏菩萨本愿经卷一」，
+      // 从 $引用/讨论页打开时会存成这种中文卷标形式）：
+      // 剥离末尾中文卷标得基础经名，并解析出卷号，保证查得到部类与字数。
+      if (volume <= 0) {
+        final m = chineseVolumeSuffixRe.firstMatch(base);
+        if (m != null) {
+          base = base.substring(0, m.start).trim();
+          volume = parseChineseVolumeNumber(m.group(0)!);
+        }
+      }
       final link = NoteSutraCatalog.cachedTitleMap?[base];
       final parts = <String>[];
       if (link != null) {
@@ -223,7 +237,7 @@ class StudyHubPageState extends State<StudyHubPage>
         if (dept.isNotEmpty) parts.add(dept);
       }
       var shownChars = NoteSutraCatalog.cachedCharCountForRawTitle(title);
-      if (shownChars <= 0) {
+      if (shownChars <= 0 && volume > 0) {
         shownChars = NoteSutraCatalog.cachedVolumeCharCount(base, volume);
       }
       if (shownChars <= 0) {
@@ -924,6 +938,7 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Widget _buildCurrentSutraCard() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureJingDuBarWidth());
     if (!_loaded) {
       return Container(
         decoration: BoxDecoration(
@@ -1040,7 +1055,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 ),
               ),
               if (_currentTitle != null) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 14),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _openSutra,
@@ -1075,24 +1090,15 @@ class StudyHubPageState extends State<StudyHubPage>
                       const SizedBox(height: 10),
                       Padding(
                         padding: const EdgeInsets.only(left: 20, right: 20),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            IntrinsicWidth(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Text(
-                                        '已读 ${(_progress * 100).toStringAsFixed(1)}%',
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            color: _textHint,
-                                            fontWeight: FontWeight.w500)),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  ClipRRect(
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: _jingDuBarWidth,
+                                  child: ClipRRect(
                                     borderRadius: BorderRadius.circular(2),
                                     child: LinearProgressIndicator(
                                       value: _progress,
@@ -1104,65 +1110,78 @@ class StudyHubPageState extends State<StudyHubPage>
                                               : AppPalette.p.accent),
                                     ),
                                   ),
-                                  const SizedBox(height: 20),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.end,
-                                    children: [
-                                      ValueListenableBuilder<int>(
-                                        valueListenable: ReadingTimeService
-                                            .instance.todaySeconds,
-                                        builder: (context, sec, _) =>
-                                            _buildTimeBadgeItem(
-                                                Icons.timer_outlined,
-                                                '今日读经',
-                                                sec),
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 14, vertical: 2),
-                                        child: Container(
-                                          width: 1,
-                                          height: 30,
-                                          color: _border,
-                                        ),
-                                      ),
-                                      ValueListenableBuilder<int>(
-                                        valueListenable: ReadingTimeService
-                                            .instance.totalSeconds,
-                                        builder: (context, sec, _) =>
-                                            _buildTimeBadgeItem(
-                                                Icons.history,
-                                                '累积读经',
-                                                sec),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                    '已读 ${(_progress * 100).toStringAsFixed(1)}%',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: _textHint,
+                                        fontWeight: FontWeight.w500)),
+                              ],
                             ),
-                            const Spacer(),
-                            GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: _showRecentSutras,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 2, vertical: 4),
-                                child: Row(
+                            const SizedBox(height: 20),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Row(
+                                  key: _jingDuBadgesKey,
                                   mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.end,
                                   children: [
-                                    Text('最近阅读',
-                                        style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w500,
-                                            color: _text)),
-                                    const SizedBox(width: 2),
-                                    Icon(Icons.chevron_right, size: 18,
-                                        color: _textSec),
+                                    ValueListenableBuilder<int>(
+                                      valueListenable: ReadingTimeService
+                                          .instance.todaySeconds,
+                                      builder: (context, sec, _) =>
+                                          _buildTimeBadgeItem(
+                                              Icons.timer_outlined,
+                                              '今日读经',
+                                              sec),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 2),
+                                      child: Container(
+                                        width: 1,
+                                        height: 30,
+                                        color: _border,
+                                      ),
+                                    ),
+                                    ValueListenableBuilder<int>(
+                                      valueListenable: ReadingTimeService
+                                          .instance.totalSeconds,
+                                      builder: (context, sec, _) =>
+                                          _buildTimeBadgeItem(
+                                              Icons.history,
+                                              '累积读经',
+                                              sec),
+                                    ),
                                   ],
                                 ),
-                              ),
+                                const Spacer(),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _showRecentSutras,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 2, vertical: 4),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text('最近阅读',
+                                            style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500,
+                                                color: _text)),
+                                        const SizedBox(width: 2),
+                                        Icon(Icons.chevron_right, size: 18,
+                                            color: _textSec),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -1241,6 +1260,17 @@ class StudyHubPageState extends State<StudyHubPage>
       ),
     ],
   );
+  }
+
+  /// 测量精读卡底部徽章行宽度，让进度条与其等宽。
+  void _measureJingDuBarWidth() {
+    final ctx = _jingDuBadgesKey.currentContext;
+    if (ctx == null || !ctx.mounted) return;
+    final w = ctx.size?.width ?? 0;
+    if (w <= 0) return;
+    if ((_jingDuBarWidth - w).abs() > 0.5) {
+      setState(() => _jingDuBarWidth = w);
+    }
   }
 
   /// 读经时长徽章：第一行（图标+标题）与第二行（时间）左对齐。

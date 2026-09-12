@@ -112,12 +112,16 @@ class _ReadingPageState extends State<ReadingPage>
   Map<int, bool> _paraShared = {}; // index -> 该段笔记是否已分享到菩提空间
   Map<int, String> _paraCloudIds = {}; // index -> 分享后的云端帖子 ID
   bool _paraNotesLoading = false;
+  Set<int> _paraHasAnyThought = {}; // 有任意用户感想的段落下标集合（操作栏「所有感想」变绿）
   // 更新排版后未能按原文重新定位到新段的原始 index 集合（保留数据并标记提示）。
   Set<int> _unalignedIndices = {};
   // 以 `。。。` 前缀标记、阅读时隐藏操作栏（AI译/感想/待办）的段落 index 集合。
   Set<int> _hiddenActionParagraphs = {};
   // 以 `。。。///` 标记、该段与下一段之间不留间隔（不分段）的段落 index 集合。
   Set<int> _tightParagraphs = {};
+  // 以 `bbb` 或 `BBB` 结尾的段落 index 集合：该段文字加粗显示。
+  Set<int> _boldParagraphs = {};
+  Set<int> _noteParagraphs = {};
   bool _isSutraAdmin = false; // 当前登录用户是否为管理员（决定菜单显示编辑经文/更新排版）
   int _activeNoteParagraphIndex = -1; // 正在编辑备注的段落（用于输入框）
   final TextEditingController _noteInputController = TextEditingController();
@@ -602,20 +606,81 @@ class _ReadingPageState extends State<ReadingPage>
     _rawLines = [];
     _hiddenActionParagraphs.clear();
     _tightParagraphs.clear();
+    _boldParagraphs.clear();
+    _noteParagraphs.clear();
     final lines = content.split('\n');
     const hideMark = '。。。';
     // 不分段记号：支持半角 /// 与全角 ／／／。
     const tightUnits = ['///', '／／／'];
+    // ── 备注段落：@@ 开头 … @@ 结尾 的块状解析 ──
+    // 支持三种写法：
+    //   1) 单行：@@内容@@
+    //   2) 多行：@@ 开头 + 若干内容行 + @@ 结尾
+    //   3) 空模板：@@@@（编辑器「备注」按钮插入的光标模板）
+    // 块内所有行合并为一段，不做任何符号/分段/翻译处理。
+    final noteBuf = <String>[];
+    var inNote = false;
+    void flushNote() {
+      if (noteBuf.isEmpty) return;
+      _noteParagraphs.add(out.length);
+      _hiddenActionParagraphs.add(out.length);
+      out.add(noteBuf.join('\n'));
+      _rawLines.add(noteBuf.join('\n'));
+      noteBuf.clear();
+    }
+
     for (final line in lines) {
       var text = line.trim();
-      if (text.isEmpty) continue;
-      // 标记（段首或段尾均可）：
-      //   `。。。`        → 该段隐藏操作栏（AI译/感想/待办），标记本身不显示。
-      //   `。。。///`     → 同时该段与下一段之间不留间隔（不分段）。
+
+      // 块内空行：保留为原样换行（不打断备注块）。
+      if (text.isEmpty) {
+        if (inNote && noteBuf.isNotEmpty) {
+          noteBuf.add('');
+        } else if (!inNote) {
+          flushNote();
+        }
+        continue;
+      }
+
+      // 备注块内的行。
+      if (inNote) {
+        if (text.endsWith('@@')) {
+          final rest = text.substring(0, text.length - 2);
+          if (rest.isNotEmpty) noteBuf.add(rest);
+          flushNote();
+          inNote = false;
+        } else if (text.startsWith('@@')) {
+          noteBuf.add(text.substring(2));
+        } else {
+          noteBuf.add(text);
+        }
+        continue;
+      }
+
+      // 单行：@@内容@@（内容可为空即 @@@@）。
+      if (text.startsWith('@@') && text.endsWith('@@') && text.length >= 4) {
+        noteBuf.add(text.substring(2, text.length - 2));
+        flushNote();
+        continue;
+      }
+
+      // 块开始：@@ 开头（未在本行结束）。
+      if (text.startsWith('@@')) {
+        final rest = text.substring(2);
+        if (rest.isNotEmpty) noteBuf.add(rest);
+        inNote = true;
+        continue;
+      }
+
+      // 遇到非 @@ 行，先刷出之前累积的备注
+      flushNote();
+
       var hide = false;
       var tight = false;
+      var bold = false;
 
-      // 尾部标记：正文[/]。。。[/]  或  正文。。。///
+      // ── 1. 尾部 hideMark + tight 检测（含 bbb 遮挡的情况） ──
+      // 先尝试完整匹配 。。。/// 或 ///。。。（最常见组合）。
       for (final u in tightUnits) {
         if (text.endsWith(hideMark + u)) {
           text = text.substring(0, text.length - hideMark.length - u.length);
@@ -630,12 +695,61 @@ class _ReadingPageState extends State<ReadingPage>
           break;
         }
       }
+      // 仅匹配 。。。：可能因 bbb 等标记遮住了 ///，先剥 。。。 再检查。
       if (!tight && text.endsWith(hideMark)) {
         text = text.substring(0, text.length - hideMark.length);
         hide = true;
+        for (final u in tightUnits) {
+          if (text.endsWith(u)) {
+            text = text.substring(0, text.length - u.length);
+            tight = true;
+            break;
+          }
+        }
+      }
+      // 若仍无 hideMark，但文本含 。。。（如 text。。。bbb），先剥 bbb 再检测。
+      if (!hide && text.contains(hideMark)) {
+        var boldCandidate = false;
+        if (text.length >= 3) {
+          final tail3 = text.substring(text.length - 3);
+          if (tail3 == 'bbb' || tail3 == 'BBB') {
+            text = text.substring(0, text.length - 3).trimRight();
+            boldCandidate = true;
+            bold = true;
+          }
+        }
+        if (boldCandidate) {
+          // 再次检测 hideMark
+          for (final u in tightUnits) {
+            if (text.endsWith(hideMark + u)) {
+              text = text.substring(0, text.length - hideMark.length - u.length);
+              hide = true;
+              tight = true;
+              break;
+            }
+            if (text.endsWith(u + hideMark)) {
+              text = text.substring(0, text.length - u.length - hideMark.length);
+              hide = true;
+              tight = true;
+              break;
+            }
+          }
+          if (!tight && text.endsWith(hideMark)) {
+            text = text.substring(0, text.length - hideMark.length);
+            hide = true;
+            for (final u in tightUnits) {
+              if (text.endsWith(u)) {
+                text = text.substring(0, text.length - u.length);
+                tight = true;
+                break;
+              }
+            }
+          }
+          if (hide) text = text.trim();
+        }
       }
 
-      // 头部标记：[/]。。。[/]正文
+      // ── 2. 头部 hideMark + tight 检测（对称逻辑） ──
       for (final u in tightUnits) {
         if (text.startsWith(hideMark + u)) {
           text = text.substring(hideMark.length + u.length);
@@ -653,19 +767,85 @@ class _ReadingPageState extends State<ReadingPage>
       if (!tight && text.startsWith(hideMark)) {
         text = text.substring(hideMark.length);
         hide = true;
+        for (final u in tightUnits) {
+          if (text.startsWith(u)) {
+            text = text.substring(u.length);
+            tight = true;
+            break;
+          }
+        }
+      }
+      // 头部含 。。。但被 bbb 遮挡的情况
+      if (!hide && text.contains(hideMark)) {
+        var boldCandidate = false;
+        if (text.length >= 3) {
+          final head3 = text.substring(0, 3);
+          if (head3 == 'bbb' || head3 == 'BBB') {
+            text = text.substring(3).trimLeft();
+            boldCandidate = true;
+            bold = true;
+          }
+        }
+        if (boldCandidate) {
+          for (final u in tightUnits) {
+            if (text.startsWith(hideMark + u)) {
+              text = text.substring(hideMark.length + u.length);
+              hide = true;
+              tight = true;
+              break;
+            }
+            if (text.startsWith(u + hideMark)) {
+              text = text.substring(u.length + hideMark.length);
+              hide = true;
+              tight = true;
+              break;
+            }
+          }
+          if (!tight && text.startsWith(hideMark)) {
+            text = text.substring(hideMark.length);
+            hide = true;
+            for (final u in tightUnits) {
+              if (text.startsWith(u)) {
+                text = text.substring(u.length);
+                tight = true;
+                break;
+              }
+            }
+          }
+          if (hide) text = text.trim();
+        }
       }
 
       text = text.trim();
-      if (text.isEmpty) continue; // 仅标记无正文的行视为空段
+      if (text.isEmpty) continue;
+
+      // ── 3. bbb / BBB 加粗标记（尾部或头部均可） ──
+      if (!bold && text.length >= 3) {
+        final tail3 = text.substring(text.length - 3);
+        if (tail3 == 'bbb' || tail3 == 'BBB') {
+          text = text.substring(0, text.length - 3).trimRight();
+          bold = true;
+        } else {
+          final head3 = text.substring(0, 3);
+          if (head3 == 'bbb' || head3 == 'BBB') {
+            text = text.substring(3).trimLeft();
+            bold = true;
+          }
+        }
+      }
+      if (text.isEmpty) continue;
+
       _rawLines.add(line.trim());
       if (hide) {
         _hiddenActionParagraphs.add(out.length);
         if (tight) _tightParagraphs.add(out.length);
-        out.add(text);
-      } else {
-        out.add(text);
       }
+      if (bold) _boldParagraphs.add(out.length);
+      out.add(text);
     }
+    // 循环结束后，刷出末尾累积的备注段落（含未闭合的块）
+    inNote = false;
+    flushNote();
     return out;
   }
 
@@ -726,12 +906,25 @@ class _ReadingPageState extends State<ReadingPage>
         };
         _paraNotesLoading = false;
       });
+      // 并行加载「哪些段有任意用户感想」（不阻塞主流程）。
+      _loadParagraphThoughtsIndicator();
     } catch (e) {
       // 笔记拉取失败不阻塞阅读：保持本地为空，静默降级。
       if (!mounted) return;
       setState(() => _paraNotesLoading = false);
       debugPrint('[reading] 拉取段落笔记失败: $e');
     }
+  }
+
+  /// 拉取本经所有有感想（任意用户）的段落下标集合，用于操作栏「所有感想」变绿。
+  Future<void> _loadParagraphThoughtsIndicator() async {
+    if (!mounted) return;
+    try {
+      final indices =
+          await CloudNotesService.instance.getParagraphsWithThoughts(_sutraKey);
+      if (!mounted) return;
+      setState(() => _paraHasAnyThought = indices);
+    } catch (_) {}
   }
 
   /// 保存某段备注文本到云端并更新本地状态。
@@ -1269,10 +1462,8 @@ class _ReadingPageState extends State<ReadingPage>
                       ),
                     _buildDownloadBanner(),
                     Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Listener(
-                          onPointerDown: (event) {
+                      child: Listener(
+                        onPointerDown: (event) {
                             // 注意：此处绝不重置 _actionRowTapped ——
                             // 指针事件按「从内到外」派发，操作栏的内层 Listener
                             // 先把标记置 true，若这里再清掉，onPointerUp 就拦不住了。
@@ -1405,11 +1596,10 @@ class _ReadingPageState extends State<ReadingPage>
                                                 showUnaligned: false),
                                         ],
                                       ),
-                              );
+                               );
                             },
                           ),
                         ),
-                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
@@ -2339,6 +2529,7 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 一个渲染簇（≥1 连续紧密段落）的正文块：合并成一个 SelectableText 使
   /// 「本段全选 / 拖动选择」都能跨段作用；单段时保留原段落行为与操作栏。
+  /// 备注段落单独渲染为浅色背景色块，破出正文 16px 内边距，通到屏幕左右边缘。
   Widget _buildClusterParagraph(
     List<int> group, {
     required bool showUnaligned,
@@ -2346,15 +2537,17 @@ class _ReadingPageState extends State<ReadingPage>
   }) {
     final last = group.last;
     final bottom = _tightParagraphs.contains(last) ? 0.0 : 24.0;
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottom),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showUnaligned)
-            for (final idx in group)
-              if (_unalignedIndices.contains(idx)) _unalignedBanner(),
-          SelectableText.rich(
+    // 备注段落：整段底色块，左右通到屏幕边缘。
+    if (group.length == 1 && _noteParagraphs.contains(group.first)) {
+      return Padding(
+        padding: EdgeInsets.only(bottom: bottom),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+          color: _isDarkBg
+              ? const Color(0xFF2C2C2C)
+              : const Color(0xFFEEEEEE),
+          child: SelectableText.rich(
             TextSpan(children: _buildClusterSpans(group)),
             key: _paraTapKey(group.first),
             onSelectionChanged: (sel, cause) {
@@ -2364,13 +2557,38 @@ class _ReadingPageState extends State<ReadingPage>
             contextMenuBuilder: (context, editableTextState) =>
                 _buildSelectionToolbar(context, editableTextState, group),
           ),
-          if (!_hiddenActionParagraphs.contains(last))
-            Align(
-              alignment:
-                  actionsRight ? Alignment.centerRight : Alignment.centerLeft,
-              child: _buildParagraphActions(last),
+        ),
+      );
+    }
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottom),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showUnaligned)
+              for (final idx in group)
+                if (_unalignedIndices.contains(idx)) _unalignedBanner(),
+            SelectableText.rich(
+              TextSpan(children: _buildClusterSpans(group)),
+              key: _paraTapKey(group.first),
+              onSelectionChanged: (sel, cause) {
+                _hasTextSelection = !sel.isCollapsed;
+                _onSelectionChanged(sel);
+              },
+              contextMenuBuilder: (context, editableTextState) =>
+                  _buildSelectionToolbar(
+                      context, editableTextState, group),
             ),
-        ],
+            if (!_hiddenActionParagraphs.contains(last))
+              Align(
+                alignment:
+                    actionsRight ? Alignment.centerRight : Alignment.centerLeft,
+                child: _buildParagraphActions(last),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -2384,7 +2602,8 @@ class _ReadingPageState extends State<ReadingPage>
     final fg =
         _isDarkBg ? Colors.white.withOpacity(0.6) : const Color(0xFF9A9A9A);
     final activeFg = AppPalette.p.accent;
-    final hasNote = (_paraNotes[index] ?? '').isNotEmpty;
+    // 任意用户添加了感想即变绿（_paraHasAnyThought 由云端全量查询填充）。
+    final hasNote = _paraHasAnyThought.contains(index);
     final done = _paraDone[index] == true;
     return Padding(
       // 操作栏紧贴本段文字（与该段一体）；
@@ -3487,14 +3706,21 @@ class _ReadingPageState extends State<ReadingPage>
     }
   }
 
-  /// 段落的基准文字样式（含是否已读完的置灰）。
+  /// 段落的基准文字样式（含是否已读完的置灰、是否加粗）。
   TextStyle _paraBaseStyle(int i) => TextStyle(
         color: _paraDone[i] == true
             ? (_isDarkBg
                 ? Colors.white.withOpacity(0.35)
                 : const Color(0xFFBDBDBD))
-            : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
-        fontSize: _fontSize,
+            : _noteParagraphs.contains(i)
+                ? const Color(0xFF71867A)
+                : _boldParagraphs.contains(i)
+                    ? (_isDarkBg ? Colors.white : Colors.black)
+                    : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
+        fontSize: _noteParagraphs.contains(i)
+            ? _fontSize - 3
+            : _boldParagraphs.contains(i) ? _fontSize + 2 : _fontSize,
+        fontWeight: _boldParagraphs.contains(i) ? FontWeight.bold : null,
         height: _lineHeight,
         letterSpacing: 0.5,
       );
@@ -3505,6 +3731,17 @@ class _ReadingPageState extends State<ReadingPage>
     final text = _paragraphs[i];
     final len = text.length;
     if (len == 0) return [TextSpan(text: '')];
+
+    // ── 备注段落：按 \n 拆行，用 TextSpan(\n) 实现真正换行 ──
+    if (_noteParagraphs.contains(i)) {
+      final noteLines = text.split('\n');
+      final spans = <TextSpan>[];
+      for (var j = 0; j < noteLines.length; j++) {
+        if (j > 0) spans.add(const TextSpan(text: '\n'));
+        spans.add(TextSpan(text: noteLines[j]));
+      }
+      return spans;
+    }
 
     // 画线区间：合并重叠/相邻成有序不相交段 [(s,e)...]。
     final raw = <(int, int)>[];
@@ -3560,14 +3797,18 @@ class _ReadingPageState extends State<ReadingPage>
       while (end < e && isSrch[end] == se0) {
         end++;
       }
-      spans.add(TextSpan(
-        text: text.substring(start, end),
-        style: TextStyle(
-          backgroundColor: se0
-              ? (_isDarkBg ? Colors.yellow.withOpacity(0.3) : Colors.yellow)
-              : null,
-        ),
-      ));
+      if (se0) {
+        spans.add(TextSpan(
+          text: text.substring(start, end),
+          style: TextStyle(
+            backgroundColor: _isDarkBg
+                ? Colors.yellow.withValues(alpha: 0.3)
+                : Colors.yellow,
+          ),
+        ));
+      } else {
+        spans.add(TextSpan(text: text.substring(start, end)));
+      }
       start = end;
     }
     if (spans.isEmpty) spans.add(TextSpan(text: text.substring(s, e)));
@@ -3580,6 +3821,12 @@ class _ReadingPageState extends State<ReadingPage>
   List<TextSpan> _underlineSpans(
       String text, int para, int s, int e, List<bool> isSrch) {
     final spans = <TextSpan>[];
+    final fw = _boldParagraphs.contains(para) ? FontWeight.bold : null;
+    final fc = _noteParagraphs.contains(para)
+        ? const Color(0xFF71867A)
+        : _boldParagraphs.contains(para)
+            ? (_isDarkBg ? Colors.white : Colors.black)
+            : null;
     var start = s;
     while (start < e) {
       final se0 = isSrch[start];
@@ -3590,6 +3837,8 @@ class _ReadingPageState extends State<ReadingPage>
       spans.add(TextSpan(
         text: text.substring(start, end),
         style: TextStyle(
+          fontWeight: fw,
+          color: fc,
           decoration: TextDecoration.underline,
           decorationStyle: TextDecorationStyle.dotted,
           decorationColor: _isDarkBg ? Colors.white : const Color(0xFF212121),
@@ -3605,6 +3854,8 @@ class _ReadingPageState extends State<ReadingPage>
       spans.add(TextSpan(
         text: text.substring(s, e),
         style: TextStyle(
+          fontWeight: fw,
+          color: fc,
           decoration: TextDecoration.underline,
           decorationStyle: TextDecorationStyle.dotted,
           decorationColor: _isDarkBg ? Colors.white : const Color(0xFF212121),
