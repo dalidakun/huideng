@@ -1844,6 +1844,12 @@ class CloudNotesService {
     await _call('sutraEditSave', params: {'id': id, 'content': content});
   }
 
+  /// 管理员撤销「完成排版」：删除云端编辑版（GitHub 文件 + sutraEdits 记录），
+  /// 使该经恢复「未编辑」状态，所有用户显示原始版。
+  Future<void> deleteSutraEdit(String id) async {
+    await _call('sutraEditDelete', params: {'id': id});
+  }
+
   /// 管理员拉取反馈列表。
   /// [status] 可选：'new' / 'handled'，为空返回全部。
   Future<FeedbackListResult> getFeedbacks({

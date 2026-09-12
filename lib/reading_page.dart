@@ -196,13 +196,11 @@ class _ReadingPageState extends State<ReadingPage>
     _loadReadLaterState();
     _loadLayoutDoneState();
     _loadDisplayTitle();
-    // 异步获取管理员身份：管理员在菜单显示「编辑经文」，普通用户不再显示按钮，而是自动更新排版。
+    // 内容加载完成后自动检查云端是否有更新排版（所有用户均需执行，不依赖登录状态）。
+    _autoCheckAndApplyLayout();
+    // 异步获取管理员身份：管理员在菜单显示「编辑经文」。
     CloudNotesService.instance.isAdmin().then((v) {
-      if (mounted) {
-        setState(() => _isSutraAdmin = v);
-        // 普通用户在内容加载完成后自动检查并应用最新排版。
-        if (!v) _autoCheckAndApplyLayout();
-      }
+      if (mounted) setState(() => _isSutraAdmin = v);
     }).catchError((_) {});
   }
 
@@ -427,11 +425,13 @@ class _ReadingPageState extends State<ReadingPage>
       await prefs.setString('last_read_filePath', widget.filePath!);
     }
     final filePath = _resolvedFilePath ?? widget.filePath;
+    debugPrint('[加载内容] filePath=$filePath');
     if (filePath != null) {
       // 1. 优先加载已编辑的副本（如果存在）
       final editedPath = await editedSutraFilePath(filePath);
       final editedFile = File(editedPath);
       final hasEdited = await editedFile.exists();
+      debugPrint('[加载内容] editedPath=$editedPath hasEdited=$hasEdited');
       if (hasEdited) {
         try {
           final content = await editedFile.readAsString();
@@ -450,10 +450,35 @@ class _ReadingPageState extends State<ReadingPage>
         }
       }
 
-      // 2. 其次加载已下载到本地的副本
+      // 2. 无本地编辑副本时，检查云端是否有管理员「已排版」版本：
+      //    只要云端的 sutraEdits 存在（即点击过「完成排版」），就从 GitHub
+      //    拉取编辑版并保存为本地编辑副本。这样「任意一部经书都有且仅有两种
+      //    状态：未编辑(显示原始版) / 已排版(显示编辑版)」，且以云端为准，
+      //    本地任何旧副本都不会挡住云端最新排版。
+      if (!hasEdited) {
+        final id = SutraDownloader.extractId(widget.title, filePath);
+        if (id != null && id.isNotEmpty) {
+          final cloudContent = await _loadCloudEditedContent(id, editedPath);
+          if (cloudContent != null) {
+            if (mounted) {
+              setState(() {
+                _content = cloudContent;
+                _paragraphs = _parseParagraphs(cloudContent);
+                _isLoadingContent = false;
+              });
+              WidgetsBinding.instance
+                  .addPostFrameCallback((_) => _scheduleRestoreScroll());
+            }
+            return;
+          }
+        }
+      }
+
+      // 3. 其次加载已下载到本地的副本（原始版兜底）
       File? localCopy;
       if (filePath.startsWith('assets/sutras_ascii/')) {
         localCopy = await SutraDownloader.localFileForAssetPath(filePath);
+        debugPrint('[加载内容] localCopy=$localCopy');
       }
       // 兜底：任何形式的路径（如换机/重新登录后从云端同步回来的旧设备
       // 绝对路径）只要能从标题/路径中识别出经书 ID，就去本地下载目录找副本，
@@ -493,6 +518,7 @@ class _ReadingPageState extends State<ReadingPage>
         try {
           content = await _loadPackagedContent(filePath);
         } catch (e) {
+          debugPrint('[加载内容] 打包资源加载失败，走自动下载编辑版: $e');
           // 打包与本地均无正文（经文正文本就不打安装包，按需下载）：
           // 自动拉取管理员「编辑经文」发布的编辑版展示；云端无编辑版时
           // download 会自动回退原始版。这样重装/首次安装默认即编辑排版，
@@ -580,16 +606,76 @@ class _ReadingPageState extends State<ReadingPage>
     return rootBundle.loadString(assetPath);
   }
 
+  /// 从云端（GitHub sutras_edited/）拉取管理员「已排版」的编辑版，并保存为
+  /// 本地编辑副本。只在云端确有编辑版时返回内容；云端无编辑版返回 null。
+  /// 与「保存到本地编辑副本」串在一起：重装后首次打开也立即享受云端排版。
+  Future<String?> _loadCloudEditedContent(String id, String editPath) async {
+    try {
+      final meta = await CloudNotesService.instance.sutraEditMeta(id);
+      final remoteAt = (meta?['updatedAt'] as num?)?.toInt() ?? 0;
+      debugPrint('[云端编辑版检查] id=$id found=${meta?['found']} remoteAt=$remoteAt');
+      if (remoteAt <= 0) return null; // 云端无编辑版，用原始版。
+
+      // 从 GitHub 直连拉取编辑版，避免 CDN 未缓存时回退到原始版。
+      final vol = id.substring(0, 3);
+      final urls = [
+        'https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+        'https://ghfast.top/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+        'https://gh-proxy.com/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+      ];
+      String? content;
+      for (final u in urls) {
+        try {
+          final resp = await _httpGet(u);
+          if (resp != null && resp.isNotEmpty) {
+            content = resp;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (content == null || content.isEmpty) return null;
+      // 保存为本地编辑副本，下次打开直接读本地（不再依赖网络）。
+      try {
+        await File(editPath).writeAsString(content);
+      } catch (_) {}
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('sutra_edit_ver_$id', remoteAt);
+      return content;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 本地/打包都没有正文时，自动下载管理员「编辑经文」发布的版本来展示。
   /// 成功则 setState 加载并返回 true；失败返回 false（由调用方显示下载提示）。
   Future<bool> _autoFetchEditedContent(String id) async {
+    debugPrint('[自动下载编辑版] id=$id');
     try {
-      final file = await SutraDownloader.download(id, preferEdited: true);
-      final content = await file.readAsString();
+      final filePath = _resolvedFilePath ?? widget.filePath;
+      if (filePath == null) return false;
+      final editPath = await editedSutraFilePath(filePath);
+      final content =
+          await _loadCloudEditedContent(id, editPath);
+      debugPrint('[自动下载编辑版] 云端编辑版: ${content != null}, 长度=${content?.length ?? 0}');
+      if (content != null) {
+        if (!mounted) return false;
+        setState(() {
+          _content = content;
+          _paragraphs = _parseParagraphs(content);
+          _isLoadingContent = false;
+          _needsDownload = false;
+        });
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _scheduleRestoreScroll());
+        return true;
+      }
+      // 云端无编辑版：回退到原始版下载（与下载按钮一致）。
+      final file = await SutraDownloader.download(id);
+      final origContent = await file.readAsString();
       if (!mounted) return false;
       setState(() {
-        _content = content;
-        _paragraphs = _parseParagraphs(content);
+        _content = origContent;
+        _paragraphs = _parseParagraphs(origContent);
         _isLoadingContent = false;
         _needsDownload = false;
       });
@@ -1681,6 +1767,13 @@ class _ReadingPageState extends State<ReadingPage>
                                 label: '完成排版',
                                 onTap: _toggleLayoutDone,
                               ),
+                            if (_isSutraAdmin && _isLayoutDone)
+                              _buildMoreMenuItem(
+                                icon: const Icon(Icons.undo_rounded,
+                                    size: 18, color: Color(0xFFE53935)),
+                                label: '撤销完成排版',
+                                onTap: _toggleLayoutUndone,
+                              ),
                             _buildMoreMenuItem(
                               icon: const Icon(Icons.settings_outlined, size: 18),
                               label: '阅读设置',
@@ -2036,21 +2129,63 @@ class _ReadingPageState extends State<ReadingPage>
     final meta = await CloudNotesService.instance.sutraEditMeta(id);
     final remoteAt = (meta?['updatedAt'] as num?)?.toInt() ?? 0;
     final localAt = prefs.getInt(verKey) ?? 0;
-    if (remoteAt <= 0 || remoteAt <= localAt) return; // 无新版或已是最新。
-    // 有新版：静默下载并应用。
+    debugPrint('[排版检查] id=$id meta=$meta remoteAt=$remoteAt localAt=$localAt');
+    if (remoteAt <= 0 || remoteAt <= localAt) {
+      debugPrint('[排版检查] 无需更新 remoteAt=$remoteAt localAt=$localAt');
+      return;
+    }
+    debugPrint('[排版检查] 检测到云端有新版，开始下载编辑版');
+    // 有新版：从 GitHub 直接拉取编辑版内容，避免 CDN 未缓存导致回退到原始版。
     final oldParagraphs = List<String>.from(_paragraphs);
     try {
-      final file = await SutraDownloader.download(
-        id,
-        preferEdited: true,
-        force: true,
-      );
-      final content = await file.readAsString();
+      final vol = id.substring(0, 3);
+      final editedUrl =
+          'https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt';
+      String? content;
+      try {
+        final resp = await _httpGet(editedUrl);
+        if (resp != null && resp.isNotEmpty) content = resp;
+      } catch (_) {}
+      // 备用：通过 GitHub 代理镜像拉取
+      if (content == null || content.isEmpty) {
+        final proxies = [
+          'https://ghfast.top/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+          'https://gh-proxy.com/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+        ];
+        for (final p in proxies) {
+          try {
+            final resp = await _httpGet(p);
+            if (resp != null && resp.isNotEmpty) {
+              content = resp;
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+      if (content == null || content.isEmpty) return; // 无法获取编辑版，不覆盖当前内容。
       if (!mounted) return;
       await prefs.setInt(verKey, remoteAt);
+      // 保存到本地编辑副本，后续打开直接读取。
+      final editedPath = await editedSutraFilePath(filePath!);
+      if (editedPath != null) await File(editedPath).writeAsString(content);
       await _applyUpdatedLayout(oldParagraphs, content, remoteAt);
     } catch (_) {
       // 静默失败，不打扰用户。
+    }
+  }
+
+  /// 简易 HTTP GET，返回响应 body；失败返回 null。
+  static Future<String?> _httpGet(String url) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final req = await client.getUrl(Uri.parse(url));
+      final resp = await req.close().timeout(const Duration(seconds: 15));
+      if (resp.statusCode != 200) return null;
+      return await resp.transform(utf8.decoder).join();
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: false);
     }
   }
 
@@ -2081,18 +2216,31 @@ class _ReadingPageState extends State<ReadingPage>
       _downloadProgress = 0;
     });
     try {
-      final file = await SutraDownloader.download(
-        id,
-        preferEdited: true,
-        force: true,
-        onProgress: (received, total) {
-          if (!mounted) return;
-          setState(() => _downloadProgress = total > 0 ? received / total : 0);
-        },
-      );
-      final content = await file.readAsString();
+      // 直接从 GitHub 拉取编辑版内容，避免 CDN 回退到原始版。
+      final vol = id.substring(0, 3);
+      final urls = [
+        'https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+        'https://ghfast.top/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+        'https://gh-proxy.com/https://raw.githubusercontent.com/dalidakun/huideng/main/assets/sutras_edited/$vol/$id.txt',
+      ];
+      String? content;
+      for (final u in urls) {
+        try {
+          final resp = await _httpGet(u);
+          if (resp != null && resp.isNotEmpty) {
+            content = resp;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (content == null || content.isEmpty) {
+        throw Exception('无法获取编辑版');
+      }
       if (!mounted) return;
       await prefs.setInt(verKey, remoteAt);
+      // 保存到本地编辑副本。
+      final editedPath = await editedSutraFilePath(filePath!);
+      if (editedPath != null) await File(editedPath).writeAsString(content);
       await _applyUpdatedLayout(oldParagraphs, content, remoteAt);
     } catch (e) {
       if (!mounted) return;
@@ -2274,7 +2422,23 @@ class _ReadingPageState extends State<ReadingPage>
     if (keyPath == null) return;
     final prefs = await SharedPreferences.getInstance();
     final done = prefs.getBool('sutra_layout_done_$keyPath') ?? false;
-    if (mounted && done) setState(() => _isLayoutDone = true);
+    if (done) {
+      if (mounted) setState(() => _isLayoutDone = true);
+      return;
+    }
+    // 本地无标记时，检查云端是否有管理员排版（重装后 SharedPreferences 清空）。
+    final id = SutraDownloader.extractId(widget.title, keyPath);
+    if (id != null && id.isNotEmpty) {
+      try {
+        final meta = await CloudNotesService.instance.sutraEditMeta(id);
+        final remoteFound = meta != null && meta['found'] == true;
+        if (remoteFound) {
+          if (mounted) setState(() => _isLayoutDone = true);
+          // 同步恢复本地标记，避免下次仍需查云端。
+          await prefs.setBool('sutra_layout_done_$keyPath', true);
+        }
+      } catch (_) {}
+    }
   }
 
   /// 管理员点击「完成排版」：标记该经排版已完成，同步到云端供所有用户自动获取最新版。
@@ -2295,6 +2459,52 @@ class _ReadingPageState extends State<ReadingPage>
       } catch (_) {}
     }
     _toast('已完成排版');
+  }
+
+  /// 管理员撤销「完成排版」：只删除云端编辑版（GitHub 文件 + 云端记录）。
+  /// 保留本地编辑副本和当前显示内容，方便在撤销的基础上继续编辑后重新上传。
+  /// 用于误点「完成排版」导致云端保存的不是最终版的情形。
+  Future<void> _toggleLayoutUndone() async {
+    final keyPath = _resolvedFilePath ?? widget.filePath;
+    if (keyPath == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('撤销完成排版'),
+        content: const Text('将删除云端已保存的排版版本，该经恢复为未排版状态。\n本地编辑副本会保留，可继续编辑后重新上传。确定继续？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确定撤销'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => _showMoreMenu = false);
+    _toast('正在撤销…');
+    final prefs = await SharedPreferences.getInstance();
+    final id = SutraDownloader.extractId(widget.title, keyPath);
+    if (id != null && id.isNotEmpty) {
+      try {
+        await CloudNotesService.instance.deleteSutraEdit(id);
+      } catch (_) {
+        _toast('撤销失败，请检查网络后重试');
+        return;
+      }
+      try {
+        await prefs.remove('sutra_edit_ver_$id');
+      } catch (_) {}
+    }
+    // 只清除「已完成」标记，保留本地编辑副本（供继续编辑）。
+    await prefs.remove('sutra_layout_done_$keyPath');
+    if (!mounted) return;
+    setState(() => _isLayoutDone = false);
+    _toast('已撤销完成排版');
   }
 
   /// 加载当前经书阅读完成状态。

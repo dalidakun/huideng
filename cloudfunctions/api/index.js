@@ -368,6 +368,89 @@ function githubWriteFile({ repo, path, content, message }) {
   });
 }
 
+// GitHub 删除：管理员「撤销完成排版」时删除仓库 assets/sutras_edited/<卷>/<ID>.txt。
+function githubDeleteFile({ repo, path, message }) {
+  const token = process.env.GITHUB_TOKEN || "";
+  if (!token) {
+    return Promise.reject(new Error("GitHub 未配置（缺少 GITHUB_TOKEN）"));
+  }
+  const apiBase = "https://api.github.com";
+  return new Promise((resolve, reject) => {
+    const getUrl = `/repos/${repo}/contents/${encodeURIComponent(path).replace(
+      /%2F/g,
+      "/"
+    )}`;
+    const getOpt = {
+      hostname: "api.github.com",
+      path: getUrl,
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "huideng-sutra/1.0",
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    };
+    // 先读 sha（文件不存在时视为已删除，直接返回成功）。
+    const req = https.get(getOpt, (r) => {
+      let body = "";
+      r.on("data", (c) => (body += c));
+      r.on("end", () => {
+        if (r.statusCode === 200) {
+          let sha = null;
+          try {
+            sha = JSON.parse(body).sha || null;
+          } catch (e) {}
+          if (!sha) return resolve({ ok: true });
+          const delBody = JSON.stringify({
+            message: message || "撤销经文排版",
+            sha: sha,
+          });
+          const delOpt = {
+            hostname: "api.github.com",
+            path: getUrl,
+            method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "User-Agent": "huideng-sutra/1.0",
+              Accept: "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(delBody),
+            },
+          };
+          const delReq = https.request(delOpt, (res) => {
+            let data = "";
+            res.on("data", (c) => (data += c));
+            res.on("end", () => {
+              if (res.statusCode === 200 || res.statusCode === 204) {
+                resolve({ ok: true });
+              } else {
+                let msg = "HTTP " + res.statusCode;
+                try {
+                  const j = JSON.parse(data);
+                  msg = (j && j.message) || msg;
+                } catch (e) {}
+                reject(new Error("GitHub 删除失败：" + msg));
+              }
+            });
+          });
+          delReq.on("error", (e) =>
+            reject(new Error("GitHub 删除失败：" + (e.code || e.message)))
+          );
+          delReq.end(delBody);
+        } else {
+          // 404：文件不存在，视为已删除。
+          resolve({ ok: true });
+        }
+      });
+    });
+    req.on("error", (e) =>
+      reject(new Error("GitHub 删除失败：" + (e.code || e.message)))
+    );
+  });
+}
+
 exports.main = async (event, context) => {
   const uid = await resolveUid(event, context);
 
@@ -2878,6 +2961,33 @@ exports.main = async (event, context) => {
           return ok({ found: true, updatedAt: r.updatedAt || 0 });
         }
         return ok({ found: false, updatedAt: 0 });
+      }
+
+      // 管理员撤销「完成排版」：删除 GitHub 编辑版文件 + 云端 sutraEdits 记录，
+      // 使该经恢复「未编辑」状态（所有用户显示原始版）。
+      case "sutraEditDelete": {
+        if (!uid) return fail("unauthorized");
+        await ensureAdmins();
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        const id = String(event.id || "").trim();
+        if (!/^T\d{2}n\d{4}[A-Za-z]?_\d{3}$/.test(id)) return fail("bad_request");
+        const vol = id.substring(0, 3);
+        const gitPath = `assets/sutras_edited/${vol}/${id}.txt`;
+        try {
+          await githubDeleteFile({
+            repo: "dalidakun/huideng",
+            path: gitPath,
+            message: `撤销经文排版 ${id}`,
+          });
+        } catch (e) {
+          return fail("github_delete_failed:" + (e && e.message ? e.message : ""));
+        }
+        await ensureSutraEdits();
+        const existing = await sutraEdits.where({ id }).limit(1).get();
+        if (existing.data && existing.data.length > 0) {
+          await sutraEdits.doc(existing.data[0]._id).remove();
+        }
+        return ok({ removed: true });
       }
 
       // ==================== 举报 ====================
