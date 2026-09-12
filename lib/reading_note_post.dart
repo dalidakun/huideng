@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:isolate';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
@@ -9,6 +10,7 @@ import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
 import 'reading_notes_page.dart';
+import 'reading_sutra_notes_page.dart';
 import 'sutra_highlights_page.dart';
 import 'sutra_live_sync.dart';
 import 'sutra_paragraph_page.dart';
@@ -87,6 +89,85 @@ class ReadingNotePost {
       sutraTitle: sutraTitle,
       paragraph: paragraph,
       noteText: noteText,
+    );
+  }
+}
+
+/// 读经笔记汇总帖数据：包含经文名和笔记内容列表。
+class SutraNotesPost {
+  final String sutraTitle;
+  final String firstNote;
+  final List<String> notes;
+  final String message;
+
+  const SutraNotesPost({
+    required this.sutraTitle,
+    required this.firstNote,
+    required this.notes,
+    this.message = '',
+  });
+
+  /// 判断正文是否为读经笔记汇总帖格式。
+  static bool isSutraNotesPost(String content) =>
+      parse(content) != null;
+
+  /// 解析 base64 元数据为笔记内容列表。
+  static List<String> _decodeNotes(String base) {
+    final notes = <String>[];
+    try {
+      final decoded = utf8.decode(base64Decode(base.trim()));
+      final arr = jsonDecode(decoded);
+      if (arr is List) {
+        for (final it in arr) {
+          if (it is Map) {
+            final c = (it['c'] ?? '').toString().trim();
+            if (c.isNotEmpty) notes.add(c);
+          }
+        }
+      }
+    } catch (_) {}
+    return notes;
+  }
+
+  /// 解析正文。非读经笔记汇总帖格式返回 null。
+  static SutraNotesPost? parse(String content) {
+    if (content.isEmpty) return null;
+    if (!content.contains(kSutraNotesMetaPrefix)) return null;
+    final trimmed = content.trimRight();
+    final nl = trimmed.indexOf('\n');
+    if (nl < 0) return null;
+    final firstLine = trimmed.substring(0, nl).trim();
+    if (!firstLine.startsWith(r'$')) return null;
+    final sutraTitle = firstLine.substring(1).trim();
+    if (sutraTitle.isEmpty) return null;
+
+    final metaIdx = trimmed.indexOf(kSutraNotesMetaPrefix);
+    var metaSection =
+        trimmed.substring(metaIdx + kSutraNotesMetaPrefix.length);
+    final metaEnd = metaSection.indexOf('\n');
+    if (metaEnd >= 0) metaSection = metaSection.substring(0, metaEnd);
+    final notes = _decodeNotes(metaSection);
+
+    // 第一篇笔记 = 标题与哨兵之间、按空行分的首段。
+    final before = trimmed.substring(nl + 1, metaIdx).trim();
+    final first =
+        before.split(RegExp(r'\n\s*\n')).map((s) => s.trim()).firstWhere(
+              (s) => s.isNotEmpty,
+              orElse: () => notes.isNotEmpty ? notes.first : '',
+            );
+
+    // 留言 = 哨兵那一行之后的内容（可为空）。
+    final afterMetaLine =
+        trimmed.substring(metaIdx + kSutraNotesMetaPrefix.length);
+    final firstNl = afterMetaLine.indexOf('\n');
+    final message =
+        firstNl >= 0 ? afterMetaLine.substring(firstNl + 1).trim() : '';
+
+    return SutraNotesPost(
+      sutraTitle: sutraTitle,
+      firstNote: first,
+      notes: notes,
+      message: message,
     );
   }
 }
@@ -225,6 +306,200 @@ class ReadingNotePostView extends StatelessWidget {
   }
 }
 
+/// 读经笔记汇总帖数据（解析后的结构）。
+/// 已在文件顶部定义，此处不再重复。
+
+/// 读经笔记汇总帖渲染组件。
+/// 样式与读经笔记分享帖一致：
+///   - $经名 → 经文讨论页
+///   - 第一篇笔记（背景色块）→ 打开该经文笔记汇总页
+///   - 其余区域 → 笔记详情页
+class SutraNotesPostView extends StatefulWidget {
+  final SutraNotesPost post;
+  final String noteId;
+  final Map<String, dynamic> sutraLibrary;
+  final String? authorName;
+  final String ownerUserId;
+
+  const SutraNotesPostView({
+    super.key,
+    required this.post,
+    required this.noteId,
+    required this.sutraLibrary,
+    this.authorName,
+    this.ownerUserId = '',
+  });
+
+  @override
+  State<SutraNotesPostView> createState() => _SutraNotesPostViewState();
+}
+
+class _SutraNotesPostViewState extends State<SutraNotesPostView> {
+  int? _liveCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLiveCount();
+  }
+
+  Future<void> _loadLiveCount() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('notes');
+      if (raw == null || raw.isEmpty) return;
+      final arr = jsonDecode(raw);
+      if (arr is! List) return;
+      final sutraTag = '\$${widget.post.sutraTitle}';
+      var count = 0;
+      for (final note in arr) {
+        if (note is Map) {
+          final content = (note['content'] ?? '').toString();
+          final shared = note['shared'] == true;
+          if (content.contains(sutraTag) && shared) count++;
+        }
+      }
+      if (mounted) setState(() => _liveCount = count);
+    } catch (_) {}
+  }
+
+  void _openDetail(BuildContext context) async {
+    if (widget.noteId.isEmpty) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: widget.noteId)),
+    );
+  }
+
+  void _openNotesPage(BuildContext context) {
+    // 将 SutraNotesPost 的笔记列表转为 ReadingSutraNotesPage 需要的格式
+    final initialNotes = <Map<String, dynamic>>[];
+    for (final noteText in widget.post.notes) {
+      initialNotes.add({
+        'id': '',
+        'content': noteText,
+        'updatedAt': DateTime.now().toIso8601String(),
+        'shared': true,
+        'cloudId': null,
+      });
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReadingSutraNotesPage(
+          title: widget.post.sutraTitle,
+          ownerUserId: widget.ownerUserId,
+          initialNotes: initialNotes,
+          noteId: widget.noteId,
+        ),
+      ),
+    ).then((_) => _loadLiveCount());
+  }
+
+  void _openDiscussion(BuildContext context) {
+    final path = widget.sutraLibrary[widget.post.sutraTitle]?.filePath ?? widget.post.sutraTitle;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SutraDiscussionPage(
+          title: widget.post.sutraTitle,
+          filePath: path,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    final post = widget.post;
+    final count = _liveCount ?? post.notes.length;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openDetail(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // $经文名 链接（点击进入讨论页）
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openDiscussion(context),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '\$${post.sutraTitle}',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: p.accent,
+                ),
+              ),
+            ),
+          ),
+          // 留言内容
+          if (post.message.isNotEmpty) ...[
+            Text(
+              post.message,
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.6,
+                color: p.text,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+          // 第一篇笔记（背景色块，点击进入笔记汇总页）
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openNotesPage(context),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: p.accent.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.authorName != null && widget.authorName!.trim().isNotEmpty) ...[
+                    Text(
+                      '${widget.authorName}的所有笔记',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                  Text(
+                    post.firstNote,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.6,
+                      color: p.text,
+                    ),
+                  ),
+                  if (count > 0) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '共 $count 篇笔记，点击查看',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: p.accent,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 画线分享帖的解析。
 ///
 /// 分享时 `SutraHighlightsPage._buildShareContent()` 生成的正文格式：
@@ -311,7 +586,7 @@ class SutraHighlightsPost {
 ///   - $经名 → 经文讨论页
 ///   - 第一条画线（背景色块）→ 打开该经书画线归集页（展示分享时发布的完整画线）
 ///   - 其余区域 → 笔记详情页
-class SutraHighlightsPostView extends StatelessWidget {
+class SutraHighlightsPostView extends StatefulWidget {
   final SutraHighlightsPost post;
   final String noteId;
   final Map<String, dynamic> sutraLibrary;
@@ -330,10 +605,52 @@ class SutraHighlightsPostView extends StatelessWidget {
     this.ownerUserId = '',
   });
 
+  @override
+  State<SutraHighlightsPostView> createState() => _SutraHighlightsPostViewState();
+}
+
+class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
+  int? _liveCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLiveCount();
+  }
+
+  Future<void> _loadLiveCount() async {
+    try {
+      final meId = AuthService.instance.cachedUserId;
+      final isOwner = meId != null && meId.isNotEmpty && widget.ownerUserId == meId;
+      if (!isOwner) return;
+
+      final loaded = await loadSutraTightByTitle(widget.post.sutraTitle,
+          filePath: widget.post.filePath);
+      final paragraphs = loaded?.paragraphs;
+      if (paragraphs == null || !mounted) return;
+
+      final union = await fetchParagraphNotesUnion(widget.post.sutraTitle,
+          widget.ownerUserId,
+          filePath: loaded!.filePath);
+      final cloudItems = union.items;
+
+      List<LiveHighlightItem>? computed;
+      try {
+        computed = await Isolate.run(
+            () => buildLiveHighlights(paragraphs, loaded!.tight, cloudItems));
+      } catch (_) {}
+
+      if (computed != null && mounted) {
+        final count = computed.length;
+        setState(() => _liveCount = count);
+      }
+    } catch (_) {}
+  }
+
   void _openDetail(BuildContext context) async {
-    if (noteId.isEmpty) return;
+    if (widget.noteId.isEmpty) return;
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: noteId)),
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: widget.noteId)),
     );
   }
 
@@ -341,9 +658,9 @@ class SutraHighlightsPostView extends StatelessWidget {
   /// 无法定位作者或加载不到经文时，才回退到分享时的快照。
   Future<void> _openHighlights(BuildContext context) async {
     final meId = AuthService.instance.cachedUserId;
-    final isOwner = meId != null && meId.isNotEmpty && ownerUserId == meId;
+    final isOwner = meId != null && meId.isNotEmpty && widget.ownerUserId == meId;
 
-    var highlights = List.of(post.highlights);
+    var highlights = List.of(widget.post.highlights);
     var items = <LiveHighlightItem>[];
     var canDelete = false;
     var liveLoaded = false;
@@ -352,16 +669,16 @@ class SutraHighlightsPostView extends StatelessWidget {
     String? syncNotice;
     Future<bool> Function(List<LiveHighlightSegment>)? deleteCb;
 
-    if (ownerUserId.isNotEmpty) {
+    if (widget.ownerUserId.isNotEmpty) {
       try {
-        final loaded = await loadSutraTightByTitle(post.sutraTitle,
-            filePath: post.filePath);
+        final loaded = await loadSutraTightByTitle(widget.post.sutraTitle,
+            filePath: widget.post.filePath);
         final paragraphs = loaded?.paragraphs;
         if (paragraphs != null) {
           // 帖子标题是展示名，与读经页存笔记的 key 未必逐字相等；
           // 用候选 key 并集拉取作者当前笔记，避免误判「作者已删除全部画线」。
-          final union = await fetchParagraphNotesUnion(post.sutraTitle,
-              ownerUserId,
+          final union = await fetchParagraphNotesUnion(widget.post.sutraTitle,
+              widget.ownerUserId,
               filePath: loaded!.filePath);
           final cloudItems = union.items;
           // 重建计算放后台隔离区：巨量画线/大幅合并也只影响耗时，不卡 UI。
@@ -408,10 +725,10 @@ class SutraHighlightsPostView extends StatelessWidget {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SutraHighlightsPage(
-          title: post.sutraTitle,
+          title: widget.post.sutraTitle,
           highlights: highlights,
           canDelete: canDelete,
-          sutraKey: post.sutraTitle,
+          sutraKey: widget.post.sutraTitle,
           itemSegments: [for (final it in items) it.segments],
           onDeleteUnderline: deleteCb,
           emptyHint: emptyHint,
@@ -422,12 +739,12 @@ class SutraHighlightsPostView extends StatelessWidget {
   }
 
   void _openDiscussion(BuildContext context) {
-    final path = post.filePath ??
-        (sutraLibrary[post.sutraTitle]?.filePath ?? post.sutraTitle);
+    final path = widget.post.filePath ??
+        (widget.sutraLibrary[widget.post.sutraTitle]?.filePath ?? widget.post.sutraTitle);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SutraDiscussionPage(
-          title: post.sutraTitle,
+          title: widget.post.sutraTitle,
           filePath: path,
         ),
       ),
@@ -437,6 +754,8 @@ class SutraHighlightsPostView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
+    final post = widget.post;
+    final count = _liveCount ?? post.highlights.length;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _openDetail(context),
@@ -484,9 +803,9 @@ class SutraHighlightsPostView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (authorName != null && authorName!.trim().isNotEmpty) ...[
+                  if (widget.authorName != null && widget.authorName!.trim().isNotEmpty) ...[
                     Text(
-                      '$authorName的所有画线',
+                      '${widget.authorName}的所有画线',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -504,6 +823,16 @@ class SutraHighlightsPostView extends StatelessWidget {
                     ),
                     lineColor: p.accent.withValues(alpha: 0.8),
                   ),
+                  if (count > 0) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '共 $count 次划线，点击查看',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: p.accent,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -662,7 +991,7 @@ String? sutraPostPlainText(String content) {
 ///   - 第一条经文（背景色块）→ 打开该经书感想汇总页（展示分享时发布的完整感想）
 ///   - 留言 → 显示在色块上方
 ///   - 其余区域 → 笔记详情页
-class SutraThoughtsPostView extends StatelessWidget {
+class SutraThoughtsPostView extends StatefulWidget {
   final SutraThoughtsPost post;
   final String noteId;
   final Map<String, dynamic> sutraLibrary;
@@ -681,10 +1010,58 @@ class SutraThoughtsPostView extends StatelessWidget {
     this.ownerUserId = '',
   });
 
+  @override
+  State<SutraThoughtsPostView> createState() => _SutraThoughtsPostViewState();
+}
+
+class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
+  int? _liveCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLiveCount();
+  }
+
+  Future<void> _loadLiveCount() async {
+    try {
+      final meId = AuthService.instance.cachedUserId;
+      final isOwner = meId != null && meId.isNotEmpty && widget.ownerUserId == meId;
+      if (!isOwner) return;
+
+      final loaded = await loadSutraTightByTitle(widget.post.sutraTitle,
+          filePath: widget.post.filePath);
+      final allParagraphs = loaded?.paragraphs;
+      if (allParagraphs == null || !mounted) return;
+
+      final union = await fetchParagraphNotesUnion(widget.post.sutraTitle,
+          widget.ownerUserId,
+          filePath: loaded!.filePath);
+      final cloudItems = union.items;
+
+      List<LiveThoughtItem>? computed;
+      try {
+        computed = await Isolate.run(() =>
+            buildLiveThoughts(allParagraphs, loaded!.tight, cloudItems));
+      } catch (_) {}
+
+      if (computed != null && mounted) {
+        final livePairs = <(String, String)>[];
+        for (final item in computed) {
+          final note = (item.note ?? '').trim();
+          if (note.isNotEmpty) {
+            livePairs.add((item.paragraph, note));
+          }
+        }
+        setState(() => _liveCount = livePairs.length);
+      }
+    } catch (_) {}
+  }
+
   void _openDetail(BuildContext context) async {
-    if (noteId.isEmpty) return;
+    if (widget.noteId.isEmpty) return;
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: noteId)),
+      MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: widget.noteId)),
     );
   }
 
@@ -692,10 +1069,10 @@ class SutraThoughtsPostView extends StatelessWidget {
   /// 无法定位作者或加载不到经文时，才回退到分享时的快照。
   Future<void> _openThoughts(BuildContext context) async {
     final meId = AuthService.instance.cachedUserId;
-    final isOwner = meId != null && meId.isNotEmpty && ownerUserId == meId;
+    final isOwner = meId != null && meId.isNotEmpty && widget.ownerUserId == meId;
 
-    var paragraphs = [for (final (p, _) in post.pairs) p];
-    var notes = [for (final (_, t) in post.pairs) t];
+    var paragraphs = [for (final (p, _) in widget.post.pairs) p];
+    var notes = [for (final (_, t) in widget.post.pairs) t];
     var itemIndexes = const <int>[];
     var canDelete = false;
     var liveLoaded = false;
@@ -704,16 +1081,16 @@ class SutraThoughtsPostView extends StatelessWidget {
     String? syncNotice;
     Future<bool> Function(int)? deleteCb;
 
-    if (ownerUserId.isNotEmpty) {
+    if (widget.ownerUserId.isNotEmpty) {
       try {
-        final loaded = await loadSutraTightByTitle(post.sutraTitle,
-            filePath: post.filePath);
+        final loaded = await loadSutraTightByTitle(widget.post.sutraTitle,
+            filePath: widget.post.filePath);
         final allParagraphs = loaded?.paragraphs;
         if (allParagraphs != null) {
           // 帖子标题是展示名，与读经页存笔记的 key 未必逐字相等；
           // 用候选 key 并集拉取作者当前感想，避免误判「作者已删除全部感想」。
-          final union = await fetchParagraphNotesUnion(post.sutraTitle,
-              ownerUserId,
+          final union = await fetchParagraphNotesUnion(widget.post.sutraTitle,
+              widget.ownerUserId,
               filePath: loaded!.filePath);
           final cloudItems = union.items;
           // 重建计算放后台隔离区：巨量感想/大幅合并也只影响耗时，不卡 UI。
@@ -759,12 +1136,12 @@ class SutraThoughtsPostView extends StatelessWidget {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ReadingNotesPage(
-          title: post.sutraTitle,
+          title: widget.post.sutraTitle,
           paragraphs:
-              liveLoaded ? paragraphs : [for (final (p, _) in post.pairs) p],
-          notes: liveLoaded ? notes : [for (final (_, t) in post.pairs) t],
+              liveLoaded ? paragraphs : [for (final (p, _) in widget.post.pairs) p],
+          notes: liveLoaded ? notes : [for (final (_, t) in widget.post.pairs) t],
           canDelete: canDelete,
-          sutraKey: post.sutraTitle,
+          sutraKey: widget.post.sutraTitle,
           itemParagraphIndexes: liveLoaded ? itemIndexes : const <int>[],
           onDeleteNote: deleteCb,
           emptyHint: emptyHint,
@@ -775,12 +1152,12 @@ class SutraThoughtsPostView extends StatelessWidget {
   }
 
   void _openDiscussion(BuildContext context) {
-    final path = post.filePath ??
-        (sutraLibrary[post.sutraTitle]?.filePath ?? post.sutraTitle);
+    final path = widget.post.filePath ??
+        (widget.sutraLibrary[widget.post.sutraTitle]?.filePath ?? widget.post.sutraTitle);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SutraDiscussionPage(
-          title: post.sutraTitle,
+          title: widget.post.sutraTitle,
           filePath: path,
         ),
       ),
@@ -790,6 +1167,8 @@ class SutraThoughtsPostView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
+    final post = widget.post;
+    final count = _liveCount ?? post.pairs.length;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _openDetail(context),
@@ -837,9 +1216,9 @@ class SutraThoughtsPostView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (authorName != null && authorName!.trim().isNotEmpty) ...[
+                  if (widget.authorName != null && widget.authorName!.trim().isNotEmpty) ...[
                     Text(
-                      '$authorName的所有感想',
+                      '${widget.authorName}的所有感想',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -856,6 +1235,16 @@ class SutraThoughtsPostView extends StatelessWidget {
                       color: p.text,
                     ),
                   ),
+                  if (count > 0) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '共 $count 篇感想，点击查看',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: p.accent,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

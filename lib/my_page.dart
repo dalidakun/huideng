@@ -1592,6 +1592,15 @@ class _PostBlockState extends State<PostBlock> {
                             authorName: displayNickname,
                             ownerUserId: displayUserId ?? '',
                           ),
+                        ] else if (SutraNotesPost.isSutraNotesPost(content)) ...[
+                          SutraNotesPostView(
+                            post: SutraNotesPost.parse(content)!,
+                            noteId: displayNoteId ?? '',
+                            sutraLibrary:
+                                NoteSutraCatalog.cachedTitleMap ?? const {},
+                            authorName: displayNickname,
+                            ownerUserId: displayUserId ?? '',
+                          ),
                         ] else if (ReadingNotePost.isReadingNote(content)) ...[
                           ReadingNotePostView(
                             note: ReadingNotePost.parse(content)!,

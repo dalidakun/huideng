@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 import 'theme.dart';
@@ -243,6 +244,10 @@ class _MainPageState extends State<MainPage>
   int _scrollDir = 0;
   // 菩提空间菜单图标最近一次点击时间戳：无新帖时用于判定双击回到顶部。
   int _lastBodhiTabTap = 0;
+  // 每晚 20:00 打卡提醒定时器。
+  Timer? _checkInReminderTimer;
+  bool _checkInReminderShownToday = false;
+  String _lastReminderDate = '';
 
   @override
   void initState() {
@@ -258,11 +263,15 @@ class _MainPageState extends State<MainPage>
     unawaited(_cleanupAvatarBannerFiles());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
+      // 启动时检查是否需要显示 20:00 打卡提醒（当天 20:00 后打开 App）。
+      _checkDailyCheckInReminder();
     });
+    _scheduleCheckInReminderTimer();
   }
 
   @override
   void dispose() {
+    _checkInReminderTimer?.cancel();
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
     AppPalette.instance.removeListener(_onPaletteChanged);
     NotificationCenter.instance.stop();
@@ -339,6 +348,168 @@ class _MainPageState extends State<MainPage>
     AssistantSession.instance.setTabActive(_currentIndex == 3);
   }
 
+  // ── 每晚 20:00 打卡提醒 ──────────────────────────────
+
+  /// 安排每天 20:00 的打卡提醒定时器。
+  void _scheduleCheckInReminderTimer() {
+    _checkInReminderTimer?.cancel();
+    final now = DateTime.now();
+    var target = DateTime(now.year, now.month, now.day, 20, 0);
+    if (now.isAfter(target)) {
+      // 已过 20:00，设为明天 20:00。
+      target = target.add(const Duration(days: 1));
+    }
+    _checkInReminderTimer = Timer(target.difference(now), () {
+      _checkDailyCheckInReminder();
+      // 明天同一时间再检查。
+      _scheduleCheckInReminderTimer();
+    });
+  }
+
+  /// 检查今天是否有未完成的打卡，20:00 后弹窗提醒（每天只弹一次）。
+  Future<void> _checkDailyCheckInReminder() async {
+    final now = DateTime.now();
+    final today =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    // 跨天重置标记。
+    if (_lastReminderDate != today) {
+      _lastReminderDate = today;
+      _checkInReminderShownToday = false;
+    }
+    if (_checkInReminderShownToday) return;
+    if (now.hour < 20) return; // 未到 20:00 不弹。
+    final prefs = await SharedPreferences.getInstance();
+    // 从持久化存储中读取今天是否已弹过。
+    final lastShownDate = prefs.getString('checkin_reminder_shown_date') ?? '';
+    if (lastShownDate == today) {
+      _checkInReminderShownToday = true;
+      return;
+    }
+    // 加载配置的功课项目。
+    final items = <Map<String, String>>[];
+    _loadNamedItems(items, prefs, 'reading', '诵经');
+    _loadNamedItems(items, prefs, 'buddha', '称名');
+    _loadNamedItems(items, prefs, 'mantra', '持咒');
+    _loadNamedItems(items, prefs, 'nianfo', '念佛');
+    _loadStrItems(items, prefs, 'copying', '抄经');
+    _loadStrItems(items, prefs, 'meditation', '静坐');
+    if (items.isEmpty) return; // 未配置功课不弹。
+    // 加载今日打卡记录。
+    final raw = prefs.getString('checkin_records') ?? '[]';
+    final List<dynamic> allRecords = jsonDecode(raw);
+    final todayRecords = allRecords.where((r) => r['date'] == today).toList();
+    // 检查是否有未完成项。
+    final allDone = items.every((item) => todayRecords.any(
+        (r) => r['type'] == item['type'] && r['name'] == item['name']));
+    if (allDone) return; // 全部完成不弹。
+    if (!mounted) return;
+    _checkInReminderShownToday = true;
+    await prefs.setString('checkin_reminder_shown_date', today);
+    _showCheckInReminderDialog();
+  }
+
+  void _loadNamedItems(List<Map<String, String>> items,
+      SharedPreferences prefs, String type, String category) {
+    final raw = prefs.getString('setting_${type}_items') ??
+        prefs.getString('setting_${type}_titles');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      for (final e in list) {
+        final name = e is Map ? (e['name'] ?? '').toString() : '';
+        if (name.trim().isEmpty) continue;
+        items.add({'type': type, 'name': name.trim()});
+      }
+    } catch (_) {}
+  }
+
+  void _loadStrItems(List<Map<String, String>> items, SharedPreferences prefs,
+      String type, String category) {
+    final raw = prefs.getString('setting_${type}_titles') ??
+        prefs.getString('setting_${type}_minutes');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      for (final e in list) {
+        final name = e.toString().trim();
+        if (name.isEmpty) continue;
+        items.add({'type': type, 'name': name});
+      }
+    } catch (_) {}
+  }
+
+  void _showCheckInReminderDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 32, 28, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 图标
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7C948).withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.notifications_active,
+                    size: 32, color: Color(0xFFF7C948)),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                '今日功课尚未完成',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppPalette.instance.isPlain
+                      ? const Color(0xFF1A1A1A)
+                      : const Color(0xFF212121),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '今天的修行功课还没打卡哦，\n坚持就是精进。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.6,
+                  color: AppPalette.instance.isPlain
+                      ? const Color(0xFF666666)
+                      : const Color(0xFF999999),
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppPalette.instance.isPlain
+                        ? const Color(0xFF1A1A1A)
+                        : const Color(0xFF71867A),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(22)),
+                    elevation: 0,
+                  ),
+                  child: const Text('我知道了',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
@@ -346,6 +517,8 @@ class _MainPageState extends State<MainPage>
       _checkForResult();
       // 回到前台立即同步未读数，角标保持实时。
       NotificationCenter.instance.refreshUnread();
+      // 回到前台检查 20:00 打卡提醒。
+      _checkDailyCheckInReminder();
     }
   }
 

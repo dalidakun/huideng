@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
@@ -14,6 +15,7 @@ import 'note_sutra_links.dart';
 import 'quote_box.dart';
 import 'reading_badges.dart';
 import 'reading_note_post.dart';
+import 'reading_sutra_notes_page.dart';
 import 'reply_thread.dart';
 import 'text_input_sheet.dart';
 import 'post_time_link.dart';
@@ -957,6 +959,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                   SutraHighlightsPostView(
                                     post: SutraHighlightsPost.parse(
                                         note.content)!,
+                                    noteId: note.id,
+                                    sutraLibrary: _sutraLib,
+                                    authorName: note.authorName,
+                                    ownerUserId: note.ownerUserId,
+                                  )
+                                else if (SutraNotesPost.isSutraNotesPost(
+                                    note.content))
+                                  SutraNotesPostView(
+                                    post: SutraNotesPost.parse(note.content)!,
                                     noteId: note.id,
                                     sutraLibrary: _sutraLib,
                                     authorName: note.authorName,
@@ -2410,12 +2421,79 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     try {
       await CloudNotesService.instance
           .updateSharedNote(cloudId: note.id, content: saved.trim());
+      // 同步更新本地笔记
+      await _syncLocalNote(note, saved.trim());
       if (!mounted) return;
       _showToast('已更新');
       _load();
     } catch (e) {
       if (mounted) _showToast(e.toString());
     }
+  }
+
+  /// 同步菩提空间编辑到本地笔记。
+  Future<void> _syncLocalNote(PlazaNote note, String newContent) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('notes');
+      if (raw == null || raw.isEmpty) return;
+      final List<dynamic> notes = jsonDecode(raw);
+      // 先按 cloudId 匹配（单独分享的笔记）
+      for (final n in notes) {
+        if (n is Map) {
+          final cloudId = (n['cloudId'] ?? '').toString();
+          if (cloudId.isNotEmpty && cloudId == note.id) {
+            n['content'] = newContent;
+            n['updatedAt'] = DateTime.now().toIso8601String();
+            await prefs.setString('notes', jsonEncode(notes));
+            return;
+          }
+        }
+      }
+      // cloudId 匹配不到时，按内容前缀匹配（SutraNotesPost 批量分享）
+      // 提取新内容中的经文名，匹配本地笔记
+      final sutraMatch = RegExp(r'^\$([^\n]+)').firstMatch(newContent);
+      if (sutraMatch != null) {
+        final sutraTag = '\$${sutraMatch.group(1)}';
+        // 从 §§SN§§ 元数据中提取各篇笔记内容
+        final metaIdx = newContent.indexOf(kSutraNotesMetaPrefix);
+        if (metaIdx > 0) {
+          final before = newContent.substring(0, metaIdx).trim();
+          final parts = before.split(RegExp(r'\n\s*\n'))
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
+              .toList();
+          // 更新匹配的本地笔记：按内容前半段匹配
+          var updated = false;
+          for (final n in notes) {
+            if (n is Map) {
+              final content = (n['content'] ?? '').toString();
+              if (content.contains(sutraTag)) {
+                // 提取本地笔记中 $经文名 之后的正文部分
+                final localParts = content.split(RegExp(r'\n\s*\n'))
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
+                    .toList();
+                if (localParts.isNotEmpty && parts.isNotEmpty) {
+                  // 用新内容的对应段落替换本地笔记正文
+                  final header = content.split(RegExp(r'\n\s*\n'))
+                      .firstWhere((s) => s.trim().startsWith(r'$'),
+                          orElse: () => '');
+                  if (header.isNotEmpty) {
+                    n['content'] = '$header\n\n${parts.first}';
+                    n['updatedAt'] = DateTime.now().toIso8601String();
+                    updated = true;
+                  }
+                }
+              }
+            }
+          }
+          if (updated) {
+            await prefs.setString('notes', jsonEncode(notes));
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   /// 删除自己发布的帖子。

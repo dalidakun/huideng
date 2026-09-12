@@ -124,16 +124,24 @@ class StudyHubPageState extends State<StudyHubPage>
     _pulseController.repeat(reverse: true);
     _zhaiCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 450));
-    if (isTodayZhaiRi()) {
-      _zhaiLunarText = todayLunarMonthDay();
-      _zhaiCtrl.forward();
-      // 显示约 5 秒后淡出并收起提醒条。
-      _zhaiHideTimer = Timer(const Duration(seconds: 5), () {
-        _zhaiCtrl.reverse();
-      });
-    }
+    _tryShowZhaiBanner();
     ReadingTimeService.instance.ensureLoaded();
     _loadData();
+  }
+
+  /// 十斋日提醒：每天只提醒一次，通过 SharedPreferences 记录上次提醒日期。
+  Future<void> _tryShowZhaiBanner() async {
+    if (!isTodayZhaiRi()) return;
+    final prefs = await SharedPreferences.getInstance();
+    final lastShownDate = prefs.getString('zhai_banner_shown_date') ?? '';
+    final today = _today();
+    if (lastShownDate == today) return;
+    _zhaiLunarText = todayLunarMonthDay();
+    _zhaiCtrl.forward();
+    _zhaiHideTimer = Timer(const Duration(seconds: 5), () {
+      _zhaiCtrl.reverse();
+    });
+    await prefs.setString('zhai_banner_shown_date', today);
   }
 
   @override

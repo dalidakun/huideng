@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'cloud_notes_service.dart';
@@ -115,27 +116,44 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
   }
 
   /// 请求白话翻译（面板打开后 / 重试时调用）。
-  /// 系统已有缓存时直接用缓存，不重复调用 API。
+  /// 优先本地缓存 → 共享云端缓存 → 调 API 生成。
   Future<void> _translate() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      // 优先使用共享缓存（其他同修 / 自己之前翻译过的结果），未命中才调 API。
+      final cacheKey = 'ai_translate_${_hashParagraph(widget.paragraph)}';
+      final prefs = await SharedPreferences.getInstance();
+
+      // 1. 优先读本地缓存（最快）。
+      final local = prefs.getString(cacheKey);
+      if (local != null && local.isNotEmpty) {
+        setState(() {
+          _translation = _stripAnnotation(local);
+          _loading = false;
+        });
+        return;
+      }
+
+      // 2. 共享云端缓存（其他同修翻译过的结果）。
       final cached = await CloudNotesService.instance
           .getCachedParagraphTranslation(widget.paragraph);
       if (!mounted) return;
       if (cached != null && cached.isNotEmpty) {
+        await prefs.setString(cacheKey, cached);
         setState(() {
           _translation = _stripAnnotation(cached);
           _loading = false;
         });
         return;
       }
+
+      // 3. 调 AI API 生成。
       final text =
           await CloudNotesService.instance.aiTranslate(paragraph: widget.paragraph);
       if (!mounted) return;
+      await prefs.setString(cacheKey, text);
       setState(() {
         _translation = _stripAnnotation(text);
         _loading = false;
@@ -147,6 +165,15 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
         _error = e is CloudApiException ? e.message : '翻译失败，请稍后重试';
       });
     }
+  }
+
+  /// 段落文本哈希，用作本地缓存键（避免原文过长）。
+  String _hashParagraph(String text) {
+    var hash = 0;
+    for (var i = 0; i < text.length; i++) {
+      hash = ((hash << 5) - hash + text.codeUnitAt(i)) & 0xFFFFFFFF;
+    }
+    return hash.toRadixString(16);
   }
 
   /// 剔除译文末尾的「注：…」等补充说明，只保留译文正文。

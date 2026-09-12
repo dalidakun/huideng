@@ -82,8 +82,13 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
 
   bool _showMenu = false;
   bool _exporting = false;
-  // 已展开的卡片下标。
+  // 已展开的经文下标。
   final Set<int> _expanded = {};
+  // 已展开的感想下标。
+  final Set<int> _expandedNotes = {};
+
+  /// 感想折叠阈值：超过此字符数默认折叠。
+  static const int _noteFoldThreshold = 120;
 
   /// 当前展示的「经文+感想」项（删除时原地移除；每项自带段落下标）。
   late List<({String paragraph, String note, int para})> _items;
@@ -727,24 +732,62 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                                   ),
                                   const SizedBox(height: 8),
                                   // 感想
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFF3F0EA),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      note,
-                                      style: TextStyle(
-                                        fontSize: 13.5,
-                                        height: 1.6,
-                                        color: isDark
-                                            ? Colors.white
-                                            : const Color(0xFF3D5C3A),
-                                      ),
-                                    ),
+                                  Builder(
+                                    builder: (context) {
+                                      final isNoteExpanded = _expandedNotes.contains(i);
+                                      final isNoteLong = note.length > _noteFoldThreshold;
+                                      final showNote = isNoteExpanded || !isNoteLong
+                                          ? note
+                                          : '${note.substring(0, _noteFoldThreshold)}…';
+                                      return Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFF3F0EA),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              showNote,
+                                              style: TextStyle(
+                                                fontSize: 13.5,
+                                                height: 1.6,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : const Color(0xFF3D5C3A),
+                                              ),
+                                            ),
+                                            if (isNoteLong)
+                                              GestureDetector(
+                                                behavior: HitTestBehavior.opaque,
+                                                onTap: () {
+                                                  setState(() {
+                                                    if (isNoteExpanded) {
+                                                      _expandedNotes.remove(i);
+                                                    } else {
+                                                      _expandedNotes.add(i);
+                                                    }
+                                                  });
+                                                },
+                                                child: Padding(
+                                                  padding: const EdgeInsets.only(top: 4),
+                                                  child: Text(
+                                                    isNoteExpanded ? '折叠' : '展开',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: accent,
+                                                      fontWeight: FontWeight.w500,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ],
                               ),

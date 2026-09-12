@@ -33,7 +33,11 @@ class NoteEditPage extends StatefulWidget {
 
   /// 新建笔记时预填的正文（如「$经书名」），仅在无编辑笔记时生效。
   final String? presetContent;
-  const NoteEditPage({super.key, this.note, this.fixedTopic, this.presetContent});
+
+  /// 只读模式：他人查看笔记时不可编辑。
+  final bool readOnly;
+
+  const NoteEditPage({super.key, this.note, this.fixedTopic, this.presetContent, this.readOnly = false});
 
   @override
   State<NoteEditPage> createState() => _NoteEditPageState();
@@ -46,6 +50,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
   late bool _shared;
   String? _cloudId;
   bool _savingCloud = false;
+
+  bool get _isEditing => widget.note != null;
 
   // 编辑页保存成功后置 true：侧滑返回时直接弹回个人主页（跳过草稿页等中间页）。
   bool _goHomeOnPop = false;
@@ -472,6 +478,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
     await prefs.setString('notes', jsonEncode(notes));
     if (mounted) {
+      FocusScope.of(context).unfocus();
       setState(() {
         _savedId = targetId;
         _hasChanges = false;
@@ -479,17 +486,16 @@ class _NoteEditPageState extends State<NoteEditPage> {
       });
       final isEditPage = widget.note != null;
       if (sharedNow) {
-        _showSavedToastWithView('已发表', newNote);
         if (isEditPage) {
-          // 编辑页：发表后停留本页，侧滑返回时直接回个人主页。
+          _showToast('已更新');
           if (!fromDraftButton) _goHomeOnPop = true;
         } else {
-          // 新建页：发表成功后返回上一页（修学主页等）。
+          _showSavedToastWithView('已发表', newNote);
           Navigator.pop(context);
         }
       } else {
         // 未分享：保存到本地草稿，停留在当前编辑页，不返回。
-        _showToast('已保存到草稿');
+        _showToast(isEditPage ? '已更新' : '已保存到草稿');
         if (isEditPage && !fromDraftButton) _goHomeOnPop = true;
       }
     }
@@ -984,41 +990,23 @@ class _NoteEditPageState extends State<NoteEditPage> {
         appBar: AppBar(
           backgroundColor: _bg,
           elevation: 0,
-          title: Text(isNew ? '新建笔记' : '编辑笔记',
+          title: Text(widget.readOnly ? '查看笔记' : (isNew ? '新建笔记' : '编辑笔记'),
               style: TextStyle(
                   color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
           actions: [
-            GestureDetector(
-              onTap: () async {
-                // 编辑页有未保存的更改时先保存，避免草稿新增/删减的内容丢失。
-                if (widget.note != null && _hasChanges) {
-                  await _save(fromDraftButton: true);
-                }
-                if (!context.mounted) return;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const DraftsPage()),
-                );
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-                decoration: BoxDecoration(
-                  color: _primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Text('草稿',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: _primary)),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: GestureDetector(
-                onTap: _save,
+            if (!widget.readOnly) ...[
+              GestureDetector(
+                onTap: () async {
+                  // 编辑页有未保存的更改时先保存，避免草稿新增/删减的内容丢失。
+                  if (widget.note != null && _hasChanges) {
+                    await _save(fromDraftButton: true);
+                  }
+                  if (!context.mounted) return;
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const DraftsPage()),
+                  );
+                },
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
@@ -1026,7 +1014,26 @@ class _NoteEditPageState extends State<NoteEditPage> {
                     color: _primary.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(18),
                   ),
-                  child: Text('保存',
+                  child: Text('草稿',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _primary)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: GestureDetector(
+                  onTap: _save,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: _primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Text(_isEditing ? '更新' : '保存',
                       style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -1034,6 +1041,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                 ),
               ),
             ),
+            ],
           ],
         ),
         body: Column(
@@ -1080,12 +1088,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
                             controller: _contentController,
                             maxLines: null,
                             expands: true,
+                            readOnly: widget.readOnly,
                             textAlignVertical: TextAlignVertical.top,
-                            autofocus: true,
+                            autofocus: !widget.readOnly,
                             style: TextStyle(
                                 fontSize: 16, color: _text, height: 1.6),
                             decoration: InputDecoration(
-                              hintText: _contentHint,
+                              hintText: widget.readOnly ? '' : _contentHint,
                               hintStyle: TextStyle(color: _textHint),
                               isDense: true,
                               contentPadding: const EdgeInsets.fromLTRB(
@@ -1108,7 +1117,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                 ),
               ),
             ),
-            _buildShareRow(),
+            if (!widget.readOnly) _buildShareRow(),
           ],
         ),
       ),

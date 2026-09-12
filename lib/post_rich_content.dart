@@ -1200,6 +1200,14 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                       authorName: n.authorName,
                       ownerUserId: n.ownerUserId,
                     )
+                  else if (SutraNotesPost.isSutraNotesPost(n.content))
+                    SutraNotesPostView(
+                      post: SutraNotesPost.parse(n.content)!,
+                      noteId: n.id,
+                      sutraLibrary: _sutraLibrary,
+                      authorName: n.authorName,
+                      ownerUserId: n.ownerUserId,
+                    )
                   else if (ReadingNotePost.isReadingNote(n.content))
                     ReadingNotePostView(
                       note: ReadingNotePost.parse(n.content)!,
@@ -2229,6 +2237,19 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                             SutraHighlightsPost
                                                                 .parse(
                                                                     n.content)!,
+                                                        noteId: n.id,
+                                                        sutraLibrary: const {},
+                                                        authorName:
+                                                            n.authorName,
+                                                        ownerUserId:
+                                                            n.ownerUserId,
+                                                      )
+                                                    else if (SutraNotesPost
+                                                        .isSutraNotesPost(
+                                                            n.content))
+                                                      SutraNotesPostView(
+                                                        post: SutraNotesPost
+                                                            .parse(n.content)!,
                                                         noteId: n.id,
                                                         sutraLibrary: const {},
                                                         authorName:

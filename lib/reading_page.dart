@@ -27,6 +27,7 @@ import 'sutra_list_page.dart'
 import 'reading_guide_page.dart';
 import 'reading_notes_page.dart';
 import 'reading_note_edit_page.dart';
+import 'reading_sutra_notes_page.dart';
 import 'paragraph_thoughts_page.dart';
 import 'ai_translate_page.dart';
 import 'sutra_highlights_page.dart';
@@ -56,12 +57,14 @@ class _ReadingPageState extends State<ReadingPage>
     with WidgetsBindingObserver, RouteAware {
   String _content = '';
   List<String> _paragraphs = [];
+  List<String> _rawLines = [];
   double _fontSize = 16.0;
   double _lineHeight = 1.8;
   int _pageMode = ReaderPreferences.pageModeScroll;
   int _bgColorIndex = 0;
   bool _isDarkMode = false;
   late ScrollController _scrollController;
+  final GlobalKey _scrollViewKey = GlobalKey();
   PageController? _pageController;
   final TextEditingController _searchController = TextEditingController();
   bool _showSearchBar = false;
@@ -189,9 +192,13 @@ class _ReadingPageState extends State<ReadingPage>
     _loadReadLaterState();
     _loadLayoutDoneState();
     _loadDisplayTitle();
-    // 异步获取管理员身份：管理员在菜单显示「编辑经文」，普通用户显示「更新排版」。
+    // 异步获取管理员身份：管理员在菜单显示「编辑经文」，普通用户不再显示按钮，而是自动更新排版。
     CloudNotesService.instance.isAdmin().then((v) {
-      if (mounted) setState(() => _isSutraAdmin = v);
+      if (mounted) {
+        setState(() => _isSutraAdmin = v);
+        // 普通用户在内容加载完成后自动检查并应用最新排版。
+        if (!v) _autoCheckAndApplyLayout();
+      }
     }).catchError((_) {});
   }
 
@@ -592,6 +599,7 @@ class _ReadingPageState extends State<ReadingPage>
 
   List<String> _parseParagraphs(String content) {
     final out = <String>[];
+    _rawLines = [];
     _hiddenActionParagraphs.clear();
     _tightParagraphs.clear();
     final lines = content.split('\n');
@@ -649,6 +657,7 @@ class _ReadingPageState extends State<ReadingPage>
 
       text = text.trim();
       if (text.isEmpty) continue; // 仅标记无正文的行视为空段
+      _rawLines.add(line.trim());
       if (hide) {
         _hiddenActionParagraphs.add(out.length);
         if (tight) _tightParagraphs.add(out.length);
@@ -1373,6 +1382,7 @@ class _ReadingPageState extends State<ReadingPage>
                                 );
                               }
                               return SingleChildScrollView(
+                                key: _scrollViewKey,
                                 controller: _scrollController,
                                 child: _searchController.text.isEmpty
                                     ? Column(
@@ -1458,16 +1468,13 @@ class _ReadingPageState extends State<ReadingPage>
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildMoreMenuItem(
-                              icon: _isSutraAdmin
-                                  ? const Icon(Icons.warning_amber_rounded,
-                                      size: 18, color: Color(0xFFE53935))
-                                  : const Icon(Icons.sync, size: 18),
-                              label: _isSutraAdmin ? '编辑经文' : '更新排版',
-                              onTap: _isSutraAdmin
-                                  ? _openEditor
-                                  : _checkSutraUpdate,
-                            ),
+                            if (_isSutraAdmin)
+                              _buildMoreMenuItem(
+                                icon: const Icon(Icons.warning_amber_rounded,
+                                    size: 18, color: Color(0xFFE53935)),
+                                label: '编辑经文',
+                                onTap: _openEditor,
+                              ),
                             if (_isSutraAdmin)
                               _buildMoreMenuItem(
                                 icon: Icon(
@@ -1484,6 +1491,11 @@ class _ReadingPageState extends State<ReadingPage>
                                 label: '完成排版',
                                 onTap: _toggleLayoutDone,
                               ),
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.settings_outlined, size: 18),
+                              label: '阅读设置',
+                              onTap: _openReadingSettings,
+                            ),
                             _buildMoreMenuItem(
                               icon: Icon(
                                 _isFavorite
@@ -1722,11 +1734,82 @@ class _ReadingPageState extends State<ReadingPage>
     );
   }
 
+  /// 获取当前视口顶部可见段落的原始文本（用于编辑页定位同步）。
+  String? _topVisibleParagraphText() {
+    if (!_scrollController.hasClients || _rawLines.isEmpty) return null;
+    try {
+      final scrollBox =
+          _scrollViewKey.currentContext?.findRenderObject() as RenderBox?;
+      if (scrollBox == null) return null;
+      final viewportTop = scrollBox.localToGlobal(Offset.zero).dy;
+      final groups = _allClusterGroups();
+      for (final group in groups) {
+        final key = _paraTapKeys[group.first];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (box == null) continue;
+        final pos = box.localToGlobal(Offset.zero);
+        if (pos.dy >= viewportTop - 2) {
+          if (group.first < _rawLines.length) {
+            final text = _rawLines[group.first];
+            return text.trim().isNotEmpty ? text.trim() : null;
+          }
+        }
+      }
+      // 兜底：返回第一个段落
+      if (groups.isNotEmpty && groups.first.first < _rawLines.length) {
+        final text = _rawLines[groups.first.first];
+        return text.trim().isNotEmpty ? text.trim() : null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// 按段落文本在阅读页中定位并滚动到对应位置。
+  Future<void> _scrollToText(String? targetText) async {
+    if (targetText == null || targetText.trim().isEmpty) return;
+    // 取前 15 个非空字符做子串匹配，兼容编辑页/阅读页微小差异。
+    final key = targetText.trim().replaceAll(RegExp(r'\s+'), '');
+    if (key.length < 5) return;
+    final searchKey = key.substring(0, 15.clamp(0, key.length));
+    final matches = <int>[];
+    for (var i = 0; i < _paragraphs.length; i++) {
+      final normalized = _paragraphs[i].trim().replaceAll(RegExp(r'\s+'), '');
+      if (normalized.startsWith(searchKey)) matches.add(i);
+    }
+    if (matches.isEmpty || matches.length > 1) return; // 找不到或不唯一，回退到百分比
+    final paraIdx = matches[0];
+    // 找到该段落所在 cluster 的 GlobalKey，获取其像素位置。
+    final groups = _allClusterGroups();
+    int? groupIdx;
+    for (var g = 0; g < groups.length; g++) {
+      if (groups[g].contains(paraIdx)) {
+        groupIdx = g;
+        break;
+      }
+    }
+    if (groupIdx == null) return;
+    final paraKey = _paraTapKeys[groups[groupIdx].first];
+    final box = paraKey?.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final targetOffset = box.localToGlobal(Offset.zero).dy;
+    final scrollBox =
+        _scrollViewKey.currentContext?.findRenderObject() as RenderBox?;
+    if (scrollBox == null) return;
+    final viewportTop = scrollBox.localToGlobal(Offset.zero).dy;
+    final newOffset = _scrollController.offset + targetOffset - viewportTop;
+    await _scrollController.animateTo(
+      newOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
   /// 管理员「编辑经文」：打开编辑页，保存后同步最新排版到云端 / GitHub。
   Future<void> _openEditor() async {
     final filePath = _resolvedFilePath ?? widget.filePath;
     if (filePath == null) return;
     setState(() => _showMoreMenu = false);
+    final topText = _topVisibleParagraphText();
     final result = await Navigator.of(context).push<Map<String, dynamic>>(
       MaterialPageRoute(
         builder: (_) => SutraEditPage(
@@ -1734,18 +1817,51 @@ class _ReadingPageState extends State<ReadingPage>
           content: _content,
           keyPath: filePath,
           scrollProgress: _scrollProgress,
+          topParagraphText: topText,
         ),
       ),
     );
     if (result == null || result['changed'] != true || !mounted) return;
-    // 编辑页退出时的光标位置作为新进度，同步到阅读页。
-    _savedProgress = result['progress'] as double?;
+    // 编辑页保存后，阅读页保持当前进度不变（不覆盖为编辑页光标位置）。
     _savedPosition = null;
-    // 内容可能已变化，作废旧的分页结果，重新分页并按进度定位。
     _flipCacheKey = '';
     _flipPages = [];
     _flipPageRestored = false;
     await _loadContent();
+  }
+
+  /// 普通用户自动检查并应用最新排版（静默执行，不弹提示）。
+  /// 在 initState 中确定非管理员身份后调用。
+  Future<void> _autoCheckAndApplyLayout() async {
+    // 等待内容加载完成后再检查。
+    while (_isLoadingContent && mounted) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    if (!mounted) return;
+    final filePath = _resolvedFilePath ?? widget.filePath;
+    final id = SutraDownloader.extractId(widget.title, filePath);
+    if (id == null || id.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final verKey = 'sutra_edit_ver_$id';
+    final meta = await CloudNotesService.instance.sutraEditMeta(id);
+    final remoteAt = (meta?['updatedAt'] as num?)?.toInt() ?? 0;
+    final localAt = prefs.getInt(verKey) ?? 0;
+    if (remoteAt <= 0 || remoteAt <= localAt) return; // 无新版或已是最新。
+    // 有新版：静默下载并应用。
+    final oldParagraphs = List<String>.from(_paragraphs);
+    try {
+      final file = await SutraDownloader.download(
+        id,
+        preferEdited: true,
+        force: true,
+      );
+      final content = await file.readAsString();
+      if (!mounted) return;
+      await prefs.setInt(verKey, remoteAt);
+      await _applyUpdatedLayout(oldParagraphs, content, remoteAt);
+    } catch (_) {
+      // 静默失败，不打扰用户。
+    }
   }
 
   /// 非管理员「更新排版」：从 GitHub / 云端拉取管理员编辑的最新排版并覆盖本地。
@@ -1882,9 +1998,6 @@ class _ReadingPageState extends State<ReadingPage>
         unmigratedOld);
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已更新到最新排版')),
-    );
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _scheduleRestoreScroll());
   }
@@ -1974,7 +2087,7 @@ class _ReadingPageState extends State<ReadingPage>
     if (mounted && done) setState(() => _isLayoutDone = true);
   }
 
-  /// 管理员点击「完成排版」：标记该经排版已完成，标题栏显示徽标。
+  /// 管理员点击「完成排版」：标记该经排版已完成，同步到云端供所有用户自动获取最新版。
   Future<void> _toggleLayoutDone() async {
     final keyPath = _resolvedFilePath ?? widget.filePath;
     if (keyPath == null) return;
@@ -1984,6 +2097,13 @@ class _ReadingPageState extends State<ReadingPage>
     });
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sutra_layout_done_$keyPath', true);
+    // 将最终排版同步到云端 / GitHub，普通用户自动获取最新版。
+    final id = SutraDownloader.extractId(widget.title, keyPath);
+    if (id != null && id.isNotEmpty) {
+      try {
+        await CloudNotesService.instance.saveSutraEdit(id, _content);
+      } catch (_) {}
+    }
     _toast('已完成排版');
   }
 
@@ -2535,7 +2655,27 @@ class _ReadingPageState extends State<ReadingPage>
     return true;
   }
 
-  /// 干净单击正文中部：弹出 画线/感想/阅读设置 速览面板。
+  /// 打开「读经笔记」汇总页：列出本经所有从右下角笔记按钮编写的笔记。
+  Future<void> _openSutraNotes() async {
+    if (_openingNotes) return;
+    _openingNotes = true;
+    try {
+      _showMoreMenu = false;
+      _showQuickPanel = false;
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ReadingSutraNotesPage(
+            title: _titleShown,
+          ),
+        ),
+      );
+    } finally {
+      _openingNotes = false;
+    }
+  }
+
+  /// 干净单击正文中部：弹出 画线/感想/笔记 速览面板。
   void _openQuickPanel() {
     if (_showQuickPanel) return;
     setState(() {
@@ -2880,9 +3020,20 @@ class _ReadingPageState extends State<ReadingPage>
                   onTap: _openReadingNotes,
                 ),
                 _buildQuickPanelItem(
-                  icon: Icons.text_fields,
-                  label: '阅读设置',
-                  onTap: _openReadingSettings,
+                  icon: null,
+                  label: '笔记',
+                  onTap: _openSutraNotes,
+                  iconWidget: ColorFiltered(
+                    colorFilter: ColorFilter.mode(
+                      _panelColors()['accent']!,
+                      BlendMode.srcIn,
+                    ),
+                    child: Image.asset(
+                      'assets/images/write.png',
+                      width: 24,
+                      height: 24,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -2894,9 +3045,10 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 速览面板里的单个按钮：上面图标、下面文字。
   Widget _buildQuickPanelItem({
-    required IconData icon,
+    required IconData? icon,
     required String label,
     required VoidCallback onTap,
+    Widget? iconWidget,
   }) {
     final c = _panelColors();
     final textColor = c['textColor']!;
@@ -2910,7 +3062,10 @@ class _ReadingPageState extends State<ReadingPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 26, color: accentColor),
+              if (iconWidget != null)
+                iconWidget
+              else
+                Icon(icon, size: 26, color: accentColor),
               const SizedBox(height: 8),
               Text(label, style: TextStyle(fontSize: 13, color: textColor)),
             ],
@@ -3503,6 +3658,10 @@ class _ReadingPageState extends State<ReadingPage>
         onDrawUnderline: drawUnderline ??
             (ss, ee) => _toggleUnderlineCluster(cluster, ss, ee),
         onOpenNote: (ss, ee) => _openIdeaFromRangeCluster(cluster, ss, ee),
+        onSearch: (t) {
+          Clipboard.setData(ClipboardData(text: t));
+          assistantVisible.value = true;
+        },
       );
     }
     if (para < 0 || para >= _paragraphs.length) return const SizedBox.shrink();
@@ -3526,6 +3685,10 @@ class _ReadingPageState extends State<ReadingPage>
       onDrawUnderline:
           drawUnderline ?? (ss, ee) => _toggleUnderline(para, ss, ee),
       onOpenNote: (ss, ee) => _openIdeaFromRange(para, ss, ee),
+      onSearch: (t) {
+        Clipboard.setData(ClipboardData(text: t));
+        assistantVisible.value = true;
+      },
     );
   }
 
@@ -4014,6 +4177,9 @@ class _IdeaMenuCard extends StatefulWidget {
   /// 「本段全选」时回调外层：把屏幕上的选中高亮扩展到整段（长按选中场景）。
   final VoidCallback? onSelectFull;
 
+  /// 「搜索」回调：传入选中的文字，由外层打开 AI 助手。
+  final void Function(String text)? onSearch;
+
   const _IdeaMenuCard({
     required this.para,
     required this.paragraph,
@@ -4027,6 +4193,7 @@ class _IdeaMenuCard extends StatefulWidget {
     required this.onOpenNote,
     this.onResolveRange,
     this.onSelectFull,
+    this.onSearch,
   });
 
   @override
@@ -4122,6 +4289,11 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             final (s, e) = _activeRange;
             widget.close();
             widget.onOpenNote(s, e);
+          }),
+          _item(Icons.search, '搜索', () {
+            final t = _selectedText;
+            widget.close();
+            if (t.isNotEmpty) widget.onSearch?.call(t);
           }),
         ],
       ),
