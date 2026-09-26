@@ -41,12 +41,15 @@ class ReadingSutraNotesPage extends StatefulWidget {
   /// 菩提空间帖子 noteId（他人查看时点击笔记进入帖子详情页）。
   final String noteId;
 
+  final bool canDelete;
+
   const ReadingSutraNotesPage({
     super.key,
     required this.title,
     this.ownerUserId = '',
     this.initialNotes,
     this.noteId = '',
+    this.canDelete = false,
   });
 
   @override
@@ -99,6 +102,8 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
     return widget.ownerUserId.isEmpty ||
         (meId != null && meId.isNotEmpty && widget.ownerUserId == meId);
   }
+
+  bool get _canDelete => widget.canDelete && _isOwner;
 
   bool _routeSubscribed = false;
 
@@ -281,7 +286,7 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
 
   /// 删除笔记。
   Future<void> _confirmDelete(int index) async {
-    if (index >= _notes.length) return;
+    if (!_canDelete || index >= _notes.length) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -766,7 +771,7 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
                                   Text(
                                     showContent,
                                     style: TextStyle(
-                                      fontSize: 14,
+                                      fontSize: 15,
                                       height: 1.7,
                                       color: isDark
                                           ? Colors.white.withOpacity(0.9)
@@ -850,7 +855,7 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
                                       ),
                                       ],
                                       // 删除按钮（仅作者本人）
-                                      if (_isOwner) ...[
+                                      if (_canDelete) ...[
                                         const SizedBox(width: 12),
                                         GestureDetector(
                                           behavior: HitTestBehavior.opaque,

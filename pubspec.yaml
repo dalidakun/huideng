@@ -89,6 +89,17 @@ flutter:
     - assets/images/mi2.png
     - assets/images/su1.png
     - assets/images/su2.png
+    # 底部第 5 格菜单图标：米黄外观 s1/s2，素白外观 h1/h2（1=未点击，2=点击）。
+    - assets/images/s1.png
+    - assets/images/s2.png
+    - assets/images/h1.png
+    - assets/images/h2.png
+    # 原「记录」菜单图标（已换成 s/h，图标先留着备用）：
+    # 米黄外观 ycode1/ycode2，素白外观 bcode1/bcode2。
+    - assets/images/bcode1.png
+    - assets/images/bcode2.png
+    - assets/images/ycode1.png
+    - assets/images/ycode2.png
     # 菩提空间页顶部标题图标：米黄外观 puti1，素白外观 puti2。
     - assets/images/puti1.png
     - assets/images/puti2.png

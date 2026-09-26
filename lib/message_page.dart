@@ -172,13 +172,13 @@ class _Palette {
 /// 消息页：展示其他用户与「我」的所有互动（点赞/评论/回复/转发/收藏/关注/@提及）。
 /// Feed 流式列表 + 同帖同类型自动聚合 + 头像堆叠 + 未读状态。
 class MessagePage extends StatefulWidget {
-  /// 左上角头像点击回调：打开「我的」页面。
-  final VoidCallback? onOpenMyPage;
+  /// 左上角头像点击回调：从左侧滑出个人菜单。
+  final VoidCallback? onOpenSideMenu;
 
   /// 当前底部 Tab 索引（切到本页时播放淡入动画）。
   final ValueNotifier<int>? activeTab;
 
-  const MessagePage({super.key, this.onOpenMyPage, this.activeTab});
+  const MessagePage({super.key, this.onOpenSideMenu, this.activeTab});
 
   @override
   State<MessagePage> createState() => _MessagePageState();
@@ -450,7 +450,7 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
           child: Row(
             children: [
               GestureDetector(
-                onTap: widget.onOpenMyPage,
+                onTap: widget.onOpenSideMenu,
                 child: UserAvatar(
                   userId: AuthService.instance.currentUser.value?.id,
                   radius: 16,

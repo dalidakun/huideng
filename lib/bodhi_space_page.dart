@@ -31,7 +31,7 @@ Color get _border => AppPalette.p.border;
 Color get _overlay => AppPalette.p.tintBg;
 
 const Map<String, String> _plazaTabMeta = {
-  'discuss': '讨论',
+  'discuss': '话题',
   'hot': '推荐',
   'follow': '关注',
 };
@@ -96,10 +96,13 @@ bool _repostSourceBlocked(PlazaNote n) =>
 /// 「菩提空间」页面：承载广场栏目（热门/推荐/关注）及其内容流；
 /// 公告不在栏目里，由右上角公告图标进入独立公告列表页。
 class BodhiSpacePage extends StatefulWidget {
-  /// 帖子卡点击自己头像/昵称的回调：打开「我的」页面。
+  /// 帖子卡点击自己头像/昵称的回调：打开个人主页。
   final VoidCallback? onOpenMyPage;
 
-  const BodhiSpacePage({super.key, this.onOpenMyPage});
+  /// 顶部左上角头像点击回调：从左侧滑出个人菜单。
+  final VoidCallback? onOpenSideMenu;
+
+  const BodhiSpacePage({super.key, this.onOpenMyPage, this.onOpenSideMenu});
 
   @override
   State<BodhiSpacePage> createState() => BodhiSpacePageState();
@@ -128,7 +131,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   List<String> _plazaTabs = ['discuss', 'hot', 'follow'];
   /// 自定义工具栏：栏目名（默认「自定义」，可改名）+ 经文/话题条目（数量不限），
   /// 点击工具栏上的自定义栏目向下展开列表，点击条目进入对应讨论页。
-  String _customTabName = '自定义';
+  String _customTabName = '列表';
   List<_CustomToolbarItem> _customItems = const [];
   bool _customTabOpen = false;
   /// 自定义面板悬浮层：锚定在工具栏下边缘（LayerLink 跟随滚动），
@@ -1128,7 +1131,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
           .toList();
       if (!mounted) return;
       setState(() {
-        _customTabName = name.isEmpty ? '自定义' : name;
+        _customTabName = name.isEmpty ? '列表' : name;
         _customItems = items;
       });
     } catch (_) {}
@@ -1760,7 +1763,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       return;
     }
     await _saveCustomTab(
-        savedName.isEmpty ? '自定义' : savedName, List.of(items));
+        savedName.isEmpty ? '列表' : savedName, List.of(items));
     // 保存后若原本展开且还有条目，重新展开面板以显示最新条目与「继续添加」行。
     if (panelWasOpen && items.isNotEmpty) _openCustomPanel();
   }
@@ -1957,12 +1960,12 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                 ),
               ],
             ),
-            // 左侧：头像（与主页左上角一致，打开「我的」页）。
+            // 左侧：头像（与主页左上角一致，打开左侧个人菜单）。
             Align(
               alignment: Alignment.centerLeft,
               child: GestureDetector(
                 // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
-                onTap: widget.onOpenMyPage,
+                onTap: widget.onOpenSideMenu,
                 child: UserAvatar(
                   userId: AuthService.instance.currentUser.value?.id,
                   radius: 16,

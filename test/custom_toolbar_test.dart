@@ -21,12 +21,12 @@ void main() {
       of: find.byType(CustomScrollView),
       matching: find.byType(Scrollable),
     );
-    await tester.scrollUntilVisible(find.text('自定义'), 300,
+    await tester.scrollUntilVisible(find.text('列表'), 300,
         scrollable: customScroll.first);
     await tester.pump(const Duration(milliseconds: 200));
 
-    // 自定义栏目 → 下拉面板（空时只有添加行）→ 添加行 → 添加弹窗。
-    await tester.tap(find.text('自定义'));
+    // 列表栏目 → 下拉面板（空时只有添加行）→ 添加行 → 添加弹窗。
+    await tester.tap(find.text('列表'));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('添加关注的经文和话题'), findsOneWidget,
         reason: 'empty panel should show the add row');
@@ -52,7 +52,7 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'finishing sheet threw');
 
     // 保存后下拉面板保持展开：直接显示新条目与「继续添加」行。
-    expect(find.text('自定义'), findsOneWidget);
+    expect(find.text('列表'), findsOneWidget);
     expect(find.text('打坐'), findsOneWidget);
     expect(find.text('继续添加经文和话题'), findsOneWidget);
     // 面板是悬浮层（Overlay + LayerLink 锚定），不占滚动列表位置。
@@ -79,12 +79,12 @@ void main() {
       of: find.byType(CustomScrollView),
       matching: find.byType(Scrollable),
     );
-    await tester.scrollUntilVisible(find.text('自定义'), 300,
+    await tester.scrollUntilVisible(find.text('列表'), 300,
         scrollable: customScroll.first);
     await tester.pump(const Duration(milliseconds: 200));
 
-    // 自定义栏目 → 下拉面板 → 添加行 → 添加弹窗。
-    await tester.tap(find.text('自定义'));
+    // 列表栏目 → 下拉面板 → 添加行 → 添加弹窗。
+    await tester.tap(find.text('列表'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('添加关注的经文和话题'));
     await tester.pump(const Duration(milliseconds: 400));

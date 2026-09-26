@@ -1960,9 +1960,9 @@ class _UserTabsDelegate extends SliverPersistentHeaderDelegate {
           child: Row(
             children: [
               for (final (i, label) in const [
-                (0, '笔记'),
+                (0, '帖子'),
                 (1, '回复'),
-                (2, '精读'),
+                (2, '闻思'),
                 (3, '功课'),
               ])
                 Expanded(

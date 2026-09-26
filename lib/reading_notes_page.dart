@@ -600,7 +600,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                                                   ? TextOverflow.ellipsis
                                                   : TextOverflow.visible,
                                               style: TextStyle(
-                                                fontSize: 13.5,
+                                                fontSize: 15,
                                                 height: 1.6,
                                                 color: isDark
                                                     ? Colors.white70
@@ -753,7 +753,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                                             Text(
                                               showNote,
                                               style: TextStyle(
-                                                fontSize: 13.5,
+                                                fontSize: 14,
                                                 height: 1.6,
                                                 color: isDark
                                                     ? Colors.white

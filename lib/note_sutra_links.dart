@@ -198,6 +198,11 @@ class NoteSutraCatalog {
   static Set<String> get cachedMultiVolumeBases =>
       _multiVolumeBases ?? const {};
 
+  /// 目录已加载时，返回全部完整经名（含 CBETA 编号，如「地藏菩萨本愿经T13n0412_002」）；
+  /// 未加载时返回空列表。用于只有编号时反查经名。
+  static List<String> get cachedRawTitles =>
+      _rawCharCounts?.keys.toList() ?? const [];
+
   /// 目录已加载时，返回基础经名 [base] 第 [volume] 卷的正文路径；
   /// 未加载或无对应卷时返回 null（调用方回退到第一部路径）。
   static String? cachedVolumePath(String base, int volume) {
@@ -206,8 +211,7 @@ class NoteSutraCatalog {
   }
 
   /// 目录已加载时，返回基础经名 [base] 的总卷数；未加载或无记录返回 0。
-  static int cachedVolumeCount(String base) =>
-      _volumePaths?[base]?.length ?? 0;
+  static int cachedVolumeCount(String base) => _volumePaths?[base]?.length ?? 0;
 
   /// 目录已加载时，返回基础经名 [base] 的总字数（多卷经书为各卷之和）；
   /// 未加载或无记录返回 0。
@@ -267,7 +271,8 @@ class NoteSutraLinks {
           if (best.isNotEmpty) {
             final entry = lib[best]!;
             // 避免旧式已提过的重复
-            final already = results.any((r) => r.$1 == best && r.$2 == entry.filePath);
+            final already =
+                results.any((r) => r.$1 == best && r.$2 == entry.filePath);
             if (!already) results.add((best, entry.filePath));
             i += 1 + best.length;
             continue;

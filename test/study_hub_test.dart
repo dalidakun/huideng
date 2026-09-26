@@ -29,14 +29,14 @@ void main() {
     );
 
     // Reveal the tab bar header.
-    await tester.scrollUntilVisible(find.text('自定义'), 300,
+    await tester.scrollUntilVisible(find.text('列表'), 300,
         scrollable: customScroll.first);
     await tester.pump(const Duration(milliseconds: 200));
     expect(tester.takeException(), isNull,
         reason: 'header reveal threw');
 
-    // Tabs are now 讨论/推荐/关注; 公告 moved to a top-right icon entry.
-    expect(find.text('讨论'), findsOneWidget, reason: '讨论 tab missing');
+    // Tabs are now 话题/推荐/关注; 公告 moved to a top-right icon entry.
+    expect(find.text('话题'), findsOneWidget, reason: '话题 tab missing');
     expect(find.text('推荐'), findsOneWidget, reason: '推荐 tab missing');
     expect(find.text('关注'), findsOneWidget, reason: '关注 tab missing');
     expect(find.text('公告'), findsNothing,
@@ -60,7 +60,7 @@ void main() {
 
     // Open the custom dropdown panel via the custom tab,
     // then enter the add sheet via the in-panel add row.
-    await tester.tap(find.text('自定义'));
+    await tester.tap(find.text('列表'));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('添加关注的经文和话题'), findsOneWidget,
         reason: 'empty panel should show the add row');
@@ -107,7 +107,7 @@ void main() {
       reason: 'title should live inside the scrollable content',
     );
     expect(
-      find.descendant(of: scrollable.first, matching: find.text('自定义')),
+      find.descendant(of: scrollable.first, matching: find.text('列表')),
       findsOneWidget,
       reason: 'tab bar should live inside the scrollable content',
     );

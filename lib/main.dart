@@ -14,6 +14,11 @@ import 'study_hub_page.dart';
 import 'bodhi_space_page.dart';
 import 'my_page.dart';
 import 'message_page.dart';
+import 'record_page.dart';
+import 'home_side_menu.dart';
+import 'certification_page.dart';
+import 'user_list_page.dart';
+import 'login_page.dart';
 import 'app_state.dart';
 import 'assistant_session.dart';
 import 'auth_service.dart';
@@ -28,6 +33,7 @@ import 'recent_sutras_page.dart';
 import 'app_palette.dart';
 import 'agreements.dart';
 import 'ui_sound.dart';
+
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
@@ -130,52 +136,53 @@ class _MyAppState extends State<MyApp> {
       home: !_agreed
           ? PrivacyConsentPage(onAgreed: _onPrivacyAgreed)
           : PopScope(
-        // 根路由不允许直接 pop（否则系统会直接退出应用）：所有返回意图都
-        // 统一在 onPopInvokedWithResult 里处理（收起面板 → 依次返回 → 最小化）。
-        // 不能用已废弃的 WillPopScope：Android 14+ 预测性返回（targetSdk 34+
-        // 默认开启）下，系统侧滑返回手势不会触发 onWillPop，导致「侧滑无反应」。
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) async {
-          if (didPop) return;
-          // 圆形助手面板展开时，先收起它而不是退出应用。
-          if (assistantReveal.value) {
-            assistantReveal.value = false;
-            return;
-          }
-          // AI 面板展开时，先收起它而不是退出应用。
-          if (assistantVisible.value) {
-            assistantVisible.value = false;
-            return;
-          }
-          // 如有可返回的路由（如从主页打开的个人空间页/详情页），先 pop 回上一页，
-          // 而不是直接最小化 App。只有在最底层（主页）才执行最小化。
-          // 注意：不能在这里用 Navigator.of(context)——MyApp 的 context 在
-          // MaterialApp 之上，找不到 Navigator 会抛空错误，改用全局 navigatorKey。
-          final nav = navigatorKey.currentState;
-          if (nav != null && nav.canPop()) {
-            nav.pop();
-            return;
-          }
-          // 经藏页处于搜索模式时，侧滑返回先退出搜索、回到经藏页面，
-          // 而不是直接最小化应用。
-          if (_mainPageKey.currentState?.exitSutraSearchIfActive() ?? false) {
-            return;
-          }
-          // 最小化应用到后台，模拟从底部滑动的行为
-          if (Platform.isAndroid) {
-            const platform = MethodChannel('app_channel');
-            try {
-              await platform.invokeMethod('minimizeApp');
-            } catch (e) {
-              // 如果失败，使用系统默认行为
-              SystemNavigator.pop();
-            }
-          } else {
-            SystemNavigator.pop();
-          }
-        },
-        child: _AppEntry(mainPageKey: _mainPageKey),
-          ),
+              // 根路由不允许直接 pop（否则系统会直接退出应用）：所有返回意图都
+              // 统一在 onPopInvokedWithResult 里处理（收起面板 → 依次返回 → 最小化）。
+              // 不能用已废弃的 WillPopScope：Android 14+ 预测性返回（targetSdk 34+
+              // 默认开启）下，系统侧滑返回手势不会触发 onWillPop，导致「侧滑无反应」。
+              canPop: false,
+              onPopInvokedWithResult: (didPop, _) async {
+                if (didPop) return;
+                // 圆形助手面板展开时，先收起它而不是退出应用。
+                if (assistantReveal.value) {
+                  assistantReveal.value = false;
+                  return;
+                }
+                // AI 面板展开时，先收起它而不是退出应用。
+                if (assistantVisible.value) {
+                  assistantVisible.value = false;
+                  return;
+                }
+                // 如有可返回的路由（如从主页打开的个人空间页/详情页），先 pop 回上一页，
+                // 而不是直接最小化 App。只有在最底层（主页）才执行最小化。
+                // 注意：不能在这里用 Navigator.of(context)——MyApp 的 context 在
+                // MaterialApp 之上，找不到 Navigator 会抛空错误，改用全局 navigatorKey。
+                final nav = navigatorKey.currentState;
+                if (nav != null && nav.canPop()) {
+                  nav.pop();
+                  return;
+                }
+                // 经藏页处于搜索模式时，侧滑返回先退出搜索、回到经藏页面，
+                // 而不是直接最小化应用。
+                if (_mainPageKey.currentState?.exitSutraSearchIfActive() ??
+                    false) {
+                  return;
+                }
+                // 最小化应用到后台，模拟从底部滑动的行为
+                if (Platform.isAndroid) {
+                  const platform = MethodChannel('app_channel');
+                  try {
+                    await platform.invokeMethod('minimizeApp');
+                  } catch (e) {
+                    // 如果失败，使用系统默认行为
+                    SystemNavigator.pop();
+                  }
+                } else {
+                  SystemNavigator.pop();
+                }
+              },
+              child: _AppEntry(mainPageKey: _mainPageKey),
+            ),
     );
   }
 }
@@ -225,12 +232,13 @@ class MainPage extends StatefulWidget {
 }
 
 class _MainPageState extends State<MainPage>
-    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   int _currentIndex = 0;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
   final _bodhiKey = GlobalKey<BodhiSpacePageState>();
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
+  final _recordKey = GlobalKey<RecordPageState>();
   late final ValueNotifier<int> _tabIndex;
   List<Widget> _pages = [];
   // 底部菜单自动隐藏动画：value 0=完全显示，1=完全隐藏。
@@ -244,6 +252,26 @@ class _MainPageState extends State<MainPage>
   int _scrollDir = 0;
   // 菩提空间菜单图标最近一次点击时间戳：无新帖时用于判定双击回到顶部。
   int _lastBodhiTabTap = 0;
+  // 左侧个人菜单（个人资料/记录/关注/设置/退出登录）滑出动画。
+  // value 0=完全收起，1=完全展开。
+  late final AnimationController _sideMenuCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+  // 抽屉曲线常驻字段（而非每次 build 新建）：避免监听器泄漏，并让关闭走
+  // 反向专用的对称缓动——否则关闭复用 easeOutCubic，会先猛冲到只剩一点，
+  // 末尾长时间慢爬，视觉上就是「先收一大半、卡住、再收完」。
+  late final CurvedAnimation _sideMenuSlide = CurvedAnimation(
+    parent: _sideMenuCtrl,
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeInOutCubic,
+  );
+  late final CurvedAnimation _sideMenuFade = CurvedAnimation(
+    parent: _sideMenuCtrl,
+    curve: Curves.easeOut,
+    reverseCurve: Curves.easeInOut,
+  );
+  bool _sideMenuOpen = false;
   // 每晚 20:00 打卡提醒定时器。
   Timer? _checkInReminderTimer;
   bool _checkInReminderShownToday = false;
@@ -277,6 +305,9 @@ class _MainPageState extends State<MainPage>
     NotificationCenter.instance.stop();
     WidgetsBinding.instance.removeObserver(this);
     _navCtrl.dispose();
+    _sideMenuSlide.dispose();
+    _sideMenuFade.dispose();
+    _sideMenuCtrl.dispose();
     super.dispose();
   }
 
@@ -398,9 +429,14 @@ class _MainPageState extends State<MainPage>
     final raw = prefs.getString('checkin_records') ?? '[]';
     final List<dynamic> allRecords = jsonDecode(raw);
     final todayRecords = allRecords.where((r) => r['date'] == today).toList();
-    // 检查是否有未完成项。
-    final allDone = items.every((item) => todayRecords.any(
-        (r) => r['type'] == item['type'] && r['name'] == item['name']));
+    // 检查是否有未完成项：按类别维度判断（与功课页「完成自动分享」口径一致——
+    // 每天每个已配置类别至少打卡一次即算完成；日历回填的补卡记录不存 name 字段，
+    // 故不按具体项目匹配，避免已完成仍被提醒）。
+    final types = {for (final item in items) item['type']!};
+    final todayTypes = {
+      for (final r in todayRecords) (r['type'] ?? '').toString()
+    };
+    final allDone = types.every((t) => todayTypes.contains(t));
     if (allDone) return; // 全部完成不弹。
     if (!mounted) return;
     _checkInReminderShownToday = true;
@@ -408,8 +444,8 @@ class _MainPageState extends State<MainPage>
     _showCheckInReminderDialog();
   }
 
-  void _loadNamedItems(List<Map<String, String>> items,
-      SharedPreferences prefs, String type, String category) {
+  void _loadNamedItems(List<Map<String, String>> items, SharedPreferences prefs,
+      String type, String category) {
     final raw = prefs.getString('setting_${type}_items') ??
         prefs.getString('setting_${type}_titles');
     if (raw == null || raw.isEmpty) return;
@@ -525,41 +561,53 @@ class _MainPageState extends State<MainPage>
   /// 底部导航图标：素白外观用黑色版本（文件名 .png 前加「1」），
   /// 每次构建重新取值，外观切换后立即换图。
   List<BottomNavigationBarItem> get _bottomNavItems => [
-    BottomNavigationBarItem(
-      icon: Image.asset(navIconAsset('assets/images/study.png'),
-          width: 22, height: 22),
-      activeIcon: Image.asset(navIconAsset('assets/images/study_selected.png'),
-          width: 22, height: 22),
-      label: '',
-    ),
-    BottomNavigationBarItem(
-      icon: _BodhiTabIcon(active: false),
-      activeIcon: _BodhiTabIcon(active: true),
-      label: '',
-    ),
-    BottomNavigationBarItem(
-      icon: Image.asset(navIconAsset('assets/images/sutra_book.png'),
-          width: 22, height: 22),
-      activeIcon:
-          Image.asset(navIconAsset('assets/images/sutra_book_selected.png'),
+        BottomNavigationBarItem(
+          icon: Image.asset(navIconAsset('assets/images/study.png'),
               width: 22, height: 22),
-      label: '',
-    ),
-    BottomNavigationBarItem(
-      icon: _NotificationTabIcon(active: false),
-      activeIcon: _NotificationTabIcon(active: true),
-      label: '',
-    ),
-    BottomNavigationBarItem(
-      icon: Image.asset(navIconAsset('assets/images/my.png'),
-          width: 19.5, height: 19.5),
-      activeIcon: Image.asset(navIconAsset('assets/images/my_selected.png'),
-          width: 19.5, height: 19.5),
-      label: '',
-    ),
-  ];
+          activeIcon: Image.asset(
+              navIconAsset('assets/images/study_selected.png'),
+              width: 22,
+              height: 22),
+          label: '',
+        ),
+        BottomNavigationBarItem(
+          icon: _BodhiTabIcon(active: false),
+          activeIcon: _BodhiTabIcon(active: true),
+          label: '',
+        ),
+        BottomNavigationBarItem(
+          icon: Image.asset(navIconAsset('assets/images/sutra_book.png'),
+              width: 22, height: 22),
+          activeIcon: Image.asset(
+              navIconAsset('assets/images/sutra_book_selected.png'),
+              width: 22,
+              height: 22),
+          label: '',
+        ),
+        BottomNavigationBarItem(
+          icon: _NotificationTabIcon(active: false),
+          activeIcon: _NotificationTabIcon(active: true),
+          label: '',
+        ),
+        // 第 5 格：图标已就位，页面内容暂留白（后续换成别的内容）。
+        BottomNavigationBarItem(
+          icon: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/h1.png'
+                  : 'assets/images/s1.png',
+              width: 22,
+              height: 22),
+          activeIcon: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/h2.png'
+                  : 'assets/images/s2.png',
+              width: 22,
+              height: 22),
+          label: '',
+        ),
+      ];
 
-  /// 当前页面索引 → 底部菜单索引（助手无菜单项，不高亮）。
+  /// 当前页面索引 → 底部菜单索引（助手/记录/个人主页无菜单项，不高亮）。
   int _navIndexForCurrent() {
     switch (_currentIndex) {
       case 0: // 首页
@@ -572,8 +620,14 @@ class _MainPageState extends State<MainPage>
         return -1;
       case 4: // 消息
         return 3;
-      default: // 我的
+      case 5: // 第 5 格（页面暂留白）
         return 4;
+      case 6: // 我的（入口在左侧菜单）
+        return -1;
+      case 7: // 记录（入口在左侧菜单）
+        return -1;
+      default:
+        return -1;
     }
   }
 
@@ -596,8 +650,13 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    // 底部菜单索引 → 页面索引：消息(3)→4、我的(4)→5，助手页无菜单项。
-    final pageIndex = index >= 3 ? index + 1 : index;
+    // 底部菜单索引 → 页面索引：消息(3)→4，第 5 格(4)→5（页面暂留白）；
+    // 记录页不在底部，由左侧菜单进入。
+    final pageIndex = index == 3
+        ? 4
+        : index == 4
+            ? 5
+            : index;
     // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
     if (pageIndex == 0 && _currentIndex == 0) {
       _studyHubKey.currentState?.reload();
@@ -651,13 +710,157 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    _tabIndex.value = 5;
+    _tabIndex.value = 6;
     setState(() {
-      _currentIndex = 5;
+      _currentIndex = 6;
     });
     _syncAssistantTab();
     _revealNavBar();
     _myKey.currentState?.reload();
+  }
+
+  /// 各页面左上角头像入口：从左侧滑出个人菜单。
+  void _openSideMenu() {
+    if (_sideMenuOpen) return;
+    setState(() {
+      _sideMenuOpen = true;
+    });
+    _sideMenuCtrl.forward();
+  }
+
+  // 关闭去重：同一轮关闭里重复调用（遮罩连点等）不再重启 reverse——
+  // 重启会按剩余距离重算时长，越点剩余时长越长，末尾看起来像卡住不动。
+  Future<void>? _sideMenuClosing;
+
+  Future<void> _closeSideMenu() {
+    final existing = _sideMenuClosing;
+    if (existing != null) return existing;
+    if (!_sideMenuOpen) return Future<void>.value();
+    final future = _sideMenuCtrl.reverse().whenComplete(() {
+      _sideMenuClosing = null;
+      if (mounted) setState(() => _sideMenuOpen = false);
+    });
+    _sideMenuClosing = future;
+    return future;
+  }
+
+  /// 菜单跳转统一处理：先收起面板，再执行跳转（避免两个转场同时进行）。
+  Future<void> _sideMenuGo(Future<void> Function() action) async {
+    await _closeSideMenu();
+    await action();
+  }
+
+  void _sideMenuOpenFollowing() {
+    unawaited(_sideMenuGo(() => Navigator.of(context).push(
+        slideInFromLeft(const UserListPage(mode: UserListMode.following)))));
+  }
+
+  void _sideMenuOpenSettings() {
+    unawaited(_sideMenuGo(() =>
+        Navigator.of(context).push(slideInFromLeft(const SettingsPage()))));
+  }
+
+  void _sideMenuOpenProfile() {
+    unawaited(_sideMenuGo(() async => _openMyPage()));
+  }
+
+  /// 抽屉「记录」入口：进记录时间线（底部菜单无此页，底部不高亮）。
+  void _sideMenuOpenRecord() {
+    unawaited(_sideMenuGo(() async => _openRecordPage()));
+  }
+
+  /// 切到记录页：重读本地索引（读经页新写的画线/感想、笔记改动即时可见）。
+  void _openRecordPage() {
+    if (!mounted) return;
+    if (_currentIndex == 2) _sutraListKey.currentState?.deactivateSearch();
+    _tabIndex.value = 7;
+    setState(() => _currentIndex = 7);
+    _syncAssistantTab();
+    _revealNavBar();
+    unawaited(_recordKey.currentState?.reload());
+  }
+
+  /// 抽屉「获得认证」入口：收起面板后进实名认证页，返回时认证状态已写入本地。
+  void _sideMenuCertify() {
+    unawaited(_sideMenuGo(() => Navigator.of(context)
+        .push(slideInFromLeft(const CertificationPage()))));
+  }
+
+  /// 抽屉「登录」入口（未登录时显示）：收起面板后进登录页。
+  Future<void> _sideMenuLogin() async {
+    await _closeSideMenu();
+    if (!mounted) return;
+    unawaited(Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const LoginPage())));
+  }
+
+  /// 退出登录：二次确认后清登录态。
+  Future<void> _sideMenuLogout() async {
+    if (!AuthService.instance.isLoggedIn) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppPalette.p.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('退出登录',
+            style: TextStyle(
+                color: AppPalette.p.text,
+                fontSize: 18,
+                fontWeight: FontWeight.w600)),
+        content: Text('退出后需重新登录才能管理云端笔记',
+            style: TextStyle(color: AppPalette.p.textSec)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消', style: TextStyle(color: AppPalette.p.textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('退出',
+                style:
+                    TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await _closeSideMenu();
+    await AuthService.instance.logout();
+  }
+
+  /// 左边缘横向拖拽打开个人菜单的触发区宽度。
+  static const double _sideMenuEdgeWidth = 28;
+
+  double? _edgeDragStartX;
+  double? _edgeDragStartY;
+
+  /// 左边缘往右滑动打开菜单：只在起始点位于左边缘、且位移以水平为主时触发，
+  /// 避免与页面内横向滚动（如轮播、横向列表）冲突。
+  void _onEdgeDragStart(Offset pos) {
+    if (_sideMenuOpen || pos.dx > _sideMenuEdgeWidth) {
+      _edgeDragStartX = null;
+      return;
+    }
+    _edgeDragStartX = pos.dx;
+    _edgeDragStartY = pos.dy;
+  }
+
+  void _onEdgeDragUpdate(Offset pos, Size size) {
+    final startX = _edgeDragStartX;
+    final startY = _edgeDragStartY;
+    if (startX == null || startY == null) return;
+    final dx = pos.dx - startX;
+    final dy = pos.dy - startY;
+    if (dx < 16 || dx.abs() <= dy.abs() * 1.5) return;
+    if (pos.dy < 0 || pos.dy > size.height) return;
+    _edgeDragStartX = null;
+    _edgeDragStartY = null;
+    _openSideMenu();
+  }
+
+  void _onEdgeDragEnd() {
+    _edgeDragStartX = null;
+    _edgeDragStartY = null;
   }
 
   /// 阅读统计入口：打开阅读统计页面。
@@ -742,13 +945,14 @@ class _MainPageState extends State<MainPage>
     _pages = [
       StudyHubPage(
         key: _studyHubKey,
-        onOpenMyPage: _openMyPage,
+        onOpenSideMenu: _openSideMenu,
         onSutraStateChanged: () =>
             unawaited(_sutraListKey.currentState?.reload()),
       ),
       BodhiSpacePage(
         key: _bodhiKey,
         onOpenMyPage: _openMyPage,
+        onOpenSideMenu: _openSideMenu,
       ),
       SutraListPage(
         key: _sutraListKey,
@@ -758,8 +962,11 @@ class _MainPageState extends State<MainPage>
         onOpenReadingHistory: _openReadingHistory,
       ),
       _AssistantTabPage(),
-      MessagePage(onOpenMyPage: _openMyPage, activeTab: _tabIndex),
+      MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
+      // 底部第 5 格：内容暂留白，后续换新页面。
+      const _ReservedTabPage(),
       MyPage(key: _myKey),
+      RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
     ];
     // 关闭键盘自适应压缩：WebView（助手/DeepSeek）在 adjustResize 下会被键盘
     // 压成小视口，页面在消息区与输入框之间露出大片空白遮挡内容。
@@ -786,9 +993,16 @@ class _MainPageState extends State<MainPage>
                             _BottomNavBar.heightOnly(context),
                       ),
                 ),
-                child: IndexedStack(
-                  index: _currentIndex,
-                  children: _pages,
+                child: Listener(
+                  onPointerDown: (e) => _onEdgeDragStart(e.position),
+                  onPointerMove: (e) => _onEdgeDragUpdate(
+                      e.position, MediaQuery.of(context).size),
+                  onPointerUp: (_) => _onEdgeDragEnd(),
+                  onPointerCancel: (_) => _onEdgeDragEnd(),
+                  child: IndexedStack(
+                    index: _currentIndex,
+                    children: _pages,
+                  ),
                 ),
               ),
             ),
@@ -815,6 +1029,41 @@ class _MainPageState extends State<MainPage>
               ),
             ),
           ),
+          // 左侧个人菜单：约 2/3 屏宽，遮罩点击关闭，覆盖在底部菜单之上。
+          if (_sideMenuOpen) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _closeSideMenu,
+                child: FadeTransition(
+                  opacity:
+                      Tween<double>(begin: 0, end: 0.35).animate(_sideMenuFade),
+                  child: const ColoredBox(color: Colors.black),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: MediaQuery.of(context).size.width * 2 / 3,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(-1, 0),
+                  end: Offset.zero,
+                ).animate(_sideMenuSlide),
+                child: HomeSideMenu(
+                  onOpenProfile: _sideMenuOpenProfile,
+                  onOpenRecord: _sideMenuOpenRecord,
+                  onOpenFollowing: _sideMenuOpenFollowing,
+                  onOpenSettings: _sideMenuOpenSettings,
+                  onLogin: _sideMenuLogin,
+                  onLogout: _sideMenuLogout,
+                  onCertify: _sideMenuCertify,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -823,9 +1072,8 @@ class _MainPageState extends State<MainPage>
 
 /// 素白外观下底部导航使用黑色图标：文件名在 .png 前加「1」
 /// （如 my.png → my1.png、my_selected.png → my_selected1.png）。
-String navIconAsset(String base) => AppPalette.instance.isPlain
-    ? base.replaceAll('.png', '1.png')
-    : base;
+String navIconAsset(String base) =>
+    AppPalette.instance.isPlain ? base.replaceAll('.png', '1.png') : base;
 
 /// X 风格毛玻璃底部导航栏：始终悬浮在内容之上，内容从下方滚过时呈磨砂效果。
 class _BottomNavBar extends StatelessWidget {
@@ -881,7 +1129,17 @@ class _BottomNavBar extends StatelessWidget {
                         child: SizedBox(
                           width: 32,
                           height: 32,
-                          child: Center(child: icon),
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            switchInCurve: Curves.easeInOut,
+                            switchOutCurve: Curves.easeInOut,
+                            transitionBuilder: (child, anim) =>
+                                FadeTransition(opacity: anim, child: child),
+                            child: KeyedSubtree(
+                              key: ValueKey<bool>(selected),
+                              child: Center(child: icon),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -912,14 +1170,12 @@ class _BodhiTabIcon extends StatelessWidget {
           children: [
             Image.asset(
               AppPalette.instance.isPlain
-                  ? (active
-                      ? 'assets/images/su2.png'
-                      : 'assets/images/su1.png')
+                  ? (active ? 'assets/images/su2.png' : 'assets/images/su1.png')
                   : (active
                       ? 'assets/images/mi2.png'
                       : 'assets/images/mi1.png'),
-              width: 25,
-              height: 25,
+              width: 22,
+              height: 22,
             ),
             if (count > 0)
               Positioned(
@@ -1074,6 +1330,22 @@ class _NotificationBadgePill extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 底部第 5 格的内容页：暂留白，等待替换为新内容。
+///
+/// 「记录」时间线已移到左侧菜单，本页只保留空壳（含底部菜单图标位），
+/// 后续要放新内容时直接把 body 换掉即可。
+class _ReservedTabPage extends StatelessWidget {
+  const _ReservedTabPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppPalette.p.bg,
+      body: const SizedBox.expand(),
     );
   }
 }

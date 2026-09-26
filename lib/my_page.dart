@@ -426,10 +426,6 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
     ).then((_) => _loadCounts());
   }
 
-  void _openSettings() {
-    Navigator.push(context, slideInFromLeft(const _SettingsPage()));
-  }
-
   void _openEditProfile() {
     Navigator.push(context, slideInFromLeft(const EditProfilePage()))
         .then((saved) {
@@ -742,17 +738,6 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                         _joinedDate,
                         style: TextStyle(fontSize: 13, color: _textHint),
                       ),
-                      const Spacer(),
-                      if (isLoggedIn)
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _openSettings,
-                          child: const Padding(
-                            padding: EdgeInsets.all(6),
-                            child: Icon(Icons.settings_outlined,
-                                size: 20, color: Color(0xFF8C8C8C)),
-                          ),
-                        ),
                     ],
                   ),
                 ],
@@ -888,7 +873,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
         unselectedLabelStyle:
             const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
         tabs: const [
-          Tab(text: '笔记'),
+          Tab(text: '帖子'),
           Tab(text: '回复'),
           Tab(text: '转发'),
           Tab(text: '书签'),
@@ -4264,14 +4249,15 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
   }
 }
 
-class _SettingsPage extends StatefulWidget {
-  const _SettingsPage();
+/// 设置页：入口在左侧个人菜单（「设置」）。
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({super.key});
 
   @override
-  State<_SettingsPage> createState() => _SettingsPageState();
+  State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<_SettingsPage> {
+class _SettingsPageState extends State<SettingsPage> {
   bool _reminderOn = false;
   String _reminderTime = '21:00';
   bool _loaded = false;

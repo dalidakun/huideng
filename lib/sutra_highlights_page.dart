@@ -435,8 +435,8 @@ class _SutraHighlightsPageState extends State<SutraHighlightsPage> {
                                 SutraUnderlineText(
                                   text: h,
                                   style: const TextStyle(
-                                    fontSize: 14,
-                                    height: 1.6,
+                                    fontSize: 15,
+                                    height: 1.9,
                                     color: _fg,
                                   ),
                                   lineColor: accent.withValues(alpha: 0.8),

@@ -34,6 +34,7 @@ import 'sutra_highlights_page.dart';
 import 'sutra_live_sync.dart' show LiveHighlightSegment;
 import 'cloud_notes_service.dart';
 import 'auth_service.dart';
+import 'record_index.dart';
 
 import 'app_palette.dart';
 
@@ -654,9 +655,9 @@ class _ReadingPageState extends State<ReadingPage>
       final filePath = _resolvedFilePath ?? widget.filePath;
       if (filePath == null) return false;
       final editPath = await editedSutraFilePath(filePath);
-      final content =
-          await _loadCloudEditedContent(id, editPath);
-      debugPrint('[自动下载编辑版] 云端编辑版: ${content != null}, 长度=${content?.length ?? 0}');
+      final content = await _loadCloudEditedContent(id, editPath);
+      debugPrint(
+          '[自动下载编辑版] 云端编辑版: ${content != null}, 长度=${content?.length ?? 0}');
       if (content != null) {
         if (!mounted) return false;
         setState(() {
@@ -808,13 +809,15 @@ class _ReadingPageState extends State<ReadingPage>
           // 再次检测 hideMark
           for (final u in tightUnits) {
             if (text.endsWith(hideMark + u)) {
-              text = text.substring(0, text.length - hideMark.length - u.length);
+              text =
+                  text.substring(0, text.length - hideMark.length - u.length);
               hide = true;
               tight = true;
               break;
             }
             if (text.endsWith(u + hideMark)) {
-              text = text.substring(0, text.length - u.length - hideMark.length);
+              text =
+                  text.substring(0, text.length - u.length - hideMark.length);
               hide = true;
               tight = true;
               break;
@@ -992,6 +995,12 @@ class _ReadingPageState extends State<ReadingPage>
         };
         _paraNotesLoading = false;
       });
+      // 为「记录」时间线补齐回填记录的段落原文 / 画线文字（只填空字段）。
+      unawaited(RecordIndex.instance.enrichParagraphs(
+        sutraKey: _sutraKey,
+        paragraphs: _paragraphs,
+        rows: items,
+      ));
       // 并行加载「哪些段有任意用户感想」（不阻塞主流程）。
       _loadParagraphThoughtsIndicator();
     } catch (e) {
@@ -1056,6 +1065,21 @@ class _ReadingPageState extends State<ReadingPage>
       );
       if (!mounted) return;
       _loadParagraphNotes();
+      // 「记录」时间线：云端保存成功后按该段最终状态同步索引（新增 / 擦除都靠差集）。
+      final synced = <({int start, int end})>[
+        for (final u in underlines ?? _paraUnderlines[index] ?? const [])
+          (
+            start: u['start'] ?? 0,
+            end: u['end'] ?? 0,
+          ),
+      ];
+      unawaited(RecordIndex.instance.syncParagraph(
+        sutraKey: _sutraKey,
+        para: index,
+        paraText: _paragraphs[index],
+        thought: noteTrim,
+        underlines: synced,
+      ));
     } catch (e) {
       debugPrint('[reading] 保存段落笔记失败: $e');
       if (!mounted) return;
@@ -1222,6 +1246,10 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   void _scrollToStart() {
+    // 用户手动回到顶部后，清除打开时恢复用的进度基准，避免后台延迟触发的
+    // 排版更新恢复（_scheduleRestoreScroll）又用陈旧的 _savedProgress 把进度拽回去。
+    _savedPosition = null;
+    _savedProgress = null;
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         0,
@@ -1550,142 +1578,137 @@ class _ReadingPageState extends State<ReadingPage>
                     Expanded(
                       child: Listener(
                         onPointerDown: (event) {
-                            // 注意：此处绝不重置 _actionRowTapped ——
-                            // 指针事件按「从内到外」派发，操作栏的内层 Listener
-                            // 先把标记置 true，若这里再清掉，onPointerUp 就拦不住了。
-                            _pointerDownPos = event.position;
-                            _longPressActive = false;
-                            // 记录按下时文字是否已选中 / 长按浮层是否已打开：
-                            // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
-                            // 擦除等浮层菜单只进 _activeMenuEntries（不设 _selectionMenuEntry），
-                            // 因此用 _activeMenuEntries 一并覆盖：首点只关菜单，二次点击才弹面板。
-                            _selectionActiveAtDown =
-                                _selectionMenuEntry != null ||
-                                    _activeMenuEntries.isNotEmpty ||
-                                    _hasTextSelection;
-                            // 300ms 后若手指仍未抬起，视为长按（文字选择）。
-                            Future.delayed(const Duration(milliseconds: 300),
-                                () {
-                              if (_pointerDownPos != null && mounted) {
-                                _longPressActive = true;
-                              }
-                            });
-                          },
-                          // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
-                          onPointerCancel: (_) {
+                          // 注意：此处绝不重置 _actionRowTapped ——
+                          // 指针事件按「从内到外」派发，操作栏的内层 Listener
+                          // 先把标记置 true，若这里再清掉，onPointerUp 就拦不住了。
+                          _pointerDownPos = event.position;
+                          _longPressActive = false;
+                          // 记录按下时文字是否已选中 / 长按浮层是否已打开：
+                          // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
+                          // 擦除等浮层菜单只进 _activeMenuEntries（不设 _selectionMenuEntry），
+                          // 因此用 _activeMenuEntries 一并覆盖：首点只关菜单，二次点击才弹面板。
+                          _selectionActiveAtDown =
+                              _selectionMenuEntry != null ||
+                                  _activeMenuEntries.isNotEmpty ||
+                                  _hasTextSelection;
+                          // 300ms 后若手指仍未抬起，视为长按（文字选择）。
+                          Future.delayed(const Duration(milliseconds: 300), () {
+                            if (_pointerDownPos != null && mounted) {
+                              _longPressActive = true;
+                            }
+                          });
+                        },
+                        // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
+                        onPointerCancel: (_) {
+                          _actionRowTapped = false;
+                        },
+                        onPointerUp: (event) {
+                          // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
+                          if (_actionRowTapped) {
                             _actionRowTapped = false;
-                          },
-                          onPointerUp: (event) {
-                            // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
-                            if (_actionRowTapped) {
-                              _actionRowTapped = false;
-                              // 同步清理按下状态，避免残留影响 300ms 长按计时器。
-                              _pointerDownPos = null;
-                              _longPressActive = false;
-                              _selectionActiveAtDown = false;
-                              return;
-                            }
-                            // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
-                            final menuOpenAtDown = _menuOpenAtDown;
-                            _menuOpenAtDown = false;
-                            final downPos = _pointerDownPos;
+                            // 同步清理按下状态，避免残留影响 300ms 长按计时器。
                             _pointerDownPos = null;
-                            // 长按或滑动均不触发面板。
-                            if (_longPressActive) {
-                              _longPressActive = false;
-                              _selectionActiveAtDown = false;
-                              return;
-                            }
-                            if (downPos != null &&
-                                (event.position - downPos).distance > 10)
-                              return;
-                            // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
-                            if (menuOpenAtDown) return;
-                            // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
-                            // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
-                            if (_selectionActiveAtDown || _hasTextSelection) {
-                              _selectionActiveAtDown = false;
-                              return;
-                            }
-                            // 延迟到事件分发结束后再决定面板：单击画线的判定完全按
-                            // 几何命中（_resolveUnderlineHit），不依赖手势竞技场时序，
-                            // 避免「有时弹擦除卡片、有时弹底部面板」的时好时坏。
-                            Timer.run(() {
-                              if (!mounted) return;
-                              setState(() {
-                                if (_showMoreMenu) {
-                                  _showMoreMenu = false;
-                                } else if (_showStylePanel) {
-                                  _showStylePanel = false;
-                                } else if (_showSearchBar) {
-                                  _showSearchBar = false;
-                                  _searchController.clear();
-                                  _searchMatches.clear();
-                                  _currentMatchIndex = 0;
-                                }
-                              });
-                              // 点击画线段落：按几何命中决定行为。
-                              //  - 命中画线文字 → 只弹「擦除」小菜单，不弹底部面板；
-                              //  - 命中带画线的段落（但不在画线文字上）→ 不弹任何面板；
-                              //  - 纯正文段落 → 弹底部 画线/感想/阅读设置 面板。
-                              final hit = _resolveUnderlineHit(event.position);
-                              if (hit != null) {
-                                if (hit.start >= 0) {
-                                  _showUnderlineMenu(hit.cluster, hit.para,
-                                      hit.start, hit.end, event.position);
-                                }
-                                return;
+                            _longPressActive = false;
+                            _selectionActiveAtDown = false;
+                            return;
+                          }
+                          // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
+                          final menuOpenAtDown = _menuOpenAtDown;
+                          _menuOpenAtDown = false;
+                          final downPos = _pointerDownPos;
+                          _pointerDownPos = null;
+                          // 长按或滑动均不触发面板。
+                          if (_longPressActive) {
+                            _longPressActive = false;
+                            _selectionActiveAtDown = false;
+                            return;
+                          }
+                          if (downPos != null &&
+                              (event.position - downPos).distance > 10) return;
+                          // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
+                          if (menuOpenAtDown) return;
+                          // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
+                          // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
+                          if (_selectionActiveAtDown || _hasTextSelection) {
+                            _selectionActiveAtDown = false;
+                            return;
+                          }
+                          // 延迟到事件分发结束后再决定面板：单击画线的判定完全按
+                          // 几何命中（_resolveUnderlineHit），不依赖手势竞技场时序，
+                          // 避免「有时弹擦除卡片、有时弹底部面板」的时好时坏。
+                          Timer.run(() {
+                            if (!mounted) return;
+                            setState(() {
+                              if (_showMoreMenu) {
+                                _showMoreMenu = false;
+                              } else if (_showStylePanel) {
+                                _showStylePanel = false;
+                              } else if (_showSearchBar) {
+                                _showSearchBar = false;
+                                _searchController.clear();
+                                _searchMatches.clear();
+                                _currentMatchIndex = 0;
                               }
-                              _openQuickPanel();
                             });
+                            // 点击画线段落：按几何命中决定行为。
+                            //  - 命中画线文字 → 只弹「擦除」小菜单，不弹底部面板；
+                            //  - 命中带画线的段落（但不在画线文字上）→ 不弹任何面板；
+                            //  - 纯正文段落 → 弹底部 画线/感想/阅读设置 面板。
+                            final hit = _resolveUnderlineHit(event.position);
+                            if (hit != null) {
+                              if (hit.start >= 0) {
+                                _showUnderlineMenu(hit.cluster, hit.para,
+                                    hit.start, hit.end, event.position);
+                              }
+                              return;
+                            }
+                            _openQuickPanel();
+                          });
+                        },
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            if (_isLoadingContent) {
+                              return const Center(
+                                  child: CircularProgressIndicator());
+                            }
+                            if (_pageMode == ReaderPreferences.pageModeFlip &&
+                                _searchController.text.isEmpty) {
+                              final pages = _getFlipPages(
+                                  constraints.maxWidth, constraints.maxHeight);
+                              return PageView.builder(
+                                controller: _pageController,
+                                itemCount: pages.length,
+                                onPageChanged: _onFlipPageChanged,
+                                itemBuilder: (context, index) =>
+                                    _buildFlipPage(pages[index], index),
+                              );
+                            }
+                            return SingleChildScrollView(
+                              key: _scrollViewKey,
+                              controller: _scrollController,
+                              child: _searchController.text.isEmpty
+                                  ? Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        for (final group in _allClusterGroups())
+                                          _buildClusterParagraph(group,
+                                              showUnaligned: true),
+                                      ],
+                                    )
+                                  : Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        for (final group in _allClusterGroups())
+                                          _buildClusterParagraph(group,
+                                              showUnaligned: false),
+                                      ],
+                                    ),
+                            );
                           },
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              if (_isLoadingContent) {
-                                return const Center(
-                                    child: CircularProgressIndicator());
-                              }
-                              if (_pageMode == ReaderPreferences.pageModeFlip &&
-                                  _searchController.text.isEmpty) {
-                                final pages = _getFlipPages(
-                                    constraints.maxWidth,
-                                    constraints.maxHeight);
-                                return PageView.builder(
-                                  controller: _pageController,
-                                  itemCount: pages.length,
-                                  onPageChanged: _onFlipPageChanged,
-                                  itemBuilder: (context, index) =>
-                                      _buildFlipPage(pages[index], index),
-                                );
-                              }
-                              return SingleChildScrollView(
-                                key: _scrollViewKey,
-                                controller: _scrollController,
-                                child: _searchController.text.isEmpty
-                                    ? Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          for (final group
-                                              in _allClusterGroups())
-                                            _buildClusterParagraph(group,
-                                                showUnaligned: true),
-                                        ],
-                                      )
-                                    : Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          for (final group
-                                              in _allClusterGroups())
-                                            _buildClusterParagraph(group,
-                                                showUnaligned: false),
-                                        ],
-                                      ),
-                               );
-                            },
-                          ),
                         ),
+                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
@@ -1775,7 +1798,8 @@ class _ReadingPageState extends State<ReadingPage>
                                 onTap: _toggleLayoutUndone,
                               ),
                             _buildMoreMenuItem(
-                              icon: const Icon(Icons.settings_outlined, size: 18),
+                              icon:
+                                  const Icon(Icons.settings_outlined, size: 18),
                               label: '阅读设置',
                               onTap: _openReadingSettings,
                             ),
@@ -2106,7 +2130,10 @@ class _ReadingPageState extends State<ReadingPage>
     );
     if (result == null || result['changed'] != true || !mounted) return;
     // 编辑页保存后，阅读页保持当前进度不变（不覆盖为编辑页光标位置）。
+    // 同步最新进度，避免 _loadContent 恢复时用 initState 读取的过期
+    // _savedProgress，导致从编辑页返回后进度回退到开头附近。
     _savedPosition = null;
+    _savedProgress = _scrollProgress;
     _flipCacheKey = '';
     _flipPages = [];
     _flipPageRestored = false;
@@ -2176,7 +2203,8 @@ class _ReadingPageState extends State<ReadingPage>
 
   /// 简易 HTTP GET，返回响应 body；失败返回 null。
   static Future<String?> _httpGet(String url) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
     try {
       final req = await client.getUrl(Uri.parse(url));
       final resp = await req.close().timeout(const Duration(seconds: 15));
@@ -2336,6 +2364,10 @@ class _ReadingPageState extends State<ReadingPage>
         unmigratedOld);
 
     if (!mounted) return;
+    // 以用户当前实际进度为恢复基准（而非打开页面时读到的过期值），
+    // 否则排版更新完成后会把已拖回顶部（或已滚动到别处）的进度拽回旧位置。
+    _savedPosition = null;
+    _savedProgress = _scrollProgress;
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _scheduleRestoreScroll());
   }
@@ -2379,6 +2411,13 @@ class _ReadingPageState extends State<ReadingPage>
     if (unmigratedOld.isNotEmpty) {
       await _loadParagraphNotes();
     }
+    // 「记录」时间线：段号已整体重排，按新段号重建本经的画线/感想条目。
+    unawaited(RecordIndex.instance.resyncSutra(
+      sutraKey: _sutraKey,
+      paragraphs: _paragraphs,
+      notes: notes,
+      underlines: underlines,
+    ));
   }
 
   void _toast(String msg) {
@@ -2471,7 +2510,8 @@ class _ReadingPageState extends State<ReadingPage>
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('撤销完成排版'),
-        content: const Text('将删除云端已保存的排版版本，该经恢复为未排版状态。\n本地编辑副本会保留，可继续编辑后重新上传。确定继续？'),
+        content:
+            const Text('将删除云端已保存的排版版本，该经恢复为未排版状态。\n本地编辑副本会保留，可继续编辑后重新上传。确定继续？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -2678,12 +2718,44 @@ class _ReadingPageState extends State<ReadingPage>
     return out;
   }
 
-  /// 簇内选区按段落逐段调 `_toggleUnderline`（每段独立云端写入）。
+  /// 簇内选区画线/擦除：先把簇内各段的新画线区间一次性算好，经
+  /// [_applyUnderlinesAndSave] 在**单个** setState 里同步更新本地状态
+  /// （整簇画线/擦除一次到位，避免逐段 setState 造成的“逐行画线/擦除”），
+  /// 再逐段写入云端。
+  /// 语义沿用 [_toggleUnderline]：选中区间已被现有画线完整覆盖 → 擦除；
+  /// 否则 → 新增画线（渲染端自动合并重叠）。
   Future<void> _toggleUnderlineCluster(
       List<int> cluster, int ss, int ee) async {
-    for (final (k, ls, le) in _clusterLocalSegments(cluster, ss, ee)) {
-      if (ls < le) await _toggleUnderline(k, ls, le);
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return;
     }
+    final changes = <int, List<Map<String, int>>>{};
+    for (final (k, ls, le) in _clusterLocalSegments(cluster, ss, ee)) {
+      if (ls >= le || k < 0 || k >= _paragraphs.length) continue;
+      final current =
+          List<Map<String, int>>.from(_paraUnderlines[k] ?? const []);
+      final covering = current
+          .where((u) => (u['start'] ?? 0) <= ls && (u['end'] ?? 0) >= le)
+          .toList();
+      List<Map<String, int>> next;
+      if (covering.isNotEmpty) {
+        final removeSet = covering.toSet();
+        next = [
+          for (final u in current)
+            if (!removeSet.contains(u)) u,
+        ];
+      } else {
+        next = [
+          ...current,
+          {'start': ls, 'end': le}
+        ];
+      }
+      next.sort((a, b) => (a['start'] ?? 0).compareTo(b['start'] ?? 0));
+      changes[k] = next;
+    }
+    if (changes.isEmpty) return;
+    await _applyUnderlinesAndSave(changes);
   }
 
   /// 簇内选区开感想：存到选区所在的第一段，但预览经文显示完整跨段选中文字，
@@ -2754,9 +2826,7 @@ class _ReadingPageState extends State<ReadingPage>
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-          color: _isDarkBg
-              ? const Color(0xFF2C2C2C)
-              : const Color(0xFFEEEEEE),
+          color: _isDarkBg ? const Color(0xFF2C2C2C) : const Color(0xFFEEEEEE),
           child: SelectableText.rich(
             TextSpan(children: _buildClusterSpans(group)),
             key: _paraTapKey(group.first),
@@ -2788,8 +2858,7 @@ class _ReadingPageState extends State<ReadingPage>
                 _onSelectionChanged(sel);
               },
               contextMenuBuilder: (context, editableTextState) =>
-                  _buildSelectionToolbar(
-                      context, editableTextState, group),
+                  _buildSelectionToolbar(context, editableTextState, group),
             ),
             if (!_hiddenActionParagraphs.contains(last))
               Align(
@@ -2991,6 +3060,14 @@ class _ReadingPageState extends State<ReadingPage>
       }
       if (!mounted) return;
       _loadParagraphNotes();
+      // 「记录」时间线：整段删除后清掉该段的感想与画线条目。
+      unawaited(RecordIndex.instance.syncParagraph(
+        sutraKey: _sutraKey,
+        para: index,
+        paraText: _paragraphs[index],
+        thought: '',
+        underlines: const [],
+      ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3023,8 +3100,7 @@ class _ReadingPageState extends State<ReadingPage>
       final paragraphs = List<String>.of(_paragraphs);
       final notes = <int, String>{..._paraNotes};
       final tight = <int>{..._tightParagraphs};
-      final noteCount =
-          notes.values.where((n) => n.trim().isNotEmpty).length;
+      final noteCount = notes.values.where((n) => n.trim().isNotEmpty).length;
       final result = await _runCompute(
         () => _buildNotesSnapshot(
           paragraphs: paragraphs,
@@ -3096,6 +3172,7 @@ class _ReadingPageState extends State<ReadingPage>
         MaterialPageRoute(
           builder: (_) => ReadingSutraNotesPage(
             title: _titleShown,
+            canDelete: true,
           ),
         ),
       );
@@ -3321,8 +3398,7 @@ class _ReadingPageState extends State<ReadingPage>
 
   static List<int> _connectedTightClusterSnapshot(
       int index, List<String> paragraphs, Set<int> tight) {
-    if (paragraphs.length <= 1)
-      return [index.clamp(0, paragraphs.length - 1)];
+    if (paragraphs.length <= 1) return [index.clamp(0, paragraphs.length - 1)];
     var lo = index;
     var hi = index;
     while (lo > 0 && tight.contains(lo - 1)) lo--;
@@ -3929,7 +4005,9 @@ class _ReadingPageState extends State<ReadingPage>
                     : (_isDarkBg ? Colors.white : const Color(0xFF212121)),
         fontSize: _noteParagraphs.contains(i)
             ? _fontSize - 3
-            : _boldParagraphs.contains(i) ? _fontSize + 2 : _fontSize,
+            : _boldParagraphs.contains(i)
+                ? _fontSize + 2
+                : _fontSize,
         fontWeight: _boldParagraphs.contains(i) ? FontWeight.bold : null,
         height: _lineHeight,
         letterSpacing: 0.5,
@@ -4025,7 +4103,7 @@ class _ReadingPageState extends State<ReadingPage>
     return spans;
   }
 
-/// 已画线区间的 span：整段加下划线，内部按搜索高亮细分。
+  /// 已画线区间的 span：整段加下划线，内部按搜索高亮细分。
   /// 单击判定不在 TextSpan 上挂识别器，而是由正文 Listener 按几何命中完成
   /// （见 _tapInUnderlinedCluster），行为恒定且与 SelectableText 的选择手势不冲突。
   List<TextSpan> _underlineSpans(
@@ -4306,8 +4384,8 @@ class _ReadingPageState extends State<ReadingPage>
       final local = box.globalToLocal(global);
       if (!box.paintBounds.contains(local)) continue;
       // 簇内无任何画线 → 该簇是普通正文，可正常弹底部面板。
-      final hasAny = group.any((i) =>
-          (_paraUnderlines[i] ?? const <Map<String, int>>[]).isNotEmpty);
+      final hasAny = group.any(
+          (i) => (_paraUnderlines[i] ?? const <Map<String, int>>[]).isNotEmpty);
       if (!hasAny) continue;
       // 用与正文同一组 span 重新排版，把点击点映射为合并文本字符偏移，
       // 再定位到具体段落及画线区间（命中 → 擦除菜单；未命中 → 仅抑制面板）。
@@ -4367,9 +4445,78 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   /// 整块（紧密连段簇）擦除：清除簇内所有段落的全部画线。
+  /// 一次性在单个 setState 里清空整簇的画线（避免逐段擦除造成的
+  /// “逐行擦除”），再逐段写入云端。
   Future<void> _removeUnderlineCluster(List<int> cluster) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLoginForNotes();
+      return;
+    }
+    final changes = <int, List<Map<String, int>>>{};
     for (final i in cluster) {
-      await _removeUnderlineRange(i, 0, _paragraphs[i].length);
+      if (i < 0 || i >= _paragraphs.length) continue;
+      final current = (_paraUnderlines[i] ?? const <Map<String, int>>[]);
+      if (current.isEmpty) continue;
+      // 有画线的段落才需要清空写入；无画线的段落跳过。
+      changes[i] = [];
+    }
+    if (changes.isEmpty) return;
+    await _applyUnderlinesAndSave(changes);
+  }
+
+  /// 批量应用画线变更：在单个 [setState] 里同步更新各段画线，随后逐段写入
+  /// 云端。这样紧密连段簇（```。。。///``` 合并的多段）画线/擦除是一次性
+  /// 全部生效，而不是逐段刷新导致的逐行渐变效果。
+  Future<void> _applyUnderlinesAndSave(
+      Map<int, List<Map<String, int>>> changes) async {
+    setState(() {
+      changes.forEach((k, underlines) {
+        if (underlines.isEmpty) {
+          _paraUnderlines.remove(k);
+        } else {
+          _paraUnderlines[k] = underlines;
+        }
+      });
+      _activeNoteParagraphIndex = -1;
+    });
+    try {
+      for (final MapEntry<int, List<Map<String, int>>> entry
+          in changes.entries) {
+        final k = entry.key;
+        await CloudNotesService.instance.saveParagraphNote(
+          sutraKey: _sutraKey,
+          index: k,
+          text: _paragraphs[k],
+          note: _paraNotes[k] ?? '',
+          shared: _paraShared[k] == true,
+          cloudId: _paraCloudIds[k] ?? '',
+          underlines: entry.value,
+        );
+      }
+      if (!mounted) return;
+      _loadParagraphNotes();
+      // 「记录」时间线：连段簇画线/擦除直写云端、不经 [_saveParagraphNote]，
+      // 这里按每段最终画线列表补一次索引同步（差集由 syncParagraph 处理）。
+      for (final k in changes.keys) {
+        if (k < 0 || k >= _paragraphs.length) continue;
+        unawaited(RecordIndex.instance.syncParagraph(
+          sutraKey: _sutraKey,
+          para: k,
+          paraText: _paragraphs[k],
+          thought: _paraNotes[k] ?? '',
+          underlines: [
+            for (final u in changes[k] ?? const <Map<String, int>>[])
+              (start: u['start'] ?? 0, end: u['end'] ?? 0),
+          ],
+        ));
+      }
+    } catch (e) {
+      debugPrint('[reading] 批量保存段落画线失败: $e');
+      if (!mounted) return;
+      final msg = e is CloudApiException ? e.message : '网络异常，请稍后重试';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保存画线失败：$msg')),
+      );
     }
   }
 
@@ -4421,8 +4568,7 @@ class _ReadingPageState extends State<ReadingPage>
     }
     final current = List<Map<String, int>>.from(_paraUnderlines[i] ?? const []);
     final next = current
-        .where((u) =>
-            !(((u['end'] ?? 0) > start) && ((u['start'] ?? 0) < end)))
+        .where((u) => !(((u['end'] ?? 0) > start) && ((u['start'] ?? 0) < end)))
         .toList();
     if (next.length == current.length) return;
     await _saveParagraphNote(

@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
-import 'cloud_notes_service.dart';
+import 'loading_widgets.dart';
 import 'note_detail_page.dart';
 import 'post_rich_content.dart';
 import 'reading_notes_page.dart';
@@ -389,6 +389,7 @@ class _SutraNotesPostViewState extends State<SutraNotesPostView> {
           ownerUserId: widget.ownerUserId,
           initialNotes: initialNotes,
           noteId: widget.noteId,
+          canDelete: false,
         ),
       ),
     ).then((_) => _loadLiveCount());
@@ -612,6 +613,9 @@ class SutraHighlightsPostView extends StatefulWidget {
 class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
   int? _liveCount;
 
+  /// 防止入口快速连点重复弹缓冲层 / 重复跳转。
+  bool _opening = false;
+
   @override
   void initState() {
     super.initState();
@@ -656,29 +660,45 @@ class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
 
   /// 打开画线归集页：以「作者当前最新画线」为准（对所有查看者）。
   /// 无法定位作者或加载不到经文时，才回退到分享时的快照。
+  /// 点击后立即进入缓冲过渡页（页面内转圈），数据就绪后再呈现汇总页，
+  /// 与普通帖子「先进入详情页、再缓冲」的体验一致。
   Future<void> _openHighlights(BuildContext context) async {
-    final meId = AuthService.instance.cachedUserId;
-    final isOwner = meId != null && meId.isNotEmpty && widget.ownerUserId == meId;
+    if (_opening) return;
+    _opening = true;
+    final post = widget.post;
+    final ownerUserId = widget.ownerUserId;
 
-    var highlights = List.of(widget.post.highlights);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _SummaryEntryPage(
+          title: post.sutraTitle,
+          loadContent: () => _buildHighlightsPage(post, ownerUserId),
+        ),
+      ),
+    );
+    _opening = false;
+  }
+
+  /// 加载画线汇总页内容（网络 + 后台重建），失败静默回退分享快照。
+  Future<Widget> _buildHighlightsPage(
+      SutraHighlightsPost post, String ownerUserId) async {
+    var highlights = List.of(post.highlights);
     var items = <LiveHighlightItem>[];
-    var canDelete = false;
     var liveLoaded = false;
     var liveEmpty = false;
     String? emptyHint;
     String? syncNotice;
-    Future<bool> Function(List<LiveHighlightSegment>)? deleteCb;
 
-    if (widget.ownerUserId.isNotEmpty) {
+    if (ownerUserId.isNotEmpty) {
       try {
-        final loaded = await loadSutraTightByTitle(widget.post.sutraTitle,
-            filePath: widget.post.filePath);
+        final loaded = await loadSutraTightByTitle(post.sutraTitle,
+            filePath: post.filePath);
         final paragraphs = loaded?.paragraphs;
         if (paragraphs != null) {
           // 帖子标题是展示名，与读经页存笔记的 key 未必逐字相等；
           // 用候选 key 并集拉取作者当前笔记，避免误判「作者已删除全部画线」。
-          final union = await fetchParagraphNotesUnion(widget.post.sutraTitle,
-              widget.ownerUserId,
+          final union = await fetchParagraphNotesUnion(post.sutraTitle,
+              ownerUserId,
               filePath: loaded!.filePath);
           final cloudItems = union.items;
           // 重建计算放后台隔离区：巨量画线/大幅合并也只影响耗时，不卡 UI。
@@ -694,17 +714,8 @@ class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
           } else {
             items = computed;
             debugPrint('[highlights-post] 实时 ${computed.length} 条, notesKey=${union.key}');
-            canDelete = isOwner && items.isNotEmpty;
             liveLoaded = true;
             liveEmpty = items.isEmpty;
-            if (isOwner) {
-              final paragraphsRef = paragraphs;
-              final notesKey = union.key;
-              deleteCb = (segs) => deleteLiveUnderline(
-                  sutraKey: notesKey,
-                  paragraphs: paragraphsRef,
-                  segments: segs);
-            }
           }
         } else {
           // 无法定位经文正文：静默回退到分享时快照。
@@ -719,20 +730,14 @@ class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
       }
     }
 
-    if (!context.mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SutraHighlightsPage(
-          title: widget.post.sutraTitle,
-          highlights: highlights,
-          canDelete: canDelete,
-          sutraKey: widget.post.sutraTitle,
-          itemSegments: [for (final it in items) it.segments],
-          onDeleteUnderline: deleteCb,
-          emptyHint: emptyHint,
-          syncNotice: syncNotice,
-        ),
-      ),
+    return SutraHighlightsPage(
+      title: post.sutraTitle,
+      highlights: highlights,
+      canDelete: false,
+      sutraKey: post.sutraTitle,
+      itemSegments: [for (final it in items) it.segments],
+      emptyHint: emptyHint,
+      syncNotice: syncNotice,
     );
   }
 
@@ -1015,6 +1020,9 @@ class SutraThoughtsPostView extends StatefulWidget {
 class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
   int? _liveCount;
 
+  /// 防止入口快速连点重复弹缓冲层 / 重复跳转。
+  bool _opening = false;
+
   @override
   void initState() {
     super.initState();
@@ -1065,30 +1073,46 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
 
   /// 打开感想汇总页：以「作者当前最新感想」为准（对所有查看者）。
   /// 无法定位作者或加载不到经文时，才回退到分享时的快照。
+  /// 点击后立即进入缓冲过渡页（页面内转圈），数据就绪后再呈现汇总页，
+  /// 与普通帖子「先进入详情页、再缓冲」的体验一致。
   Future<void> _openThoughts(BuildContext context) async {
-    final meId = AuthService.instance.cachedUserId;
-    final isOwner = meId != null && meId.isNotEmpty && widget.ownerUserId == meId;
+    if (_opening) return;
+    _opening = true;
+    final post = widget.post;
+    final ownerUserId = widget.ownerUserId;
 
-    var paragraphs = [for (final (p, _) in widget.post.pairs) p];
-    var notes = [for (final (_, t) in widget.post.pairs) t];
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _SummaryEntryPage(
+          title: post.sutraTitle,
+          loadContent: () => _buildThoughtsPage(post, ownerUserId),
+        ),
+      ),
+    );
+    _opening = false;
+  }
+
+  /// 加载感想汇总页内容（网络 + 后台重建），失败静默回退分享快照。
+  Future<Widget> _buildThoughtsPage(
+      SutraThoughtsPost post, String ownerUserId) async {
+    var paragraphs = [for (final (p, _) in post.pairs) p];
+    var notes = [for (final (_, t) in post.pairs) t];
     var itemIndexes = const <int>[];
-    var canDelete = false;
     var liveLoaded = false;
     var liveEmpty = false;
     String? emptyHint;
     String? syncNotice;
-    Future<bool> Function(int)? deleteCb;
 
-    if (widget.ownerUserId.isNotEmpty) {
+    if (ownerUserId.isNotEmpty) {
       try {
-        final loaded = await loadSutraTightByTitle(widget.post.sutraTitle,
-            filePath: widget.post.filePath);
+        final loaded = await loadSutraTightByTitle(post.sutraTitle,
+            filePath: post.filePath);
         final allParagraphs = loaded?.paragraphs;
         if (allParagraphs != null) {
           // 帖子标题是展示名，与读经页存笔记的 key 未必逐字相等；
           // 用候选 key 并集拉取作者当前感想，避免误判「作者已删除全部感想」。
-          final union = await fetchParagraphNotesUnion(widget.post.sutraTitle,
-              widget.ownerUserId,
+          final union = await fetchParagraphNotesUnion(post.sutraTitle,
+              ownerUserId,
               filePath: loaded!.filePath);
           final cloudItems = union.items;
           // 重建计算放后台隔离区：巨量感想/大幅合并也只影响耗时，不卡 UI。
@@ -1106,15 +1130,8 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
             paragraphs = [for (final it in items) it.paragraph];
             notes = [for (final it in items) it.note];
             itemIndexes = [for (final it in items) it.para];
-            canDelete = isOwner && items.isNotEmpty;
             liveLoaded = true;
             liveEmpty = items.isEmpty;
-            if (isOwner) {
-              final paragraphsRef = allParagraphs;
-              final notesKey = union.key;
-              deleteCb = (p) =>
-                  deleteLiveNote(sutraKey: notesKey, paragraphs: paragraphsRef, index: p);
-            }
           }
         } else {
           // 无法定位经文正文：静默回退到分享时快照。
@@ -1128,22 +1145,16 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
       }
     }
 
-    if (!context.mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ReadingNotesPage(
-          title: widget.post.sutraTitle,
-          paragraphs:
-              liveLoaded ? paragraphs : [for (final (p, _) in widget.post.pairs) p],
-          notes: liveLoaded ? notes : [for (final (_, t) in widget.post.pairs) t],
-          canDelete: canDelete,
-          sutraKey: widget.post.sutraTitle,
-          itemParagraphIndexes: liveLoaded ? itemIndexes : const <int>[],
-          onDeleteNote: deleteCb,
-          emptyHint: emptyHint,
-          syncNotice: syncNotice,
-        ),
-      ),
+    return ReadingNotesPage(
+      title: post.sutraTitle,
+      paragraphs:
+          liveLoaded ? paragraphs : [for (final (p, _) in post.pairs) p],
+      notes: liveLoaded ? notes : [for (final (_, t) in post.pairs) t],
+      canDelete: false,
+      sutraKey: post.sutraTitle,
+      itemParagraphIndexes: liveLoaded ? itemIndexes : const <int>[],
+      emptyHint: emptyHint,
+      syncNotice: syncNotice,
     );
   }
 
@@ -1247,6 +1258,54 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 汇总入口的缓冲过渡页：点击入口后立即进入本页（先出页面、再缓冲），
+/// 加载期间在页面内显示转圈，数据就绪后原位替换为真正的汇总内容页，
+/// 与普通帖子「先进入详情页、再缓冲」的体验保持一致。
+class _SummaryEntryPage extends StatefulWidget {
+  final String title;
+  final Future<Widget> Function() loadContent;
+
+  const _SummaryEntryPage({required this.title, required this.loadContent});
+
+  @override
+  State<_SummaryEntryPage> createState() => _SummaryEntryPageState();
+}
+
+class _SummaryEntryPageState extends State<_SummaryEntryPage> {
+  late final Future<Widget> _contentFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _contentFuture = widget.loadContent();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Widget>(
+      future: _contentFuture,
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          return snapshot.data!;
+        }
+        return Scaffold(
+          backgroundColor: const Color(0xFFFAF7F2),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFFFAF7F2),
+            title: Text(
+              widget.title,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ),
+          body: const Center(
+            child: AppLoadingIndicator(size: 36),
+          ),
+        );
+      },
     );
   }
 }

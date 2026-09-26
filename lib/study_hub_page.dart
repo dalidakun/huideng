@@ -44,13 +44,14 @@ Color get _checkinCardBg => AppPalette.instance.isPlain
     : const Color(0xFFF8EED9);
 
 class StudyHubPage extends StatefulWidget {
-  /// 左上角头像点击回调：打开「我的」页面。
-  final VoidCallback? onOpenMyPage;
+  /// 左上角头像点击回调：从左侧滑出个人菜单。
+  final VoidCallback? onOpenSideMenu;
 
   /// 精读卡长按菜单修改收藏/已读状态后回调（用于通知经藏页刷新列表与收藏）。
   final VoidCallback? onSutraStateChanged;
 
-  const StudyHubPage({super.key, this.onOpenMyPage, this.onSutraStateChanged});
+  const StudyHubPage(
+      {super.key, this.onOpenSideMenu, this.onSutraStateChanged});
 
   @override
   State<StudyHubPage> createState() => StudyHubPageState();
@@ -848,9 +849,9 @@ class StudyHubPageState extends State<StudyHubPage>
             child: Row(
               children: [
                 GestureDetector(
-                  // 与帖子卡头像一致：打开「我的」页（个人主页）。
+                  // 左上角头像：从左侧滑出个人菜单（个人资料/记录/关注/设置/退出）。
                   // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
-                  onTap: widget.onOpenMyPage,
+                  onTap: widget.onOpenSideMenu,
                   child: UserAvatar(
                     userId: AuthService.instance.currentUser.value?.id,
                     radius: 16,
@@ -1013,7 +1014,7 @@ class StudyHubPageState extends State<StudyHubPage>
                           size: 16, color: AppPalette.p.readingAccent),
                     ),
                     SizedBox(width: AppPalette.instance.isPlain ? 9 : 12),
-                    Text('精读经文',
+                    Text('闻思经文',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
