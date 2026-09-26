@@ -4,13 +4,12 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'loading_widgets.dart';
 import 'login_page.dart';
+import 'user_avatar.dart';
+import 'user_space_page.dart';
 
 import 'app_palette.dart';
-Color get _primary => AppPalette.p.primary;
-Color get _primaryLight => AppPalette.p.textSec;
 Color get _gold => AppPalette.p.accent;
 Color get _bg => AppPalette.p.bg;
-Color get _card => AppPalette.p.card;
 Color get _text => AppPalette.p.text;
 Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
@@ -250,7 +249,7 @@ class _UserListPageState extends State<UserListPage> {
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       itemCount: _users.length,
       itemBuilder: (context, index) => _buildUserTile(_users[index]),
     );
@@ -261,73 +260,103 @@ class _UserListPageState extends State<UserListPage> {
     final isSelf = me != null && user.id == me.id;
     final following =
         CloudNotesService.instance.followingUserIds.contains(user.id);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2)),
-        ],
-      ),
+    // 整行点按进入对方主页；关注药丸在内层有自己的点击，优先响应。
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) =>
+                  UserSpacePage(userId: user.id, userName: user.name))),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: _primary.withValues(alpha: 0.12),
-              backgroundImage: const AssetImage('assets/images/app_icon.png'),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      user.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 15,
-                          color: _text,
-                          fontWeight: FontWeight.w500),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                UserAvatar(
+                  userId: user.id,
+                  imageBase64: user.avatar,
+                  radius: 22,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              user.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  color: _text,
+                                  fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          if (user.verified) ...[
+                            const SizedBox(width: 4),
+                            const Icon(Icons.verified,
+                                size: 15, color: Color(0xFF70867A)),
+                          ],
+                        ],
+                      ),
+                      if (user.account.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text('@${user.account}',
+                              style:
+                                  TextStyle(fontSize: 13, color: _textHint)),
+                        ),
+                    ],
+                  ),
+                ),
+                if (!isSelf) ...[
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _toggleFollow(user),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 13, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: following
+                            ? Colors.transparent
+                            : _gold.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                            color: following
+                                ? _border
+                                : _gold.withValues(alpha: 0.4)),
+                      ),
+                      child: Text(
+                        following ? '正在关注' : '关注',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color:
+                              following ? _text : AppPalette.p.accentDeep,
+                        ),
+                      ),
                     ),
                   ),
-                  if (user.verified) ...[
-                    const SizedBox(width: 4),
-                    const Icon(Icons.verified,
-                        size: 14, color: Color(0xFF70867A)),
-                  ],
                 ],
-              ),
+              ],
             ),
-            if (!isSelf)
-              GestureDetector(
-                onTap: () => _toggleFollow(user),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: following
-                        ? Colors.transparent
-                        : _gold.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color:
-                            following ? _border : _gold.withValues(alpha: 0.4)),
-                  ),
-                  child: Text(
-                    following ? '已关注' : '关注',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: following ? _textHint : AppPalette.p.accentDeep,
-                    ),
-                  ),
+            if (user.tagline.isNotEmpty)
+              Padding(
+                // 与昵称列左对齐（头像 44 + 间距 12），横向不受药丸挤压。
+                padding: const EdgeInsets.only(top: 6, left: 56),
+                child: Text(
+                  user.tagline,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      TextStyle(fontSize: 14, color: _text, height: 1.45),
                 ),
               ),
           ],

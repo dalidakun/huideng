@@ -63,7 +63,6 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
   Color get _text => AppPalette.p.text;
   Color get _textHint => AppPalette.p.textHint;
   Color get _border => AppPalette.p.border;
-  Color get _green => AppPalette.p.primary;
 
   @override
   void initState() {
@@ -168,7 +167,6 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                     _buildItem(
                       (c) => Icon(Icons.login, size: 21, color: c),
                       '登录',
-                      color: _green,
                       onTap: widget.onLogin,
                     ),
                 ],
@@ -266,7 +264,7 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                 children: [
                   const Icon(Icons.history, size: 12, color: Color(0xFF70867A)),
                   const SizedBox(width: 4),
-                  Text('累计${_formatReadTime(sec)}',
+                  Text('累计读经${_formatReadTime(sec)}',
                       maxLines: 1,
                       style: const TextStyle(
                           fontSize: 11,
@@ -363,108 +361,79 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
     return const Icon(Icons.verified, size: 16, color: Color(0xFF70867A));
   }
 
-  /// 菜单项：图标 + 18 号文案，右侧不挂箭头，按压有水波纹。
+  /// 菜单项：图标 + 18 号文案，右侧不挂箭头。
   ///
-  /// [icon] 收到当前生效的颜色（禁用时为浅灰），据此自绘图标或图片。
+  /// 素白与米黄外观下图标、文字统一黑色，按压不换色——点击即进入新页面，
+  /// 按压态没有意义。[icon] 收到统一的黑色，据此自绘图标或图片。
   Widget _buildItem(
     Widget Function(Color color) icon,
     String label, {
     VoidCallback? onTap,
     bool enabled = true,
-    Color? color,
     Widget? trailing,
   }) {
-    final accent = enabled ? (color ?? _green) : _textHint;
-    final fg = enabled ? (color ?? _text) : _textHint;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        splashColor: accent.withValues(alpha: 0.12),
-        highlightColor: accent.withValues(alpha: 0.06),
-        onTap: enabled && onTap != null ? onTap : null,
-        child: Padding(
-          // 上下留白加大，菜单项之间更松。
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-          child: Row(
-            children: [
-              icon(accent),
-              const SizedBox(width: 14),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 18,
-                  height: 1.2,
-                  color: fg,
-                  fontWeight: enabled ? FontWeight.w500 : FontWeight.w400,
-                ),
+    const fg = Color(0xFF1C1C1C);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: enabled && onTap != null ? onTap : null,
+      child: Padding(
+        // 上下留白加大，菜单项之间更松。
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+        child: Row(
+          children: [
+            icon(fg),
+            const SizedBox(width: 17),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 18,
+                height: 1.2,
+                color: fg,
+                fontWeight: enabled ? FontWeight.w600 : FontWeight.w500,
               ),
-              const Spacer(),
-              if (trailing != null) trailing,
-            ],
-          ),
+            ),
+            const Spacer(),
+            if (trailing != null) trailing,
+          ],
         ),
       ),
     );
   }
 }
 
-/// 侧边菜单「个人资料」图标：沿用原底部菜单「我的」那组资源，
-/// 米黄 my.png / my_selected.png，素白 my1.png / my_selected1.png；
-/// 按下瞬间换成选中态，抬手还原。
-class _ProfileMenuIcon extends StatefulWidget {
+/// 侧边菜单「个人资料」图标：沿用原底部菜单「我的」资源。
+/// 素白与米黄外观统一用黑色 my1.png，按压不换色（点击即进入新页面）。
+class _ProfileMenuIcon extends StatelessWidget {
   const _ProfileMenuIcon();
 
   @override
-  State<_ProfileMenuIcon> createState() => _ProfileMenuIconState();
-}
-
-class _ProfileMenuIconState extends State<_ProfileMenuIcon> {
-  bool _pressed = false;
-
-  String get _asset {
-    final plain = AppPalette.instance.isPlain;
-    if (_pressed) {
-      return plain
-          ? 'assets/images/my_selected1.png'
-          : 'assets/images/my_selected.png';
-    }
-    return plain ? 'assets/images/my1.png' : 'assets/images/my.png';
-  }
-
-  void _set(bool v) {
-    if (_pressed == v || !mounted) return;
-    setState(() => _pressed = v);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (_) => _set(true),
-      onPointerUp: (_) => _set(false),
-      onPointerCancel: (_) => _set(false),
-      child: Image.asset(
-        _asset,
-        // 与同排 21 号矢量图标视觉重量一致。
-        width: 21,
-        height: 21,
-        fit: BoxFit.contain,
+    return SizedBox(
+      // 占位与同排 21 号图标一致，保证各行图标中心与文字起点对齐；
+      // PNG 字形占满画布视觉偏大，实际绘制约 18。
+      width: 21,
+      height: 21,
+      child: Center(
+        child: Image.asset(
+          'assets/images/my1.png',
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+        ),
       ),
     );
   }
 }
 
-/// 侧边菜单「记录」图标：沿用原底部菜单那组资源
-/// （米黄 ycode1、素白 bcode1），尺寸与同排矢量图标一致。
+/// 侧边菜单「笔记」图标：沿用原底部菜单那组资源，
+/// 两种外观统一用黑色 bcode1.png，与同排矢量图标一致。
 class _RecordMenuIcon extends StatelessWidget {
   const _RecordMenuIcon();
 
   @override
   Widget build(BuildContext context) {
     return Image.asset(
-      AppPalette.instance.isPlain
-          ? 'assets/images/bcode1.png'
-          : 'assets/images/ycode1.png',
+      'assets/images/bcode1.png',
       width: 21,
       height: 21,
       fit: BoxFit.contain,

@@ -66,13 +66,6 @@ class RecordPageState extends State<RecordPage> {
   String _query = '';
   bool _loading = true;
 
-  /// 云端回填进度。
-  bool _backfilling = false;
-  int _backfillDone = 0;
-  int _backfillTotal = 0;
-
-  bool _menuOpen = false;
-
   List<RecordItem> _items = const [];
 
   /// 多卷经书基础经名集合（来自随包目录），决定经名是否补「卷X」。
@@ -95,6 +88,15 @@ class RecordPageState extends State<RecordPage> {
     // 首次进入即与本地 `notes` 全量对账，历史笔记直接出现在时间线上。
     unawaited(reload(syncNotes: true));
     unawaited(_loadSutraNames());
+    _searchFocus.addListener(_onSearchFocusChanged);
+  }
+
+  /// 聚焦状态变化时重建，决定搜索框叉号是否显示。
+  void _onSearchFocusChanged() => setState(() {});
+
+  /// 收起搜索：关闭键盘并回到默认未激活状态。
+  void _dismissSearch() {
+    if (_searchFocus.hasFocus) _searchFocus.unfocus();
   }
 
   /// 加载随包目录里的多卷经名集合，供经名统一成「经名 + 卷X」。
@@ -129,6 +131,7 @@ class RecordPageState extends State<RecordPage> {
 
   @override
   void dispose() {
+    _searchFocus.removeListener(_onSearchFocusChanged);
     _searchCtrl.dispose();
     _searchFocus.dispose();
     _scrollCtrl.dispose();
@@ -221,41 +224,6 @@ class RecordPageState extends State<RecordPage> {
     return '${dt.year}/${dt.month}/${dt.day}';
   }
 
-  // ── 云端回填 ───────────────────────────────────────────
-
-  Future<void> _backfill() async {
-    if (_backfilling) return;
-    if (!AuthService.instance.isLoggedIn) {
-      _toast('登录后才能从云端补全历史记录');
-      return;
-    }
-    setState(() {
-      _menuOpen = false;
-      _backfilling = true;
-      _backfillDone = 0;
-      _backfillTotal = 0;
-    });
-    final added = await RecordIndex.instance.backfillFromCloud(
-      onProgress: (done, total) {
-        if (!mounted) return;
-        setState(() {
-          _backfillDone = done;
-          _backfillTotal = total;
-        });
-      },
-    );
-    if (!mounted) return;
-    setState(() => _backfilling = false);
-    await reload();
-    if (!mounted) return;
-    _toast(added > 0 ? '已补全 $added 条历史记录' : '没有新的历史记录');
-  }
-
-  void _toast(String text) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-
   // ── 构建 ──────────────────────────────────────────────
 
   @override
@@ -271,67 +239,50 @@ class RecordPageState extends State<RecordPage> {
         shadowColor: Colors.transparent,
         iconTheme: IconThemeData(color: p.text),
         titleSpacing: 0,
-        title: Row(
-          children: [
-            GestureDetector(
-              onTap: widget.onOpenSideMenu,
-              child: UserAvatar(
-                userId: AuthService.instance.currentUser.value?.id,
-                radius: 16,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              '记录',
-              style: TextStyle(
-                color: p.text,
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          Stack(
-            children: [
-              IconButton(
-                tooltip: '补全历史',
-                icon: Icon(Icons.more_horiz, size: 22, color: p.text),
-                onPressed: () => setState(() => _menuOpen = !_menuOpen),
-              ),
-              if (_menuOpen)
-                Positioned(
-                  top: 46,
-                  right: 8,
-                  child: Material(
-                    elevation: 6,
-                    borderRadius: BorderRadius.circular(12),
-                    color: p.card,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _menuTile(
-                          icon: const Icon(Icons.cloud_sync_outlined, size: 18),
-                          label: '从云端补全历史',
-                          onTap: _backfill,
-                        ),
-                        _menuTile(
-                          icon: const Icon(Icons.refresh, size: 18),
-                          label: '刷新',
-                          onTap: () {
-                            setState(() => _menuOpen = false);
-                            unawaited(reload(syncNotes: true));
-                          },
-                        ),
-                      ],
-                    ),
+        title: Padding(
+          // 稍离左边缘，避免头像贴边。
+          padding: const EdgeInsets.only(left: 14),
+          // 点标题空白处也收起搜索与键盘（头像自身的点击在外层之内优先）。
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _dismissSearch,
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: widget.onOpenSideMenu,
+                  child: UserAvatar(
+                    userId: AuthService.instance.currentUser.value?.id,
+                    radius: 16,
                   ),
                 ),
-            ],
+                const SizedBox(width: 10),
+                Text(
+                  '笔记',
+                  style: TextStyle(
+                    color: p.text,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              Container(
+                width: 4,
+                height: 4,
+                decoration: const BoxDecoration(
+                  // 低饱和浅灰，弱化存在感。
+                  color: Color(0xFFC6C6C6),
+                  shape: BoxShape.circle,
+                ),
+              ),
+                const SizedBox(width: 5),
+                Text(
+                  '应无所住，而生其心。',
+                  style: TextStyle(color: p.textSec, fontSize: 11.5),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(width: 4),
-        ],
+        ),
       ),
       body: Column(
         children: [
@@ -339,49 +290,32 @@ class RecordPageState extends State<RecordPage> {
             padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
             child: _buildSearchField(p),
           ),
-          if (_backfilling)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _backfillTotal > 0
-                          ? '正在补全历史记录 $_backfillDone/$_backfillTotal 部经…'
-                          : '正在补全历史记录…',
-                      style: TextStyle(fontSize: 14, color: p.textSec),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : rows.isEmpty
-                    ? _buildEmpty(p)
-                    : RefreshIndicator(
-                        onRefresh: () => reload(syncNotes: true),
-                        child: ListView.builder(
-                          controller: _scrollCtrl,
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                          itemCount: rows.length,
-                          itemBuilder: (context, i) {
-                            final row = rows[i];
-                            final item = row.item;
-                            if (item == null) {
-                              return RecordDateHeader(label: row.label!);
-                            }
-                            return _buildCard(item, p);
-                          },
+            // 点搜索框以外的列表/空白区域：收起搜索与键盘。
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _dismissSearch,
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : rows.isEmpty
+                      ? _buildEmpty(p)
+                      : RefreshIndicator(
+                          onRefresh: () => reload(syncNotes: true),
+                          child: ListView.builder(
+                            controller: _scrollCtrl,
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                            itemCount: rows.length,
+                            itemBuilder: (context, i) {
+                              final row = rows[i];
+                              final item = row.item;
+                              if (item == null) {
+                                return RecordDateHeader(label: row.label!);
+                              }
+                              return _buildCard(item, p);
+                            },
+                          ),
                         ),
-                      ),
+            ),
           ),
         ],
       ),
@@ -478,12 +412,13 @@ class RecordPageState extends State<RecordPage> {
             padding: const EdgeInsets.only(left: 10, right: 6),
             child: Icon(Icons.search, color: p.textHint, size: 18),
           ),
-          suffixIcon: _query.isEmpty
+          suffixIcon: _query.isEmpty && !_searchFocus.hasFocus
               ? null
               : GestureDetector(
                   onTap: () {
                     _searchCtrl.clear();
                     setState(() => _query = '');
+                    _searchFocus.unfocus();
                   },
                   child: Padding(
                     padding: const EdgeInsets.only(right: 10),
@@ -496,29 +431,6 @@ class RecordPageState extends State<RecordPage> {
         ),
         onChanged: (v) => setState(() => _query = v),
         onSubmitted: (_) => _searchFocus.unfocus(),
-      ),
-    );
-  }
-
-  Widget _menuTile({
-    required Widget icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    final p = AppPalette.p;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconTheme(data: IconThemeData(color: p.text), child: icon),
-            const SizedBox(width: 10),
-            Text(label, style: TextStyle(color: p.text, fontSize: 14)),
-          ],
-        ),
       ),
     );
   }

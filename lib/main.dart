@@ -570,9 +570,20 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
+        // 宗派：图标已就位，页面内容暂留白（后续换成别的内容）。
         BottomNavigationBarItem(
-          icon: _BodhiTabIcon(active: false),
-          activeIcon: _BodhiTabIcon(active: true),
+          icon: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/h1.png'
+                  : 'assets/images/s1.png',
+              width: 24,
+              height: 24),
+          activeIcon: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/h2.png'
+                  : 'assets/images/s2.png',
+              width: 24,
+              height: 24),
           label: '',
         ),
         BottomNavigationBarItem(
@@ -585,24 +596,13 @@ class _MainPageState extends State<MainPage>
           label: '',
         ),
         BottomNavigationBarItem(
-          icon: _NotificationTabIcon(active: false),
-          activeIcon: _NotificationTabIcon(active: true),
+          icon: _BodhiTabIcon(active: false),
+          activeIcon: _BodhiTabIcon(active: true),
           label: '',
         ),
-        // 第 5 格：图标已就位，页面内容暂留白（后续换成别的内容）。
         BottomNavigationBarItem(
-          icon: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/h1.png'
-                  : 'assets/images/s1.png',
-              width: 22,
-              height: 22),
-          activeIcon: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/h2.png'
-                  : 'assets/images/s2.png',
-              width: 22,
-              height: 22),
+          icon: _NotificationTabIcon(active: false),
+          activeIcon: _NotificationTabIcon(active: true),
           label: '',
         ),
       ];
@@ -612,16 +612,16 @@ class _MainPageState extends State<MainPage>
     switch (_currentIndex) {
       case 0: // 首页
         return 0;
-      case 1: // 菩提空间
-        return 1;
+      case 1: // 菩提空间（菜单第 4 位）
+        return 3;
       case 2: // 经藏
         return 2;
       case 3: // 助手（入口在经藏页右上角）
         return -1;
       case 4: // 消息
-        return 3;
-      case 5: // 第 5 格（页面暂留白）
         return 4;
+      case 5: // 宗派（菜单第 2 位，页面暂留白）
+        return 1;
       case 6: // 我的（入口在左侧菜单）
         return -1;
       case 7: // 记录（入口在左侧菜单）
@@ -650,13 +650,9 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    // 底部菜单索引 → 页面索引：消息(3)→4，第 5 格(4)→5（页面暂留白）；
+    // 底部菜单索引 → 页面索引：宗派(1)→5（页面暂留白），菩提空间(3)→1，消息(4)→4；
     // 记录页不在底部，由左侧菜单进入。
-    final pageIndex = index == 3
-        ? 4
-        : index == 4
-            ? 5
-            : index;
+    final pageIndex = index == 1 ? 5 : index == 3 ? 1 : index;
     // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
     if (pageIndex == 0 && _currentIndex == 0) {
       _studyHubKey.currentState?.reload();
@@ -963,8 +959,8 @@ class _MainPageState extends State<MainPage>
       ),
       _AssistantTabPage(),
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
-      // 底部第 5 格：内容暂留白，后续换新页面。
-      const _ReservedTabPage(),
+      // 底部「宗派」菜单：内容暂留白，后续换新页面。
+      const _SectTabPage(),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
     ];
@@ -1334,12 +1330,12 @@ class _NotificationBadgePill extends StatelessWidget {
   }
 }
 
-/// 底部第 5 格的内容页：暂留白，等待替换为新内容。
+/// 底部「宗派」菜单的内容页：暂留白，等待放入宗派内容。
 ///
 /// 「记录」时间线已移到左侧菜单，本页只保留空壳（含底部菜单图标位），
 /// 后续要放新内容时直接把 body 换掉即可。
-class _ReservedTabPage extends StatelessWidget {
-  const _ReservedTabPage();
+class _SectTabPage extends StatelessWidget {
+  const _SectTabPage();
 
   @override
   Widget build(BuildContext context) {
