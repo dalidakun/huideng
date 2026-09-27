@@ -150,6 +150,21 @@ class _UserListPageState extends State<UserListPage> {
               Text(_title,
                   style: TextStyle(
                       fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+              // 关注页标题后带一句偈语，样式与「笔记」页顶部一致。
+              if (_isFollowing) ...[
+                const SizedBox(width: 8),
+                Container(
+                  width: 4,
+                  height: 4,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFC6C6C6),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 5),
+                Text('若见诸相非相，即见如来。',
+                    style: TextStyle(fontSize: 11.5, color: _textSec)),
+              ],
               const Spacer(),
               if (!_loading && _users.isNotEmpty)
                 Text('${_users.length} 位',

@@ -144,7 +144,7 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                     onTap: widget.onOpenRecord,
                   ),
                   _buildItem(
-                    (c) => Icon(Icons.favorite_outline, size: 21, color: c),
+                    (_) => const _FollowMenuIcon(),
                     '关注',
                     onTap: widget.onOpenFollowing,
                   ),
@@ -437,6 +437,28 @@ class _RecordMenuIcon extends StatelessWidget {
       width: 21,
       height: 21,
       fit: BoxFit.contain,
+    );
+  }
+}
+
+/// 侧边菜单「关注」图标：两种外观统一用黑色 gz.png。
+/// 字形占满画布，与「个人资料」同样缩绘到 18、21 槽居中。
+class _FollowMenuIcon extends StatelessWidget {
+  const _FollowMenuIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 21,
+      height: 21,
+      child: Center(
+        child: Image.asset(
+          'assets/images/gz.png',
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+        ),
+      ),
     );
   }
 }

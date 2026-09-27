@@ -106,6 +106,8 @@ flutter:
     # 菩提空间页右上角公告图标：米黄外观 gao1，素白外观 gao2。
     - assets/images/gao1.png
     - assets/images/gao2.png
+    # 侧边栏「关注」菜单图标：两种外观统一用黑色 gz.png。
+    - assets/images/gz.png
     # 菩提空间页右下角悬浮按钮图标：添加笔记 write，回到顶部 top。
     - assets/images/write.png
     - assets/images/top.png
@@ -115,6 +117,8 @@ flutter:
     - assets/images/leaf-sharp.png
     # 首页精读经文卡片右侧莲花装饰图。
     - assets/images/lianhua.png
+    # 宗门页行首图标（首字母缩写，1=素白外观，2=米黄外观；律宗暂无切图）。
+    - assets/menpai/
     - assets/sutras_catalog.json
     - assets/tool.html
     # 底部菜单点击音效（清脆、短暂）。

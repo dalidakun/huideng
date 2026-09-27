@@ -29,6 +29,7 @@ import 'user_avatar_cache.dart';
 import 'update_service.dart';
 import 'reading_badges.dart';
 import 'recent_sutras_page.dart';
+import 'sect_page.dart';
 
 import 'app_palette.dart';
 import 'agreements.dart';
@@ -570,20 +571,28 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
-        // 宗派：图标已就位，页面内容暂留白（后续换成别的内容）。
+        // 宗门：图标已就位，页面见 SectPage（lib/sect_page.dart）。
+        // 素材四周留白不均（200x200 中图形约 108x132，上留白 24、下留白 44），
+        // 故放大尺寸并整体下移，使可见图形与其它菜单项对齐居中。
         BottomNavigationBarItem(
-          icon: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/h1.png'
-                  : 'assets/images/s1.png',
-              width: 24,
-              height: 24),
-          activeIcon: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/h2.png'
-                  : 'assets/images/s2.png',
-              width: 24,
-              height: 24),
+          icon: Transform.translate(
+            offset: const Offset(0, 2),
+            child: Image.asset(
+                AppPalette.instance.isPlain
+                    ? 'assets/images/h1.png'
+                    : 'assets/images/s1.png',
+                width: 27,
+                height: 27),
+          ),
+          activeIcon: Transform.translate(
+            offset: const Offset(0, 2),
+            child: Image.asset(
+                AppPalette.instance.isPlain
+                    ? 'assets/images/h2.png'
+                    : 'assets/images/s2.png',
+                width: 27,
+                height: 27),
+          ),
           label: '',
         ),
         BottomNavigationBarItem(
@@ -620,7 +629,7 @@ class _MainPageState extends State<MainPage>
         return -1;
       case 4: // 消息
         return 4;
-      case 5: // 宗派（菜单第 2 位，页面暂留白）
+      case 5: // 宗门（菜单第 2 位）
         return 1;
       case 6: // 我的（入口在左侧菜单）
         return -1;
@@ -959,8 +968,8 @@ class _MainPageState extends State<MainPage>
       ),
       _AssistantTabPage(),
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
-      // 底部「宗派」菜单：内容暂留白，后续换新页面。
-      const _SectTabPage(),
+      // 底部「宗门」菜单：宗门列表页，左上头像滑出个人菜单。
+      SectPage(onOpenSideMenu: _openSideMenu),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
     ];
@@ -1326,22 +1335,6 @@ class _NotificationBadgePill extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 底部「宗派」菜单的内容页：暂留白，等待放入宗派内容。
-///
-/// 「记录」时间线已移到左侧菜单，本页只保留空壳（含底部菜单图标位），
-/// 后续要放新内容时直接把 body 换掉即可。
-class _SectTabPage extends StatelessWidget {
-  const _SectTabPage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppPalette.p.bg,
-      body: const SizedBox.expand(),
     );
   }
 }

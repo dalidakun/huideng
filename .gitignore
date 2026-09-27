@@ -33,6 +33,10 @@ assets/大正藏经简体txt/
 *.png
 *.apk
 *.zip
+# App icons under assets/ are build inputs declared in pubspec.yaml, keep them in the repo.
+!assets/images/*.png
+!assets/icon/*.png
+!assets/menpai/*.png
 missing_sutras.txt
 sutras.json
 temp_methods.txt

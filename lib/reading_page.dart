@@ -80,7 +80,10 @@ class _ReadingPageState extends State<ReadingPage>
   bool _actionRowTapped = false; // 点击段落操作栏（AI译/笔记/方框）时置true，阻止外层Listener触发面板
   final GlobalKey _moreMenuKey = GlobalKey();
 
-  List<int> _searchMatches = [];
+  // 搜索命中列表：每项为 (段落下标, 段内起始字符下标)。
+  // 必须在「实际渲染的段落」上匹配（与高亮同一数据源），命中数才恒等于
+  // 正文里被高亮的处数；备注段落（@@块）不参与搜索，与 _buildParagraphSpans 一致。
+  List<(int, int)> _searchMatches = [];
   int _currentMatchIndex = 0;
   double _scrollProgress = 0.0;
 
@@ -1570,6 +1573,21 @@ class _ReadingPageState extends State<ReadingPage>
                                     onPressed: _goToNextMatch,
                                   ),
                                 ],
+                              ),
+                            if (_searchMatches.isEmpty &&
+                                _searchController.text.isNotEmpty)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
+                                child: Text(
+                                  '无匹配',
+                                  style: TextStyle(
+                                    color: _isDarkBg
+                                        ? Colors.white.withOpacity(0.7)
+                                        : const Color(0xFF212121),
+                                    fontSize: 13,
+                                  ),
+                                ),
                               ),
                           ],
                         ),
@@ -3929,27 +3947,10 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   void _performSearch(String query) {
-    if (query.isEmpty) {
-      setState(() {
-        _searchMatches.clear();
-        _currentMatchIndex = 0;
-      });
-      return;
-    }
-
-    final matches = <int>[];
-    final content = _content.toLowerCase();
-    final lowerQuery = query.toLowerCase();
-
-    int index = content.indexOf(lowerQuery);
-    while (index != -1) {
-      matches.add(index);
-      index = content.indexOf(lowerQuery, index + 1);
-    }
-
+    final matches = _findSearchMatches(query);
     setState(() {
       _searchMatches = matches;
-      _currentMatchIndex = matches.isNotEmpty ? 0 : -1;
+      _currentMatchIndex = 0;
     });
 
     if (matches.isNotEmpty) {
@@ -3957,17 +3958,56 @@ class _ReadingPageState extends State<ReadingPage>
     }
   }
 
+  /// 在渲染段落中查找 [query] 的全部命中：整串连续匹配才算一次，命中后跳过
+  /// query.length 个字符（互不重叠），口径与 _buildParagraphSpans 的高亮完全
+  /// 一致，故计数与正文里被高亮的处数永远相同。
+  List<(int, int)> _findSearchMatches(String query) {
+    final lowerQuery = query.toLowerCase();
+    if (lowerQuery.isEmpty) return const [];
+    final hits = <(int, int)>[];
+    for (var i = 0; i < _paragraphs.length; i++) {
+      // 备注段落不画搜索高亮（见 _buildParagraphSpans 提前返回），故不计数。
+      if (_noteParagraphs.contains(i)) continue;
+      final lower = _paragraphs[i].toLowerCase();
+      var idx = lower.indexOf(lowerQuery);
+      while (idx != -1) {
+        hits.add((i, idx));
+        idx = lower.indexOf(lowerQuery, idx + lowerQuery.length);
+      }
+    }
+    return hits;
+  }
+
   void _scrollToMatch(int index) {
-    if (index >= 0 &&
-        index < _searchMatches.length &&
-        _scrollController.hasClients) {
-      final position = _searchMatches[index];
+    if (index < 0 || index >= _searchMatches.length) return;
+    final para = _searchMatches[index].$1;
+    // 搜索态下正文才刚从翻页 PageView 切成 SingleChildScrollView，段落
+    // GlobalKey 要等本帧构建完才可读，故延到帧末再定位。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      int? head;
+      for (final g in _allClusterGroups()) {
+        if (g.contains(para)) {
+          head = g.first;
+          break;
+        }
+      }
+      if (head == null) return;
+      final box = _paraTapKeys[head]?.currentContext?.findRenderObject()
+          as RenderBox?;
+      final scrollBox =
+          _scrollViewKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || scrollBox == null || !box.hasSize) return;
+      final viewportTop = scrollBox.localToGlobal(Offset.zero).dy;
+      final paraTop = box.localToGlobal(Offset.zero).dy;
+      final offset = (_scrollController.offset + paraTop - viewportTop - 8)
+          .clamp(0.0, _scrollController.position.maxScrollExtent);
       _scrollController.animateTo(
-        position.toDouble(),
+        offset,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-    }
+    });
   }
 
   void _goToPreviousMatch() {
