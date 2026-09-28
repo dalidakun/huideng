@@ -117,9 +117,14 @@ flutter:
     - assets/images/leaf-sharp.png
     # 首页精读经文卡片右侧莲花装饰图。
     - assets/images/lianhua.png
+    # 宗门/法门页核心经典的文件夹图标（两种外观同一张）。
+    - assets/images/fojing.png
     # 宗门页行首图标（首字母缩写，1=素白外观，2=米黄外观；律宗暂无切图）。
     - assets/menpai/
+    - assets/famen/
     - assets/sutras_catalog.json
+    # 宗门核心经典索引（只含索引与元数据，正文仍走统一下载目录，不打包经文）。
+    - assets/sect_sutras/manifest.json
     - assets/tool.html
     # 底部菜单点击音效（清脆、短暂）。
     - assets/sounds/ui_click.wav

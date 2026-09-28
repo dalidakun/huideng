@@ -70,17 +70,19 @@ class _AboutPageState extends State<AboutPage> {
     return SettingsPageScaffold(
       title: '关于我们',
       child: ListView(
-        padding: const EdgeInsets.only(top: 20, bottom: 40),
+        padding: const EdgeInsets.only(top: 14, bottom: 40),
         children: [
           SettingsCard(
             children: [
+              // 图标在左，名称/版本/一句话在图标右侧竖排（与下方条目同 20 内边距）。
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 28),
-                child: Column(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Container(
-                      width: 88,
-                      height: 88,
+                      width: 80,
+                      height: 80,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: AppPalette.p.tintBg,
@@ -88,18 +90,24 @@ class _AboutPageState extends State<AboutPage> {
                       clipBehavior: Clip.antiAlias,
                       child: Image.asset('assets/images/app_icon.png', fit: BoxFit.cover),
                     ),
-                    const SizedBox(height: 16),
-                    Text('燃灯', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: sText)),
-                    const SizedBox(height: 6),
-                    Text(_version.isEmpty ? '' : '版本 $_version',
-                        style: TextStyle(fontSize: 13, color: sTextHint)),
-                    const SizedBox(height: 14),
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 40),
-                      child: Text(
-                        '燃一盏灯，看见自己，照亮别人',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 14, color: sTextSec, height: 1.7),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('燃灯',
+                              style: TextStyle(
+                                  fontSize: 20, fontWeight: FontWeight.w700, color: sText)),
+                          const SizedBox(height: 4),
+                          Text(_version.isEmpty ? '' : '版本 $_version',
+                              style: TextStyle(fontSize: 13, color: sTextHint)),
+                          // 与版本号贴紧一些，整块更紧凑。
+                          const SizedBox(height: 2),
+                          Text(
+                            '燃一盏灯，看见自己，照亮别人',
+                            style: TextStyle(fontSize: 14, color: sTextSec, height: 1.5),
+                          ),
+                        ],
                       ),
                     ),
                   ],

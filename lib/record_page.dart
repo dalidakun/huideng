@@ -66,6 +66,13 @@ class RecordPageState extends State<RecordPage> {
   String _query = '';
   bool _loading = true;
 
+  /// 搜索框是否展开：默认收起，只在点右上角搜索按钮后于标题栏下方浮出。
+  bool _searchVisible = false;
+
+  /// 搜索防抖：每敲一键都重建上千行太浪费，攒到 [_debounceMs] 再真正过滤。
+  static const Duration _debounceMs = Duration(milliseconds: 180);
+  Timer? _searchDebounce;
+
   List<RecordItem> _items = const [];
 
   /// 多卷经书基础经名集合（来自随包目录），决定经名是否补「卷X」。
@@ -76,6 +83,16 @@ class RecordPageState extends State<RecordPage> {
 
   /// sutraKey -> 显示名，避免每帧重复计算。
   final Map<String, String> _nameCache = {};
+
+  /// 行列表的记忆化：只有「索引版本 / 关键词 / 经名表」三者之一变了才重算。
+  ///
+  /// [RecordIndex.items] 是**活的**零拷贝视图，读经页写入新记录时它会当场变化，
+  /// 所以用索引自增的 [RecordIndex.revision] 做版本号来判定失效 ——
+  /// 既不会在每次 reload 里为比较内容而多走一趟 O(n)，
+  /// 也不会在索引变了之后拿旧行列表糊弄用户。
+  int _rowsRevCache = -1;
+  String _rowsQueryCache = '';
+  List<_Row>? _rowsCache;
 
   /// 展开状态：经文引用、感想正文、笔记正文各自独立。
   final Set<String> _paraExpanded = {};
@@ -88,15 +105,60 @@ class RecordPageState extends State<RecordPage> {
     // 首次进入即与本地 `notes` 全量对账，历史笔记直接出现在时间线上。
     unawaited(reload(syncNotes: true));
     unawaited(_loadSutraNames());
-    _searchFocus.addListener(_onSearchFocusChanged);
   }
 
-  /// 聚焦状态变化时重建，决定搜索框叉号是否显示。
-  void _onSearchFocusChanged() => setState(() {});
-
-  /// 收起搜索：关闭键盘并回到默认未激活状态。
+  /// 收起搜索：关闭键盘、清空关键词并把搜索框收回头像旁那个按钮的状态。
+  ///
+  /// 点搜索框以外的区域（列表、标题空白处）时调用；已是收起态就直接返回，
+  /// 免得每点一次列表都重建整页。
   void _dismissSearch() {
+    _searchDebounce?.cancel();
+    _searchDebounce = null;
     if (_searchFocus.hasFocus) _searchFocus.unfocus();
+    if (!_searchVisible && _query.isEmpty) return;
+    _searchCtrl.clear();
+    setState(() {
+      _searchVisible = false;
+      _query = '';
+    });
+  }
+
+  /// 右上角搜索按钮：展开 / 收起搜索框，展开后顺带把光标放进输入框。
+  void _toggleSearch() {
+    if (_searchVisible) {
+      _dismissSearch();
+      return;
+    }
+    setState(() => _searchVisible = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  /// 搜索框输入：只起防抖，不重建页面。列表按 [_query] 记忆化，
+  /// 真正过滤推迟到 [_debounceMs] 之后。
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(_debounceMs, () {
+      _searchDebounce = null;
+      if (!mounted || _query == value) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// 点「搜索」键：立刻生效，不再等防抖。
+  void _onSearchSubmitted(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = null;
+    _searchFocus.unfocus();
+    if (!mounted || _query == value) return;
+    setState(() => _query = value);
+  }
+
+  /// 行列表记忆化失效：改关键词、或经名表补齐后都要重算。
+  void _invalidateRows() {
+    _rowsRevCache = -1;
+    _rowsCache = null;
   }
 
   /// 加载随包目录里的多卷经名集合，供经名统一成「经名 + 卷X」。
@@ -111,6 +173,8 @@ class RecordPageState extends State<RecordPage> {
       _multiVolumeBases = NoteSutraCatalog.cachedMultiVolumeBases;
       _rawTitles = NoteSutraCatalog.cachedRawTitles;
       _nameCache.clear();
+      // 经名显示变了，按经名匹配的搜索结果也要跟着重算。
+      _invalidateRows();
     });
   }
 
@@ -131,7 +195,7 @@ class RecordPageState extends State<RecordPage> {
 
   @override
   void dispose() {
-    _searchFocus.removeListener(_onSearchFocusChanged);
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
     _scrollCtrl.dispose();
@@ -149,6 +213,7 @@ class RecordPageState extends State<RecordPage> {
     setState(() {
       _items = _sorted(RecordIndex.instance.items);
       _loading = false;
+      _invalidateRows();
     });
     if (_scrollCtrl.hasClients) {
       // 列表变短时把滚动位置收回有效范围，避免空白。
@@ -162,13 +227,24 @@ class RecordPageState extends State<RecordPage> {
     }
   }
 
+  /// 时间倒序、同刻按 id 升序。
+  ///
+  /// 索引本身已按时间升序维护，倒序几乎总是「已经有序」，所以先线性探一遍，
+  /// 命中就直接复用原列表，省掉一次 n 元素的复制 + 排序。
   static List<RecordItem> _sorted(List<RecordItem> src) {
-    final out = List<RecordItem>.of(src);
-    out.sort((a, b) {
-      final byTime = b.createdAt.compareTo(a.createdAt);
-      return byTime != 0 ? byTime : a.id.compareTo(b.id);
-    });
-    return out;
+    for (var i = 1; i < src.length; i++) {
+      if (_compareDesc(src[i - 1], src[i]) > 0) {
+        final out = List<RecordItem>.of(src);
+        out.sort(_compareDesc);
+        return out;
+      }
+    }
+    return src;
+  }
+
+  static int _compareDesc(RecordItem a, RecordItem b) {
+    final byTime = b.createdAt.compareTo(a.createdAt);
+    return byTime != 0 ? byTime : a.id.compareTo(b.id);
   }
 
   // ── 过滤与分组 ────────────────────────────────────────
@@ -182,6 +258,20 @@ class RecordPageState extends State<RecordPage> {
       if (i.sutraKeys.any((k) => k.contains(q))) return true;
       return i.text.contains(q) || i.paraText.contains(q);
     }).toList();
+  }
+
+  /// 展示用的行列表（日期分组头 + 记录），带记忆化。
+  List<_Row> get _rows {
+    final rev = RecordIndex.instance.revision.value;
+    final cached = _rowsCache;
+    if (cached != null && _rowsRevCache == rev && _rowsQueryCache == _query) {
+      return cached;
+    }
+    final rows = _buildRows(_filtered);
+    _rowsRevCache = rev;
+    _rowsQueryCache = _query;
+    _rowsCache = rows;
+    return rows;
   }
 
   /// 把记录展平成「日期分组头 + 记录」的行列表，供 ListView.builder 使用。
@@ -229,8 +319,7 @@ class RecordPageState extends State<RecordPage> {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
-    final items = _filtered;
-    final rows = _buildRows(items);
+    final rows = _rows;
     return Scaffold(
       backgroundColor: p.bg,
       appBar: AppBar(
@@ -283,13 +372,38 @@ class RecordPageState extends State<RecordPage> {
             ),
           ),
         ),
+        actions: [
+          // 常态只留一个搜索入口，搜索框本身按需浮出。
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: IconButton(
+                tooltip: _searchVisible ? '收起搜索' : '搜索笔记',
+                icon: Icon(
+                  _searchVisible ? Icons.close : Icons.search,
+                  size: 20,
+                  color: p.text,
+                ),
+                onPressed: _toggleSearch,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                splashRadius: 16,
+              ),
+            ),
+          ),
+        ],
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-            child: _buildSearchField(p),
-          ),
+          // 搜索框不再常驻顶部，展开时从标题栏下方浮出。
+          if (_searchVisible)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+              child: _buildSearchField(p),
+            ),
+
           Expanded(
             // 点搜索框以外的列表/空白区域：收起搜索与键盘。
             child: GestureDetector(
@@ -412,25 +526,13 @@ class RecordPageState extends State<RecordPage> {
             padding: const EdgeInsets.only(left: 10, right: 6),
             child: Icon(Icons.search, color: p.textHint, size: 18),
           ),
-          suffixIcon: _query.isEmpty && !_searchFocus.hasFocus
-              ? null
-              : GestureDetector(
-                  onTap: () {
-                    _searchCtrl.clear();
-                    setState(() => _query = '');
-                    _searchFocus.unfocus();
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: Icon(Icons.close, color: p.textHint, size: 18),
-                  ),
-                ),
+          // 不放清除叉号：搜索激活时右上角那个按钮本身就是叉号。
           border: InputBorder.none,
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 12),
         ),
-        onChanged: (v) => setState(() => _query = v),
-        onSubmitted: (_) => _searchFocus.unfocus(),
+        onChanged: _onSearchChanged,
+        onSubmitted: _onSearchSubmitted,
       ),
     );
   }

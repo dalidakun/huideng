@@ -129,7 +129,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
 
   int _tabIndex = 0;
   List<String> _plazaTabs = ['discuss', 'hot', 'follow'];
-  /// 自定义工具栏：栏目名（默认「自定义」，可改名）+ 经文/话题条目（数量不限），
+  /// 自定义工具栏：栏目名（默认「列表」，可改名）+ 经文/话题条目（数量不限），
   /// 点击工具栏上的自定义栏目向下展开列表，点击条目进入对应讨论页。
   String _customTabName = '列表';
   List<_CustomToolbarItem> _customItems = const [];
@@ -1131,7 +1131,9 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
           .toList();
       if (!mounted) return;
       setState(() {
-        _customTabName = name.isEmpty ? '列表' : name;
+        // 老版本默认叫「自定义」，已存的配置里留着这个名字的按新默认「列表」显示。
+        _customTabName =
+            (name.isEmpty || name == '自定义') ? '列表' : name;
         _customItems = items;
       });
     } catch (_) {}
@@ -1497,7 +1499,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                         decoration: InputDecoration(
                           isDense: true,
                           counterText: '',
-                          hintText: '默认「自定义」，可改成你喜欢的名字',
+                          hintText: '默认「列表」，可改成你喜欢的名字',
                           hintStyle: TextStyle(color: _textHint, fontSize: 14),
                           filled: true,
                           fillColor: _bg,
@@ -2941,8 +2943,8 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
                       customTabLabel,
                       selected: customTabOpen,
                       onTap: onCustomTabPressed,
-                      // 自定义为三字栏目：短线比三字宽度再大一些才协调。
-                      underlineWidth: 52,
+                      // 短线随栏目字数：两字 36（与固定栏目同宽），三字及以上 52。
+                      underlineWidth: customTabLabel.length >= 3 ? 52 : 36,
                       trailingIcon: Icon(
                         customTabOpen
                             ? Icons.keyboard_arrow_up
@@ -2966,7 +2968,7 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   /// 与个人主页同款栏目按钮：均分宽度、字号 15、金色短线 36×3。
-  /// [underlineWidth] 可按栏目字数加宽（如三字自定义栏目用更宽的短线）。
+  /// [underlineWidth] 可按栏目字数加宽（两字 36，三字及以上 52）。
   Widget _buildTab(BuildContext context, String label,
       {required bool selected,
       required VoidCallback onTap,

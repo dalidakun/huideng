@@ -190,4 +190,208 @@ void main() {
     expect(back.shared, isTrue);
     expect(back.backfilled, isTrue);
   });
+
+  // ── 大数据量下的稳定性 ────────────────────────────────
+
+  /// 造 n 条笔记，updatedAt 递增（越靠后越新）。
+  Future<void> seedNotes(int n) async {
+    final prefs = await SharedPreferences.getInstance();
+    final base = DateTime(2026, 1, 1);
+    await prefs.setString(
+      'notes',
+      jsonEncode([
+        for (var i = 0; i < n; i++)
+          {
+            'id': 'n$i',
+            'content': '第 $i 则',
+            'updatedAt': base.add(Duration(minutes: i)).toIso8601String(),
+            'shared': false,
+          }
+      ]),
+    );
+  }
+
+  test('syncNotesFromPrefs：笔记超过配额时只留最新一批，且反复对账不再抖动',
+      () async {
+    final idx = RecordIndex.instance;
+    // 把配额调小，才能在测试里真的走到截断分支。
+    idx.noteQuota = 4;
+    addTearDown(() => idx.noteQuota = RecordIndex.maxNoteItems);
+
+    await idx.load(force: true);
+    await seedNotes(12);
+    await idx.syncNotesFromPrefs();
+
+    // 只留更新时间最新的 4 条（n8..n11）。
+    final kept = idx.items.where((i) => i.type == RecordType.note).map((i) => i.id).toList();
+    expect(kept.length, 4);
+    expect(kept, containsAll(<String>['n|n8', 'n|n9', 'n|n10', 'n|n11']));
+
+    // 再连对 3 次：条目集合与时间戳必须一字不差。
+    // 旧实现（写盘按最旧裁剪 + 下次全量加回）在这里必然出现增删抖动。
+    final snapshot = <String, int>{
+      for (final it in idx.items.where((i) => i.type == RecordType.note))
+        it.id: it.updatedAt,
+    };
+    for (var i = 0; i < 3; i++) {
+      await idx.syncNotesFromPrefs();
+      final now = <String, int>{
+        for (final it in idx.items.where((it) => it.type == RecordType.note))
+          it.id: it.updatedAt,
+      };
+      expect(now, snapshot, reason: '第 $i 次重复对账结果发生了变化（抖动）');
+    }
+
+    // 新增一条最新的笔记：最旧的 n8 出局，其余不动。
+    final prefs = await SharedPreferences.getInstance();
+    final base = DateTime(2026, 1, 1);
+    final all = [
+      for (var i = 0; i < 12; i++)
+        {
+          'id': 'n$i',
+          'content': '第 $i 则',
+          'updatedAt': base.add(Duration(minutes: i)).toIso8601String(),
+          'shared': false,
+        },
+      {
+        'id': 'new',
+        'content': '最新一则',
+        'updatedAt': base.add(const Duration(days: 1)).toIso8601String(),
+        'shared': false,
+      }
+    ];
+    await prefs.setString('notes', jsonEncode(all));
+    await idx.syncNotesFromPrefs();
+    final after = idx.items.where((i) => i.type == RecordType.note).map((i) => i.id).toList();
+    expect(after.length, 4);
+    expect(after, contains('n|new'));
+    expect(after, isNot(contains('n|n8'))); // 最旧的被顶掉
+    // 顶掉之后仍然稳定。
+    await idx.syncNotesFromPrefs();
+    final again = idx.items.where((i) => i.type == RecordType.note).map((i) => i.id).toList();
+    expect(again.toSet(), after.toSet());
+  });
+
+  test('syncNotesFromPrefs：画线/感想占位后，笔记配额相应让出，非笔记条目一条不少',
+      () async {
+    final idx = RecordIndex.instance;
+    idx.noteQuota = 10;
+    addTearDown(() => idx.noteQuota = RecordIndex.maxNoteItems);
+
+    await idx.load(force: true);
+    // 先塞 3 条非笔记条目。
+    await idx.syncParagraph(
+      sutraKey: '心经',
+      para: 0,
+      paraText: '观自在菩萨',
+      thought: '照见五蕴皆空',
+      underlines: [(start: 0, end: 2), (start: 2, end: 4)],
+    );
+    expect(idx.items.where((i) => i.type != RecordType.note).length, 3);
+
+    await seedNotes(4);
+    await idx.syncNotesFromPrefs();
+
+    // 非笔记条目一条都不能因为笔记对账而丢掉。
+    expect(idx.items.where((i) => i.type != RecordType.note).length, 3);
+    expect(idx.items.where((i) => i.type == RecordType.note).length, 4);
+    // 下标表与列表一致：每条的 id 唯一，且 _pos 指向的确实是它自己。
+    final ids = idx.items.map((i) => i.id).toList();
+    expect(ids.toSet().length, ids.length);
+  });
+
+  test('_removeAll：批量删除后位置表仍与列表一致', () async {
+    final idx = RecordIndex.instance;
+    await idx.load(force: true);
+    // 造 5 段各带一条感想。
+    for (var p = 0; p < 5; p++) {
+      await idx.syncParagraph(
+        sutraKey: '心经',
+        para: p,
+        paraText: '段 $p 的原文',
+        thought: '感想 $p',
+        underlines: [(start: 0, end: 2)],
+      );
+    }
+    expect(idx.items.length, 10);
+
+    // 重排版把段号整体前移一位：应重建 5 段，且不残留旧段号。
+    await idx.resyncSutra(
+      sutraKey: '心经',
+      paragraphs: ['新段 0', '新段 1', '新段 2', '新段 3', '新段 4'],
+      notes: {0: '感想 0', 1: '感想 1', 2: '感想 2', 3: '感想 3', 4: '感想 4'},
+      underlines: {
+        0: [
+          {'start': 0, 'end': 2}
+        ],
+        1: [
+          {'start': 0, 'end': 2}
+        ],
+        2: [
+          {'start': 0, 'end': 2}
+        ],
+        3: [
+          {'start': 0, 'end': 2}
+        ],
+        4: [
+          {'start': 0, 'end': 2}
+        ],
+      },
+    );
+    expect(idx.items.length, 10);
+    // 没有旧段号 5+ 的幽灵条目。
+    expect(idx.items.where((i) => i.para >= 5), isEmpty);
+    // 位置表一致性：连续两次 syncParagraph 改不同段，结果必须都落在正确条目上。
+    await idx.syncParagraph(
+      sutraKey: '心经',
+      para: 2,
+      paraText: '新段 2',
+      thought: '改过的感想',
+      underlines: [(start: 0, end: 3)],
+    );
+    final t2 = idx.items.firstWhere((i) => i.type == RecordType.thought && i.para == 2);
+    expect(t2.text, '改过的感想');
+    // 其它段的感想没被串位。
+    for (var p = 0; p < 5; p++) {
+      if (p == 2) continue;
+      final t = idx.items.firstWhere((i) => i.type == RecordType.thought && i.para == p);
+      expect(t.text, '感想 $p');
+    }
+  });
+
+  test('decodeIndexJson：重复的段落原文折叠成同一个字符串实例', () {
+    const para = '观自在菩萨行深般若波罗蜜多时照见五蕴皆空度一切苦厄';
+    final raw = jsonEncode([
+      for (var i = 0; i < 4; i++)
+        {
+          'i': 'h|心经|$i|0|2',
+          't': 0,
+          'k': ['心经'],
+          'p': i,
+          'x': '观自',
+          'q': para,
+          'c': i,
+          'u': i,
+        }
+    ]);
+    final items = decodeIndexJson(raw);
+    expect(items.length, 4);
+    // 同一段原文只留一份内存。
+    expect(identical(items[0].paraText, items[1].paraText), isTrue);
+    expect(identical(items[2].paraText, items[3].paraText), isTrue);
+    // 值仍然正确。
+    expect(items[3].paraText, para);
+  });
+
+  test('decodeIndexJson：脏数据跳过而不是整体崩掉', () {
+    final raw = jsonEncode([
+      {'i': '', 't': 0}, // 空 id
+      {'i': 'x', 't': 99}, // 越界类型
+      {'i': 'ok', 't': 1, 'x': '正文', 'c': 5, 'u': 5},
+      'not-a-map',
+    ]);
+    final items = decodeIndexJson(raw);
+    expect(items.length, 1);
+    expect(items.single.id, 'ok');
+  });
 }

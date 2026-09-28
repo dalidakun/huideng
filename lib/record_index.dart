@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -78,7 +79,7 @@ class RecordItem {
         'b': backfilled ? 1 : 0,
       };
 
-  static RecordItem? fromJson(Map<String, dynamic> j) {
+  static RecordItem? fromJson(Map<String, dynamic> j, {Map<String, String>? pool}) {
     final id = (j['i'] ?? '').toString();
     if (id.isEmpty) return null;
     final t = (j['t'] as num?)?.toInt();
@@ -100,14 +101,45 @@ class RecordItem {
       type: RecordType.values[t],
       sutraKeys: keys,
       para: (j['p'] as num?)?.toInt() ?? -1,
-      text: (j['x'] ?? '').toString(),
-      paraText: (j['q'] ?? '').toString(),
+      text: _interned((j['x'] ?? '').toString(), pool),
+      paraText: _interned((j['q'] ?? '').toString(), pool),
       createdAt: created,
       updatedAt: (j['u'] as num?)?.toInt() ?? created,
       shared: (j['s'] as num?)?.toInt() == 1,
       backfilled: (j['b'] as num?)?.toInt() == 1,
     );
   }
+}
+
+/// 字符串驻留：同一段落原文会被按「每条画线一份」重复存进索引，
+/// 折叠成同一个实例即可省掉成倍的常驻内存（值相等，语义不变）。
+String _interned(String s, Map<String, String>? pool) {
+  if (pool == null || s.isEmpty) return s;
+  return pool.putIfAbsent(s, () => s);
+}
+
+/// 索引文件的解析：整个 JSON 字符串 → [RecordItem] 列表。
+///
+/// 顶层函数是为了能被 [compute] 丢到后台 isolate 上跑：文件动辄几 MB，
+/// jsonDecode 加几千次对象分配放在主 isolate 上会把进页面的首屏卡住。
+/// 同时在这里做字符串驻留，重复的段落原文只留一份。
+List<RecordItem> decodeIndexJson(String raw) {
+  final out = <RecordItem>[];
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is List) {
+      final pool = <String, String>{};
+      for (final it in decoded) {
+        if (it is! Map) continue;
+        final item =
+            RecordItem.fromJson(it.cast<String, dynamic>(), pool: pool);
+        if (item != null) out.add(item);
+      }
+    }
+  } catch (e) {
+    debugPrint('[record-index] 解析失败：$e');
+  }
+  return out;
 }
 
 /// 本地「记录索引」：时间线页的唯一数据源。
@@ -127,6 +159,19 @@ class RecordIndex {
   /// 索引条数上限，超出丢弃最旧的记录，避免文件无限增长。
   static const int maxItems = 5000;
 
+  /// 时间线上保留的**笔记**条数上限。
+  ///
+  /// 笔记的本体在 SharedPreferences `notes` 里、条数不受限，而索引有 [maxItems] 上限。
+  /// 若只在写盘时按「最旧」裁剪，被裁掉的那批下次对账又会从 `notes` 里加回来，
+  /// 于是每次进页面都触发一次「全量加回 → 裁剪 → 重写整个文件」的抖动，
+  /// 而且那批笔记在时间线上永远刷不出来。因此这里先把规则定死：
+  /// 按更新时间倒序只取前 N 条进索引，规则只依赖 `notes` 自身，每次对账结果一致。
+  static const int maxNoteItems = 3000;
+
+  /// 笔记配额实例变量，[maxNoteItems] 为默认值；测试里调小以覆盖截断分支。
+  @visibleForTesting
+  int noteQuota = maxNoteItems;
+
   /// 索引变更版本号：写入方自增，时间线页监听后静默刷新。
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
@@ -141,7 +186,14 @@ class RecordIndex {
   bool get isLoaded => _loaded;
 
   /// 全部记录（按创建时间正序，便于裁剪最旧）。
-  List<RecordItem> get items => List<RecordItem>.unmodifiable(_items);
+  ///
+  /// 零拷贝的只读视图：索引自身已按时间升序维护，页面再排一次倒序即可，
+  /// 不必在这里先复制一份。视图是**活的**，只读，且不要跨次 reload 缓存。
+  List<RecordItem> get items => UnmodifiableListView<RecordItem>(_items);
+
+  /// 当前索引里的非笔记条目数（画线 / 感想），用于给笔记留出配额。
+  int get _nonNoteCount =>
+      _items.where((i) => i.type != RecordType.note).length;
 
   // ── 读取 ────────────────────────────────────────────────
 
@@ -155,19 +207,13 @@ class RecordIndex {
   }
 
   Future<void> _readFromDisk() async {
-    final list = <RecordItem>[];
+    var list = <RecordItem>[];
     try {
       final file = await _resolveFile();
       if (await file.exists()) {
-        final decoded = jsonDecode(await file.readAsString());
-        if (decoded is List) {
-          for (final it in decoded) {
-            if (it is Map) {
-              final item = RecordItem.fromJson(it.cast<String, dynamic>());
-              if (item != null) list.add(item);
-            }
-          }
-        }
+        final raw = await file.readAsString();
+        // 几 MB 的 JSON 解析 + 几千次对象分配放后台 isolate，别卡住进页首帧。
+        list = await compute(decodeIndexJson, raw);
       }
     } catch (e) {
       debugPrint('[record-index] 读取失败：$e');
@@ -236,8 +282,8 @@ class RecordIndex {
             i.para == para &&
             !wanted.contains(i.id))
         .toList();
-    for (final it in stale) {
-      _remove(it.id);
+    if (stale.isNotEmpty) {
+      _removeAll(stale.map((i) => i.id));
       changed = true;
     }
     for (final r in ranges) {
@@ -280,11 +326,13 @@ class RecordIndex {
           i.id: i.createdAt,
     };
     var changed = false;
-    for (final id in _items
+    // 本经非笔记条目整批清空：一次扫描 + 一次重建，别逐条删成 O(k·n)。
+    final doomed = _items
         .where((i) => i.type != RecordType.note && i.sutraKey == sutraKey)
         .map((i) => i.id)
-        .toList()) {
-      _remove(id);
+        .toList();
+    if (doomed.isNotEmpty) {
+      _removeAll(doomed);
       changed = true;
     }
 
@@ -398,6 +446,12 @@ class RecordIndex {
 
   /// 用本地 `notes` 全量对账笔记条目：新增 / 更新已存在的，删除已不存在的。
   /// 因此笔记的保存、删除、回收站恢复都无需改动各自页面。
+  ///
+  /// 笔记条数不受限、索引条数有 [maxItems] 上限，所以这里先按 [maxNoteItems]
+  /// 截一道：只把**更新时间最新的**那批放进索引，落盘时就不会触发按「最旧」
+  /// 裁剪，也不会出现「裁掉 → 下次对账又加回来 → 每次进页面重写整个文件」的抖动。
+  /// 截断规则只依赖 `notes` 自身（`updatedAt` 排序 + 稳定次序），
+  /// 因此同一个 `notes` 每次算出来的入选集合完全一致。
   Future<void> syncNotesFromPrefs() async {
     await load();
     final prefs = await SharedPreferences.getInstance();
@@ -409,32 +463,52 @@ class RecordIndex {
     } catch (_) {
       return;
     }
-    final liveIds = <String>{};
-    var changed = false;
+
+    // 先摊平成轻量候选：正则在截断之后才跑，避免为落选的几千条白做解析。
+    final candidates = <({String id, String content, String updatedAt, bool shared, int ts})>[];
     for (final it in notes) {
       if (it is! Map) continue;
       final map = it.cast<String, dynamic>();
       final id = (map['id'] ?? '').toString();
       if (id.isEmpty) continue;
-      liveIds.add('n|$id');
       final content = (map['content'] ?? '').toString();
-      if (content.trim().isEmpty) {
-        // 正文被清空：视为删除，避免时间线留下空条目。
-        if (_pos.containsKey('n|$id')) {
-          _remove('n|$id');
-          changed = true;
-        }
-        continue;
-      }
-      changed |= _upsertNote(id, content, (map['updatedAt'] ?? '').toString(),
-          map['shared'] == true);
+      if (content.trim().isEmpty) continue;
+      candidates.add((
+        id: id,
+        content: content,
+        updatedAt: (map['updatedAt'] ?? '').toString(),
+        shared: map['shared'] == true,
+        ts: DateTime.tryParse((map['updatedAt'] ?? '').toString())
+                ?.millisecondsSinceEpoch ??
+            0,
+      ));
     }
+
+    // 画线 / 感想也占索引名额，笔记配额要相应让出，总量才不会顶破 maxItems。
+    final budget = (maxItems - _nonNoteCount).clamp(0, noteQuota);
+
+    // 最新优先；更新时间相同或缺失时按笔记 id 兜底，保证结果稳定可复现。
+    candidates.sort((a, b) {
+      final byTime = b.ts.compareTo(a.ts);
+      return byTime != 0 ? byTime : a.id.compareTo(b.id);
+    });
+    final kept = candidates.length > budget
+        ? candidates.sublist(0, budget)
+        : candidates;
+
+    final liveIds = <String>{};
+    var changed = false;
+    for (final c in kept) {
+      liveIds.add('n|${c.id}');
+      changed |= _upsertNote(c.id, c.content, c.updatedAt, c.shared);
+    }
+    // 落选、以及在 `notes` 里已不存在的笔记，都从时间线上撤掉。
     final gone = _items
         .where((i) => i.type == RecordType.note && !liveIds.contains(i.id))
         .map((i) => i.id)
         .toList();
-    for (final id in gone) {
-      _remove(id);
+    if (gone.isNotEmpty) {
+      _removeAll(gone);
       changed = true;
     }
     if (changed) _touch();
@@ -612,8 +686,9 @@ class RecordIndex {
   bool _upsert(RecordItem item) {
     final pos = _pos[item.id];
     if (pos == null) {
+      // 追加到末尾不会挪动既有下标，直接登记即可，无需重建整张位置表。
+      _pos[item.id] = _items.length;
       _items.add(item);
-      _reindex();
       return true;
     }
     if (_sameAs(pos, item)) return false;
@@ -630,14 +705,26 @@ class RecordIndex {
         old.backfilled == item.backfilled;
   }
 
-  void _remove(String id) {
-    final pos = _pos[id];
-    if (pos == null) return;
-    _removeAt(pos);
-  }
-
   void _removeAt(int pos) {
     _items.removeAt(pos);
+    _reindex();
+  }
+
+  /// 一次删掉一批条目：单趟扫描 + 只重建一次位置表。
+  ///
+  /// 重排版时本经的画线/感想会被整批清掉，逐条 [_removeAt] 就是 O(k·n)。
+  void _removeAll(Iterable<String> ids) {
+    final doomed = <int>{};
+    for (final id in ids) {
+      final pos = _pos[id];
+      if (pos != null) doomed.add(pos);
+    }
+    if (doomed.isEmpty) return;
+    // 从后往前删，下标才不会因前次删除而失效。
+    final sorted = doomed.toList()..sort();
+    for (var i = sorted.length - 1; i >= 0; i--) {
+      _items.removeAt(sorted[i]);
+    }
     _reindex();
   }
 

@@ -29,6 +29,7 @@ import 'user_avatar_cache.dart';
 import 'update_service.dart';
 import 'reading_badges.dart';
 import 'recent_sutras_page.dart';
+import 'sect_detail_page.dart';
 import 'sect_page.dart';
 
 import 'app_palette.dart';
@@ -571,28 +572,10 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
-        // 宗门：图标已就位，页面见 SectPage（lib/sect_page.dart）。
-        // 素材四周留白不均（200x200 中图形约 108x132，上留白 24、下留白 44），
-        // 故放大尺寸并整体下移，使可见图形与其它菜单项对齐居中。
+        // 菩提空间（菜单第 2 位）。
         BottomNavigationBarItem(
-          icon: Transform.translate(
-            offset: const Offset(0, 2),
-            child: Image.asset(
-                AppPalette.instance.isPlain
-                    ? 'assets/images/h1.png'
-                    : 'assets/images/s1.png',
-                width: 27,
-                height: 27),
-          ),
-          activeIcon: Transform.translate(
-            offset: const Offset(0, 2),
-            child: Image.asset(
-                AppPalette.instance.isPlain
-                    ? 'assets/images/h2.png'
-                    : 'assets/images/s2.png',
-                width: 27,
-                height: 27),
-          ),
+          icon: _BodhiTabIcon(active: false),
+          activeIcon: _BodhiTabIcon(active: true),
           label: '',
         ),
         BottomNavigationBarItem(
@@ -604,9 +587,28 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
+        // 宗门（菜单第 4 位）：图标已就位，页面见 SectPage（lib/sect_page.dart）。
+        // 素材四周留白不均（200x200 中图形约 108x132，上留白 24、下留白 44），
+        // 故放大尺寸并整体下移，使可见图形与其它菜单项对齐居中。
         BottomNavigationBarItem(
-          icon: _BodhiTabIcon(active: false),
-          activeIcon: _BodhiTabIcon(active: true),
+          icon: Transform.translate(
+            offset: const Offset(0, 2),
+            child: Image.asset(
+                AppPalette.instance.isPlain
+                    ? 'assets/images/h1.png'
+                    : 'assets/images/s1.png',
+                width: 29,
+                height: 29),
+          ),
+          activeIcon: Transform.translate(
+            offset: const Offset(0, 2),
+            child: Image.asset(
+                AppPalette.instance.isPlain
+                    ? 'assets/images/h2.png'
+                    : 'assets/images/s2.png',
+                width: 27,
+                height: 27),
+          ),
           label: '',
         ),
         BottomNavigationBarItem(
@@ -621,16 +623,16 @@ class _MainPageState extends State<MainPage>
     switch (_currentIndex) {
       case 0: // 首页
         return 0;
-      case 1: // 菩提空间（菜单第 4 位）
-        return 3;
+      case 1: // 菩提空间（菜单第 2 位）
+        return 1;
       case 2: // 经藏
         return 2;
       case 3: // 助手（入口在经藏页右上角）
         return -1;
       case 4: // 消息
         return 4;
-      case 5: // 宗门（菜单第 2 位）
-        return 1;
+      case 5: // 宗门（菜单第 4 位）
+        return 3;
       case 6: // 我的（入口在左侧菜单）
         return -1;
       case 7: // 记录（入口在左侧菜单）
@@ -659,9 +661,9 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    // 底部菜单索引 → 页面索引：宗派(1)→5（页面暂留白），菩提空间(3)→1，消息(4)→4；
+    // 底部菜单索引 → 页面索引：菩提空间(1)→1、宗门(3)→5，其余索引即页面索引；
     // 记录页不在底部，由左侧菜单进入。
-    final pageIndex = index == 1 ? 5 : index == 3 ? 1 : index;
+    final pageIndex = index == 3 ? 5 : index;
     // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
     if (pageIndex == 0 && _currentIndex == 0) {
       _studyHubKey.currentState?.reload();
@@ -894,6 +896,19 @@ class _MainPageState extends State<MainPage>
     );
   }
 
+  /// 宗门入口：打开该宗核心经典详情页，分卷正文复用经藏页的下载/阅读逻辑。
+  void _openSectDetail(SectInfo sect) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SectDetailPage(
+          sect: sect,
+          parent: _sutraListKey.currentState,
+        ),
+      ),
+    );
+  }
+
   /// 切页时立即弹回菜单并重置滚动方向跟踪。
   void _revealNavBar() {
     _scrollDir = 0;
@@ -969,7 +984,8 @@ class _MainPageState extends State<MainPage>
       _AssistantTabPage(),
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
       // 底部「宗门」菜单：宗门列表页，左上头像滑出个人菜单。
-      SectPage(onOpenSideMenu: _openSideMenu),
+      // 点击宗门进本宗核心经典详情页。
+      SectPage(onOpenSideMenu: _openSideMenu, onOpen: _openSectDetail),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
     ];

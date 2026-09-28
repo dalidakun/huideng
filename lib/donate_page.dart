@@ -38,6 +38,12 @@ class DonatePage extends StatelessWidget {
               ),
               const SettingsDivider(),
               const _PurposeTile(
+                icon: Icons.language,
+                title: '域名维护和年费',
+                subtitle: '域名续费与年检，站点不掉线',
+              ),
+              const SettingsDivider(),
+              const _PurposeTile(
                 icon: Icons.handyman_outlined,
                 title: '持续开发维护',
                 subtitle: '优化体验，更新经藏内容',

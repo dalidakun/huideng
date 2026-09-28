@@ -1014,7 +1014,7 @@ class StudyHubPageState extends State<StudyHubPage>
                           size: 16, color: AppPalette.p.readingAccent),
                     ),
                     SizedBox(width: AppPalette.instance.isPlain ? 9 : 12),
-                    Text('闻思经文',
+                    Text('闻思佛法',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
