@@ -1,7 +1,7 @@
 {
-  "version": "1.0.7",
-  "versionCode": 8,
-  "downloadPage": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/download.html",
-  "downloadUrl": "https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/huideng_v1.0.7.apk",
-  "notes": "1.0.7：修复登录状态异常掉线——access token 过期后自动静默刷新（此前 SDK 不会自动刷新，2 小时后会话被服务端清除，重新打开 App 就需要重新登录）；会话恢复失败不再误登出，网络恢复后自动补回登录态；并修复并发刷新导致的会话失效竞争。"
+  "version": "1.4.0",
+  "versionCode": 12,
+  "downloadPage": "https://randeng-d8gs968w22a3d98e8-1461892767.tcloudbaseapp.com/huideng/download.html",
+  "downloadUrl": "https://randeng-d8gs968w22a3d98e8-1461892767.tcloudbaseapp.com/huideng/downloads/huideng.apk",
+  "notes": "1.4.0：新增宗门社区——每个宗派与法门都有了自己的社区，可发帖讨论、看社区动态与成员，并可在「核心经典 / xx社区」之间一键切换；新增社区邀请页，八大宗派与十二法门共 20 个社区各生成一页可分享的官网落地页；新增笔记仓库，草稿、笔记与回收站统一管理，编辑后按条增量上云，不会再整份覆盖而误伤他人笔记；新增燃灯官网（首页、下载页、更新日志、隐私政策与用户协议）；优化记录页索引与云端同步，修复若干同步与登录状态问题。"
 }
