@@ -911,13 +911,14 @@ class _MainPageState extends State<MainPage>
   }
 
   /// 社区入口：顶部展示位点「进入社区」时按社区标记（`${栏目名}社区`）
-  /// 反查栏目再进社区页；对不上（历史脏数据）直接忽略，不弹空页。
+  /// 反查栏目，再进该栏目的合并页并直接落在社区那一侧。
+  /// 对不上（历史脏数据）直接忽略，不弹空页。
   void _openSectCommunityByKey(String community) {
     final sect = sectByCommunity(community);
     if (sect == null) return;
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => SectCommunityPage(sect: sect)),
+      MaterialPageRoute(builder: (_) => SectDetailPage(sect: sect, initialTab: 1)),
     );
   }
 

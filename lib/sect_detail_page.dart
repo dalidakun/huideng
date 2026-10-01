@@ -6,6 +6,7 @@ import 'sect_page.dart';
 import 'sect_profile_card.dart';
 import 'sect_profiles.dart';
 import 'sect_sutra_manifest.dart';
+import 'sect_switch.dart';
 import 'sutra_list_page.dart';
 
 /// 经典区的固定色：译本题前的竖杠一律绿（素白外观的主色绿），译本题名一律黑。
@@ -19,13 +20,14 @@ const double _kFolderIconSize = 19;
 /// 译本竖杠（3）+ 竖杠到题名的间距（8）：卷行按它左缩进，与译本题名首字对齐。
 const double _kEditionIndent = 11;
 
-/// 顶部水墨背景图 assets/menpai/bj.png（1376×561，按标题区裁短过一版），
+/// 顶部水墨背景图 assets/menpai/bj.webp（原始 PNG 1376×473，约 293 KB，
+/// 已转 WebP q95 压到 67 KB，PSNR 74 dB 肉眼无差）。
 /// 山峰/叶脉是白底上的淡墨，直接压在页面底色上会露白块，
 /// 所以整体用页面底色做一次正片叠底（modulate），两种外观下都与页面无缝。
-const String _kHeaderBg = 'assets/menpai/bj.png';
+const String _kHeaderBg = 'assets/menpai/bj.webp';
 
-/// 高宽比 561/1376：标题区按原图比例取高，山峰与叶尖都不被裁掉。
-const double _kHeaderAspect = 561 / 1376;
+/// 高宽比 473/1376：标题区按原图比例取高，山峰与叶尖都不被裁掉。
+const double _kHeaderAspect = 473 / 1376;
 
 /// 顶部社区入口：胶囊底色与社区页 banner 同色（communityTone）。
 
@@ -44,12 +46,21 @@ const Offset _kActiveShadowOffset = Offset(0, 3);
 /// 正文不在本页加载，统一点击后交给经藏页的 [SutraListPageState.openSutraFromChild]，
 /// 复用其下载进度、已下载判断与「下载完成」提示。
 class SectDetailPage extends StatefulWidget {
-  const SectDetailPage({super.key, required this.sect, this.parent});
+  const SectDetailPage({
+    super.key,
+    required this.sect,
+    this.parent,
+    this.initialTab = 0,
+  });
 
   final SectInfo sect;
 
   /// 经藏页 State，用于复用下载/阅读逻辑。
   final SutraListPageState? parent;
+
+  /// 进来先停在哪一侧：0 核心经典，1 xx社区。
+  /// 从菩提空间/顶部展示位点「进入社区」时传 1，直接落在社区那一半。
+  final int initialTab;
 
   @override
   State<SectDetailPage> createState() => _SectDetailPageState();
@@ -57,6 +68,22 @@ class SectDetailPage extends StatefulWidget {
 
 class _SectDetailPageState extends State<SectDetailPage> {
   Future<SectSutraManifest> _future = SectSutraManifest.load();
+
+  /// 0 = 核心经典（左），1 = xx社区（右）。两半既是 [SectSwitch] 点出来的，
+  /// 也是左右拖出来的，两条路都落到这个 [index] 上。
+  late int _tab = widget.initialTab;
+
+  /// 当前这次横向拖拽累计走过的横向距离：往左拖过 [_dragThreshold] 切到社区，
+  /// 往右拖过就切回经典。拖的过程中**不搬动任何东西**，松手直接换内容。
+  double _dragX = 0;
+
+  /// 换边所需的横向拖拽距离（逻辑像素）。取 56：比控件最小可拖距离大、比半屏小，
+  /// 轻轻一带不至于误切，拇指一划又能到位。
+  static const double _dragThreshold = 56;
+
+  /// 社区内容的 State：外层要用它的 [CommunitySectionState.openCompose] 挂发帖浮钮。
+  final GlobalKey<CommunitySectionState> _communityKey =
+      GlobalKey<CommunitySectionState>();
 
   /// 展开的文件夹（经典）名，用清单里的稳定 key 而非显示名，
   /// 免得同名文件夹在不同宗门/法门下互相串状态。
@@ -83,6 +110,32 @@ class _SectDetailPageState extends State<SectDetailPage> {
     _listScroll.removeListener(_updateBackToTop);
     _listScroll.dispose();
     super.dispose();
+  }
+
+  /// 换边：点胶囊或横向拖过阈值都走这里。[_tab] 一变，右下角浮钮与社区侧的
+  /// [CommunitySection.active] 立刻跟着换；两半各自留着自己的滚动位置，切回来还在原处。
+  void _goTo(int i) {
+    if (i == _tab) return;
+    setState(() => _tab = i);
+  }
+
+  /// 横向拖拽换边：只累计距离、**不跟着手指搬动画面**，松手才决定换不换。
+  /// 竖向滚动照旧由两半自己的滚动区处理（竖直手势赢不了这里的手势竞技场）。
+  void _onDragStart(DragStartDetails _) {
+    _dragX = 0;
+  }
+
+  void _onDragUpdate(DragUpdateDetails d) {
+    _dragX += d.delta.dx;
+  }
+
+  void _onDragEnd(DragEndDetails _) {
+    if (_dragX <= -_dragThreshold) {
+      _goTo(1);
+    } else if (_dragX >= _dragThreshold) {
+      _goTo(0);
+    }
+    _dragX = 0;
   }
 
   @override
@@ -167,26 +220,106 @@ class _SectDetailPageState extends State<SectDetailPage> {
     final p = AppPalette.p;
     return Scaffold(
       backgroundColor: p.bg,
-      // 文件夹展开、上滑一段后才露出；停在顶部时整颗按钮隐藏。
-      floatingActionButton:
-          _showBackToTop ? _buildBackToTopButton() : null,
-      body: SafeArea(child: _buildBodyWithProgress(p)),
+      // 浮钮跟着当前这一侧走：经典侧是「回到顶部」，社区侧是「发帖」。
+      floatingActionButton: _tab == 0
+          ? (_showBackToTop ? _buildBackToTopButton() : null)
+          : _buildComposeButton(p),
+      body: SafeArea(child: _buildTabBody(p)),
     );
   }
 
-  /// 顶部标题区：水墨背景图铺满（降透明度让题字更清楚），返回键与社区入口浮在图上，
-  /// 宗派/法门名与副标题在图中留白处上下居中（示意图同款，旧的 46px 顶栏取消）。
-  /// 头部作为滚动区第一项，上滑时随内容一起移出屏幕，不固定在顶部。
+  /// 社区那一侧的「发帖」浮钮：与「我的」页发帖浮钮同款配色，只换 heroTag。
+  Widget _buildComposeButton(PaletteData p) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 18, bottom: 30),
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: FloatingActionButton(
+          heroTag: 'sect_detail_compose_fab',
+          onPressed: () => _communityKey.currentState?.openCompose(),
+          backgroundColor:
+              AppPalette.instance.isPlain ? const Color(0xFF1A1A1A) : const Color(0xFF71867A),
+          elevation: 8,
+          highlightElevation: 12,
+          shape: const CircleBorder(),
+          child: Image.asset('assets/images/write.png', width: 21, height: 21),
+        ),
+      ),
+    );
+  }
+
+  /// 页顶结构：标题图 + 切换胶囊 + 下方内容，三者同属一页。
+  ///
+  /// 左右**不推整页**：拖动只累计距离（[_onDragUpdate]），松手才把 [_tab] 换过去，
+  /// 画面上没有任何东西跟着手指横移——换的只是「菜单选中哪一段 + 下方是哪份内容」。
+  ///
+  /// 头部（标题图 + 胶囊）放在两半各自的内容里，所以上滑内容时它跟着一起滚走、隐藏；
+  /// 切到另一半时换成那一半自己的头。非当前侧用 [Offstage] 留在树上：既不画也不参与
+  /// 命中测试，切回来时滚动位置还在原地。
+  Widget _buildTabBody(PaletteData p) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: _onDragStart,
+      onHorizontalDragUpdate: _onDragUpdate,
+      onHorizontalDragEnd: _onDragEnd,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Offstage(
+            offstage: _tab != 0,
+            child: _buildBodyWithProgress(p),
+          ),
+          Offstage(
+            offstage: _tab != 1,
+            child: CommunitySection(
+              key: _communityKey,
+              sect: widget.sect,
+              active: _tab == 1,
+              header: _buildHeader(p),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 顶部标题区：通用水墨背景图铺满（降透明度让题字更清楚），返回键浮在图上，
+  /// 宗派/法门名与副标题在图中留白处上下居中，**图下方**挂一颗左右切换胶囊。
+  /// 它是内容滚动区的第一项，所以上滑时连图带胶囊一起滚走、隐藏；
+  /// 旧版右下角那个「xx社区」入口已由胶囊取代，删掉。
   Widget _buildHeader(PaletteData p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildBanner(p),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(28, 14, 28, 14),
+          child: SectSwitch(
+            index: _tab,
+            onChanged: _goTo,
+            leftLabel: '核心经典',
+            rightLabel: '${widget.sect.name}社区',
+            tone: communityTone(AppPalette.instance.isPlain),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 标题图本体（水墨背景 + 返回键 + 栏目图标 + 栏目名 + 副标题）。
+  /// 由 [_buildHeader] 摆在切换条上方，两半各挂各的，都随自己那半内容滚动。
+  Widget _buildBanner(PaletteData p) {
     final width = MediaQuery.sizeOf(context).width;
-    // 竖屏取原图比例整幅铺开；横屏/宽屏按上下限截断，免得标题区吃掉半屏或被压扁。
-    final height = (width * _kHeaderAspect).clamp(140.0, 240.0);
+    // 竖屏按裁短后的原图比例整幅铺开（约 0.34 倍屏宽）；横屏/宽屏按上下限截断。
+    // 下限压到 118：图矮了，图标+题字+副标题仍放得下，但不再白占一截屏幕。
+    final height = (width * _kHeaderAspect).clamp(118.0, 190.0);
     return SizedBox(
-      width: double.infinity,
       height: height,
       child: Stack(
         fit: StackFit.expand,
         children: [
+          // 通用水墨图：淡淡压一层页面底色（正片叠底），两种外观下都与页面无缝。
           ColorFiltered(
             colorFilter: ColorFilter.mode(p.bg, BlendMode.modulate),
             child: Opacity(
@@ -209,8 +342,6 @@ class _SectDetailPageState extends State<SectDetailPage> {
               constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
             ),
           ),
-          // 题字压在图中留白带（原图 x512~896、y208~456 全白）并上下居中，
-          // 左右山与叶子不抢字，读起来最清爽。
           Positioned(
             left: 24,
             right: 24,
@@ -220,11 +351,23 @@ class _SectDetailPageState extends State<SectDetailPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 名字长的栏目（如「普贤行愿法门 · 核心经典」）等比缩小，不出横向滚动。
+                  // 栏目图标压在配图正中偏上，题字与副标题依次落在它下面。
+// 跟着裁短后的图一起收小到 40，保证图标+题字+副标题在 118pt 里排得下。
+                  Opacity(
+                    opacity: 0.92,
+                    child: SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: _buildSectIcon(),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  // 名字长的栏目（如「普贤行愿法门」）等比缩小，不出横向滚动。
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
-                      '${widget.sect.name} · 核心经典',
+                      // 不再缀「· 核心经典」：当前停在哪一侧由钉住的切换条说明。
+                      widget.sect.name,
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
@@ -250,15 +393,39 @@ class _SectDetailPageState extends State<SectDetailPage> {
               ),
             ),
           ),
-          // 「xx社区」挪到图右下角，与左上角返回键成对角；边距取 12，
-          // 与图缘、题字块都留出呼吸位，不压居中的题字。
-          Positioned(
-            right: 12,
-            bottom: 12,
-            child: _buildCommunityEntry(p),
-          ),
         ],
       ),
+    );
+  }
+
+  /// 栏目图标：与宗门菜单页同一套切图规则（法门走 `assets/famen/`、
+  /// 宗门走 `assets/menpai/`、律宗没有切图改手绘）。
+  /// 原先这块在社区页 banner 上，社区并进本页后跟着挪到顶图上。
+  Widget _buildSectIcon() {
+    final isPlain = AppPalette.instance.isPlain;
+    final gate = widget.sect.icon.gateCode;
+    if (gate.isNotEmpty) {
+      final suffix = isPlain ? '' : '2';
+      return Image.asset(
+        'assets/famen/$gate$suffix.png',
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+      );
+    }
+    final code = widget.sect.icon.assetCode;
+    if (code.isEmpty) {
+      // 律宗：没有切图，用页面既有的手绘门形兜住。
+      return CustomPaint(
+        painter: GatePainter(
+          color: isPlain ? const Color(0xFF000000) : kCommunityWarm,
+        ),
+      );
+    }
+    final suffix = isPlain ? '1' : '2';
+    return Image.asset(
+      'assets/menpai/$code$suffix.png',
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
     );
   }
 
@@ -309,7 +476,7 @@ class _SectDetailPageState extends State<SectDetailPage> {
     );
   }
 
-  /// 加载/提示态同样把头部放进滚动区：上滑时背景图随内容一起走，不钉在顶部。
+  /// 加载/提示态把头部一并放进滚动区：上滑时背景图与胶囊跟着走。
   Widget _headerShell(PaletteData p, Widget child) {
     return ListView(
       controller: _listScroll,
@@ -327,10 +494,10 @@ class _SectDetailPageState extends State<SectDetailPage> {
         child: child,
       );
 
-  /// 头部在最前随页滚动，统计条次之、介绍再次，之后才是经典文件夹。
+  /// 头部在最前随内容上滑滚走，统计条次之、介绍再次，之后才是经典文件夹。
   Widget _buildBody(PaletteData p, SectSutraSect sect) {
     final profile = _profile;
-    // 有介绍时占两格（统计条 + 介绍），否则只有统计条；第 0 格固定给标题图。
+    // 有介绍时占两格（统计条 + 介绍），否则只有统计条；第 0 格固定给标题图 + 胶囊。
     final head = profile == null ? 1 : 2;
     return ListView.separated(
       controller: _listScroll,
@@ -433,56 +600,6 @@ class _SectDetailPageState extends State<SectDetailPage> {
           style: TextStyle(fontSize: 8.5, color: fg, height: 1.0)),
     );
   }
-
-  /// 右下角「进入社区」入口：浅色本色胶囊（本宗名 + ›），与左上角返回键成对角。
-  /// 底色取 communityTone 再向白色提亮三成——原色在水墨图上压得太重；
-  /// 提亮后白字对比不够，字与箭头改用本页正文色，社区页 banner 仍用原色。
-  Widget _buildCommunityEntry(PaletteData p) {
-    final tone = Color.lerp(
-        communityTone(AppPalette.instance.isPlain), Colors.white, 0.30)!;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _openCommunity,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-        decoration: BoxDecoration(
-          color: tone,
-          borderRadius: BorderRadius.circular(999),
-          boxShadow: [
-            BoxShadow(
-              color: tone.withValues(alpha: 0.35),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '${widget.sect.name}社区',
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w700,
-                color: p.text,
-                letterSpacing: 0.5,
-              ),
-            ),
-            Icon(Icons.chevron_right, size: 16, color: p.text),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 进入该宗门/法门的社区页。
-  void _openCommunity() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => SectCommunityPage(sect: widget.sect)),
-    );
-  }
-
   /// 一个经典文件夹：折叠时是经名，展开后按译本分区列出分卷。
   /// 收起态与示意图一致——图标、经名/副行、右侧居中的下箭头同一行。
   Widget _buildGroup(PaletteData p, SectSutraGroup group) {

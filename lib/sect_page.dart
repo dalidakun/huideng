@@ -33,7 +33,7 @@ enum SectIconKind {
   faXiang, // 法相宗 · 眼
   sanLun, // 三论宗 · 中观旋
   gmDizang, // 地藏法门
-  gmGuanyin, // 观音法门
+  gmGuanyin, // 观世音法门
   gmYaoshi, // 药师法门
   gmMile, // 弥勒法门
   gmJingtu, // 净土法门
@@ -120,7 +120,7 @@ const List<SectInfo> kSectList = [
 const List<SectInfo> kGateList = [
   SectInfo('地藏法门', '超度亡灵，化解冤亲业障', SectIconKind.gmDizang,
       kind: SectMenuKind.gate),
-  SectInfo('观音法门', '消灾解厄，救难护身', SectIconKind.gmGuanyin,
+  SectInfo('观世音法门', '消灾解厄，救难护身', SectIconKind.gmGuanyin,
       kind: SectMenuKind.gate),
   SectInfo('药师法门', '祛病消灾，化解疾苦', SectIconKind.gmYaoshi,
       kind: SectMenuKind.gate),

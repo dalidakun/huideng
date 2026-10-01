@@ -66,7 +66,9 @@ LEGAL_DOCS = {
 }
 
 # 协议页由 assets/agreements/ 现场生成，模板本身不部署。
-TEMPLATES = {"legal.template.html"}
+# 社区邀请页同理：community.template.html 只当模板，逐栏目渲染成
+# dist/community/<slug>.html（slug 真源是 lib/community_invite.dart）。
+TEMPLATES = {"legal.template.html", "community.template.html"}
 
 
 # --------------------------------------------------------------------------
@@ -404,6 +406,148 @@ def render_log(releases: list[dict], latest: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# 社区邀请页（八大宗派 + 十二法门，共 20 页）
+#
+# 数据真源全在 App 侧的 Dart 文件里，本脚本只读不写：
+#   lib/community_invite.dart      kCommunityInviteSlugs  → 页面 slug
+#   lib/sect_page.dart             kSectList / kGateList  → 栏目名、一句话简介、图标枚举
+#                                 SectIconKindAsset 两个 switch → 切图文件名
+#   lib/sect_community_texts.dart  kCommunityIntros       → 页面正文介绍
+#   lib/cloudbase_config.dart      envId / accessKey      → 云函数网关地址与匿名凭证
+# 改了 Dart 里的任何一项，重跑 `python tools/build_site.py --sync` 即可同步页面。
+# --------------------------------------------------------------------------
+
+LIB = ROOT / "lib"
+COMMUNITY_TPL = SITE / "community.template.html"
+
+
+def _read_lib(name: str) -> str:
+    return (LIB / name).read_text(encoding="utf-8")
+
+
+def _dart_map(src: str, map_name: str) -> str:
+    """取出 `const Map<...> <map_name> = { ... };` 的花括号正文。"""
+    m = re.search(rf"{map_name}\s*(?::\s*[^=]+)?=\s*\{{(.*?)\n\}};", src, re.S)
+    if not m:
+        raise SystemExit(f"lib/ 里找不到 map {map_name}")
+    return m.group(1)
+
+
+def _dart_switch(src: str, getter: str) -> dict[str, str]:
+    """取 `String get <getter> => switch (this) { Kind => 'x', ... };` 的映射。"""
+    m = re.search(
+        rf"String get {getter}\s*=>\s*switch\s*\(this\)\s*\{{(.*?)\}};", src, re.S
+    )
+    if not m:
+        raise SystemExit(f"lib/sect_page.dart 里找不到 {getter} switch")
+    return dict(re.findall(r"SectIconKind\.(\w+)\s*=>\s*'([^']*)'", m.group(1)))
+
+
+def load_communities() -> list[dict]:
+    """从 lib/*.dart 解析 20 个栏目，返回渲染落地页所需的全部字段。"""
+    page_src = _read_lib("sect_page.dart")
+    intro_src = _read_lib("sect_community_texts.dart")
+    invite_src = _read_lib("community_invite.dart")
+
+    asset_code = _dart_switch(page_src, "assetCode")
+    gate_code = _dart_switch(page_src, "gateCode")
+
+    intros = {
+        k: "".join(re.findall(r"'([^']*)'", v))
+        for k, v in re.findall(
+            r"'([^']+)':\s*((?:\s*'[^']*')+)\s*,", _dart_map(intro_src, "kCommunityIntros")
+        )
+    }
+    slugs = dict(
+        re.findall(
+            r"'([^']+)':\s*'([^']+)'", _dart_map(invite_src, "kCommunityInviteSlugs")
+        )
+    )
+
+    items: list[dict] = []
+    for list_name, icon_dir, warm_suffix in (
+        ("kSectList", "assets/menpai", "2"),
+        ("kGateList", "assets/famen", "2"),
+    ):
+        m = re.search(rf"{list_name}\s*=\s*\[(.*?)\n\];", page_src, re.S)
+        if not m:
+            raise SystemExit(f"lib/sect_page.dart 里找不到 {list_name}")
+        for name, desc, kind in re.findall(
+            r"SectInfo\('([^']+)',\s*'([^']*)',\s*SectIconKind\.(\w+)", m.group(1)
+        ):
+            # 图标取米黄「2」变体：落地页黑底，切图 1 是黑线、2 是金线（黑底可见）。
+            code = (gate_code if list_name == "kGateList" else asset_code).get(kind, "")
+            icon_src = (
+                f"{icon_dir}/{code}{warm_suffix}.png" if code else "site/assets/icon.png"
+            )
+            if name not in slugs:
+                raise SystemExit(f"community_invite.dart 缺少「{name}」的 slug")
+            if name not in intros:
+                raise SystemExit(f"sect_community_texts.dart 缺少「{name}」的介绍")
+            items.append(
+                {
+                    "name": name,
+                    "slug": slugs[name],
+                    "desc": desc,
+                    "intro": intros[name],
+                    "iconSrc": icon_src,
+                }
+            )
+
+    slugs_seen = [c["slug"] for c in items]
+    if len(items) != 20:
+        raise SystemExit(f"栏目数不是 20：解析到 {len(items)} 个")
+    if len(set(slugs_seen)) != len(slugs_seen):
+        raise SystemExit("slug 有重复")
+    return items
+
+
+def build_communities(common: dict) -> int:
+    """渲染 20 页邀请页到 dist/community/，并把各自图标复制到 dist/assets/sect/。"""
+    cfg_src = _read_lib("cloudbase_config.dart")
+    env_id = re.search(r"envId\s*=\s*'([^']+)'", cfg_src)
+    api_key = re.search(r"accessKey\s*=\s*'([^']+)'", cfg_src)
+    if not env_id or not api_key:
+        raise SystemExit("cloudbase_config.dart 里读不到 envId / accessKey")
+    api_url = f"https://{env_id.group(1)}.api.tcloudbasegateway.com/v1/functions/api"
+
+    communities = load_communities()
+    tpl = COMMUNITY_TPL.read_text(encoding="utf-8")
+
+    icon_out = DIST / "assets" / "sect"
+    icon_out.mkdir(parents=True, exist_ok=True)
+    page_out = DIST / "community"
+    page_out.mkdir(parents=True, exist_ok=True)
+
+    for c in communities:
+        # publishable key 本就是给客户端匿名用的（APK 里同样明文），
+        # 放进页面只影响「谁都能调公开接口」——与 App 的权限面一致。
+        values = {
+            **common,
+            "NAME": c["name"],
+            "SLUG": c["slug"],
+            "DESC": html.escape(c["desc"], quote=True),
+            "INTRO": html.escape(c["intro"], quote=True),
+            "ICON": f"../assets/sect/{c['slug']}.png",
+            "DOWNLOAD_HREF": "../download.html",
+            "COMMUNITY_KEY": f"{c['name']}社区",
+            "API_URL": api_url,
+            "API_KEY": api_key.group(1),
+        }
+        out = tpl
+        for key, value in values.items():
+            out = out.replace("{{" + key + "}}", str(value))
+        left = sorted(set(re.findall(r"\{\{([A-Z_]+)\}\}", out)))
+        if left:
+            raise SystemExit(f"community/{c['slug']}.html 还有未替换的占位符：{left}")
+        (page_out / f"{c['slug']}.html").write_text(out, encoding="utf-8")
+        shutil.copy2(ROOT / c["iconSrc"], icon_out / f"{c['slug']}.png")
+
+    print(f"社区页    {len(communities)} 页 -> community/<slug>.html")
+    return len(communities)
+
+
+# --------------------------------------------------------------------------
 # 构建
 # --------------------------------------------------------------------------
 
@@ -547,6 +691,10 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         (DIST / f"{slug}.html").write_text(out, encoding="utf-8")
         pages += 1
 
+    # 栏目邀请页：20 个社区各一页 + 各自图标（须在 copy_assets 之后，
+    # 因为 copy_assets 会整个重建 dist/assets/）。
+    pages += build_communities(common)
+
     # App 内更新检查用的版本信息。
     (DIST / "version.json").write_text(
         json.dumps(
@@ -566,7 +714,8 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         encoding="utf-8",
     )
 
-    print(f"输出      {pages + 1} 个文件 -> {DIST.relative_to(ROOT)}")
+    total = len([p for p in DIST.rglob("*") if p.is_file()])
+    print(f"输出      {total} 个文件 -> {DIST.relative_to(ROOT)}")
     print(f"          下载直链 {apk_url}")
     print(f"          更新检查 {base}/version.json")
 

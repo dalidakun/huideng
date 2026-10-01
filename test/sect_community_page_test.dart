@@ -7,7 +7,9 @@ import 'package:my_flutter_app/cloud_notes_service.dart';
 import 'package:my_flutter_app/custom_tab_store.dart';
 import 'package:my_flutter_app/my_page.dart';
 import 'package:my_flutter_app/sect_community_page.dart';
+import 'package:my_flutter_app/sect_detail_page.dart';
 import 'package:my_flutter_app/sect_page.dart';
+import 'package:my_flutter_app/sect_switch.dart';
 
 void main() {
   /// 沿祖先链找带边框的盒子：规则项若被卡片包住，这里会返回 true。
@@ -31,16 +33,103 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  Future<void> pumpCommunity(WidgetTester tester, SectInfo sect) async {
+  /// 合并页默认落在核心经典那一侧，`initialTab` 可直接指定停在哪一半。
+  Future<void> pumpSect(WidgetTester tester, SectInfo sect,
+      {int initialTab = 0}) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(
-      home: SectCommunityPage(sect: sect),
+      home: SectDetailPage(sect: sect, initialTab: initialTab),
     ));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(tester.takeException(), isNull, reason: '社区页渲染抛异常');
+    expect(tester.takeException(), isNull, reason: '宗门页渲染抛异常');
   }
+
+  /// 直接进社区那一侧（`initialTab: 1`）：合并页打开就落在社区，不用先点一次胶囊。
+  Future<void> pumpCommunity(WidgetTester tester, SectInfo sect) async {
+    await pumpSect(tester, sect, initialTab: 1);
+  }
+
+  testWidgets('合并页：胶囊两段写「核心经典 / xx社区」，标题只留栏目名',
+      (tester) async {
+    await pumpSect(tester, kSectList[2]); // 天台宗，默认落在核心经典
+
+    expect(find.byType(SectSwitch), findsOneWidget, reason: '顶部要有一颗切换胶囊');
+    expect(find.text('核心经典'), findsWidgets, reason: '左段标签');
+    expect(find.text('天台宗社区'), findsWidgets, reason: '右段标签 = 栏目名 + 社区');
+    expect(find.text('天台宗'), findsWidgets, reason: '顶图只写栏目名');
+    expect(find.text('天台宗 · 核心经典'), findsNothing,
+        reason: '栏目名后面不再缀「· 核心经典」');
+    // 社区那半还没轮到 PageView 建出来，所以社区专属内容此时不在树上。
+    expect(find.text('展开全文'), findsNothing, reason: '社区那半应当还没显示');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('合并页：旧右下角「进入社区」入口已删，浮钮不再重复出现',
+      (tester) async {
+    await pumpSect(tester, kSectList[2]);
+    // 新的「进入社区」只能由胶囊右段承担，不再额外挂一颗入口。
+    expect(find.text('天台宗社区'), findsWidgets);
+    expect(find.byType(SectSwitch), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('合并页：点胶囊右段切到社区，左段切回经典', (tester) async {
+    await pumpSect(tester, kSectList[2]);
+
+    // 经典侧：社区那半留在树上但 Offstage（不画、不参与命中），社区内容看不到。
+    expect(find.text('展开全文'), findsNothing);
+    expect(find.byType(CommunitySection), findsNothing,
+        reason: '社区那半此刻应当不在屏上');
+    expect(find.byType(CommunitySection, skipOffstage: false), findsOneWidget,
+        reason: '它只是被 Offstage 收起来，滚动位置要留着，切回来还在原处');
+
+    await tester.tap(find.text('天台宗社区').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('展开全文'), findsOneWidget, reason: '切到社区侧后社区介绍在');
+    expect(find.text('0 成员'), findsOneWidget, reason: '社区成员行在');
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('核心经典').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('0 成员'), findsNothing, reason: '切回经典侧后社区成员行不在');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('合并页：initialTab = 1 直接落在社区侧', (tester) async {
+    await pumpSect(tester, kGateList[0], initialTab: 1); // 地藏法门社区
+    expect(find.text('地藏法门社区'), findsWidgets, reason: '右段标签');
+    expect(find.text('展开全文'), findsOneWidget, reason: '直接就在社区那一侧');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('合并页：左右滑动整页互换两半', (tester) async {
+    await pumpSect(tester, kSectList[2]); // 天台宗
+
+    // [PageScrollPhysics] 用弹簧把两半送到位，松手后还要再推进一会儿才彻底停稳；
+    // 页面里又有一直转的加载指示器，pumpAndSettle 等不到静，只能定时推进。
+    Future<void> settle() async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+    }
+
+    await tester.drag(find.byType(SectDetailPage), const Offset(-260, 0));
+    await settle();
+    expect(find.text('展开全文'), findsOneWidget,
+        reason: '向左滑应翻到社区那一半');
+    expect(find.text('0 成员'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.drag(find.byType(SectDetailPage), const Offset(260, 0));
+    await settle();
+    expect(find.text('0 成员'), findsNothing,
+        reason: '向右滑应翻回核心经典那一半');
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('宗门社区页：标题、成员行与三个 tab 都在', (tester) async {
     await pumpCommunity(tester, kSectList[2]); // 天台宗
@@ -115,10 +204,13 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('律宗没有切图，banner 走手绘不抛异常', (tester) async {
+  testWidgets('律宗没有切图，顶部栏目图标走手绘不抛异常', (tester) async {
     await pumpCommunity(tester, kSectList[5]); // 律宗
     expect(find.text('律宗社区'), findsWidgets);
     expect(find.byType(CustomPaint), findsWidgets, reason: '手绘图标走 CustomPaint');
+    // 顶图只画栏目名，不再缀「· 核心经典」。
+    expect(find.text('律宗'), findsWidgets, reason: '顶部只留栏目名，不再缀「· 核心经典」');
+    expect(find.text('律宗 · 核心经典'), findsNothing);
   });
 
   testWidgets('十二法门社区页逐个渲染都不抛异常', (tester) async {
@@ -312,8 +404,8 @@ void main() {
     await tester.tap(find.text('天台宗社区'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byType(SectCommunityPage), findsOneWidget,
-        reason: '点标签直接进入该社区');
+    expect(find.byType(SectDetailPage), findsWidgets,
+        reason: '点标签直接进入该社区（合并页的社区那一侧）');
     expect(tester.takeException(), isNull);
   });
 

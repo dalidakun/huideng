@@ -21,6 +21,7 @@ import 'post_rich_content.dart';
 import 'sutra_list_page.dart';
 import 'custom_tab_store.dart';
 import 'sect_community_page.dart';
+import 'sect_detail_page.dart';
 
 import 'app_palette.dart';
 Color get _gold => AppPalette.p.accent;
@@ -1225,7 +1226,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       }
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => SectCommunityPage(sect: sect)),
+        MaterialPageRoute(
+            builder: (_) => SectDetailPage(sect: sect, initialTab: 1)),
       );
       return;
     }

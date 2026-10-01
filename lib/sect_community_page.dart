@@ -5,12 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_palette.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'community_invite.dart';
 import 'custom_tab_store.dart';
 import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'sect_community_texts.dart';
+import 'sect_detail_page.dart';
 import 'sect_page.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
@@ -62,22 +64,38 @@ List<String> communityRecentMembers(
   return ids.take(5).toList(growable: false);
 }
 
-/// 栏目社区页：banner + 栏目名 + 社区介绍 + 成员行 + 「热门/最新/规则」+ 帖子流。
+/// 栏目社区内容（可嵌入）：社区名 + 社区介绍 + 成员行 + 「热门/最新/规则」+ 帖子流。
 ///
+/// 不带 Scaffold、不带 banner、不带返回键——那些都由外层宗门页统一提供，
+/// 本组件只负责社区这一半的内容，交给 `SectDetailPage` 的切换器摆位。
 /// 帖子用 [PlazaNote.community] 字段归属（云函数按它精确过滤），
 /// 正文里不带任何 `#话题` 前缀——发出来的就是一条普通帖子，
 /// 只在菩提空间等列表里正文前挂一枚可点的社区小标签。
 /// 这样社区页有帖子、广场照常显示，又不会把 20 个「xx社区」顶进话题榜。
-class SectCommunityPage extends StatefulWidget {
+class CommunitySection extends StatefulWidget {
   final SectInfo sect;
 
-  const SectCommunityPage({super.key, required this.sect});
+  /// 本组件是否处在可见状态：不可见时不加载帖子，省掉一次无谓的网络请求。
+  final bool active;
+
+  /// 社区侧内容最上面的一块：只给标题水墨图 + 其下方的左右切换胶囊。
+  /// 由外层宗门页提供，与经典那半用的是同一个组件，各挂各的内容里、都随内容上滑滚走。
+  final Widget? header;
+
+  const CommunitySection({
+    super.key,
+    required this.sect,
+    this.active = true,
+    this.header,
+  });
 
   @override
-  State<SectCommunityPage> createState() => _SectCommunityPageState();
+  State<CommunitySection> createState() => CommunitySectionState();
 }
 
-class _SectCommunityPageState extends State<SectCommunityPage> {
+/// 社区内容的状态。单独暴露出来是为了让外层宗门页用 [GlobalKey] 拿到 [openCompose]，
+/// 把「发帖」浮钮挂在自己的 Scaffold 上（社区这一侧没有自己的 Scaffold）。
+class CommunitySectionState extends State<CommunitySection> {
   /// 0 热门（云端热度序）/ 1 最新（按发帖时间倒序）/ 2 规则
   int _tab = 0;
 
@@ -143,11 +161,21 @@ class _SectCommunityPageState extends State<SectCommunityPage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    // 只有切到社区这一侧才去拉帖子：进页面先看核心经典时不必白等一次网络。
+    if (widget.active) _load();
     _restoreJoinState();
     _restoreStarState();
     // 星标可能在别处被改（菩提空间的列表里把社区移走），改完立刻同步点亮态。
     CustomTabStore.revision.addListener(_restoreStarState);
+  }
+
+  @override
+  void didUpdateWidget(CommunitySection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 首次切到社区侧才加载；来回切不重复请求。
+    if (widget.active && !oldWidget.active && _notes.isEmpty && !_loading) {
+      _load();
+    }
   }
 
   @override
@@ -246,20 +274,9 @@ class _SectCommunityPageState extends State<SectCommunityPage> {
   }
 
   /// 分享本社区：交给系统分享面板，微信等装了的 App 都能选。
-  /// 文案沿用 App 里帖子分享的格式，识别度一致。
+  /// 文案两行——栏目介绍首句 + 落地页链接（见 [communityShareText]）。
   Future<void> _shareCommunity() async {
-    final sect = widget.sect;
-    final intro = (kCommunityIntros[sect.name] ?? '').trim();
-    final first = intro.split(RegExp(r'[。\n]')).first.trim();
-    final lead = first.isEmpty ? '' : '$first。';
-    final head = lead.isEmpty
-        ? '我发现了一个「${sect.name}」社区'
-        : '我发现了一个「${sect.name}」社区：$lead';
-    final text = '$head\n'
-        '———来自【燃灯】App\n'
-        '燃一盏灯，看见自己，照亮别人\n'
-        '点击进入八千大藏经世界\n'
-        '下载链接：';
+    final text = communityShareText(widget.sect.name);
     try {
       await SharePlus.instance.share(ShareParams(text: text));
     } catch (e) {
@@ -290,6 +307,9 @@ class _SectCommunityPageState extends State<SectCommunityPage> {
       if (mounted) _load(silent: true);
     });
   }
+
+  /// 打开发帖输入框。外层宗门页的「发帖」浮钮通过 GlobalKey 调它。
+  void openCompose() => _openCompose();
 
   void _openCompose() {
     if (!AuthService.instance.isLoggedIn) {
@@ -452,62 +472,37 @@ class _SectCommunityPageState extends State<SectCommunityPage> {
     }
   }
 
-  // ───────────────────────── 页面 ─────────────────────────
+  // ───────────────────────── 内容 ─────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      body: SafeArea(
-        top: true,
-        child: RefreshIndicator(
-          color: _gold,
-          onRefresh: () => _load(silent: true),
-          child: NestedScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            headerSliverBuilder: (context, innerScrolled) => [
-              SliverToBoxAdapter(child: _buildHeader()),
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _FixedHeaderDelegate(child: _buildTabBar()),
-              ),
-            ],
-            body: _tab == 2 ? _buildRules() : _buildFeed(),
+    return RefreshIndicator(
+      color: _gold,
+      onRefresh: () => _load(silent: true),
+      child: NestedScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        headerSliverBuilder: (context, innerScrolled) => [
+          // 标题水墨图 + 切换胶囊：与经典那半共用同一个头部组件，各随自己那半滚。
+          if (widget.header != null)
+            SliverToBoxAdapter(child: widget.header!),
+          SliverToBoxAdapter(child: _buildHeader()),
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _FixedHeaderDelegate(child: _buildTabBar()),
           ),
-        ),
-      ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: SizedBox(
-          width: 42,
-          height: 42,
-          child: FloatingActionButton(
-            heroTag: 'sect_community_fab',
-            onPressed: _openCompose,
-            // 与「我的」页发帖浮钮同款配色，只换 heroTag。
-            backgroundColor:
-                _isPlain ? const Color(0xFF1A1A1A) : const Color(0xFF71867A),
-            elevation: 8,
-            highlightElevation: 12,
-            shape: const CircleBorder(),
-            child: Image.asset(
-              'assets/images/write.png',
-              width: 21,
-              height: 21,
-            ),
-          ),
-        ),
+        ],
+        body: _tab == 2 ? _buildRules() : _buildFeed(),
       ),
     );
   }
 
-  /// 头部：banner + 栏目名 + 社区介绍（可展开）+ 成员行 + 分割线。
+  /// 社区这一侧的头部：社区名 + 社区介绍（可展开）+ 成员行 + 分割线。
+  /// banner 与返回键由外层宗门页统一提供，这里不再重复。
   Widget _buildHeader() {
     final intro = kCommunityIntros[widget.sect.name] ?? '';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildBanner(),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: Text(
@@ -563,108 +558,6 @@ class _SectCommunityPageState extends State<SectCommunityPage> {
         _buildMembersRow(),
         Divider(height: 1, color: _border),
       ],
-    );
-  }
-
-  /// 顶部横幅：本色渐变 + 山水底纹 + 栏目图标 + 返回键。
-  Widget _buildBanner() {
-    final scale = widget.sect.icon.iconScale;
-    return SizedBox(
-      height: 150,
-      width: double.infinity,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  _tone.withValues(alpha: 0.20),
-                  _tone.withValues(alpha: 0.04),
-                ],
-              ),
-            ),
-          ),
-          Positioned(
-            right: -14,
-            bottom: -10,
-            child: Opacity(
-              opacity: 0.16,
-              child: Image.asset(
-                'assets/menpai/mih.png',
-                width: 168,
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-          Center(
-            child: Opacity(
-              opacity: 0.55,
-              child: SizedBox(
-                width: 78 * scale,
-                height: 78 * scale,
-                child: _buildSectIcon(),
-              ),
-            ),
-          ),
-          Positioned(
-            left: 8,
-            top: 8,
-            child: _buildBackButton(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBackButton() {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: () => Navigator.maybePop(context),
-        child: Container(
-          width: 36,
-          height: 36,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: _card.withValues(alpha: 0.88),
-            shape: BoxShape.circle,
-            border: Border.all(color: _border),
-          ),
-          child: Icon(Icons.chevron_left, size: 26, color: _text),
-        ),
-      ),
-    );
-  }
-
-  /// 栏目图标：与宗门菜单页同一套切图规则（法门走 assets/famen/、
-  /// 宗门走 assets/menpai/、律宗没有切图改手绘）。
-  Widget _buildSectIcon() {
-    final gate = widget.sect.icon.gateCode;
-    if (gate.isNotEmpty) {
-      final suffix = _isPlain ? '' : '2';
-      return Image.asset(
-        'assets/famen/$gate$suffix.png',
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-      );
-    }
-    final code = widget.sect.icon.assetCode;
-    if (code.isEmpty) {
-      return CustomPaint(
-        painter: GatePainter(
-          color: _isPlain ? const Color(0xFF000000) : kCommunityWarm,
-        ),
-      );
-    }
-    final suffix = _isPlain ? '1' : '2';
-    return Image.asset(
-      'assets/menpai/$code$suffix.png',
-      fit: BoxFit.contain,
-      filterQuality: FilterQuality.medium,
     );
   }
 
@@ -845,7 +738,7 @@ class _SectCommunityPageState extends State<SectCommunityPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (_joined) ...[
-                const Icon(Icons.check, size: 12, color: Color(0xFF5F7A62)),
+                const Icon(Icons.check, size: 12, color: kCommunityPlain),
                 const SizedBox(width: 2),
               ],
               Text(
@@ -1145,7 +1038,8 @@ class CommunityTag extends StatelessWidget {
         if (sect == null) return;
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => SectCommunityPage(sect: sect)),
+          MaterialPageRoute(
+              builder: (_) => SectDetailPage(sect: sect, initialTab: 1)),
         );
       },
       child: Container(

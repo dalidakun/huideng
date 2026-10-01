@@ -367,7 +367,7 @@ GATE_SPEC = [
         ],
     },
     {
-        "name": "观音法门",
+        "name": "观世音法门",
         "key": "guanyin",
         "desc": "消灾解厄，救难护身",
         "groups": [

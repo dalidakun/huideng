@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>{{NAME}}社区 · {{SITE_NAME}}</title>
+<meta name="description" content="{{DESC}}">
+<meta name="theme-color" content="#000000">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{SITE_NAME}}">
+<meta property="og:title" content="{{NAME}}社区 · {{SITE_NAME}}">
+<meta property="og:description" content="{{DESC}}">
+<meta property="og:image" content="{{BASE_URL}}/assets/icon.png">
+<meta property="og:url" content="{{BASE_URL}}/community/{{SLUG}}.html">
+<meta name="twitter:card" content="summary">
+<link rel="icon" type="image/png" href="../assets/icon.png">
+<link rel="apple-touch-icon" href="../assets/icon.png">
+<link rel="canonical" href="{{BASE_URL}}/community/{{SLUG}}.html">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  min-height: 100vh;
+  background: #000;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 56px 24px calc(140px + env(safe-area-inset-bottom));
+}
+.avatar {
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: #101010;
+  border: 1px solid #262626;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+.title {
+  margin-top: 26px;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  line-height: 1.35;
+}
+.subtitle {
+  margin-top: 10px;
+  font-size: 14px;
+  color: #9aa0a6;
+  letter-spacing: 0.3px;
+}
+.members {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+.members[hidden] { display: none; }
+.stack { display: flex; }
+.stack img {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #1a1a1a;
+  border: 2px solid #000;
+  margin-left: -9px;
+  display: block;
+}
+.stack img:first-child { margin-left: 0; }
+.count { font-size: 13px; color: #9aa0a6; letter-spacing: 0.3px; }
+.intro {
+  margin-top: 22px;
+  max-width: 420px;
+  font-size: 14.5px;
+  line-height: 1.85;
+  color: #c9cccf;
+  text-align: center;
+}
+.bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 28px 20px calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, rgba(0,0,0,0), #000 34%);
+}
+.cta {
+  display: block;
+  max-width: 420px;
+  height: 52px;
+  line-height: 52px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  font-size: 17px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  letter-spacing: 1px;
+}
+.cta:active { opacity: 0.82; }
+.foot {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #6b6f73;
+}
+.foot a { color: #8a8f94; text-decoration: none; }
+.foot a:active { color: #fff; }
+</style>
+</head>
+<body>
+
+<main class="page">
+  <div class="avatar"><img src="{{ICON}}" alt="{{NAME}}图标" width="132" height="132"></div>
+  <h1 class="title">{{NAME}}社区</h1>
+  <p class="subtitle">{{DESC}}</p>
+
+  <div class="members" id="members" hidden>
+    <span class="count" id="count"></span>
+    <span class="stack" id="stack"></span>
+  </div>
+
+  <p class="intro">{{INTRO}}</p>
+</main>
+
+<div class="bar">
+  <a class="cta" href="{{DOWNLOAD_HREF}}">打开 {{SITE_NAME}}</a>
+  <p class="foot"><a href="../index.html">{{SITE_NAME}} · 佛学学习与修行 App</a></p>
+</div>
+
+<script>
+(function () {
+  var API_URL = '{{API_URL}}';
+  var API_KEY = '{{API_KEY}}';
+  var COMMUNITY = '{{COMMUNITY_KEY}}';
+
+  // 头像 base64 按前缀猜 MIME（云上存的是裸 base64，没有 data: 前缀）。
+  function dataUri(b64) {
+    var mime = 'image/jpeg';
+    if (b64.indexOf('iVBOR') === 0) mime = 'image/png';
+    else if (b64.indexOf('R0lGOD') === 0) mime = 'image/gif';
+    else if (b64.indexOf('UklGR') === 0) mime = 'image/webp';
+    return 'data:' + mime + ';base64,' + b64;
+  }
+
+  function call(body) {
+    return fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + API_KEY,
+        'x-device-id': 'web'
+      },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    });
+  }
+
+  // 成员 = 本社区发过帖的人（去重），与 App 社区页同一口径；
+  // 最多翻 5 页 × 100 条，够当前 20 个社区用。
+  function loadAuthorIds() {
+    var ids = [];
+    var seen = {};
+    var page = 1;
+    function next() {
+      return call({
+        action: 'getPlazaNotes',
+        community: COMMUNITY,
+        page: page,
+        pageSize: 100,
+        sort: 'latest'
+      }).then(function (r) {
+        if (!r || !r.ok) throw new Error('bad response');
+        (r.notes || []).forEach(function (n) {
+          var id = n && n.ownerUserId;
+          if (id && !seen[id]) { seen[id] = 1; ids.push(id); }
+        });
+        if (r.hasMore && page < 5) { page += 1; return next(); }
+        return ids;
+      });
+    }
+    return next();
+  }
+
+  loadAuthorIds().then(function (ids) {
+    if (!ids.length) return;
+    var box = document.getElementById('members');
+    document.getElementById('count').textContent = ids.length + ' 位成员';
+    box.hidden = false;
+    return call({ action: 'getUserProfiles', ids: ids.slice(0, 5) }).then(function (r) {
+      if (!r || !r.ok) return;
+      var stack = document.getElementById('stack');
+      (r.users || []).forEach(function (u) {
+        if (!u || !u.avatar) return;
+        var img = document.createElement('img');
+        img.src = dataUri(String(u.avatar));
+        img.alt = u.name || '成员';
+        stack.appendChild(img);
+      });
+    });
+  }).catch(function () {
+    // 网关不可达（离线、非本站域名等）：整行藏起来，页面照常展示。
+    document.getElementById('members').hidden = true;
+  });
+})();
+</script>
+
+</body>
+</html>

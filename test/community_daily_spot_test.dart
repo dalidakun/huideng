@@ -79,7 +79,7 @@ void main() {
       final picked = pickRandomTopCommunity([
         _stat('禅宗社区', 3),
         _stat('天台宗社区', 7),
-        _stat('观音法门社区', 5),
+        _stat('观世音法门社区', 5),
       ]);
       expect(picked?.community, '天台宗社区');
     });
@@ -89,7 +89,7 @@ void main() {
         _stat('禅宗社区', 4),
         _stat('天台宗社区', 9),
         _stat('华严宗社区', 9),
-        _stat('观音法门社区', 2),
+        _stat('观世音法门社区', 2),
       ];
       final tied = {'天台宗社区', '华严宗社区'};
       for (var i = 0; i < 200; i++) {
