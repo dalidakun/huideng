@@ -106,7 +106,8 @@ void main() {
       await tester.pump();
 
       expect(find.text('宗派介绍'), findsOneWidget);
-      expect(find.text('念佛门'), findsOneWidget, reason: '别称显示在标题右侧');
+      // 示意图的卡头只有标题与居中的首节名，别称不再占位。
+      expect(find.text('念佛门'), findsNothing);
       for (final label in ['核心思想', '重要祖师', '修行方式', '历史地位']) {
         expect(find.text(label), findsOneWidget, reason: label);
       }
@@ -131,22 +132,25 @@ void main() {
 
       expect(find.text('法门介绍'), findsOneWidget);
       expect(find.text('宗派介绍'), findsNothing);
-      expect(find.text('忏悔法门'), findsOneWidget);
+      expect(find.text('忏悔法门'), findsNothing);
       for (final label in ['核心思想', '重要祖师', '修行方式', '历史地位']) {
         expect(find.text(label), findsOneWidget, reason: label);
       }
     });
 
-    testWidgets('无别称时标题照样贴左，与第一节对齐', (tester) async {
+    testWidgets('标题贴左，首节名浮在卡头正中', (tester) async {
       final profile = sectProfileOf(sectByIcon(SectIconKind.gmDizang))!;
       expect(profile.alias, isEmpty);
       await tester.pumpWidget(_host(profile, title: '法门介绍'));
       await tester.pump();
 
-      // 标题与第一节都在卡片内边距 14 处，不因没有别称而挪动。
-      final header = tester.getTopLeft(find.text('法门介绍'));
-      final block = tester.getTopLeft(find.text('核心思想'));
-      expect(header.dx, closeTo(block.dx, 14));
+      final card = tester.getRect(find.byType(SectProfileCard));
+      final title = tester.getTopLeft(find.text('法门介绍'));
+      final first = tester.getRect(find.text('核心思想'));
+      // 标题在卡内边距处（宿主 20 + 卡 16 + 竖杠 3 + 间距 8 ≈ 47），
+      // 首节名不占行宽，整段居中浮在卡头。
+      expect(title.dx, closeTo(47, 3));
+      expect(first.center.dx, closeTo(card.center.dx, 4));
     });
 
     testWidgets('二十栏介绍默认收起，展开后四节都在', (tester) async {

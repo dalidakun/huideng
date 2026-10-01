@@ -1,7 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'cloud_notes_service.dart';
+import 'note_store.dart';
 
 import 'app_palette.dart';
 Color get _card => AppPalette.p.card;
@@ -27,17 +26,11 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
   }
 
   Future<void> _loadTrash() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('trash_notes') ?? '[]';
+    final trash = await NoteStore.loadTrash();
     setState(() {
-      _trash = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
+      _trash = trash;
       _trash.sort((a, b) => b['deletedAt'].toString().compareTo(a['deletedAt'].toString()));
     });
-  }
-
-  Future<void> _saveTrash() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('trash_notes', jsonEncode(_trash));
   }
 
   Future<void> _restore(int index) async {
@@ -49,15 +42,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       } catch (_) {}
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('notes') ?? '[]';
-    final notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
-    final restored = Map<String, dynamic>.from(note)..remove('deletedAt');
-    notes.add(restored);
-    await prefs.setString('notes', jsonEncode(notes));
-
+    await NoteStore.restore((note['id'] ?? '').toString());
     setState(() => _trash.removeAt(index));
-    await _saveTrash();
   }
 
   Future<void> _deleteForever(int index) async {
@@ -84,8 +70,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       } catch (_) {}
     }
 
+    await NoteStore.purge((note['id'] ?? '').toString());
     setState(() => _trash.removeAt(index));
-    await _saveTrash();
   }
 
   Future<void> _clearAll() async {
@@ -115,8 +101,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
           } catch (_) {}
         }
       }
+      await NoteStore.purgeAll(copy.map((n) => (n['id'] ?? '').toString()));
       setState(() => _trash = []);
-      await _saveTrash();
     } finally {
       setState(() => _busy = false);
     }

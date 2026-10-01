@@ -43,6 +43,12 @@ temp_methods.txt
 lib/temp_methods.txt
 lib/temp_*.dart
 
+# 官网（site/）的构建产物，由 tools/build_site.py 生成，不入库。
+site/dist/
+
+# 官网图片：上面 *.png 全局忽略了，这里把 site/assets 下的图放回来。
+!site/assets/*.png
+
 # IDE
 .vscode/
 __pycache__/

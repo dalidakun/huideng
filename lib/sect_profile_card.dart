@@ -3,11 +3,18 @@ import 'package:flutter/material.dart';
 import 'app_palette.dart';
 import 'sect_profiles.dart';
 
+/// 经典区同款固定绿：小节竖杠、卡头竖杠、「展开全文」都用它，
+/// 米黄外观下也保持示意图里那套绿，不跟着金色 accent 走。
+const Color _kLabelGreen = Color(0xFF5D7C5A);
+
 /// 宗派/法门介绍卡：核心思想 / 重要祖师 / 修行方式 / 历史地位。
 ///
 /// 正文太长时默认只露一屏，其余折在「展开全文」后面——
 /// 收起与展开用的是同一套排版，字号行距一个字都不改。四节一次铺开要占掉小半屏，
 /// 往下翻经典之前先得滚过它，所以宁可先收着。正文行距比卷行松，因为这段是读的。
+///
+/// 卡头按示意图：左侧竖杠 + 「宗派介绍」，正中浮着首节小标题「核心思想」，
+/// 所以正文里核心思想不再单独出一行小标题，其余三节照常带竖杠。
 class SectProfileCard extends StatefulWidget {
   const SectProfileCard({
     super.key,
@@ -72,11 +79,21 @@ class _SectProfileCardState extends State<SectProfileCard> {
     final body = KeyedSubtree(
       key: _bodyKey,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 13, 14, 15),
+        padding: const EdgeInsets.fromLTRB(16, 13, 16, 15),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _block(p, '核心思想', text: profile.idea),
+            // 首节小标题在卡头正中（核心思想），正文不再重复出一行。
+            Text(
+              profile.idea,
+              style: TextStyle(
+                fontSize: 14.5,
+                color: p.text,
+                height: 1.85,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 13),
             _block(p, '重要祖师', lines: profile.masters),
             _block(p, '修行方式', text: profile.practice),
             _block(p, '历史地位', text: profile.history, last: true),
@@ -88,46 +105,52 @@ class _SectProfileCardState extends State<SectProfileCard> {
     return Container(
       decoration: BoxDecoration(
         color: p.card,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: p.borderSoft, width: 0.8),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A000000),
+            blurRadius: 9,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Stack(
               children: [
-                Icon(Icons.menu_book_outlined, size: 17, color: p.textHint),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.title,
-                    style: TextStyle(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w600,
-                      color: p.text,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                ),
-                // 禅宗没有别称，没有就不占位，标题照样贴左。
-                if (profile.alias.isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      profile.alias,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
+                Row(
+                  children: [
+                    Container(width: 3, height: 13, color: _kLabelGreen),
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.title,
                       style: TextStyle(
-                        fontSize: 11.5,
-                        color: p.textHint,
-                        letterSpacing: 0.2,
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w700,
+                        color: p.text,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ],
+                ),
+                // 首节名浮在卡头正中（示意图同款），与左侧标题互不占位。
+                Positioned.fill(
+                  child: Center(
+                    child: Text(
+                      '核心思想',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: p.text,
+                        letterSpacing: 1,
                       ),
                     ),
                   ),
-                ],
+                ),
               ],
             ),
           ),
@@ -153,33 +176,33 @@ class _SectProfileCardState extends State<SectProfileCard> {
     );
   }
 
-  /// 卡片底部「展开全文 / 收起」：只在正文超长时才有，样式跟着小节标题走。
+  /// 卡片底部「展开全文 / 收起」：只在正文超长时才有，绿色与小节竖杠同色。
   Widget _buildToggle(PaletteData p) {
     final expanded = _expanded;
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(14)),
         onTap: () => setState(() => _expanded = !expanded),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 9, 14, 11),
+          padding: const EdgeInsets.fromLTRB(16, 9, 16, 12),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
                 expanded ? '收起' : '展开全文',
-                style: TextStyle(
-                  fontSize: 12.5,
+                style: const TextStyle(
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: p.accentDeep,
+                  color: _kLabelGreen,
                   letterSpacing: 0.6,
                 ),
               ),
               const SizedBox(width: 2),
               Icon(
                 expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                size: 16,
-                color: p.accentDeep,
+                size: 17,
+                color: _kLabelGreen,
               ),
             ],
           ),
@@ -188,7 +211,7 @@ class _SectProfileCardState extends State<SectProfileCard> {
     );
   }
 
-  /// 一节：小标题用主色竖条（沿用译本小标题的语言，但换主色以示层级不同），
+  /// 一节：小标题用固定绿竖条（与经典区、示意图同一套语言），
   /// 正文与祖师列表同字号，行距放宽到 1.85。
   Widget _block(
     PaletteData p,
@@ -198,7 +221,7 @@ class _SectProfileCardState extends State<SectProfileCard> {
     bool last = false,
   }) {
     final body = TextStyle(
-      fontSize: 14,
+      fontSize: 14.5,
       color: p.text,
       height: 1.85,
       letterSpacing: 0.4,
@@ -210,14 +233,14 @@ class _SectProfileCardState extends State<SectProfileCard> {
         children: [
           Row(
             children: [
-              Container(width: 3, height: 12, color: p.accent),
+              Container(width: 3, height: 12, color: _kLabelGreen),
               const SizedBox(width: 8),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  color: p.accentDeep,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: p.text,
                   letterSpacing: 1.2,
                 ),
               ),

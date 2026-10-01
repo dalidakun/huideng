@@ -43,10 +43,10 @@ class UpdateInfo {
 class UpdateService {
   UpdateService._();
 
-  /// 版本检查接口地址（占位）：发布前请替换为真实静态托管域名，
-  /// 并把 release/version.json 与 download.html、APK 一起上传到对应路径。
+  /// 版本检查接口地址：CloudBase 静态托管上的 version.json。
+  /// 注意是 .tcloudbaseapp.com（可用），.tcb.qcloud.la 旧域名已失效（418）。
   static const String _checkUrl =
-      'https://randeng-d8gs968w22a3d98e8.tcb.qcloud.la/huideng/version.json';
+      'https://randeng-d8gs968w22a3d98e8-1461892767.tcloudbaseapp.com/huideng/version.json';
 
   /// 请求超时（秒）。
   static const int _timeoutSeconds = 8;

@@ -29,6 +29,7 @@ import 'user_avatar_cache.dart';
 import 'update_service.dart';
 import 'reading_badges.dart';
 import 'recent_sutras_page.dart';
+import 'sect_community_page.dart';
 import 'sect_detail_page.dart';
 import 'sect_page.dart';
 
@@ -909,6 +910,17 @@ class _MainPageState extends State<MainPage>
     );
   }
 
+  /// 社区入口：顶部展示位点「进入社区」时按社区标记（`${栏目名}社区`）
+  /// 反查栏目再进社区页；对不上（历史脏数据）直接忽略，不弹空页。
+  void _openSectCommunityByKey(String community) {
+    final sect = sectByCommunity(community);
+    if (sect == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => SectCommunityPage(sect: sect)),
+    );
+  }
+
   /// 切页时立即弹回菜单并重置滚动方向跟踪。
   void _revealNavBar() {
     _scrollDir = 0;
@@ -984,8 +996,12 @@ class _MainPageState extends State<MainPage>
       _AssistantTabPage(),
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
       // 底部「宗门」菜单：宗门列表页，左上头像滑出个人菜单。
-      // 点击宗门进本宗核心经典详情页。
-      SectPage(onOpenSideMenu: _openSideMenu, onOpen: _openSectDetail),
+      // 点击宗门进本宗核心经典详情页；顶部展示位点社区进该社区页。
+      SectPage(
+        onOpenSideMenu: _openSideMenu,
+        onOpen: _openSectDetail,
+        onOpenCommunity: _openSectCommunityByKey,
+      ),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
     ];

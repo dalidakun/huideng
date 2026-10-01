@@ -37,10 +37,13 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   Map<String, String> _displayNames = const {};
   // 经文榜条目的副标题（部类 · 共N卷）：目录就绪后构建。
   Map<String, String> _subtitles = const {};
-  // 每页 50 条，用户点击「查看更多」再展示下一页 50 条，
-  // 直到全部展示完。避免一次性渲染超长榜单。
-  static const int _pageStep = 50;
+  // 首屏渲染 30 条，向上滑到接近底部时自动续载下一批 30 条，直到全部展示完。
+  // 只影响「渲染多少条」，不影响数据：_items 始终是云端返回的完整榜单
+  // （每类最多 200 条），老条目不会被丢掉或随时间消失。
+  static const int _pageStep = 30;
   int _visibleCount = _pageStep;
+  // 距列表底部多少像素时触发续载，提前一点让追加几乎无感。
+  static const double _kLoadMoreThreshold = 400;
   bool _refreshing = false;
   // 滚动超过一屏后显示「回到顶部」小按钮。
   final ScrollController _scroll = ScrollController();
@@ -87,8 +90,20 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
   }
 
   void _onScroll() {
-    final show = _scroll.hasClients && _scroll.offset > 600;
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final show = pos.pixels > 600;
     if (show != _showBackToTop) setState(() => _showBackToTop = show);
+    // 滑到接近底部自动续载下一批，替代原来需要点的「查看更多」按钮。
+    if (pos.pixels >= pos.maxScrollExtent - _kLoadMoreThreshold) _loadMore();
+  }
+
+  /// 续载下一批 [_pageStep] 条。
+  /// 榜单是一次性从云端全量取回的（每类最多 200 条，已按累计热度降序），
+  /// 这里只把「渲染条数」往上加，不需要再发请求；等到 [_items] 全部渲染完就停。
+  void _loadMore() {
+    if (_visibleCount >= _items.length) return;
+    setState(() => _visibleCount += _pageStep);
   }
 
   void _backToTop() {
@@ -126,8 +141,8 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
       await NoteSutraCatalog.load(); // 确保经书目录（含多卷基础名）就绪
       final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
       final mvBases = NoteSutraCatalog.cachedMultiVolumeBases;
-      // 经文榜用「最近 30 天提及数」口径（广场帖 $经名 引用 + 经书讨论页讨论，
-      // 同一帖多次提及只算一次）；话题榜沿用互动热度榜。
+      // 经文榜用「累计提及数」口径（广场帖 $经名 引用 + 经书讨论页讨论，
+      // 同一帖多次提及只算一次）；话题榜沿用累计互动热度榜。两榜都不设时间窗口。
       final List<HotDiscussionItem> all;
       if (widget.isSutra) {
         final sutras = await CloudNotesService.instance.getHotSutraMentions();
@@ -308,9 +323,9 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                           color: _accent)),
                   const SizedBox(height: 3),
                   Text(
-                      widget.isSutra
-                          ? '近 30 天 · 共 $_totalLabel 项 · $_totalPosts讨论'
-                          : '近 14 天 · 共 $_totalLabel 项 · $_totalPosts讨论',
+                      // 两榜云端都按累计热度统计、不设时间窗口，所以不再显示
+                      // 「近 N 天」（旧话题榜的「近 14 天」是残留的过期文案）。
+                      '累计 · 共 $_totalLabel 项 · $_totalPosts讨论',
                       style: TextStyle(fontSize: 12, color: _textSec)),
                 ],
               ),
@@ -460,10 +475,11 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 当前可见条目数：取总条数与已展开页数中较小者。
+    // 当前可见条目数：取总条数与已续载批数中较小者。
     final visibleCount =
         _visibleCount < _items.length ? _visibleCount : _items.length;
-    final hasMore = visibleCount < _items.length;
+    // 榜单超过首批 30 条、且已经全部渲染完时才显示到底提示。
+    final showEndHint = visibleCount >= _items.length && _items.length > _pageStep;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -497,8 +513,9 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                     controller: _scroll,
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.only(top: 6, bottom: 24),
-                    // 1 个 header + 可见条目数 + (有更多时)1 个「查看更多」按钮。
-                    itemCount: visibleCount + 1 + (hasMore ? 1 : 0),
+                    // 1 个 header + 可见条目数 + (全部渲染完时)1 行到底提示。
+                    // 「还有更多」时不再占位——滑到接近底部会自动续载下一批。
+                    itemCount: visibleCount + 1 + (showEndHint ? 1 : 0),
                     itemBuilder: (context, i) {
                       if (i == 0) return _buildHeader();
                       final index = i - 1;
@@ -507,27 +524,13 @@ class _HotDiscussionListPageState extends State<HotDiscussionListPage> {
                         if (index < 3) return _buildTopCard(it, index);
                         return _buildPlainRow(it, index);
                       }
-                      // 「查看更多」按钮：展开下一页 50 条。
+                      // 到底提示：说明榜单已完整展示（含很早之前的老条目）。
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _accent,
-                            side:
-                                BorderSide(color: _accent.withValues(alpha: 0.4)),
-                            minimumSize: const Size.fromHeight(44),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                          onPressed: () {
-                            setState(() {
-                              _visibleCount = visibleCount + _pageStep;
-                            });
-                          },
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                        child: Center(
                           child: Text(
-                            '查看更多（剩 ${_items.length - visibleCount} 项）',
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w600),
+                            '已全部显示 · 共 ${_items.length} 项',
+                            style: TextStyle(fontSize: 12, color: _textHint),
                           ),
                         ),
                       );

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -6,6 +5,7 @@ import 'auth_service.dart';
 import 'loading_widgets.dart';
 import 'my_page.dart';
 import 'note_edit_page.dart';
+import 'note_store.dart';
 
 import 'app_palette.dart';
 Color get _bg => AppPalette.p.bg;
@@ -38,9 +38,7 @@ class _DraftsPageState extends State<DraftsPage> {
   Future<void> _load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes') ?? '[]';
-      final notes = (jsonDecode(raw) as List<dynamic>)
-          .cast<Map<String, dynamic>>()
+      final notes = (await NoteStore.load())
           .where((n) => n['shared'] != true)
           .toList()
         ..sort((a, b) => (b['updatedAt']?.toString() ?? '')
@@ -99,13 +97,7 @@ class _DraftsPageState extends State<DraftsPage> {
     if (ok != true || !mounted) return;
     final id = note['id']?.toString();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes') ?? '[]';
-      final list = (jsonDecode(raw) as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .where((n) => n['id']?.toString() != id)
-          .toList();
-      await prefs.setString('notes', jsonEncode(list));
+      await NoteStore.softDelete(note);
     } catch (_) {}
     if (!mounted) return;
     setState(() =>

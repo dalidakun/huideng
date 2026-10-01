@@ -1,0 +1,98 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{LEGAL_TITLE}} · {{SITE_NAME}}</title>
+<meta name="description" content="{{SITE_NAME}}{{LEGAL_TITLE}}全文。{{LEGAL_UPDATED}} 生效。">
+<meta name="theme-color" content="#FBFBFB">
+<meta name="robots" content="index,follow">
+<link rel="icon" type="image/png" href="assets/icon.png">
+<link rel="apple-touch-icon" href="assets/icon.png">
+<link rel="canonical" href="{{BASE_URL}}/{{LEGAL_SLUG}}.html">
+<link rel="stylesheet" href="assets/site.css?v={{ASSET_VER}}">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <img class="nav__logo" src="assets/icon.png" alt="" width="26" height="26">
+      <span>{{SITE_NAME}}</span>
+    </a>
+    <button class="nav__toggle" type="button" aria-label="打开菜单" aria-expanded="false" data-nav-toggle><span></span></button>
+    <ul class="nav__links" data-nav-links>
+      <li><a href="index.html">首页</a></li>
+      <li><a href="download.html">下载</a></li>
+      <li><a href="changelog.html">更新日志</a></li>
+      <li><a href="privacy.html"{{LEGAL_NAV_A}}>隐私政策</a></li>
+      <li><a href="terms.html"{{LEGAL_NAV_B}}>用户协议</a></li>
+      <li><a class="nav__cta" href="download.html">立即下载</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="main">
+  <div class="page-head">
+    <div class="container">
+      <h1>{{LEGAL_TITLE}}</h1>
+      <p>本页与 App 内展示的版本完全一致，如有更新以本页为准</p>
+    </div>
+  </div>
+
+  <section class="section">
+    <div class="container">
+      <article class="prose">
+        <span class="prose__updated">生效日期：{{LEGAL_UPDATED}}</span>
+        {{LEGAL_BODY}}
+      </article>
+      <div class="note" style="max-width:760px;margin:20px auto 0">
+        <b>有问题？</b>对本政策有疑问，或发现信息收集有疏漏，请发邮件至
+        <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>，我们会在 7 个工作日内回复。
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer__inner">
+      <div>
+        <div class="footer__brand">
+          <img src="assets/icon.png" alt="" width="24" height="24">
+          <span>{{SITE_NAME}}</span>
+        </div>
+        <p class="footer__about">{{TAGLINE}}</p>
+      </div>
+      <ul class="footer__links">
+        <li><a href="index.html">首页</a></li>
+        <li><a href="download.html">下载</a></li>
+        <li><a href="changelog.html">更新日志</a></li>
+      </ul>
+      <div class="footer__contact">
+        <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
+        <div>邮箱：{{CONTACT_EMAIL}}</div>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <span>© {{YEAR}} {{SITE_NAME}} · 经文内容依据公开流通的《大正新修大藏经》整理</span>
+      <span>{{PACKAGE_NAME}} · v{{VERSION}} ({{VERSION_CODE}})</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var toggle = document.querySelector('[data-nav-toggle]');
+  var links = document.querySelector('[data-nav-links]');
+  if (!toggle || !links) return;
+  toggle.addEventListener('click', function () {
+    var open = links.classList.toggle('is-open');
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
+import 'sect_community_page.dart';
 import 'sect_page.dart';
 import 'sect_profile_card.dart';
 import 'sect_profiles.dart';
@@ -12,13 +13,22 @@ import 'sutra_list_page.dart';
 const Color _kSectGreen = Color(0xFF5D7C5A);
 const Color _kEditionName = Color(0xFF1A1A1A);
 
-/// 文件夹切图边长与它到经名的间距；「几译本 · 几卷」副行按这个整体左缩进，
-/// 于是副行与经名的首字同一条竖线。
+/// 文件夹切图边长。
 const double _kFolderIconSize = 19;
-const double _kFolderIconGap = 8;
 
 /// 译本竖杠（3）+ 竖杠到题名的间距（8）：卷行按它左缩进，与译本题名首字对齐。
 const double _kEditionIndent = 11;
+
+/// 顶部水墨背景图 assets/menpai/bj.png（1376×561，按标题区裁短过一版），
+/// 山峰/叶脉是白底上的淡墨，直接压在页面底色上会露白块，
+/// 所以整体用页面底色做一次正片叠底（modulate），两种外观下都与页面无缝。
+const String _kHeaderBg = 'assets/menpai/bj.png';
+
+/// 高宽比 561/1376：标题区按原图比例取高，山峰与叶尖都不被裁掉。
+const double _kHeaderAspect = 561 / 1376;
+
+/// 顶部社区入口：胶囊底色与社区页 banner 同色（communityTone）。
+
 
 /// 展开中的经典文件夹专用阴影：比 App 常规卡片阴影略重，
 /// 经名文件夹可以同时展开多个，靠这层阴影就能一眼看出当前在读哪一部。
@@ -52,8 +62,28 @@ class _SectDetailPageState extends State<SectDetailPage> {
   /// 免得同名文件夹在不同宗门/法门下互相串状态。
   final Set<String> _expanded = <String>{};
 
+  /// 经典列表的滚动控制器：撑满一屏的经文文件夹展开后，
+  /// 上滑翻卷很难再摸回顶栏，右下角的「回到顶部」箭头就靠它复位。
+  final ScrollController _listScroll = ScrollController();
+
+  /// 「回到顶部」箭头的显隐：只有打开了文件夹且往下滑过一段才出现，默认隐藏。
+  bool _showBackToTop = false;
+
   /// 当前栏目的介绍；法门为 null（详情页据此跳过介绍块）。
   SectProfile? get _profile => sectProfileOf(widget.sect);
+
+  @override
+  void initState() {
+    super.initState();
+    _listScroll.addListener(_updateBackToTop);
+  }
+
+  @override
+  void dispose() {
+    _listScroll.removeListener(_updateBackToTop);
+    _listScroll.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(SectDetailPage oldWidget) {
@@ -61,6 +91,7 @@ class _SectDetailPageState extends State<SectDetailPage> {
     if (oldWidget.sect.name != widget.sect.name) {
       _expanded.clear();
       _future = SectSutraManifest.load();
+      _updateBackToTop();
     }
   }
 
@@ -68,6 +99,53 @@ class _SectDetailPageState extends State<SectDetailPage> {
     setState(() {
       if (!_expanded.remove(groupKey)) _expanded.add(groupKey);
     });
+    // 文件夹开合会改变内容长度，显隐跟着重算。
+    _updateBackToTop();
+  }
+
+  /// 「打开文件夹」与「上滑了一段」两个条件同时成立才露出箭头，
+  /// 停在顶部或所有文件夹都收起时保持隐藏。
+  void _updateBackToTop() {
+    final show =
+        _expanded.isNotEmpty && _listScroll.hasClients && _listScroll.offset > 60;
+    if (show != _showBackToTop) {
+      setState(() => _showBackToTop = show);
+    }
+  }
+
+  /// 回到顶部：与菩提空间右下角那颗箭头同一套样式与位置。
+  void _scrollToTop() {
+    if (_listScroll.hasClients && _listScroll.offset > 0) {
+      _listScroll.animateTo(0,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+  }
+
+  /// 42 圆钮 + top.png 白色上箭头，底色随外观切换（素白黑底 / 米黄青绿底）。
+  /// 底距比菩提空间那颗再抬高一截，避开底部手势条与页面下缘。
+  Widget _buildBackToTopButton() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 40),
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: FloatingActionButton(
+          onPressed: _scrollToTop,
+          heroTag: 'sect_detail_back_to_top',
+          backgroundColor: AppPalette.instance.isPlain
+              ? const Color(0xFF1A1A1A)
+              : const Color(0xFF71867A),
+          elevation: 8,
+          highlightElevation: 12,
+          shape: const CircleBorder(),
+          child: Image.asset(
+            'assets/images/top.png',
+            width: 21,
+            height: 21,
+          ),
+        ),
+      ),
+    );
   }
 
   void _openVolume(SectSutraVolume volume) {
@@ -89,62 +167,97 @@ class _SectDetailPageState extends State<SectDetailPage> {
     final p = AppPalette.p;
     return Scaffold(
       backgroundColor: p.bg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildTopBar(p),
-            Expanded(child: _buildBodyWithProgress(p)),
-          ],
-        ),
-      ),
+      // 文件夹展开、上滑一段后才露出；停在顶部时整颗按钮隐藏。
+      floatingActionButton:
+          _showBackToTop ? _buildBackToTopButton() : null,
+      body: SafeArea(child: _buildBodyWithProgress(p)),
     );
   }
 
-  /// 顶栏：返回键 + 宗名/法门名 + 副标题（其余菜单页无返回键，本页为二级页）。
-  Widget _buildTopBar(PaletteData p) {
+  /// 顶部标题区：水墨背景图铺满（降透明度让题字更清楚），返回键与社区入口浮在图上，
+  /// 宗派/法门名与副标题在图中留白处上下居中（示意图同款，旧的 46px 顶栏取消）。
+  /// 头部作为滚动区第一项，上滑时随内容一起移出屏幕，不固定在顶部。
+  Widget _buildHeader(PaletteData p) {
+    final width = MediaQuery.sizeOf(context).width;
+    // 竖屏取原图比例整幅铺开；横屏/宽屏按上下限截断，免得标题区吃掉半屏或被压扁。
+    final height = (width * _kHeaderAspect).clamp(140.0, 240.0);
     return SizedBox(
       width: double.infinity,
-      height: 46,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(
-          children: [
-            IconButton(
+      height: height,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColorFiltered(
+            colorFilter: ColorFilter.mode(p.bg, BlendMode.modulate),
+            child: Opacity(
+              opacity: 0.4,
+              child: Image.asset(
+                _kHeaderBg,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+          ),
+          Positioned(
+            top: 2,
+            left: 6,
+            child: IconButton(
               onPressed: () => Navigator.pop(context),
-              icon: Icon(Icons.arrow_back_ios_new, size: 18, color: p.primary),
+              icon: const Icon(Icons.arrow_back_ios_new,
+                  size: 20, color: Color(0xFF1A1A1A)),
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
             ),
-            const SizedBox(width: 6),
-            Text(
-              widget.sect.name,
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                color: p.primary,
-                letterSpacing: 1.5,
+          ),
+          // 题字压在图中留白带（原图 x512~896、y208~456 全白）并上下居中，
+          // 左右山与叶子不抢字，读起来最清爽。
+          Positioned(
+            left: 24,
+            right: 24,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 名字长的栏目（如「普贤行愿法门 · 核心经典」）等比缩小，不出横向滚动。
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      '${widget.sect.name} · 核心经典',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: p.text,
+                        letterSpacing: 1.5,
+                        height: 1.2,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    widget.sect.desc,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: Color(0xFF9E9588),
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 6),
-            const Text(
-              '·',
-              style: TextStyle(
-                color: Color(0xFF9E9588),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                '核心经典',
-                style: TextStyle(color: p.textSec, fontSize: 12),
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+          ),
+          // 「xx社区」挪到图右下角，与左上角返回键成对角；边距取 12，
+          // 与图缘、题字块都留出呼吸位，不压居中的题字。
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: _buildCommunityEntry(p),
+          ),
+        ],
       ),
     );
   }
@@ -174,8 +287,9 @@ class _SectDetailPageState extends State<SectDetailPage> {
       future: _future,
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
-          return Center(
-            child: SizedBox(
+          return _headerShell(
+            p,
+            SizedBox(
               width: 22,
               height: 22,
               child: CircularProgressIndicator(strokeWidth: 1.2, color: p.textHint),
@@ -183,86 +297,210 @@ class _SectDetailPageState extends State<SectDetailPage> {
           );
         }
         if (snap.hasError) {
-          return _buildMessage(p, '经典清单加载失败');
+          return _headerShell(p, _buildMessage(p, '经典清单加载失败'));
         }
         final manifest = snap.data ?? SectSutraManifest.empty;
         final data = manifest.byName(widget.sect.name);
         if (data == null || data.groups.isEmpty) {
-          return _buildMessage(p, '核心经典整理中');
+          return _headerShell(p, _buildMessage(p, '核心经典整理中'));
         }
         return _buildBody(p, data);
       },
     );
   }
 
-  /// 概览在前、介绍次之，之后才是经典文件夹。
+  /// 加载/提示态同样把头部放进滚动区：上滑时背景图随内容一起走，不钉在顶部。
+  Widget _headerShell(PaletteData p, Widget child) {
+    return ListView(
+      controller: _listScroll,
+      padding: const EdgeInsets.only(bottom: 28),
+      children: [
+        _buildHeader(p),
+        SizedBox(height: 200, child: Center(child: child)),
+      ],
+    );
+  }
+
+  /// 头部整幅出血；其余条目自带左右边距，与旧版列表边距一致。
+  Widget _pad(Widget child) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: child,
+      );
+
+  /// 头部在最前随页滚动，统计条次之、介绍再次，之后才是经典文件夹。
   Widget _buildBody(PaletteData p, SectSutraSect sect) {
     final profile = _profile;
-    // 有介绍时头部占两格（概览 + 介绍），否则只有概览。
+    // 有介绍时占两格（统计条 + 介绍），否则只有统计条；第 0 格固定给标题图。
     final head = profile == null ? 1 : 2;
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(20, 6, 20, 28),
-      itemCount: sect.groups.length + head,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      controller: _listScroll,
+      padding: const EdgeInsets.only(bottom: 28),
+      itemCount: sect.groups.length + head + 1,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
-        if (index == 0) return _buildSummary(p, sect);
-        if (profile != null && index == 1) {
-          return SectProfileCard(
+        if (index == 0) return _buildHeader(p);
+        if (index == 1) return _pad(_buildStatsBar(p, sect));
+        if (profile != null && index == 2) {
+          return _pad(SectProfileCard(
             profile: profile,
             title: widget.sect.kind == SectMenuKind.gate ? '法门介绍' : '宗派介绍',
-          );
+          ));
         }
-        return _buildGroup(p, sect.groups[index - head]);
+        return _pad(_buildGroup(p, sect.groups[index - 1 - head]));
       },
     );
   }
 
-  /// 概览：经典文件夹数、译本数、分卷数、总字数。
-  Widget _buildSummary(PaletteData p, SectSutraSect sect) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  /// 统计条：经典 / 译本 / 卷 / 字数四项。四项等宽均分铺满整行，右端不再空一块；
+  /// 项多字长（如「24.6 万字」）时单项等比缩小，宁可小一号也不折行。
+  Widget _buildStatsBar(PaletteData p, SectSutraSect sect) {
+    final plain = AppPalette.instance.isPlain;
+    final bg =
+        plain ? const Color(0xFFF2F2F2) : const Color(0xFFEFE8DC);
+    final fg = plain ? const Color(0xFF3C3C3C) : const Color(0xFF4A3F35);
+    // 四项前面的图标：素白外观用墨绿，米黄外观用暖金。
+    final icon = plain ? _kSectGreen : const Color(0xFFD09D66);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
         children: [
-          Text(
-            widget.sect.desc,
-            style: TextStyle(
-              fontSize: 12.5,
-              color: p.textSec,
-              height: 1.8,
-              letterSpacing: 0.4,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${sect.groups.length} 部经典 · ${sect.totalEditions} 译本 · '
-            '${sect.totalVolumes} 卷 · ${_formatWords(sect.totalWords)}',
-            style: TextStyle(fontSize: 12, color: p.textHint, letterSpacing: 0.3),
-          ),
+          _statCell(_statItem(
+              fg, icon, Icons.layers_outlined, '${sect.groups.length} 部经典')),
+          _statDot(fg),
+          _statCell(_statItem(fg, icon, Icons.menu_book_outlined,
+              '${sect.totalEditions} 译本')),
+          _statDot(fg),
+          _statCell(_statItem(
+              fg, icon, Icons.book_outlined, '${sect.totalVolumes} 卷')),
+          _statCell(Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 1, height: 13, color: fg.withValues(alpha: 0.35)),
+              const SizedBox(width: 6),
+              _wordsGlyph(icon),
+              const SizedBox(width: 5),
+              Text(
+                _formatWords(sect.totalWords),
+                style:
+                    TextStyle(fontSize: 11.5, color: fg, letterSpacing: 0.2),
+              ),
+            ],
+          )),
         ],
       ),
     );
   }
 
+  /// 单项指标占四分之一行宽：四项均分、内容居中，超宽时等比缩放不溢出。
+  Widget _statCell(Widget child) => Expanded(
+        child: FittedBox(fit: BoxFit.scaleDown, child: child),
+      );
+
+  Widget _statItem(Color fg, Color icon, IconData iconData, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(iconData, size: 14, color: icon),
+        const SizedBox(width: 5),
+        Text(label,
+            style: TextStyle(fontSize: 11.5, color: fg, letterSpacing: 0.2)),
+      ],
+    );
+  }
+
+  Widget _statDot(Color fg) => Container(
+        width: 3,
+        height: 3,
+        decoration:
+            BoxDecoration(color: fg.withValues(alpha: 0.45), shape: BoxShape.circle),
+      );
+
+  /// 「字数」小徽标：描边方框里一个「字」，与示意图第四个图标一致。
+  Widget _wordsGlyph(Color fg) {
+    return Container(
+      width: 14,
+      height: 14,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        border: Border.all(color: fg, width: 1.2),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text('字',
+          style: TextStyle(fontSize: 8.5, color: fg, height: 1.0)),
+    );
+  }
+
+  /// 右下角「进入社区」入口：浅色本色胶囊（本宗名 + ›），与左上角返回键成对角。
+  /// 底色取 communityTone 再向白色提亮三成——原色在水墨图上压得太重；
+  /// 提亮后白字对比不够，字与箭头改用本页正文色，社区页 banner 仍用原色。
+  Widget _buildCommunityEntry(PaletteData p) {
+    final tone = Color.lerp(
+        communityTone(AppPalette.instance.isPlain), Colors.white, 0.30)!;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _openCommunity,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+        decoration: BoxDecoration(
+          color: tone,
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: tone.withValues(alpha: 0.35),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${widget.sect.name}社区',
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: p.text,
+                letterSpacing: 0.5,
+              ),
+            ),
+            Icon(Icons.chevron_right, size: 16, color: p.text),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 进入该宗门/法门的社区页。
+  void _openCommunity() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => SectCommunityPage(sect: widget.sect)),
+    );
+  }
+
   /// 一个经典文件夹：折叠时是经名，展开后按译本分区列出分卷。
+  /// 收起态与示意图一致——图标、经名/副行、右侧居中的下箭头同一行。
   Widget _buildGroup(PaletteData p, SectSutraGroup group) {
     final open = _expanded.contains(group.key);
     return Container(
       decoration: BoxDecoration(
         color: p.card,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: p.borderSoft, width: 0.8),
-        // 展开的那一个给一层阴影：经名文件夹可以同时展开多个，
+        // 展开的那一个阴影更重：经名文件夹可以同时展开多个，
         // 收起时全靠阴影就能一眼看出当前在看哪一部。
-        boxShadow: open
-            ? const [
-                BoxShadow(
-                  color: _kActiveShadow,
-                  blurRadius: _kActiveShadowBlur,
-                  offset: _kActiveShadowOffset,
-                ),
-              ]
-            : null,
+        boxShadow: [
+          BoxShadow(
+            color: open ? _kActiveShadow : const Color(0x0A000000),
+            blurRadius: open ? _kActiveShadowBlur : 9,
+            offset: open ? _kActiveShadowOffset : const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -270,51 +508,45 @@ class _SectDetailPageState extends State<SectDetailPage> {
           Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(14),
               onTap: () => _toggle(group.key),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-                // 图标、经名、折叠箭头同一行（Row 默认垂直居中），
-                // 「几译本 · 几卷」退到第二行并左对齐经名，不再把图标拽偏。
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        _buildFolderIcon(),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
+                    _buildFolderIcon(),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
                             group.name,
                             style: TextStyle(
-                              fontSize: 15.5,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.w700,
                               color: p.text,
                               letterSpacing: 0.8,
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        AnimatedRotation(
-                          turns: open ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 180),
-                          child:
-                              Icon(Icons.expand_more, size: 20, color: p.textHint),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Padding(
-                      padding: const EdgeInsets.only(
-                          left: _kFolderIconSize + _kFolderIconGap),
-                      child: Text(
-                        _groupMeta(group),
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: p.textHint,
-                          letterSpacing: 0.2,
-                        ),
+                          const SizedBox(height: 5),
+                          // 副行与经名首字同一条竖线（Column 对齐，不再靠缩进补）。
+                          Text(
+                            _groupMeta(group),
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: p.textHint,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    AnimatedRotation(
+                      turns: open ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: Icon(Icons.expand_more,
+                          size: 22, color: p.textHint),
                     ),
                   ],
                 ),

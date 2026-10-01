@@ -10,7 +10,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'note_store.dart';
 import 'reading_badges.dart';
+import 'record_index.dart';
 import 'reading_time_service.dart';
 import 'sutra_asset_path.dart';
 
@@ -29,6 +31,11 @@ class SyncService with WidgetsBindingObserver {
 
   /// 拉取应用后 +1，供主页面监听并刷新（修学/我的）。
   final ValueNotifier<int> dataVersion = ValueNotifier<int>(0);
+
+  /// 最近一次推送失败的原因（null 表示当前一切正常）。
+  /// 以前这里只有一个 `catch (_) {}`：云端停在旧版本、用户毫无察觉，
+  /// 直到卸载重装才发现数据丢了。现在把原因暴露出来供「我的」页提示。
+  final ValueNotifier<String?> lastError = ValueNotifier<String?>(null);
 
   Timer? _timer;
   String? _lastPushedJson;
@@ -178,6 +185,13 @@ class SyncService with WidgetsBindingObserver {
         final changed = await _applyCloud(cloud);
         if (changed) dataVersion.value++;
       }
+      // 笔记走独立的 userNotes 通道，顺序很重要：先补传本地未上传的改动，
+      // 再从云端拉回来覆盖本地。反过来的话，本地离线期的新内容会被云端
+      // 旧版本覆盖掉——用户会看到「刚写的笔记自己变了回去」。
+      await NoteStore.sync();
+      // 时间线同理：先推本地（换机后本地是空的，推空等于靠下面的拉取恢复），
+      // 再拉云端条目补进本地索引。
+      await RecordIndex.instance.syncToCloud();
       _fullSyncPending = false;
     } catch (_) {
       // 网络失败：保留 pending 标记，周期任务会持续重试拉取，避免本地数据覆盖云端。
@@ -578,13 +592,33 @@ class SyncService with WidgetsBindingObserver {
     try {
       final payload = await _collect();
       final jsonStr = jsonEncode(payload);
-      if (jsonStr == _lastPushedJson) return;
-      try {
-        await CloudNotesService.instance.setUserData(payload);
-        _lastPushedJson = jsonStr;
-      } catch (_) {
-        // 失败静默，等待下次周期推送。
+      if (jsonStr == _lastPushedJson) {
+        // prefs 没变，但笔记与时间线走独立通道，仍要推一次脏队列。
+        await NoteStore.flush();
+        await RecordIndex.instance.syncToCloud();
+        return;
       }
+      try {
+        final res = await CloudNotesService.instance.setUserData(payload);
+        _lastPushedJson = jsonStr;
+        // 超大 key 被云端跳过：这些数据这次没上云，下次也传不上去。
+        // 不提示的话用户会以为已经备份，直到卸载才发现数据停在很久以前。
+        final skipped = res.skippedKeys;
+        if (skipped.isNotEmpty) {
+          lastError.value =
+              '${skipped.length} 项数据过大未能备份：${skipped.take(3).join('、')}';
+        }
+      } on CloudApiException catch (e) {
+        // 静默失败是最糟的一种失败：用户以为一直在备份，实际云端副本早已
+        // 停在旧版本。至少把原因记下来，供「我的」页提示。
+        lastError.value = '数据备份失败：${e.message}';
+      } catch (e) {
+        lastError.value = '数据备份失败';
+      }
+      // 笔记与时间线走 userNotes / userRecords 独立通道
+      //（不受 setUserData 体积限制），单独推。
+      await NoteStore.flush();
+      await RecordIndex.instance.syncToCloud();
     } finally {
       _pushBusy = false;
       if (_pendingPush) {

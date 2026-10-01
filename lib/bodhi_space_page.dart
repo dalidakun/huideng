@@ -19,6 +19,8 @@ import 'note_sutra_links.dart';
 import 'hot_discussion_list_page.dart';
 import 'post_rich_content.dart';
 import 'sutra_list_page.dart';
+import 'custom_tab_store.dart';
+import 'sect_community_page.dart';
 
 import 'app_palette.dart';
 Color get _gold => AppPalette.p.accent;
@@ -36,6 +38,26 @@ const Map<String, String> _plazaTabMeta = {
   'follow': '关注',
 };
 
+/// 自定义列表/设置面板里每行行首的前缀：经文 `$`、话题 `#`、
+/// 社区一枚本色小图标（跟社区页的星标/加入按钮同一套本色，颜色即身份）。
+Widget customItemGlyph(CustomTabItem it, {double size = 15}) {
+  if (it.isCommunity) {
+    return Icon(
+      Icons.people_alt_outlined,
+      size: size + 1,
+      color: communityTone(AppPalette.instance.isPlain),
+    );
+  }
+  return Text(
+    it.isSutra ? r'$' : '#',
+    style: TextStyle(
+      fontSize: size,
+      fontWeight: FontWeight.w600,
+      color: it.isSutra ? const Color(0xFF71867A) : const Color(0xFFcf9e66),
+    ),
+  );
+}
+
 /// 每个广场栏目的笔记流缓存：切换栏目时不重新拉取，直接展示已缓存内容，
 /// 离开栏目时后台预取，回到栏目时数据已经就绪。
 class _PlazaFeedCache {
@@ -44,35 +66,6 @@ class _PlazaFeedCache {
   bool hasMore = true;
   bool initial = true;
   bool error = false;
-}
-
-/// 自定义工具栏的单个条目：经文（$，可带卷标）或话题（#）。
-class _CustomToolbarItem {
-  final bool isSutra;
-  final String name;
-  final String path;
-
-  const _CustomToolbarItem({
-    required this.isSutra,
-    required this.name,
-    this.path = '',
-  });
-
-  Map<String, dynamic> toJson() => {
-        'type': isSutra ? 'sutra' : 'topic',
-        'name': name,
-        'path': path,
-      };
-
-  static _CustomToolbarItem? fromJson(Map<String, dynamic> e) {
-    final name = (e['name'] ?? '').toString().trim();
-    if (name.isEmpty) return null;
-    return _CustomToolbarItem(
-      isSutra: e['type'] == 'sutra',
-      name: name,
-      path: (e['path'] ?? '').toString(),
-    );
-  }
 }
 
 /// 笔记是否来自被屏蔽用户：作者本人被屏蔽，或转发源作者被屏蔽，一律不展示。
@@ -132,7 +125,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   /// 自定义工具栏：栏目名（默认「列表」，可改名）+ 经文/话题条目（数量不限），
   /// 点击工具栏上的自定义栏目向下展开列表，点击条目进入对应讨论页。
   String _customTabName = '列表';
-  List<_CustomToolbarItem> _customItems = const [];
+  List<CustomTabItem> _customItems = const [];
   bool _customTabOpen = false;
   /// 自定义面板悬浮层：锚定在工具栏下边缘（LayerLink 跟随滚动），
   /// 以 OverlayEntry 盖在帖子流上方，而不是占位把内容挤下去。
@@ -161,12 +154,13 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   /// 有未读公告：右上角公告图标显示实体圆点角标（打开公告页即视为已读）。
   bool _hasUnreadAnnouncement = false;
   static const int _feedPageSize = 20;
-  /// 讨论栏目顶部的热门话题 / 热门经文（云端聚合，客户端经文取 8 个、话题取 4 个做当日轮换）。
+  /// 讨论栏目顶部的热门话题 / 热门经文（云端按累计热度聚合降序返回）。
+  /// 卡片上把全部条目铺出来显示，「更多」全量榜页复用同一份数据。
   List<HotDiscussionItem> _hotTopics = [];
   List<HotDiscussionItem> _hotSutras = [];
-  /// 全量热门榜（top50）：供「更多」页展示完整的经文/话题热度排行。
-  List<HotDiscussionItem> _hotTopicAll = [];
-  List<HotDiscussionItem> _hotSutraAll = [];
+  /// 热门榜是否已成功拉取过一次：用于区分「未就绪（加载中/请求失败）」与
+  /// 「确实一条都没有」。前者不渲染热门块避免占位闪烁，后者渲染一行引导文案。
+  bool _hotLoaded = false;
   /// 热门经文的基础经名 → 显示名（含卷标），用于热门榜胶囊显示。
   Map<String, String> _hotSutraDisplayNames = const {};
   /// 「热门/推荐/关注」新帖提醒：后台静默统计新帖数量，只更新「X条新帖子」提醒条，
@@ -177,9 +171,15 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   int _newPostCount = 0;
   /// 滚动到顶部提醒条被隐藏时，是否显示悬浮的「显示X帖子」按钮。
   bool _showNewPostPill = false;
-  /// 顶部栏目栏完全滚出视口时，右下角按钮切为「回到顶部」：
-  /// 样式与添加笔记一致，仅白色图标不同；栏目栏再次露出时恢复添加笔记。
+  /// 右下角按钮形态：按滚动方向切换——往下滑显示「回到顶部」，往上调显示「新建笔记」。
+  /// 两者外观完全一致，仅白色图标不同；滑到最顶部时强制回到「新建笔记」，
+  /// 这样滑到列表最底部也能直接新建笔记，不用先滚回顶部。
   bool _fabBackToTop = false;
+  /// 判定滚动方向的基准偏移量：与当前位置差值累计到 [_kFabDirDelta] 才切形态，
+  /// 抗手指微抖与惯性滚动末端回弹造成的图标闪烁。
+  double _fabRefOffset = 0;
+  /// 切换右下角按钮形态所需的最小位移（像素）。
+  static const double _kFabDirDelta = 6;
   /// _loadFeed 重入闸门：防止点击「显示X帖子」时双击重入，
   /// 或后台轮询新帖与点击触发的加载同时跑导致请求/状态错乱。
   bool _feedRefreshing = false;
@@ -231,6 +231,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     _feedScroll.addListener(_onFeedScroll);
     final tabOrderFuture = _loadTabOrder();
     unawaited(_loadCustomTab());
+    // 列表可能在别处被改（社区页的星标），改完立刻重读，本页永远是新列表。
+    CustomTabStore.revision.addListener(_onCustomTabRevision);
     _loadFeed();
     // 静默拉取公告列表：只用于右上角公告图标的「新公告」角标判定。
     unawaited(_loadAnnouncements());
@@ -304,6 +306,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     NoteStatsCenter.instance.lastReplyPosted
         .removeListener(_onLocalReplyPosted);
     WidgetsBinding.instance.removeObserver(this);
+    CustomTabStore.revision.removeListener(_onCustomTabRevision);
     _newPostTimer?.cancel();
     _newPostTimer = null;
     // 页面销毁时移除自定义悬浮面板，避免 OverlayEntry 泄漏。
@@ -570,10 +573,14 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       _tabCaches.putIfAbsent(tab, _PlazaFeedCache.new);
 
   /// 拉取讨论栏目的热门话题 / 热门经文。
-  /// 话题沿用云端互动热度榜；经文榜改用「最近 30 天提及数」口径：
+  /// 话题沿用云端累计互动热度榜；经文榜改用「累计提及数」口径：
   /// 广场帖 $经名 引用 + 经书讨论页讨论，同一帖多次提及只算一次，提及越多越热。
-  /// 轮换规则：前 N 名按当天日期确定性跳过少数几个 + 其余名次补足，
-  /// 当天内稳定、跨天变化，避免永远同一批。经文名需命中经书目录才展示。
+  /// 两榜云端都不设时间窗口、也不做时间衰减（时间只作为有界乘数），
+  /// 长期没有新讨论时名次保持稳定、条目照常显示，不会退化或消失。
+  /// 展示规则：_hotTopics / _hotSutras 保留云端返回的完整热度序（每类最多 200 条），
+  /// 卡片只按 [_kHotRow]×2 取前 8 个渲染、不做任何按天跳过，「更多」页复用同一份全量数据。
+  /// 所以很久没有新讨论、后面一条新的都没有时，前 8 个名额依然由历史上的老条目
+  /// 填满，两行始终有内容。经文名需命中经书目录才展示。
   Future<void> _loadHotDiscussions() async {
     try {
       await NoteSutraCatalog.load(); // 确保经书目录就绪，过滤有效经名
@@ -583,8 +590,6 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       final sutras = await sutrasFuture;
       final titleMap = NoteSutraCatalog.cachedTitleMap ?? const {};
       final mvBases = NoteSutraCatalog.cachedMultiVolumeBases;
-      final now = DateTime.now();
-      final daySeed = now.year * 10000 + now.month * 100 + now.day;
       // 多卷经书按卷拆分：「地藏菩萨本愿经卷一」「卷二」各成一条，卷拆分前的
       // 历史讨论与不带卷标的引用并入卷一，使榜单「提及X次」与点进对应卷讨论页
       // 看到的条数一致；传目录经名做最长前缀归一，让云端贪心提取的「经名+粘连
@@ -603,42 +608,16 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
           : topics.where((t) => !bans.contains(t.name)).toList();
       if (!mounted) return;
       setState(() {
-        // 经文两行 4+4（top14 内轮换）、话题一行 4 个（top10 内轮换），全量榜留给「更多」页。
-        _hotTopics = _pickHotItems(validTopics.take(10).toList(), 4, daySeed);
-        _hotSutras = _pickHotItems(validSutras.take(14).toList(), 8, daySeed);
+        // 全部条目按热度顺序直接展示，「更多」页复用同一份数据。
+        _hotTopics = validTopics;
+        _hotSutras = validSutras;
         _hotSutraDisplayNames = sutraDisplayNames;
-        _hotTopicAll = validTopics;
-        _hotSutraAll = validSutras;
+        _hotLoaded = true;
       });
     } catch (_) {
-      // 热门榜失败静默降级：只展示最新讨论列表。
+      // 热门榜失败静默降级：只展示最新讨论列表。_hotLoaded 保持 false，
+      // 热门块不渲染，避免把「加载失败」误显示成「还没有热门讨论」。
     }
-  }
-
-  /// 当日确定性轮换取 count 个：前 count 名按 seed 跳过 count~/3 个，
-  /// 再由第 count 名以后补足剩余名额；总量不足时全部展示，避免「有 1 个却显示没有」。
-  static List<T> _pickHotItems<T>(List<T> list, int count, int daySeed) {
-    if (list.isEmpty) return const [];
-    if (list.length <= count) return List.of(list);
-    final first = list.sublist(0, count);
-    final rest = list.sublist(count);
-    final picked = <T>[];
-    // 跳过位按 seed 确定、互不重合。
-    final skip = count ~/ 3;
-    final offset = daySeed % count;
-    final stride = 1 + daySeed % (count - 1);
-    final skips = <int>{
-      for (var i = 0; i < skip; i++) (offset + i * stride) % count
-    };
-    for (var i = 0; i < first.length; i++) {
-      if (skips.contains(i)) continue;
-      picked.add(first[i]);
-    }
-    // 其余名次补足剩余名额（不足时有多少取多少）。
-    for (var i = 0; i < skip && i < rest.length; i++) {
-      picked.add(rest[(offset + i) % rest.length]);
-    }
-    return picked;
   }
 
   /// 把当前正在展示的栏目内容快照进缓存，供切换栏目后恢复。
@@ -859,14 +838,21 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     }
   }
 
-  /// 顶部栏（头像 + 标题 + 公告）高度：上内边距 6 + 头像高 32 + 下内边距 10。
-  double get _topBarHeight => 6 + 32 + 10;
-
-  /// 计算右下角按钮形态：顶部栏（头像/标题）完全滚出视口、
-  /// 工具栏吸顶后切为「回到顶部」，滚回顶部时恢复「添加笔记」。
+  /// 按滚动方向切换右下角按钮形态：页面往下滑（内容上移）显示「回到顶部」，
+  /// 往上调显示「新建笔记」；滑到最顶部时永远保持「新建笔记」。
+  /// 只认累计位移 [_kFabDirDelta] 以上的手势/惯性滚动，慢速微调不切图标。
   void _updateFabMode() {
     if (!_feedScroll.hasClients) return;
-    final backToTop = _feedScroll.offset >= _topBarHeight;
+    final offset = _feedScroll.position.pixels;
+    if (offset <= 0) {
+      _fabRefOffset = 0;
+      if (_fabBackToTop) setState(() => _fabBackToTop = false);
+      return;
+    }
+    final moved = offset - _fabRefOffset;
+    if (moved.abs() < _kFabDirDelta) return;
+    _fabRefOffset = offset;
+    final backToTop = moved > 0;
     if (backToTop != _fabBackToTop) {
       setState(() => _fabBackToTop = backToTop);
     }
@@ -1116,32 +1102,32 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     _onTabChanged(i);
   }
 
-  /// 加载自定义工具栏配置（栏目名 + 经文/话题条目）。
+  /// 加载自定义工具栏配置（栏目名 + 经文/话题/社区条目）。
+  /// 数据只有一份：[CustomTabStore]，和社区页的星标共用。
   Future<void> _loadCustomTab() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('plaza_custom_tab');
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final m = jsonDecode(raw) as Map<String, dynamic>;
-      final name = (m['name'] ?? '').toString().trim();
-      final items = (m['items'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(_CustomToolbarItem.fromJson)
-          .whereType<_CustomToolbarItem>()
-          .toList();
-      if (!mounted) return;
-      setState(() {
-        // 老版本默认叫「自定义」，已存的配置里留着这个名字的按新默认「列表」显示。
-        _customTabName =
-            (name.isEmpty || name == '自定义') ? '列表' : name;
-        _customItems = items;
-      });
-    } catch (_) {}
+    final m = await CustomTabStore.read();
+    final items = (m['items'] as List<dynamic>)
+        .whereType<Map<String, dynamic>>()
+        .map(CustomTabItem.fromJson)
+        .whereType<CustomTabItem>()
+        .toList();
+    if (!mounted) return;
+    final name = (m['name'] ?? '').toString().trim();
+    setState(() {
+      // 老版本默认叫「自定义」，已存的配置里留着这个名字的按新默认「列表」显示。
+      _customTabName = (name.isEmpty || name == '自定义') ? '列表' : name;
+      _customItems = items;
+    });
+    // 面板正展开时列表被别处改了，同步刷新悬浮层内容。
+    _customPanelEntry?.markNeedsBuild();
   }
+
+  /// 列表在别处被改（社区页星标/移出）时的回调：立刻重读，切回本页即是新列表。
+  void _onCustomTabRevision() => unawaited(_loadCustomTab());
 
   /// 保存自定义工具栏配置并更新工具栏（条目为空时收起自定义栏目）。
   Future<void> _saveCustomTab(
-      String name, List<_CustomToolbarItem> items) async {
+      String name, List<CustomTabItem> items) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
         'plaza_custom_tab',
@@ -1182,10 +1168,12 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
 
   /// 拉取自定义面板每条目的最新讨论数（经文=经书讨论总数，话题=话题下帖子总数），
   /// 完成后刷新悬浮层。计数键与打开讨论页时的口径保持一致。
+  /// 社区没有「讨论总数」这个口径，直接留空（面板上就不显示计数）。
   Future<void> _loadCustomCounts() async {
-    final items = List<_CustomToolbarItem>.from(_customItems);
+    final items = List<CustomTabItem>.from(_customItems);
     final results = await Future.wait<int?>(items.map((it) async {
       try {
+        if (it.isCommunity) return null;
         if (it.isSutra) {
           final (base, path) = resolveHotSutraTarget(it.name);
           final key = sutraDisplayTitleWithPath(
@@ -1209,7 +1197,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     for (var i = 0; i < items.length; i++) {
       final c = results[i];
       if (c == null) continue;
-      _customCounts['${items[i].isSutra ? 's' : 't'}:${items[i].name}'] = c;
+      _customCounts[items[i].countKey] = c;
     }
     _customPanelEntry?.markNeedsBuild();
   }
@@ -1225,9 +1213,22 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   /// 避免面板残留在其他页面上方。
   void closeCustomPanel() => _closeCustomPanel();
 
-  /// 点击自定义列表条目：经文进对应经书讨论页，话题进话题页。
-  void _openCustomItem(_CustomToolbarItem it) {
+  /// 点击自定义列表条目：经文进对应经书讨论页，话题进话题页，
+  /// 社区进该栏目的社区页（由社区名反查栏目，对不上就提示一下）。
+  void _openCustomItem(CustomTabItem it) {
     _closeCustomPanel();
+    if (it.isCommunity) {
+      final sect = sectByCommunity(it.name);
+      if (sect == null) {
+        showPostToast(context, '这个社区已经不在了');
+        return;
+      }
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => SectCommunityPage(sect: sect)),
+      );
+      return;
+    }
     if (it.isSutra) {
       final (base, path) = resolveHotSutraTarget(it.name);
       Navigator.push(
@@ -1278,8 +1279,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                 children: [
                   for (final it in _customItems)
                     Builder(builder: (ctx2) {
-                      final count =
-                          _customCounts['${it.isSutra ? 's' : 't'}:${it.name}'];
+                      final count = _customCounts[it.countKey];
                       return InkWell(
                         onTap: () => _openCustomItem(it),
                         child: Padding(
@@ -1287,13 +1287,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                               horizontal: 16, vertical: 12),
                           child: Row(
                             children: [
-                              Text(it.isSutra ? r'$' : '#',
-                                  style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: it.isSutra
-                                          ? const Color(0xFF71867A)
-                                          : const Color(0xFFcf9e66))),
+                              customItemGlyph(it, size: 15),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(it.name,
@@ -1398,7 +1392,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     if (panelWasOpen) _closeCustomPanel();
     // 目录预热不阻塞面板打开；检索时 search() 内部会自行等待目录就绪。
     unawaited(NoteSutraCatalog.load());
-    var items = List<_CustomToolbarItem>.from(_customItems);
+    var items = List<CustomTabItem>.from(_customItems);
     var searchSeq = 0;
     var sheetOpen = true; // 弹窗关闭后，未完成的搜索回调不得再 setSheet
     var trigger = ''; // 当前触发符：$ 经文 / # 话题，空表示未进入检索
@@ -1442,8 +1436,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       });
     }
 
-    void tryAdd(StateSetter setSheet, _CustomToolbarItem it) {
-      if (items.any((e) => e.isSutra == it.isSutra && e.name == it.name)) {
+    void tryAdd(StateSetter setSheet, CustomTabItem it) {
+      if (items.any((e) => e.type == it.type && e.name == it.name)) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('已经添加过了')));
         return;
@@ -1478,7 +1472,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                 trigger == '#' ? queryCtrl.text.substring(1).trim() : '';
             final canCreateTopic = topicQuery.isNotEmpty &&
                 !topicResults.contains(topicQuery) &&
-                !items.any((e) => !e.isSutra && e.name == topicQuery);
+                !items.any((e) => e.isTopic && e.name == topicQuery);
             return Padding(
               padding:
                   EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
@@ -1530,13 +1524,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Text(it.isSutra ? r'$' : '#',
-                                        style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                            color: it.isSutra
-                                                ? const Color(0xFF71867A)
-                                                : const Color(0xFFcf9e66))),
+                                    customItemGlyph(it, size: 14),
                                     const SizedBox(width: 4),
                                     ConstrainedBox(
                                       constraints: const BoxConstraints(
@@ -1617,9 +1605,9 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                 ...sutraResults.map((s) => InkWell(
                                       onTap: () => tryAdd(
                                           setSheet,
-                                          _CustomToolbarItem(
-                                              isSutra: true,
-                                              name: s.title,
+                                              CustomTabItem(
+                                                  type: 'sutra',
+                                                  name: s.title,
                                               path: s.filePath)),
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
@@ -1666,8 +1654,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                 InkWell(
                                   onTap: () => tryAdd(
                                       setSheet,
-                                      _CustomToolbarItem(
-                                          isSutra: false, name: topicQuery)),
+                                      CustomTabItem(
+                                          type: 'topic', name: topicQuery)),
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 4, vertical: 9),
@@ -1694,8 +1682,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                 ...topicResults.map((t) => InkWell(
                                       onTap: () => tryAdd(
                                           setSheet,
-                                          _CustomToolbarItem(
-                                              isSutra: false, name: t)),
+                                      CustomTabItem(
+                                          type: 'topic', name: t)),
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 4, vertical: 9),
@@ -1844,7 +1832,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
           width: 42,
           height: 42,
           child: FloatingActionButton(
-            // 工具栏整行滚出视口后：按钮变为「回到顶部」；样式与添加笔记一致，仅图标不同。
+            // 按滚动方向切换：往下滑显示「回到顶部」，往上调显示「新建笔记」，
+            // 两个图标淡入淡出交接，滑到最底部也能直接新建笔记。
             onPressed: _fabBackToTop
                 ? scrollToTop
                 : () => Navigator.push(
@@ -1859,12 +1848,26 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
             elevation: 8,
             highlightElevation: 12,
             shape: const CircleBorder(),
-            child: Image.asset(
-              _fabBackToTop
-                  ? 'assets/images/top.png'
-                  : 'assets/images/write.png',
-              width: 21,
-              height: 21,
+            // 淡出旧图标 + 淡入放大新图标，避免滚动中图标硬切显得突兀。
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.72, end: 1).animate(anim),
+                  child: child,
+                ),
+              ),
+              child: Image.asset(
+                _fabBackToTop
+                    ? 'assets/images/top.png'
+                    : 'assets/images/write.png',
+                key: ValueKey(_fabBackToTop),
+                width: 21,
+                height: 21,
+              ),
             ),
           ),
         ),
@@ -2221,12 +2224,50 @@ if (_feedAuthDead) {
     );
   }
 
-  /// 热门栏目顶部的热门卡片，三行布局：
-  /// 第一行 4 个经文；第二行 4 个经文 + 「更多经文」入口；
-  /// 第三行 4 个话题 + 「更多话题」入口。整块无标题文案、无边框线条。
-  /// 数据未就绪（加载中/失败）时返回 null 不渲染，避免占位闪烁。
+  /// 热门卡片每行胶囊数：经文/话题各两行，共 8 个名额。
+  static const int _kHotRow = 4;
+
+  /// 热门栏目顶部的热门卡片，四行布局（经文两行、话题两行）：
+  /// 第一行前 4 个热门经文；第二行后 4 个热门经文 +「更多经文」入口；
+  /// 第三行前 4 个热门话题；第四行后 4 个热门话题 +「更多话题」入口。
+  /// 整块无标题文案、无边框线条。
+  ///
+  /// 名额按云端累计热度顺序从榜首往下取，**不做按天跳过**：云端已改成累计热度、
+  /// 不设时间窗口也不做时间衰减，所以哪怕很久没有新讨论、后面一条新的都没有，
+  /// 这 8 个名额依然由历史上那些老条目填满，两行始终有内容，不会退化或空掉。
+  /// 超出 8 个的部分收进「更多」全量榜。
+  ///
+  /// 未就绪（加载中/请求失败）时返回 null 不渲染，避免占位闪烁；
+  /// 已就绪但两榜确实都为空（全新无历史数据）时改为渲染一行引导文案，
+  /// 而不是静默消失，让用户知道热门榜不是坏了而是真的还没有内容。
   Widget? _buildHotCardSliver() {
-    if (_hotTopics.isEmpty && _hotSutras.isEmpty) return null;
+    if (!_hotLoaded) return null;
+    if (_hotTopics.isEmpty && _hotSutras.isEmpty) {
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            alignment: Alignment.center,
+            child: Text(
+              '还没有热门讨论\n发布带 #话题 或 \$经名 的帖子，就会出现在这里',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: _textSec,
+                height: 1.7,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    final sutraMore = _hotSutras.isEmpty
+        ? null
+        : () => _openHotListPage(isSutra: true, title: '热门经文讨论');
+    final topicMore = _hotTopics.isEmpty
+        ? null
+        : () => _openHotListPage(isSutra: false, title: '热门话题讨论');
     return SliverToBoxAdapter(
       child: Padding(
         // 与顶部栏目栏贴近：top 4。横向不留边距：
@@ -2241,32 +2282,32 @@ if (_feedAuthDead) {
             children: [
               // 第一行：前 4 个热门经文（绿色系），第一个经文用火把替换 $ 前缀。
               _buildHotChips(
-                _hotSutras.take(4).toList(),
+                _hotSutras.take(_kHotRow).toList(),
                 isSutra: true,
                 showFirstFire: true,
               ),
               const SizedBox(height: 10),
-              // 第二行：后 4 个热门经文 + 「更多经文」入口。
+              // 第二行：后 4 个热门经文 +「更多经文」入口。
               _buildHotChips(
-                _hotSutras.skip(4).toList(),
+                _hotSutras.skip(_kHotRow).take(_kHotRow).toList(),
                 isSutra: true,
                 moreLabel: '更多经文',
-                onMore: _hotSutraAll.isEmpty
-                    ? null
-                    : () => _openHotListPage(
-                        isSutra: true, title: '热门经文讨论'),
+                onMore: sutraMore,
               ),
               const SizedBox(height: 10),
-              // 第三行：4 个热门话题（金色系）+ 「更多话题」入口，第一个话题用火把替换 # 前缀。
+              // 第三行：前 4 个热门话题（金色系），第一个话题用火把替换 # 前缀。
               _buildHotChips(
-                _hotTopics,
+                _hotTopics.take(_kHotRow).toList(),
+                isSutra: false,
+                showFirstFire: true,
+              ),
+              const SizedBox(height: 10),
+              // 第四行：后 4 个热门话题 +「更多话题」入口。
+              _buildHotChips(
+                _hotTopics.skip(_kHotRow).take(_kHotRow).toList(),
                 isSutra: false,
                 moreLabel: '更多话题',
-                showFirstFire: true,
-                onMore: _hotTopicAll.isEmpty
-                    ? null
-                    : () => _openHotListPage(
-                        isSutra: false, title: '热门话题讨论'),
+                onMore: topicMore,
               ),
             ],
           ),
@@ -2275,10 +2316,10 @@ if (_feedAuthDead) {
     );
   }
 
-  /// 打开「更多」全量热门榜页面：按讨论帖子数从多到少排列。
+  /// 打开「更多」全量热门榜页面：按热度分从高到低排列。
   /// 返回后刷新热门榜与当前栏目（管理员可能删除了话题）。
   void _openHotListPage({required bool isSutra, required String title}) {
-    final items = isSutra ? _hotSutraAll : _hotTopicAll;
+    final items = isSutra ? _hotSutras : _hotTopics;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -2296,7 +2337,8 @@ if (_feedAuthDead) {
   }
 
   /// 热门胶囊行：一行横滑展示（最多 4 个胶囊，可带「更多」入口），
-  /// 字数较多时左右滑动查看，不换行截断、不撑高卡片。
+  /// 字数较多时左右滑动查看，不换行、不撑高卡片——所以无论榜单多长，
+  /// 卡片始终是固定的四行，不会变成一堵胶囊墙。
   /// 本行没有胶囊时：有「更多」入口就只渲染入口，否则整行收起。
   /// [showFirstFire] 为 true 时第一个胶囊用火把图标替换 $/# 前缀。
   Widget _buildHotChips(List<HotDiscussionItem> items,

@@ -106,10 +106,12 @@ const app = cloudbase.init(buildInitOptions());
 
 // 热门讨论聚合结果缓存（内存级，仅热实例间共享）：15 分钟内不重复全表扫描。
 let hotDiscussionsCache = null;
-// 菩提空间热门经文榜缓存：最近 30 天 $提及 计数，15 分钟 TTL。
+// 菩提空间热门经文榜缓存：累计 $提及 计数（不设时间窗口），15 分钟 TTL。
 let hotSutraMentionsCache = null;
 // 大家都在读：全平台锁定精读经书热度缓存。
 let popularSutrasCache = null;
+// 宗门菜单页顶部展示位：某时间窗内各栏目社区的发帖数（按 since-until 分键），10 分钟 TTL。
+let communityDailyTopCache = null;
 
 async function resolveUid(event, context) {
   // 1) 客户端显式传入的 access token → 官方接口解析调用者
@@ -495,6 +497,21 @@ exports.main = async (event, context) => {
   const readingParagraphNotes = db.collection("readingParagraphNotes");
   // 管理员编辑的经文：按 id（规范 ID，如 T01n0031_001）唯一，存最新排版与版本时间戳。
   const sutraEdits = db.collection("sutraEdits");
+  // 用户私有笔记（独立笔记 + 回收站）：一条笔记一个文档。
+  // 与 userData 那个「所有 prefs 塞进一个文档」的存储彻底分开，单文档体积
+  // 上限只约束单条笔记，不再随笔记条数线性增长，也就不会再撞上体积上限。
+  const userNotes = db.collection("userNotes");
+  // 用户时间线（画线 / 感想 / 笔记三类记录）：一条记录一个文档，recId 用
+  // 客户端已有的稳定 id（h|经名|段|start|end、t|经名|段、n|<笔记id>）。
+  // readingParagraphNotes 只能按 sutraKey 查单部经，做不了「本用户全部经
+  // 按时间排」的全局视图，故时间线需要独立集合承载。
+  const userRecords = db.collection("userRecords");
+
+  // setUserData 的两个体积阈值。
+  // 单 key 上限：宽松到足以放过 notes 这类正常的大 key（迁移期它还在
+  // userData 里），只拦真正失控的 key；整包上限：平台单文档 16M，留足余量。
+  const _maxPrefKeyChars = 3 * 1024 * 1024;
+  const _maxUserDataChars = 6 * 1024 * 1024;
 
   // 确保 aiTranslations 集合存在。
   async function ensureAiTranslations() {
@@ -512,6 +529,48 @@ exports.main = async (event, context) => {
     } catch (e) {
       // 已存在或其它错误均忽略。
     }
+  }
+
+  // 确保 userNotes 集合存在。
+  async function ensureUserNotes() {
+    try {
+      await db.createCollection("userNotes");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 确保 userRecords 集合存在。
+  async function ensureUserRecords() {
+    try {
+      await db.createCollection("userRecords");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 稳定的文档 id：客户端 recId / noteId 形态多样（含「|」「$经名」与中文），
+  // 直接拼进 Mongo 文档 id 不安全（不能含 . 与 $），统一取 sha1 十六进制。
+  // 同样的 (uid, kind, rawId) 永远得到同一个 id，批量 upsert 因此幂等，
+  // 迁移重跑也不会产生重复文档。
+  function stableDocId(uid, kind, rawId) {
+    return crypto
+      .createHash("sha1")
+      .update(String(uid) + "|" + kind + "|" + String(rawId))
+      .digest("hex");
+  }
+
+  // 并发受限的批量写：node-sdk 没有跨文档批量接口，按小组并发避免打爆配额。
+  // 迁移几千条笔记时靠它把耗时压到可接受范围。
+  async function writeDocsInBatches(col, entries, groupSize) {
+    const size = Math.max(1, groupSize || 20);
+    let written = 0;
+    for (let i = 0; i < entries.length; i += size) {
+      const slice = entries.slice(i, i + size);
+      await Promise.all(slice.map((e) => col.doc(e.id).set(e.data)));
+      written += slice.length;
+    }
+    return written;
   }
 
   // 确保 notes（菩提空间帖子）集合存在。
@@ -891,10 +950,14 @@ exports.main = async (event, context) => {
 
       case "createNote": {
         if (!uid) return fail("unauthorized");
+        // 栏目社区页发的帖：记下所属社区，列表按它过滤即可，
+        // 正文不用再塞 #话题 前缀（那样会被当成话题帖进话题榜）。
+        const community = String(event.community || "").trim().slice(0, 50);
         const res = await notes.add({
           ownerUserId: uid,
           title: String(event.title || "无标题").slice(0, 100),
           content: String(event.content || ""),
+          ...(community ? { community } : {}),
           visibility: event.visibility === "private" ? "private" : "public",
           authorName: String(event.authorName || "同修").slice(0, 30),
           likeCount: 0,
@@ -1052,6 +1115,10 @@ exports.main = async (event, context) => {
               options: "",
             })
           : null;
+        // 可选社区过滤（栏目社区页专用）：只返回 community 字段精确命中的帖子，
+        // 与话题过滤可以叠加，也可以单独使用。
+        const rawCommunity = String(event.community || "").trim().slice(0, 50);
+        const communityFilter = rawCommunity || null;
         const base = notes.where(
           Object.assign(
             {
@@ -1059,7 +1126,8 @@ exports.main = async (event, context) => {
               status: "normal",
               kind: _.neq("announcement"),
             },
-            topicFilter ? { content: topicFilter } : {}
+            topicFilter ? { content: topicFilter } : {},
+            communityFilter ? { community: communityFilter } : {}
           )
         );
 
@@ -1095,9 +1163,10 @@ exports.main = async (event, context) => {
           // 若热门池不足三页（冷清时段），放宽到 7 天、再放宽到 30 天兜底，保证热门榜有内容。
           // 话题模式例外：带该话题的帖子总量有限，直接全量扫描（不限时间窗），
           // 冷清的老话题也能完整展示历史帖，再按同一套热度衰减公式排序。
+          // 社区同理：一个社区的帖子量本来就小，全量扫描才排得全。
           const hotPoolMin = 60;
           let all = [];
-          if (topicFilter) {
+          if (topicFilter || communityFilter) {
             let skip = 0;
             while (true) {
               const r = await base
@@ -1341,6 +1410,131 @@ exports.main = async (event, context) => {
         });
       }
 
+      // 宗门菜单页顶部展示位：统计「前一天」各栏目社区的发帖数，
+      // 返回按发帖数降序的社区列表（最多 20 个，正好是八大宗派 + 十二法门），
+      // 每个社区附一条该时间窗内最热的帖子，供卡片直接展示其内容。
+      // 并列第一（发帖数相同）时不做取舍：客户端在并列者里随机挑一个展示。
+      // 只统计 community 字段非空的公开帖（社区页发出的帖），广场普通帖不计入。
+      case "getCommunityDailyTop": {
+        const nowMs = Date.now();
+        const until = Number(event.until) || nowMs;
+        const since = Number(event.since) || until - 24 * 3600000;
+        // 只接受 0~7 天的窗口，防止这个接口被拿去当全表统计用。
+        const span = until - since;
+        if (!(span > 0) || span > 7 * 24 * 3600000) return fail("bad_range");
+        const cacheKey = `${since}-${until}`;
+        if (
+          communityDailyTopCache &&
+          communityDailyTopCache.key === cacheKey &&
+          nowMs - communityDailyTopCache.at < 10 * 60 * 1000
+        ) {
+          return ok({ ...communityDailyTopCache.data, cached: true });
+        }
+
+        // community 用 _.gt("") 而不是 _.neq("")：字段缺失的广场帖在 $ne 语义下
+        // 也会被匹配上（缺失即「不等于空串」），$gt 则不会，连锁住查询范围。
+        // 循环里再兜一次 trim 判空，两处都不依赖对方的数据库语义。
+        const base = notes.where({
+          visibility: "public",
+          status: "normal",
+          kind: _.neq("announcement"),
+          community: _.gt(""),
+          createdAt: _.gte(since).and(_.lt(until)),
+        });
+        let all = [];
+        let skip = 0;
+        // 一天内的社区帖量很小，1000 一批翻完即可；20000 封底兜住异常膨胀。
+        while (skip < 20000) {
+          const r = await base.skip(skip).limit(1000).get();
+          const batch = r.data || [];
+          all.push(...batch);
+          if (batch.length < 1000) break;
+          skip += 1000;
+        }
+
+        // 与广场同款：屏蔽过的用户，其帖子不进入展示位。
+        let blocked = [];
+        if (uid) {
+          try {
+            const br = await blocks.where({ blockerId: uid }).limit(1000).get();
+            blocked = br.data.map((r) => r.blockedId);
+          } catch (e) {}
+        }
+        const visible = blocked.length
+          ? all.filter(
+              (n) =>
+                n.ownerUserId === uid ||
+                (!blocked.includes(n.ownerUserId) &&
+                  !(
+                    n.repostSourceUserId &&
+                    blocked.includes(n.repostSourceUserId)
+                  ))
+            )
+          : all;
+
+        // 当窗内的互动热度：与 getPlazaNotes 热门榜同一套权重
+        //（阅读 +1、赞×3、评论×5、转发×8）。时间衰减在同一天内差异很小，
+        // 省略掉，这样「谁更热」完全由互动量决定，不会被发帖时间带偏。
+        const engagementOf = (n) =>
+          (n.viewCount || 0) +
+          (n.likeCount || 0) * 3 +
+          (n.commentCount || 0) * 5 +
+          (n.repostCount || 0) * 8;
+
+        const groups = new Map();
+        for (const n of visible) {
+          const community = String(n.community || "").trim();
+          if (!community) continue;
+          let g = groups.get(community);
+          if (!g) {
+            g = { community, posts: 0, best: null, bestScore: -1 };
+            groups.set(community, g);
+          }
+          g.posts += 1;
+          const score = engagementOf(n);
+          const bestCreatedAt = (g.best && g.best.createdAt) || 0;
+          // 热度相同取更晚发的那条，同分时的展示结果也确定。
+          if (
+            score > g.bestScore ||
+            (score === g.bestScore && (n.createdAt || 0) > bestCreatedAt)
+          ) {
+            g.bestScore = score;
+            g.best = n;
+          }
+        }
+        const ranked = [...groups.values()].sort(
+          (a, b) => b.posts - a.posts || b.bestScore - a.bestScore
+        );
+        // 展示位只需要标题/正文/作者/互动数，正文截断到 200 字即可，
+        // 避免把整篇长文搬上接口。
+        const spotNote = (n, community) =>
+          n
+            ? {
+                id: String(n._id || n.id || ""),
+                community,
+                title: String(n.title || "").slice(0, 100),
+                content: String(n.content || "").slice(0, 200),
+                authorName: String(n.authorName || ""),
+                ownerUserId: String(n.ownerUserId || ""),
+                likeCount: n.likeCount || 0,
+                commentCount: n.commentCount || 0,
+                viewCount: n.viewCount || 0,
+                createdAt: n.createdAt || 0,
+              }
+            : null;
+        const communities = ranked.slice(0, 20).map((g) => ({
+          community: g.community,
+          posts: g.posts,
+          note: spotNote(g.best, g.community),
+        }));
+        const notesOut = communities.map((c) => c.note).filter(Boolean);
+        await attachAuthorAccounts(notesOut);
+        await attachAuthorVerified(notesOut);
+        const data = { communities, updatedAt: nowMs };
+        communityDailyTopCache = { at: nowMs, key: cacheKey, data };
+        return ok(data);
+      }
+
       // 讨论页热门榜：聚合公开帖子中的 #话题 与 $经名 引用热度，
       // 返回全量话题 + 全量经文（最多各 200 条；客户端卡片取前几名做当日轮换，「更多」页展示全榜）。
       case "getHotDiscussions": {
@@ -1369,11 +1563,14 @@ exports.main = async (event, context) => {
           const br = await topicBans.limit(1000).get();
           bannedTopics = new Set((br.data || []).map((r) => String(r.name || "")));
         } catch (e) {}
-        // 不再按时间窗口截断（旧逻辑只统计最近 14 天，导致 14 天没新帖的话题
+        // 不按时间窗口截断（旧逻辑只统计最近 14 天，导致 14 天没新帖的话题
         // 整体掉出榜单、「更多」页时有时无）。改为全量扫描最新 cap 条公开帖子，
-        // 所有出现过的话题/经文都稳定在榜；排序仍由互动量 + 时间衰减决定。
+        // 所有出现过的话题/经文都稳定在榜，长时间没有新讨论也不会消失。
+        // 排序由「累计互动热度」决定，时间只作为一个有界乘数参与（见
+        // aggregateRecord 里的公式），保证老热门的名次不会被时间稀释掉。
         // 单条记录对热度榜的贡献（话题帖、经书讨论都复用同款聚合逻辑）：
-        // - ageHours 小（新发布）且 engagement 越高，得分越高；
+        // - engagement 越高（累计互动越多）得分越高；新帖额外乘一个随时间
+        //   收敛到 1 的有界系数，保证老热门不被稀释、同时新帖仍有机会上榜；
         // - 经书讨论（sutraDiscussions）只按 sutraTitle 字段计入对应经书——
         //   讨论正文里提到的其它 $经名 不计入（那条讨论不会出现在被提及经书的
         //   讨论页），content 中的 #话题 仍按话题帖一样计分；
@@ -1388,15 +1585,19 @@ exports.main = async (event, context) => {
         };
         const aggregateRecord = (createdAt, likeCount, viewCount, commentCount, repostCount, /* 话题扫描文本 */ topicText, /* 经书讨论专属 */ sutraTitle, /* 经文引用扫描文本（仅正文） */ sutraText) => {
           const ageHours = Math.max(0, (nowMs - (createdAt || nowMs)) / 3600000);
+          // 热度按「累计互动量」统计，不做时间窗口截断，时间也不进分母：
+          // 出现一次即计 4 点基础热度，再叠加各互动量加权。
           const engagement =
+            4 +
             (viewCount || 0) +
             (likeCount || 0) * 3 +
             (commentCount || 0) * 5 +
             (repostCount || 0) * 8;
-          // 得分完全由互动量驱动：0 互动 → 0 分（垫底显示，保证新话题/经书仍在总榜但排在后面），
-          // 有互动 → 按互动量除以时间衰减因子，新互动比老互动更值钱。
-          // 不再用 (1 + engagement)：避免 0 互动的新帖凭"新鲜度"白拿 ~0.4 分冲到前三。
-          const score = engagement / Math.pow(ageHours + 2, 1.3);
+          // 新鲜度只作为一个有界乘数：刚发布最高 4 倍（1 + 6/2），随小时数
+          // 增长迅速收敛到 1。这样老热门的累计热度不会被时间稀释掉（不会像
+          // 旧公式那样被 /Math.pow(ageHours+2, 1.3) 压到 0、退化成纯时间排序），
+          // 长期没有新讨论时榜单名次也保持稳定；新帖仍能凭新鲜度挤进榜。
+          const score = engagement * (1 + 6 / (ageHours + 2));
           // 经书讨论：直接以 sutraTitle 字段计入经文榜（正文不再重复计 $经名）。
           if (sutraTitle) {
             const s = String(sutraTitle).trim();
@@ -1499,6 +1700,9 @@ exports.main = async (event, context) => {
                 d.content || "", // 正文里的 #话题 仍计入话题榜
                 d.sutraTitle || "",
                 null // 讨论正文里的 $经名 不再重复计入经文榜（与讨论页展示口径一致）
+                // 注：经书讨论没有浏览/评论/转发数，engagement 只由「4 点基础
+                // 热度 + 赞×3」构成，不会是 0 分——只出现在经书讨论里的 #话题
+                // 也能正常进榜（旧公式下无赞即 0 分，永远垫底）。
               );
             }
             if (sBatch.length < 1000 || sdScanned >= sdCap) break;
@@ -1529,19 +1733,22 @@ exports.main = async (event, context) => {
         return ok(data);
       }
 
-      // 菩提空间热门经文榜：只统计最近 30 天的「提及」，规则与经书讨论页展示口径一致：
+      // 菩提空间热门经文榜：按「累计提及数」统计，不设时间窗口，
+      // 规则与经书讨论页展示口径一致：
       // - 广场帖子正文里的 $经名/@经名 引用（识别规则与客户端 referencesSutra 相同），
       //   同一帖子多次提及同一经书只算一次（按帖去重）；
       // - 经书讨论页里发布的每条讨论（sutraDiscussions）算对该经书的一次提及
       //   （讨论自动挂在其 sutraTitle 下，讨论正文里的其它 $经名 不重复计入）；
       // - 阅读页右下角发出的笔记本质是带 $经名 的广场帖，已包含在第一条里。
-      // 只要有 1 次提及就入榜；提及次数越多热度越高，score 即提及次数。
+      // 只要有 1 次提及就入榜；提及次数越多热度越高，score 即累计提及次数。
+      // 不设窗口是为了让榜单常驻：早期最冷的 30 天里若没人发新讨论，旧逻辑
+      // 会让整张经文榜清空、经文行直接从界面消失。改为扫全库最新记录后，
+      // 只要历史上被提及过一次就一直在榜，长期没有新讨论也照常显示。
       case "getHotSutraMentions": {
         const nowMs = Date.now();
         if (hotSutraMentionsCache && nowMs - hotSutraMentionsCache.at < 15 * 60 * 1000) {
           return ok({ ...hotSutraMentionsCache.data, cached: true });
         }
-        const windowStart = nowMs - 30 * 24 * 3600 * 1000;
         const sutraRe = /[@$]([^\s#$，。！？,;:!?（）()@[\]]+)/g;
         const sutraBeforeRe = /[0-9A-Za-z\u4e00-\u9fa5]/;
         const mentions = new Map(); // name -> { posts, last }
@@ -1551,12 +1758,15 @@ exports.main = async (event, context) => {
           if ((createdAt || 0) > cur.last) cur.last = createdAt || 0;
           mentions.set(name, cur);
         };
-        // 广场帖子：30 天窗口内的公开帖，正文含 $经名 引用即计一次（按帖去重）。
+        // 广场帖子：公开帖按 createdAt 倒序扫，正文含 $经名 引用即计一次（按帖去重）。
+        // 不加时间窗口条件，扫描量与旧实现一致（最多 mentionCap 条），
+        // 查询形状也与 getHotDiscussions 的 hotBase 完全同形，复用同一复合索引。
+        // 边界：全库公开帖超过 mentionCap 后，最老的帖子扫不到，其经书
+        // 若近期无新提及就不会入榜——这是为「成本零增加」刻意接受的取舍。
         const mentionBase = notes.where({
           visibility: "public",
           status: "normal",
           kind: _.neq("announcement"),
-          createdAt: _.gte(windowStart),
         });
         const mentionCap = 10000;
         let mScanned = 0;
@@ -1592,6 +1802,7 @@ exports.main = async (event, context) => {
           mSkip += 1000;
         }
         // 经书讨论页的讨论：每条讨论算对其 sutraTitle 的一次提及。
+        // 同样去掉时间窗口，只按 createdAt 倒序扫，扫描量上限 dCap 不变。
         try {
           await ensureSutraDiscussions();
           let dSkip = 0;
@@ -1599,7 +1810,6 @@ exports.main = async (event, context) => {
           let dScanned = 0;
           while (dScanned < dCap) {
             const dr = await sutraDiscussions
-              .where({ createdAt: _.gte(windowStart) })
               .orderBy("createdAt", "desc")
               .skip(dSkip)
               .limit(1000)
@@ -3019,6 +3229,277 @@ exports.main = async (event, context) => {
         });
       }
 
+      // ==================== 用户私有笔记（一条笔记一个文档） ====================
+
+      // 拉取个人笔记（含/不含回收站），按 (updatedAt, _id) 复合游标分页。
+      // 不用纯 updatedAt 游标：同一毫秒写入的两条笔记会被漏掉或重复。
+      case "getUserNotes": {
+        if (!uid) return fail("unauthorized");
+        const pageSize = Math.min(Number(event.pageSize) || 200, 500);
+        const before = Number(event.updatedBefore) || 0;
+        const beforeId = String(event.beforeId || "");
+        const query = { ownerUserId: uid };
+        // 回收站用 deletedAt > 0 表达，笔记本身没有被移动到别的集合，
+        // 所以「拉回收站」只是把过滤条件放开。
+        if (event.includeTrash !== true) query.deletedAt = _.eq(0);
+        let base = userNotes.where(query);
+        if (before > 0) {
+          base = base.where(
+            _.or([
+              _.and([{ updatedAt: _.lt(before) }]),
+              _.and([{ updatedAt: before }, { _id: _.lt(beforeId) }]),
+            ])
+          );
+        }
+        const res = await base
+          .orderBy("updatedAt", "desc")
+          .orderBy("_id", "desc")
+          .limit(pageSize)
+          .get();
+        const rows = res.data || [];
+        const last = rows.length > 0 ? rows[rows.length - 1] : null;
+        // 拿不满一页说明已经到末尾，nextCursor 置空让客户端停止翻页。
+        const hasMore = rows.length === pageSize;
+        return ok({
+          notes: rows,
+          nextCursor:
+            hasMore && last
+              ? { updatedBefore: last.updatedAt, beforeId: last._id }
+              : null,
+        });
+      }
+
+      // 批量写入个人笔记。迁移几千条笔记必须走批量，逐条 upsert 会把云函数拖到
+      // 超时。createdAt 只在首次写入时确定：已存在的文档沿用旧值，防止客户端
+      // 重装后重传导致时间线顺序整体后移。
+      case "upsertUserNotes": {
+        if (!uid) return fail("unauthorized");
+        const incoming = Array.isArray(event.notes) ? event.notes : [];
+        if (incoming.length === 0) return ok({ written: 0 });
+        if (incoming.length > 500) return fail("too_many");
+        try {
+          await ensureUserNotes();
+          const nowMs = now();
+          const clean = [];
+          for (const raw of incoming) {
+            if (!raw || typeof raw !== "object") continue;
+            const noteId = String(raw.noteId || "").trim();
+            if (!noteId || noteId.length > 128) continue;
+            clean.push({
+              noteId,
+              title: String(raw.title == null ? "" : raw.title).slice(0, 200),
+              content: String(raw.content == null ? "" : raw.content).slice(
+                0,
+                50000
+              ),
+              createdAt: Number(raw.createdAt) || 0,
+              updatedAt: Number(raw.updatedAt) || nowMs,
+              sutraKeys: Array.isArray(raw.sutraKeys)
+                ? raw.sutraKeys
+                    .map((k) => String(k))
+                    .filter((k) => k && k.length <= 200)
+                    .slice(0, 32)
+                : [],
+              shared: raw.shared === true,
+              cloudId: raw.cloudId ? String(raw.cloudId).slice(0, 128) : "",
+              deletedAt: Number(raw.deletedAt) || 0,
+            });
+          }
+          if (clean.length === 0) return ok({ written: 0 });
+
+          // 墓碑（回收站里彻底删除）：content 为空且 deletedAt > 0。
+          // 这类条目不进 userNotes——回收站里清空后它已不存在，留在集合里
+          // 只会让笔记计数越攒越多。真要删就删文档。
+          const tombstones = clean.filter(
+            (n) => n.deletedAt > 0 && n.content === ""
+          );
+          if (tombstones.length > 0) {
+            const tIds = tombstones.map((n) => stableDocId(uid, "note", n.noteId));
+            for (let i = 0; i < tIds.length; i += 20) {
+              const slice = tIds.slice(i, i + 20);
+              await Promise.all(
+                slice.map((id) => userNotes.doc(id).remove())
+              );
+            }
+          }
+          const alive = clean.filter((n) => !(n.deletedAt > 0 && n.content === ""));
+          if (alive.length === 0) {
+            return ok({ written: 0, removed: tombstones.length });
+          }
+
+          // 一次查询取回这批 id 已有的文档，只为保住 createdAt，避免逐条读。
+          const ids = alive.map((n) => stableDocId(uid, "note", n.noteId));
+          const existingRes = await userNotes
+            .where({ _id: _.in(ids) })
+            .limit(500)
+            .get();
+          const prev = {};
+          for (const row of existingRes.data || []) prev[row._id] = row;
+
+          const entries = alive.map((n) => {
+            const id = stableDocId(uid, "note", n.noteId);
+            const old = prev[id];
+            const createdAt =
+              n.createdAt > 0
+                ? n.createdAt
+                : old && old.createdAt
+                ? old.createdAt
+                : n.updatedAt;
+            return {
+              id,
+              data: {
+                ownerUserId: uid,
+                noteId: n.noteId,
+                title: n.title,
+                content: n.content,
+                createdAt,
+                updatedAt: n.updatedAt,
+                sutraKeys: n.sutraKeys,
+                shared: n.shared,
+                cloudId: n.cloudId,
+                deletedAt: n.deletedAt,
+                serverAt: nowMs,
+              },
+            };
+          });
+          const written = await writeDocsInBatches(userNotes, entries, 20);
+          return ok({ written });
+        } catch (e) {
+          console.error(
+            "[api] upsertUserNotes error:",
+            e && e.message ? e.message : e
+          );
+          return fail(e && e.message ? e.message : "笔记保存失败");
+        }
+      }
+
+      // ==================== 用户时间线（一条记录一个文档） ====================
+
+      // 按 (createdAt, _id) 复合游标倒序翻页。
+      // 复合游标是必需的：同一段落里画线与感想可能落在同一毫秒，
+      // 只按 createdAt 过滤会漏掉或重复这些条目，也就丢了段内先后顺序。
+      case "getUserRecords": {
+        if (!uid) return fail("unauthorized");
+        const pageSize = Math.min(Number(event.pageSize) || 50, 200);
+        const before = Number(event.createdBefore) || 0;
+        const beforeId = String(event.beforeId || "");
+        let base = userRecords.where({ ownerUserId: uid });
+        if (before > 0) {
+          base = base.where(
+            _.or([
+              _.and([{ createdAt: _.lt(before) }]),
+              _.and([{ createdAt: before }, { _id: _.lt(beforeId) }]),
+            ])
+          );
+        }
+        const res = await base
+          .orderBy("createdAt", "desc")
+          .orderBy("_id", "desc")
+          .limit(pageSize)
+          .get();
+        const rows = res.data || [];
+        const last = rows.length > 0 ? rows[rows.length - 1] : null;
+        const hasMore = rows.length === pageSize;
+        return ok({
+          records: rows,
+          nextCursor:
+            hasMore && last
+              ? { createdBefore: last.createdAt, beforeId: last._id }
+              : null,
+        });
+      }
+
+      // 按「段落完整集合」同步时间线。
+      //
+      // 客户端只上报本段落当前存在的 recId 全集，由服务端删掉不在集合里的文档。
+      // 不让客户端显式报「删了哪些 id」：那样漏报一次，云端就会留下永久幽灵条目。
+      // 用全集比对天然幂等、可自愈，重复推送同一份数据结果一致。
+      case "upsertUserRecords": {
+        if (!uid) return fail("unauthorized");
+        const records = Array.isArray(event.records) ? event.records : [];
+        const groups = Array.isArray(event.groups) ? event.groups : [];
+        if (records.length > 500) return fail("too_many");
+        if (groups.length > 200) return fail("too_many");
+        try {
+          await ensureUserRecords();
+          const nowMs = now();
+
+          const entries = [];
+          for (const raw of records) {
+            if (!raw || typeof raw !== "object") continue;
+            const recId = String(raw.recId || "");
+            if (!recId || recId.length > 400) continue;
+            const t = Number(raw.type);
+            if (!Number.isInteger(t) || t < 0 || t > 2) continue;
+            const keys = Array.isArray(raw.sutraKeys)
+                ? raw.sutraKeys
+                    .map((k) => String(k))
+                    .filter((k) => k && k.length <= 200)
+                    .slice(0, 32)
+                : [];
+            // 主经名单独存一份字符串字段：下面按段落做差集删除时要拿它做
+            // 等值查询，而 sutraKeys 是数组，按数组字段等值匹配不到东西。
+            const primarySutraKey = keys.length > 0 ? keys[0] : "";
+            entries.push({
+              id: stableDocId(uid, "rec", recId),
+              data: {
+                ownerUserId: uid,
+                recId,
+                type: t,
+                sutraKey: primarySutraKey,
+                sutraKeys: keys,
+                para: Number(raw.para) || -1,
+                text: String(raw.text == null ? "" : raw.text).slice(0, 20000),
+                paraText: String(raw.paraText == null ? "" : raw.paraText).slice(
+                  0,
+                  20000
+                ),
+                // createdAt 是「动作发生时刻」，首次写入后由下次同步沿用：
+                // 它是时间线唯一的排序依据，被覆盖就等于丢失历史顺序。
+                createdAt: Number(raw.createdAt) || nowMs,
+                updatedAt: Number(raw.updatedAt) || nowMs,
+                shared: raw.shared === true,
+                serverAt: nowMs,
+              },
+            });
+          }
+          const written = await writeDocsInBatches(userRecords, entries, 20);
+
+          // 逐段做差集删除。只清 type 0/1（画线/感想）：笔记记录 para 为 -1、
+          // id 以 n| 开头，不属于任何段落，段落同步绝不能碰它们。
+          let removed = 0;
+          for (const g of groups) {
+            if (!g || typeof g !== "object") continue;
+            const sutraKey = String(g.sutraKey || "");
+            const para = Number(g.para);
+            if (!sutraKey || !Number.isInteger(para) || para < 0) continue;
+            const keep = new Set(
+              (Array.isArray(g.ids) ? g.ids : []).map((x) => String(x))
+            );
+            const cur = await userRecords
+              .where({ ownerUserId: uid, sutraKey, para, type: _.in([0, 1]) })
+              .limit(500)
+              .get();
+            const doomed = (cur.data || []).filter((r) => !keep.has(r.recId));
+            if (doomed.length === 0) continue;
+            for (let i = 0; i < doomed.length; i += 20) {
+              const slice = doomed.slice(i, i + 20);
+              await Promise.all(
+                slice.map((r) => userRecords.doc(r._id).remove())
+              );
+              removed += slice.length;
+            }
+          }
+          return ok({ written, removed });
+        } catch (e) {
+          console.error(
+            "[api] upsertUserRecords error:",
+            e && e.message ? e.message : e
+          );
+          return fail(e && e.message ? e.message : "记录保存失败");
+        }
+      }
+
       case "setUserData": {
         if (!uid) return fail("unauthorized");
         const payload = event.payload && typeof event.payload === "object" ? event.payload : null;
@@ -3035,13 +3516,26 @@ exports.main = async (event, context) => {
         for (const k of Object.keys(payload)) {
           if (!(k in merged)) merged[k] = payload[k];
         }
+        // 单个 key 超限时只跳过它，不让整次同步失败。
+        // 原来只要整包超限就整个 fail，于是一个大 key 就能把打卡记录、阅读
+        // 进度等所有数据一起拖停；而客户端又把这个失败静默吞掉，用户毫无
+        // 察觉，等卸载重装才发现数据停在很久以前。
+        const skippedKeys = [];
+        for (const group of ["prefs", "files"]) {
+          const bucket = merged[group];
+          for (const k of Object.keys(bucket)) {
+            if (JSON.stringify(bucket[k]).length > _maxPrefKeyChars) {
+              skippedKeys.push(group + "." + k);
+              delete bucket[k];
+            }
+          }
+        }
         const json = JSON.stringify(merged);
-        if (json.length > 2 * 1024 * 1024) return fail("payload_too_large");
+        if (json.length > _maxUserDataChars) return fail("payload_too_large");
         const nowMs = now();
         const record = {
           uid,
           payload: merged,
-          payloadJson: json,
           updatedAt: nowMs,
         };
         if (row) {
@@ -3053,7 +3547,7 @@ exports.main = async (event, context) => {
           await userData.add(record);
         }
         popularSutrasCache = null;
-        return ok({ updatedAt: record.updatedAt });
+        return ok({ updatedAt: record.updatedAt, skippedKeys });
       }
 
       // ==================== 账号名称 + 密码登录 ====================

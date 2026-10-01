@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'note_store.dart';
 
 /// 记录类型：画线 / 感想 / 笔记。
 enum RecordType { highlight, thought, note }
@@ -454,21 +455,12 @@ class RecordIndex {
   /// 因此同一个 `notes` 每次算出来的入选集合完全一致。
   Future<void> syncNotesFromPrefs() async {
     await load();
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('notes') ?? '[]';
-    List<dynamic> notes;
-    try {
-      final decoded = jsonDecode(raw);
-      notes = decoded is List ? decoded : const [];
-    } catch (_) {
-      return;
-    }
+    final notes = await NoteStore.load();
+    if (notes.isEmpty) return;
 
     // 先摊平成轻量候选：正则在截断之后才跑，避免为落选的几千条白做解析。
     final candidates = <({String id, String content, String updatedAt, bool shared, int ts})>[];
-    for (final it in notes) {
-      if (it is! Map) continue;
-      final map = it.cast<String, dynamic>();
+    for (final map in notes) {
       final id = (map['id'] ?? '').toString();
       if (id.isEmpty) continue;
       final content = (map['content'] ?? '').toString();
@@ -791,6 +783,187 @@ class RecordIndex {
         .replaceAll(_sutraTagRe, '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
+  }
+
+  // ── 时间线云端同步（userRecords） ──────────────────────────
+
+  /// 把时间线差分后推上云端，并拉回云端条目。
+  ///
+  /// 差分而不是全量：时间线可能有上万条，但绝大多数条目自建好后就没再动过，
+  /// 每 5 分钟全量重推既费流量又容易撞上云函数的请求体积上限。只推「新增」
+  /// 和「内容有变」的条目，删除则靠下面按段落上报完整 id 集合。
+  ///
+  /// 拉回是必须的：换机 / 重装后本地 record_index.json 是空的，时间线
+  /// 只能从云端恢复。
+  Future<void> syncToCloud() async {
+    if (!AuthService.instance.isLoggedIn) return;
+    await load();
+    try {
+      await _pushDirtyRecords();
+      await _pullCloudRecords();
+    } on CloudApiException catch (e) {
+      debugPrint('[record-index] 时间线同步失败：${e.message}');
+    } catch (e) {
+      debugPrint('[record-index] 时间线同步异常：$e');
+    }
+  }
+
+  /// 判断条目相对已推送版本是否有变化。
+  /// 指纹只用会体现在时间线卡片上的字段，不含 paraText：段落原文是本地
+  /// 快照，换设备后应由本地重新生成，不该因为它变化就重推。
+  static String _fingerprint(RecordItem it) {
+    return '${it.type.index}\u0001${it.para}\u0001'
+        '${it.text}\u0001${it.paraText}\u0001'
+        '${it.sutraKeys.join('\u0001')}\u0001${it.shared ? 1 : 0}';
+  }
+
+  static const String _fingerprintsKey = 'record_index_fingerprints';
+
+  Future<Map<String, String>> _readFingerprints() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_fingerprintsKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _pushDirtyRecords() async {
+    final prev = await _readFingerprints();
+    final next = <String, String>{};
+    final dirty = <Map<String, dynamic>>[];
+
+    // 段落完整 id 集合：服务端据此删除集合外的陈旧条目。
+    // 只上报画线/感想所属的段落；笔记 para 为 -1，不属于任何段落。
+    final groups = <String, List<String>>{};
+    for (final it in _items) {
+      next[it.id] = _fingerprint(it);
+      if (it.para < 0) continue;
+      final key = '${it.sutraKey}\u0001${it.para}';
+      (groups[key] ??= <String>[]).add(it.id);
+    }
+
+    for (final it in _items) {
+      final fp = next[it.id]!;
+      if (prev[it.id] == fp) continue;
+      dirty.add(_toCloudRecord(it));
+    }
+
+    // 段落集合即使没有新增条目也要上报：这是「把画线擦掉」这件事唯一的
+    // 传达方式。只推增量的话，擦掉的画线会永远留在云端时间线上。
+    final groupPayload = <Map<String, dynamic>>[];
+    for (final e in groups.entries) {
+      final parts = e.key.split('\u0001');
+      final para = int.tryParse(parts[1]) ?? -1;
+      if (para < 0 || parts[0].isEmpty) continue;
+      groupPayload.add({
+        'sutraKey': parts[0],
+        'para': para,
+        'ids': e.value,
+      });
+    }
+
+    // records 和 groups 是两个独立上限，必须各自分批，且**不能**让 records
+    // 的分批循环顺手把 groups 也推进——否则 groups 只会上报第一批，
+    // 后面那些段落的画线删除就再也传达不到云端。
+    // 两个序列各推进各的，循环条件是「任一还没推完」。
+    const maxRecords = 500;
+    const maxGroups = 200;
+    var recOffset = 0;
+    var grpOffset = 0;
+    while (recOffset < dirty.length || grpOffset < groupPayload.length) {
+      final recEnd = (recOffset + maxRecords).clamp(0, dirty.length);
+      final grpEnd = (grpOffset + maxGroups).clamp(0, groupPayload.length);
+      await CloudNotesService.instance.upsertUserRecords(
+        records: dirty.sublist(recOffset, recEnd),
+        groups: groupPayload.sublist(grpOffset, grpEnd),
+      );
+      recOffset = recEnd;
+      grpOffset = grpEnd;
+    }
+
+    // 只有云端确认写入后才更新指纹，否则失败时这些条目会被误判为「已同步」，
+    // 之后再也不重推，数据就此永久丢失。
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_fingerprintsKey, jsonEncode(next));
+  }
+
+  static Map<String, dynamic> _toCloudRecord(RecordItem it) => {
+        'recId': it.id,
+        'type': it.type.index,
+        'sutraKeys': it.sutraKeys,
+        'para': it.para,
+        'text': it.text,
+        'paraText': it.paraText,
+        'createdAt': it.createdAt,
+        'updatedAt': it.updatedAt,
+        'shared': it.shared,
+      };
+
+  /// 从云端拉回时间线条目并并入本地索引。
+  Future<void> _pullCloudRecords() async {
+    final rows = <Map<String, dynamic>>[];
+    UserRecordsCursor? cursor;
+    var guard = 0;
+    do {
+      final page = await CloudNotesService.instance.fetchUserRecords(
+        pageSize: 200,
+        cursor: cursor,
+      );
+      rows.addAll(page.records);
+      cursor = page.cursor;
+      if (++guard > 100) break;
+    } while (cursor != null);
+    if (rows.isEmpty) return;
+
+    var changed = false;
+    for (final row in rows) {
+      final item = _fromCloudRecord(row);
+      if (item == null) continue;
+      if (_pos.containsKey(item.id)) continue;
+      changed |= _upsert(item);
+    }
+    if (changed) {
+      _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _reindex();
+      _touch();
+    }
+  }
+
+  static RecordItem? _fromCloudRecord(Map<String, dynamic> row) {
+    final recId = (row['recId'] ?? '').toString();
+    if (recId.isEmpty) return null;
+    final typeIdx = (row['type'] as num?)?.toInt();
+    if (typeIdx == null ||
+        typeIdx < 0 ||
+        typeIdx >= RecordType.values.length) {
+      return null;
+    }
+    final keys = <String>[];
+    final rawKeys = row['sutraKeys'];
+    if (rawKeys is List) {
+      for (final k in rawKeys) {
+        final s = k.toString();
+        if (s.isNotEmpty && !keys.contains(s)) keys.add(s);
+      }
+    }
+    return RecordItem(
+      id: recId,
+      type: RecordType.values[typeIdx],
+      sutraKeys: keys,
+      para: (row['para'] as num?)?.toInt() ?? -1,
+      text: (row['text'] ?? '').toString(),
+      // 云端没有本地段落原文快照时按紧凑样式展示。
+      paraText: (row['paraText'] ?? '').toString(),
+      createdAt: (row['createdAt'] as num?)?.toInt() ?? 0,
+      updatedAt: (row['updatedAt'] as num?)?.toInt() ?? 0,
+      shared: row['shared'] == true,
+      backfilled: (row['paraText'] ?? '').toString().isEmpty,
+    );
   }
 
   /// 按 [start,end) 从段落原文切出画线片段（越界自动收敛）。

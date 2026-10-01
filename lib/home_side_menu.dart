@@ -92,19 +92,22 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
     if (!mounted) return;
     await LocalCanonProgress.refresh();
     if (!mounted) return;
+    final loggedIn = AuthService.instance.isLoggedIn;
     final user = AuthService.instance.currentUser.value;
-    final account = prefs.getString('user_account_name') ?? '';
+    // 账户名/昵称/认证都是**登录用户**的资料：未登录时一律不读本地残留，
+    // 否则退出登录后抽屉里还挂着上一个账号的 @账户名，看着像没退掉。
+    final account = loggedIn ? (prefs.getString('user_account_name') ?? '') : '';
     final nickname =
         user?.displayName ?? prefs.getString('user_nickname') ?? '同修';
     final verified = prefs.getBool('user_verified') ?? false;
     setState(() {
       _accountName = account;
       _nickname = nickname.trim().isEmpty ? '同修' : nickname;
-      _verified = verified && AuthService.instance.isLoggedIn;
+      _verified = verified && loggedIn;
       // 本地已有账户名即为已确定；否则等补取结果，期间不显示提示文案。
-      _accountLoaded = _accountLoaded || account.isNotEmpty;
+      _accountLoaded = loggedIn && (_accountLoaded || account.isNotEmpty);
     });
-    if (account.isEmpty && AuthService.instance.isLoggedIn) {
+    if (account.isEmpty && loggedIn) {
       final name = await AuthService.instance.getAccountName();
       if (!mounted) return;
       setState(() {

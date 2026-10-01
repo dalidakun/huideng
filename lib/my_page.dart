@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -31,8 +30,11 @@ import 'reply_thread.dart';
 import 'reply_chain.dart';
 import 'certification_page.dart';
 import 'note_stats_center.dart';
+import 'note_store.dart';
 import 'reading_badges.dart';
+import 'sync_service.dart';
 import 'reading_time_service.dart';
+import 'sect_community_page.dart';
 import 'loading_widgets.dart';
 import 'ui_sound.dart';
 import 'reading_note_post.dart';
@@ -961,6 +963,10 @@ class PostBlock extends StatefulWidget {
   final int timeMs;
   final String content;
   final Widget? stats;
+
+  /// 所属栏目社区（如「天台宗社区」）：非空时在正文前挂一枚可点的社区小标签。
+  /// 空串表示普通帖子，不挂任何标签。
+  final String community;
   final VoidCallback? onTap;
   final String? noteId;
   final bool allowActions;
@@ -993,6 +999,7 @@ class PostBlock extends StatefulWidget {
     required this.timeMs,
     required this.content,
     this.stats,
+    this.community = '',
     this.onTap,
     this.noteId,
     this.allowActions = false,
@@ -1354,6 +1361,7 @@ class _PostBlockState extends State<PostBlock> {
     final displayCanonRead = showOriginal ? rn.canonRead : widget.canonRead;
     final displayCanonTotal = showOriginal ? rn.canonTotal : widget.canonTotal;
     final displayNoteId = showOriginal ? rn.id : widget.noteId;
+    final displayCommunity = showOriginal ? rn.community : widget.community;
     final isSelf = (me != null && displayUserId == me.id) ||
         (cachedUid != null && displayUserId == cachedUid);
     final showMore = !isSelf &&
@@ -1553,6 +1561,15 @@ class _PostBlockState extends State<PostBlock> {
                           ],
                         ],
                       ),
+
+                      // 所属社区小标签：色块包小字、不描边，点一下进该社区。
+                      // 上距昵称拉开 12px，下距正文只留 2px（+正文自带 4px = 6px），
+                      // 让色块紧跟着它那条帖子。
+                      if (displayCommunity.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        CommunityTag(community: displayCommunity),
+                        const SizedBox(height: 2),
+                      ],
 
                       // 内容（与昵称同一左缘）
                       if (content.isNotEmpty) ...[
@@ -2087,6 +2104,10 @@ class PostFeedRow extends StatefulWidget {
   final void Function(PlazaNote note)? onMore;
   final bool showFollowButton;
 
+  /// 正文前是否挂「xx社区」小标签；社区页自己的帖子里再挂一枚是废话，
+  /// 那边传 false 关掉，菩提空间等广场列表保持开启。
+  final bool showCommunityTag;
+
   /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
   final VoidCallback? onOpenSelf;
   const PostFeedRow({
@@ -2099,6 +2120,7 @@ class PostFeedRow extends StatefulWidget {
     this.onDelete,
     this.onMore,
     this.showFollowButton = true,
+    this.showCommunityTag = true,
     this.onOpenSelf,
   });
 
@@ -2180,6 +2202,7 @@ class _PostFeedRowState extends State<PostFeedRow> {
       timeMs: note.createdAt,
       content: note.content,
       noteId: note.id,
+      community: widget.showCommunityTag ? note.community : '',
       allowActions: true,
       likeCount: note.likeCount,
       repostCount: note.repostCount,
@@ -2520,8 +2543,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   Future<List<PlazaNote>> _loadLocalNotes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes') ?? '[]';
-      final List<dynamic> list = jsonDecode(raw);
+      final list = await NoteStore.load();
       final uid = AuthService.instance.currentUser.value?.id ?? 'local';
       final nickname =
           AuthService.instance.currentUser.value?.displayName ?? '同修';
@@ -4449,6 +4471,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       _sectionTitle('安全'),
                       SettingsCard(
                         children: [
+                          // 备份出问题时必须让用户看见。以前推送失败只有一个
+                          // 静默 catch，云端停在旧版本而用户毫不知情，直到
+                          // 卸载重装才发现数据没了。
+                          const _SyncStatusBanner(),
                           _SettingsAccountTile(),
                           const SettingsDivider(),
                           _SettingsPhoneTile(),
@@ -4496,6 +4522,63 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 云端备份状态提示：正常时完全不占空间，出问题时才显示一行警示。
+class _SyncStatusBanner extends StatelessWidget {
+  const _SyncStatusBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return ValueListenableBuilder<String?>(
+      valueListenable: SyncService.instance.lastError,
+      builder: (context, error, _) {
+        if (error == null || error.isEmpty) return const SizedBox.shrink();
+        return Container(
+          margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.orange.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.cloud_off_outlined, size: 18, color: p.accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$error\n请保持联网，重试后仍未恢复请联系客服。',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.5,
+                    color: p.textSec,
+                  ),
+                ),
+              ),
+              // 手动重试：不用等 5 分钟周期。
+              GestureDetector(
+                onTap: () => SyncService.instance.push(),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 8, top: 1),
+                  child: Text(
+                    '重试',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: p.accent,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -56,6 +56,11 @@ class PlazaNote {
   /// 帖子类型：普通帖为空；announcement = 管理员公告（详情页展示「公告」标签）。
   final String kind;
 
+  /// 所属栏目社区（如「天台宗社区」），由社区页发布时写入；普通帖子为空。
+  /// 列表里据此在正文前挂一枚可点的社区小标签，帖子本身仍是普通帖、
+  /// 正文里不含 `#话题` 前缀。
+  final String community;
+
   /// 引用转发时的用户引言（空表示直接转发）。
   final String quoteContent;
   final String quoteOfTitle;
@@ -85,6 +90,7 @@ class PlazaNote {
     this.repostKind = '',
     this.tombstoneAncestorIds = const [],
     this.kind = '',
+    this.community = '',
     this.quoteContent = '',
     this.quoteOfTitle = '',
     this.quoteOfContent = '',
@@ -117,6 +123,7 @@ class PlazaNote {
                 .toList(growable: false) ??
             const [],
         kind: json['kind']?.toString() ?? '',
+        community: json['community']?.toString() ?? '',
         quoteContent: json['quoteContent']?.toString() ?? '',
         quoteOfTitle: json['quoteOfTitle']?.toString() ?? '',
         quoteOfContent: json['quoteOfContent']?.toString() ?? '',
@@ -146,6 +153,7 @@ class PlazaNote {
         title: title,
         content: content,
         authorName: authorName,
+        community: community,
         authorAccount: authorAccount ?? this.authorAccount,
         authorVerified: authorVerified ?? this.authorVerified,
         canonRead: canonRead ?? this.canonRead,
@@ -188,6 +196,33 @@ class HotDiscussionItem {
         posts: (e['posts'] as num?)?.toInt() ?? 0,
         score: (e['score'] as num?)?.toDouble() ?? 0,
       );
+}
+
+/// 某个栏目社区在一段时间窗内的发帖统计（宗门菜单页顶部展示位用）。
+class CommunityDailyStat {
+  /// 社区标记，如「天台宗社区」。
+  final String community;
+
+  /// 该时间窗内这个社区发出的帖子数。
+  final int posts;
+
+  /// 该社区在时间窗内最热的一条帖子（按互动量排序），标题/正文已在服务端截断。
+  final PlazaNote? top;
+
+  const CommunityDailyStat({
+    required this.community,
+    required this.posts,
+    this.top,
+  });
+
+  factory CommunityDailyStat.fromJson(Map<String, dynamic> e) {
+    final raw = (e['note'] as Map<String, dynamic>?);
+    return CommunityDailyStat(
+      community: e['community']?.toString() ?? '',
+      posts: (e['posts'] as num?)?.toInt() ?? 0,
+      top: raw == null ? null : PlazaNote.fromJson(raw),
+    );
+  }
 }
 
 /// 大家都在读：某部经书被多少用户锁定精读。
@@ -586,6 +621,68 @@ class VerificationInfo {
   });
 }
 
+/// 私有笔记翻页游标。
+///
+/// 刻意用 (updatedAt, _id) 复合游标而非单个 updatedAt：同一毫秒写入的两条
+/// 笔记若只按 updatedAt 过滤，会被同时漏掉或同时重复——两者都会让笔记看起来
+/// 「少了几条」或「凭空多了一条」。_id 作次序保证把同一毫秒内的并列项切开。
+class UserNotesCursor {
+  final int updatedAt;
+  final String id;
+
+  const UserNotesCursor(this.updatedAt, this.id);
+}
+
+/// 一页私有笔记。[cursor] 为 null 表示已到末尾。
+class UserNotesPage {
+  final List<Map<String, dynamic>> notes;
+  final UserNotesCursor? cursor;
+
+  const UserNotesPage(this.notes, this.cursor);
+
+  bool get hasMore => cursor != null;
+}
+
+/// 时间线翻页游标，理由同 [UserNotesCursor]。
+///
+/// 时间线这里尤其重要：一段里可以同时有画线与感想，二者可能落在同一毫秒，
+/// 单靠 createdAt 分页会打乱段内先后顺序。
+class UserRecordsCursor {
+  final int createdAt;
+  final String id;
+
+  const UserRecordsCursor(this.createdAt, this.id);
+}
+
+/// 一页时间线记录。[cursor] 为 null 表示已到末尾。
+class UserRecordsPage {
+  final List<Map<String, dynamic>> records;
+  final UserRecordsCursor? cursor;
+
+  const UserRecordsPage(this.records, this.cursor);
+
+  bool get hasMore => cursor != null;
+}
+
+/// 一次时间线同步的结果：[written] 写入条数，[removed] 被差集删除的陈旧条目数。
+class UserRecordsSyncResult {
+  final int written;
+  final int removed;
+
+  const UserRecordsSyncResult(this.written, this.removed);
+}
+
+/// setUserData 的结果：[skippedKeys] 是被云端因体积超限跳过的 key。
+///
+/// 之前整包超限直接 fail，一个大 key 就能让打卡、阅读进度等所有数据一起
+/// 停更，而客户端把失败静默吞掉。现在改成只跳过超限的那个 key，并把它
+/// 报回来，让用户知道哪些数据真的没备份。
+class SetUserDataResult {
+  final Set<String> skippedKeys;
+
+  const SetUserDataResult([this.skippedKeys = const {}]);
+}
+
 /// 广场云端数据服务：所有操作统一走「api」云函数。
 class CloudNotesService {
   CloudNotesService._();
@@ -847,6 +944,108 @@ class CloudNotesService {
     });
   }
 
+  // ── 用户私有笔记 / 时间线（一条一个文档） ──────────────────────────
+  //
+  // 这两组数据不再塞进 setUserData 的「所有 prefs 打包成一个文档」里：
+  // 单文档体积上限只约束单条笔记/记录，笔记条数再多也不会撞上限。
+
+  /// 拉取个人笔记。[cursor] 为 null 表示从头拉；返回的 [UserNotesPage.cursor]
+  /// 为 null 表示已到末尾，客户端应停止翻页。
+  Future<UserNotesPage> fetchUserNotes({
+    bool includeTrash = false,
+    int pageSize = 200,
+    UserNotesCursor? cursor,
+  }) async {
+    final res = await _call(
+      'getUserNotes',
+      params: {
+        'includeTrash': includeTrash,
+        'pageSize': pageSize,
+        if (cursor != null) 'updatedBefore': cursor.updatedAt,
+        if (cursor != null) 'beforeId': cursor.id,
+      },
+    );
+    final rows = <Map<String, dynamic>>[];
+    final raw = res['notes'];
+    if (raw is List) {
+      for (final e in raw) {
+        if (e is Map) rows.add(e.cast<String, dynamic>());
+      }
+    }
+    return UserNotesPage(rows, _parseNotesCursor(res['nextCursor']));
+  }
+
+  /// 批量写入个人笔记，返回实际写入条数。
+  /// 迁移与离线补传都走这里：逐条调用会把云函数拖到超时。
+  Future<int> upsertUserNotes(List<Map<String, dynamic>> notes) async {
+    if (notes.isEmpty) return 0;
+    final res = await _call(
+      'upsertUserNotes',
+      params: {'notes': notes},
+      timeout: const Duration(seconds: 60),
+    );
+    return (res['written'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 同步时间线记录。[records] 为要写入的条目，[groups] 为「段落完整集合」
+  /// （该段当前应存在的 recId 全集），服务端据此删除集合外的陈旧条目。
+  Future<UserRecordsSyncResult> upsertUserRecords({
+    required List<Map<String, dynamic>> records,
+    required List<Map<String, dynamic>> groups,
+  }) async {
+    if (records.isEmpty && groups.isEmpty) {
+      return const UserRecordsSyncResult(0, 0);
+    }
+    final res = await _call(
+      'upsertUserRecords',
+      params: {'records': records, 'groups': groups},
+      timeout: const Duration(seconds: 60),
+    );
+    return UserRecordsSyncResult(
+      (res['written'] as num?)?.toInt() ?? 0,
+      (res['removed'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// 倒序拉取时间线（最新的在前）。复合游标保证同一毫秒的条目既不漏也不重。
+  Future<UserRecordsPage> fetchUserRecords({
+    int pageSize = 50,
+    UserRecordsCursor? cursor,
+  }) async {
+    final res = await _call(
+      'getUserRecords',
+      params: {
+        'pageSize': pageSize,
+        if (cursor != null) 'createdBefore': cursor.createdAt,
+        if (cursor != null) 'beforeId': cursor.id,
+      },
+    );
+    final rows = <Map<String, dynamic>>[];
+    final raw = res['records'];
+    if (raw is List) {
+      for (final e in raw) {
+        if (e is Map) rows.add(e.cast<String, dynamic>());
+      }
+    }
+    return UserRecordsPage(rows, _parseRecordsCursor(res['nextCursor']));
+  }
+
+  UserNotesCursor? _parseNotesCursor(dynamic raw) {
+    if (raw is! Map) return null;
+    final ts = (raw['updatedBefore'] as num?)?.toInt();
+    final id = raw['beforeId']?.toString() ?? '';
+    if (ts == null || id.isEmpty) return null;
+    return UserNotesCursor(ts, id);
+  }
+
+  UserRecordsCursor? _parseRecordsCursor(dynamic raw) {
+    if (raw is! Map) return null;
+    final ts = (raw['createdBefore'] as num?)?.toInt();
+    final id = raw['beforeId']?.toString() ?? '';
+    if (ts == null || id.isEmpty) return null;
+    return UserRecordsCursor(ts, id);
+  }
+
   /// 切换某段「已读完/学完」标记。
   Future<void> toggleParagraphDone({
     required String sutraKey,
@@ -913,6 +1112,8 @@ class CloudNotesService {
       'toggleParagraphDone',
       'deleteParagraphNote',
       'sutraEditSave',
+      'upsertUserNotes',
+      'upsertUserRecords',
     };
     return writes.contains(action);
   }
@@ -1017,9 +1218,13 @@ class CloudNotesService {
   }
 
   /// 发布笔记到广场（分享）。返回云端笔记 id。
+  ///
+  /// [community] 非空时表示从某个栏目社区页发的帖：帖子归入该社区，
+  /// 正文照写、不加任何 `#话题` 前缀，所以在广场里它就是一条普通帖子。
   Future<String> publishNote({
     required String title,
     required String content,
+    String community = '',
   }) async {
     if (!AuthService.instance.isLoggedIn) {
       throw const CloudApiException('请先登录');
@@ -1029,6 +1234,7 @@ class CloudNotesService {
       'content': content,
       'visibility': 'public',
       'authorName': _authorName,
+      if (community.isNotEmpty) 'community': community,
     });
     final id = res['id']?.toString() ?? '';
     markRecentlyPublished(id);
@@ -1098,6 +1304,27 @@ class CloudNotesService {
         .toList();
     final hasMore = res['hasMore'] == true;
     return (_withoutDeleted(list), hasMore);
+  }
+
+  /// 拉取某个栏目社区的帖子：按 [PlazaNote.community] 字段精确过滤，
+  /// 排序与话题页同款（热度衰减分倒序）。正文里没有 `#话题` 标记，
+  /// 所以这些帖子不会混进任何话题榜。未登录也可浏览。
+  Future<(List<PlazaNote>, bool hasMore)> getCommunityNotes(
+    String community, {
+    int page = 1,
+    int pageSize = 100,
+  }) async {
+    final res = await _call('getPlazaNotes', params: {
+      'page': page,
+      'pageSize': pageSize,
+      'sort': 'hot',
+      'community': community,
+    });
+    final list = (res['notes'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlazaNote.fromJson)
+        .toList();
+    return (_withoutDeleted(list), res['hasMore'] == true);
   }
 
   /// 拉取某话题下的帖子（服务端按 #话题 边界精确过滤，不再客户端截断前100条）。
@@ -1192,8 +1419,10 @@ class CloudNotesService {
     );
   }
 
-  /// 拉取热门讨论：返回（top 话题, top 经文），每类最多 10 条。
-  /// 热度由云端按互动量 + 时间衰减聚合；客户端负责取前 3 并做当日轮换。
+  /// 拉取热门讨论：返回（top 话题, top 经文），每类最多 200 条，均已按累计热度降序。
+  /// 热度由云端按累计互动量聚合（时间只作为一个随时间收敛到 1 的有界乘数，
+  /// 不做窗口截断与分母衰减），所以长期没有新讨论时名次保持稳定、条目照常在榜。
+  /// 客户端按此顺序取前若干个展示（卡片两行共 8 个），其余收进「更多」全量榜。
   Future<(List<HotDiscussionItem>, List<HotDiscussionItem>)>
       getHotDiscussions() async {
     final res = await _call('getHotDiscussions');
@@ -1205,9 +1434,30 @@ class CloudNotesService {
     return (parse('topics'), parse('sutras'));
   }
 
-  /// 菩提空间热门经文榜：最近 30 天内被提及的经文（广场帖正文的 $经名 引用 +
-  /// 经书讨论页发布的讨论），同一帖子多次提及只算一次；提及次数即热度分，
-  /// 次数越多越靠前，有 1 次提及即入榜。
+  /// 某段时间窗内各栏目社区的发帖数（宗门菜单页顶部展示位用）。
+  /// 服务端只负责按 [sinceMs], [untilMs) 统计并按发帖数降序返回（最多 20 个），
+  /// 并列第一不做取舍，由客户端在并列者里随机挑一个展示。
+  /// 每个社区带一条窗内最热帖（互动量：阅读 +1、赞×3、评论×5、转发×8），
+  /// 标题/正文已截断，可直接拿来展示。未登录也可浏览。
+  Future<List<CommunityDailyStat>> getCommunityDailyTop({
+    required int sinceMs,
+    required int untilMs,
+  }) async {
+    final res = await _call('getCommunityDailyTop', params: {
+      'since': sinceMs,
+      'until': untilMs,
+    });
+    return (res['communities'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(CommunityDailyStat.fromJson)
+        .where((e) => e.community.isNotEmpty)
+        .toList();
+  }
+
+  /// 菩提空间热门经文榜：被提及过的经文（广场帖正文的 $经名 引用 +
+  /// 经书讨论页发布的讨论），同一帖子多次提及只算一次；累计提及次数即热度分，
+  /// 次数越多越靠前，有 1 次提及即入榜。云端不设时间窗口，历史上有过提及
+  /// 就一直在榜，长期没有新讨论时也不会掉出榜单。
   Future<List<HotDiscussionItem>> getHotSutraMentions() async {
     final res = await _call('getHotSutraMentions');
     return (res['sutras'] as List<dynamic>? ?? [])
@@ -1805,9 +2055,17 @@ class CloudNotesService {
   }
 
   /// 上传当前用户云端整包数据（整包覆盖，见 getUserData）。
-  Future<void> setUserData(Map<String, dynamic> payload) async {
-    if (!AuthService.instance.isLoggedIn) return;
-    await _call('setUserData', params: {'payload': payload});
+  ///
+  /// 返回云端跳过的超大 key：这些数据**没有**上云（下次也传不上去），
+  /// 调用方需要把这件事告诉用户，否则会被误认为已备份。
+  Future<SetUserDataResult> setUserData(Map<String, dynamic> payload) async {
+    if (!AuthService.instance.isLoggedIn) return const SetUserDataResult();
+    final res = await _call('setUserData', params: {'payload': payload});
+    final raw = res['skippedKeys'];
+    if (raw is! List) return const SetUserDataResult();
+    return SetUserDataResult(
+      raw.map((e) => e.toString()).where((e) => e.isNotEmpty).toSet(),
+    );
   }
 
   /// 提交反馈意见（未登录也可提交，云端记录用户 uid）。

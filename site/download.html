@@ -1,0 +1,219 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>下载 {{SITE_NAME}} · Android 官方安装包</title>
+<meta name="description" content="下载 {{SITE_NAME}} {{PLATFORM}} 官方安装包 v{{VERSION}}。{{MIN_ANDROID}}，安装包 {{APK_SIZE}}，免费无广告，附安装说明与常见问题。">
+<meta name="theme-color" content="#FBFBFB">
+<meta property="og:type" content="website">
+<meta property="og:title" content="下载 {{SITE_NAME}} v{{VERSION}}">
+<meta property="og:description" content="{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 免费无广告">
+<meta property="og:image" content="{{BASE_URL}}/assets/icon.png">
+<meta property="og:url" content="{{BASE_URL}}/download.html">
+<link rel="icon" type="image/png" href="assets/icon.png">
+<link rel="apple-touch-icon" href="assets/icon.png">
+<link rel="canonical" href="{{BASE_URL}}/download.html">
+<link rel="stylesheet" href="assets/site.css?v={{ASSET_VER}}">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <img class="nav__logo" src="assets/icon.png" alt="" width="26" height="26">
+      <span>{{SITE_NAME}}</span>
+    </a>
+    <button class="nav__toggle" type="button" aria-label="打开菜单" aria-expanded="false" data-nav-toggle><span></span></button>
+    <ul class="nav__links" data-nav-links>
+      <li><a href="index.html">首页</a></li>
+      <li><a href="download.html" aria-current="page">下载</a></li>
+      <li><a href="changelog.html">更新日志</a></li>
+      <li><a href="privacy.html">隐私政策</a></li>
+      <li><a href="terms.html">用户协议</a></li>
+      <li><a class="nav__cta" href="{{APK_HREF}}" download="{{APK_FILENAME}}">立即下载</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="page-head">
+    <div class="container">
+      <h1>下载 {{SITE_NAME}}</h1>
+      <p>官方直接分发的安装包，无广告、无内购，永久免费更新</p>
+    </div>
+  </div>
+
+  <section class="section section--tight">
+    <div class="container">
+      <div class="download">
+        <div>
+          <div class="download__head">
+            <img class="download__logo" src="assets/icon.png" alt="" width="60" height="60">
+            <div>
+              <div class="download__name">{{SITE_NAME}}</div>
+              <div class="download__ver">最新版本 <b>v{{VERSION}}</b> · {{APK_SIZE}} · {{RELEASE_DATE}}</div>
+            </div>
+          </div>
+
+          <a class="btn btn--primary btn--lg btn--block" href="{{APK_HREF}}" download="{{APK_FILENAME}}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            下载安装包（{{APK_SIZE}}）
+          </a>
+
+          <details style="margin-top:18px">
+            <summary style="cursor:pointer;font-size:13.5px;color:var(--text-sec)">校验安装包（可选）</summary>
+            <p style="margin-top:10px;font-size:13px;color:var(--text-hint);line-height:1.8">
+              担心下载不完整，可以核对文件指纹：<br>
+              <code style="word-break:break-all;background:var(--tint-bg);padding:6px 8px;border-radius:4px;display:inline-block;margin-top:4px">{{APK_SHA256}}</code>
+            </p>
+          </details>
+        </div>
+
+        <div>
+          <div class="download__qr">
+            <img src="assets/qr-download.png" alt="扫码下载二维码" width="168" height="168">
+            <p class="download__qr-tip">手机扫码，直接跳转下载</p>
+          <p class=download__qr-note>二维码指向本页，页面永远是最新版</p>
+          </div>
+
+          <div class="download__notes" style="margin-top:16px;margin-bottom:0">
+            <b>v{{VERSION}} 更新内容</b><br>{{NOTES}}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--alt">
+    <div class="container">
+      <div class="section__head">
+        <span class="eyebrow">安装说明</span>
+        <h2 class="section__title">为什么系统会拦一下</h2>
+        <p class="section__sub">
+          {{SITE_NAME}} 未在应用商店上架，安装包由官网直接分发。系统对这类来源会多问一句，这是正常流程，不是安全问题。
+        </p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step__title">下载 APK</div>
+          <p class="step__desc">点上方按钮直接下载，或用手机扫二维码。文件约 {{APK_SIZE}}，需要预留约 150MB 空间。</p>
+        </div>
+        <div class="step">
+          <div class="step__title">允许本次安装</div>
+          <p class="step__desc">若弹出「禁止安装未知应用」，点「设置」，允许当前浏览器/文件管理器「安装未知应用」，只授权这一次即可。</p>
+        </div>
+        <div class="step">
+          <div class="step__title">风险提示选继续</div>
+          <p class="step__desc">若提示「此应用可能有害」或「存在风险」，选择「仍要安装」。这是自签名安装包的通用提示。</p>
+        </div>
+        <div class="step">
+          <div class="step__title">完成安装</div>
+          <p class="step__desc">点「安装」等待完成。旧版本升级直接覆盖，笔记和阅读记录都会保留。</p>
+        </div>
+      </div>
+      <div class="note">
+        <b>关于提示：</b>应用商店能上架的包会经过平台审核，所以系统默认信任它们；官网分发的包系统无法核实来源，所以会提示。这两者不代表包本身有区别。
+        燃灯的安装包由官方统一签名分发，如需确认来源，可核对上面的 SHA-256 指纹。
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <div class="section__head">
+        <span class="eyebrow">常见问题</span>
+        <h2 class="section__title">装不上？先看这里</h2>
+      </div>
+
+      <div class="features">
+        <div class="feature">
+          <h3 class="feature__title">提示「安装包解析失败」</h3>
+          <p class="feature__desc">下载没完成或文件损坏。删掉已下载的 APK 重下一次，下载过程中不要切走或锁屏。</p>
+        </div>
+        <div class="feature">
+          <h3 class="feature__title">提示「与已安装版本不兼容」</h3>
+          <p class="feature__desc">通常是旧版卸载重装导致。卸载旧版再装新版即可，注意卸载会清空本地笔记，先去「我的 → 导出笔记」备份。</p>
+        </div>
+        <div class="feature">
+          <h3 class="feature__title">下载一直很慢</h3>
+          <p class="feature__desc">换用下方的备用地址，或用手机扫二维码走移动网络下载，通常更快。</p>
+        </div>
+        <div class="feature">
+          <h3 class="feature__title">需要注册才能用吗</h3>
+          <p class="feature__desc">不需要。不登录也能读经、写笔记，只是无法跨设备同步和参与讨论。</p>
+        </div>
+        <div class="feature">
+          <h3 class="feature__title">有 iOS 版吗</h3>
+          <p class="feature__desc">目前仅提供 Android 版。iOS 版在规划中，可关注更新日志。</p>
+        </div>
+        <div class="feature">
+          <h3 class="feature__title">卸载后笔记会丢吗</h3>
+          <p class="feature__desc">已登录并同步过的笔记保留在云端，重装登录后自动恢复。未登录的本地笔记会随卸载清除，务必先导出。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--alt">
+    <div class="container">
+      <div class="section__head">
+        <span class="eyebrow">更新</span>
+        <h2 class="section__title">最近改动</h2>
+        <p class="section__sub">装旧版也能用，但建议更新到最新版。</p>
+      </div>
+      <div class="log">
+        {{CHANGELOG_PREVIEW}}
+      </div>
+      <p style="text-align:center;margin-top:32px">
+        <a class="btn btn--ghost" href="changelog.html">查看完整更新日志</a>
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer__inner">
+      <div>
+        <div class="footer__brand">
+          <img src="assets/icon.png" alt="" width="24" height="24">
+          <span>{{SITE_NAME}}</span>
+        </div>
+        <p class="footer__about">{{TAGLINE}}</p>
+      </div>
+      <ul class="footer__links">
+        <li><a href="index.html">首页</a></li>
+        <li><a href="changelog.html">更新日志</a></li>
+        <li><a href="privacy.html">隐私政策</a></li>
+        <li><a href="terms.html">用户协议</a></li>
+      </ul>
+      <div class="footer__contact">
+        <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
+        <div>邮箱：{{CONTACT_EMAIL}}</div>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <span>© {{YEAR}} {{SITE_NAME}} · 经文内容依据公开流通的《大正新修大藏经》整理</span>
+      <span>{{PACKAGE_NAME}} · v{{VERSION}} ({{VERSION_CODE}})</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var toggle = document.querySelector('[data-nav-toggle]');
+  var links = document.querySelector('[data-nav-links]');
+  if (!toggle || !links) return;
+  toggle.addEventListener('click', function () {
+    var open = links.classList.toggle('is-open');
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+  });
+})();
+</script>
+</body>
+</html>

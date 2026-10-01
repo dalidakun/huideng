@@ -105,6 +105,17 @@ class RecordPageState extends State<RecordPage> {
     // 首次进入即与本地 `notes` 全量对账，历史笔记直接出现在时间线上。
     unawaited(reload(syncNotes: true));
     unawaited(_loadSutraNames());
+    // ListView.builder 没有 onScroll 参数，用控制器监听滚动位置放行下一页。
+    _scrollCtrl.addListener(_onScroll);
+  }
+
+  /// 离底部还有一屏时预先放行下一批，避免滑到底看到空白。
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - _pageSize * 80) {
+      _loadMore();
+    }
   }
 
   /// 收起搜索：关闭键盘、清空关键词并把搜索框收回头像旁那个按钮的状态。
@@ -198,6 +209,7 @@ class RecordPageState extends State<RecordPage> {
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -213,6 +225,9 @@ class RecordPageState extends State<RecordPage> {
     setState(() {
       _items = _sorted(RecordIndex.instance.items);
       _loading = false;
+      // 重新载入会带入新条目，分页进度回到首屏长度，让新内容可见；
+      // 否则它可能落在已展开窗口之外，看起来像「同步了但什么都没多」。
+      _visibleCount = _pageSize;
       _invalidateRows();
     });
     if (_scrollCtrl.hasClients) {
@@ -249,15 +264,33 @@ class RecordPageState extends State<RecordPage> {
 
   // ── 过滤与分组 ────────────────────────────────────────
 
+  /// 首屏只渲染 [_pageSize] 条，往下滚再逐步放出来。
+  ///
+  /// 时间线上万条很常见，全部铺进 ListView.builder 虽然能跑，但首次要过滤、
+  /// 分组、展开 _Row，滑动时也一直背着这个开销。分批放行后首屏只剩几十条，
+  /// 后续按需追加。
+  static const int _pageSize = 30;
+  int _visibleCount = _pageSize;
+
   List<RecordItem> get _filtered {
     final q = _query.trim();
-    if (q.isEmpty) return _items;
-    return _items.where((i) {
-      // 经名按显示名匹配（用户看到的是「地藏菩萨本愿经卷二」而不是编号）。
-      if (_sutraNameOf(i).contains(q)) return true;
-      if (i.sutraKeys.any((k) => k.contains(q))) return true;
-      return i.text.contains(q) || i.paraText.contains(q);
-    }).toList();
+    final list = q.isEmpty
+        ? _items
+        : _items.where((i) {
+            // 经名按显示名匹配（用户看到的是「地藏菩萨本愿经卷二」而不是编号）。
+            if (_sutraNameOf(i).contains(q)) return true;
+            if (i.sutraKeys.any((k) => k.contains(q))) return true;
+            return i.text.contains(q) || i.paraText.contains(q);
+          }).toList();
+    // 搜索时结果通常很少，截断反而会漏掉本该命中的条目，因此只在无搜索时分页。
+    if (q.isNotEmpty) return list;
+    return list.length > _visibleCount ? list.sublist(0, _visibleCount) : list;
+  }
+
+  /// 滚到底部时多放一屏。
+  void _loadMore() {
+    if (_visibleCount >= _items.length) return;
+    setState(() => _visibleCount += _pageSize);
   }
 
   /// 展示用的行列表（日期分组头 + 记录），带记忆化。

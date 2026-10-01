@@ -1,0 +1,401 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{SITE_NAME}} · {{TAGLINE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta name="theme-color" content="#FBFBFB">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{SITE_NAME}} · {{TAGLINE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:image" content="{{BASE_URL}}/assets/icon.png">
+<meta property="og:url" content="{{BASE_URL}}/">
+<meta name="twitter:card" content="summary">
+<link rel="icon" type="image/png" href="assets/icon.png">
+<link rel="apple-touch-icon" href="assets/icon.png">
+<link rel="canonical" href="{{BASE_URL}}/">
+<link rel="stylesheet" href="assets/site.css?v={{ASSET_VER}}">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <img class="nav__logo" src="assets/icon.png" alt="" width="26" height="26">
+      <span>{{SITE_NAME}}</span>
+    </a>
+    <button class="nav__toggle" type="button" aria-label="打开菜单" aria-expanded="false" data-nav-toggle><span></span></button>
+    <ul class="nav__links" data-nav-links>
+      <li><a href="index.html" aria-current="page">首页</a></li>
+      <li><a href="download.html">下载</a></li>
+      <li><a href="changelog.html">更新日志</a></li>
+      <li><a href="privacy.html">隐私政策</a></li>
+      <li><a href="terms.html">用户协议</a></li>
+      <li><a class="nav__cta" href="download.html">立即下载</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="container hero__inner">
+      <div class="hero__col">
+        <div class="hero__lead">
+          <span class="hero__badge">v{{VERSION}} · {{RELEASE_DATE}}</span>
+          <h1 class="hero__title">燃灯，看见<em>自己</em>，照见别人</h1>
+          <p class="hero__slogan">{{TAGLINE}}</p>
+          <div class="hero__desc">
+            <p>收录大藏经丰富经典内容，借助 AI 翻译与解读，让原本难懂的古文经书更容易阅读和理解。通过社区交流，与同修分享心得、讨论经典；通过功课打卡、日历记录，帮助建立持续的修行习惯。</p>
+            <p>同时整理八大宗派、十二大法门及核心经典，帮助初学者了解佛教不同的思想体系与修行方向。</p>
+            <p>无论是想读一部经、了解佛法，还是寻找适合自己的修行方式，都可以从这里开始。</p>
+          </div>
+        </div>
+        <div class="hero__foot">
+          <div class="hero__actions">
+            <a class="btn btn--primary btn--lg" href="download.html">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              下载 Android 版
+            </a>
+            <a class="btn btn--ghost btn--lg" href="#features">看看能做什么</a>
+          </div>
+          <p class="hero__meta">{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 完全免费</p>
+          <div class="stats">
+            <div class="stat"><div class="stat__num">8,982</div><div class="stat__label">部经文收录</div></div>
+            <div class="stat"><div class="stat__num">56</div><div class="stat__label">分卷 · 大正藏全藏</div></div>
+            <div class="stat"><div class="stat__num">8 + 12</div><div class="stat__label">宗派与法门</div></div>
+            <div class="stat"><div class="stat__num">0 元</div><div class="stat__label">无广告无内购</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="hero__art">
+        <div class="hero__phone">
+          <img src="assets/shot-home.jpg" alt="燃灯 App 首页" width="852" height="1846" loading="eager" data-zoom>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section__head section__head--bar">
+        <div>
+          <span class="eyebrow">功能</span>
+          <h2 class="section__title">从选经到读懂，一条路走通</h2>
+          <p class="section__sub">不知道从哪部经开始？按宗派法门找；读不进去？逐段精读；读完记不住？随手笔记。</p>
+        </div>
+      </div>
+
+      <div class="features">
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+          <h3 class="feature__title">经藏 · 八宗十二门</h3>
+          <p class="feature__desc">禅宗、净土、天台等八大宗派，观音、地藏等十二法门，各自的核心思想、历代祖师、修行方式与历史地位，先看懂脉络再读经。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></div>
+          <h3 class="feature__title">逐段精读</h3>
+          <p class="feature__desc">长文分段呈现，标注生僻字与难句，支持划线、批注、段落感想。读慢一点，才读得进去。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0-3 3v1a3 3 0 0 0 0 6v1a3 3 0 0 0 3 3v1a3 3 0 0 0 6 0v-1a3 3 0 0 0 3-3v-1a3 3 0 0 0 0-6V9a3 3 0 0 0-3-3V5a3 3 0 0 0-3-3z"/><path d="M12 8v8"/></svg></div>
+          <h3 class="feature__title">AI 助手</h3>
+          <p class="feature__desc">读不懂的段落直接问。AI 助手基于 DeepSeek 回答经文义理、白话翻译与修行指引，答完还能一键存成笔记。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></div>
+          <h3 class="feature__title">笔记与读后感</h3>
+          <p class="feature__desc">写笔记、草稿、回收站，笔记能关联到具体经文段落。日后回看，知道自己当时想到了什么。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10"/><polyline points="12 6 12 12 16 14"/><path d="M18.4 2.6A10 10 0 0 1 22 6.2"/></svg></div>
+          <h3 class="feature__title">打卡与坚持</h3>
+          <p class="feature__desc">记录每日阅读时长与进度，攒徽章、看得见的连续天数。读经是长跑，需要一点正反馈。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+          <h3 class="feature__title">讨论与同修</h3>
+          <p class="feature__desc">菩提空间里发读经心得、回复楼层、关注同修。也可以只看热门讨论，自己安静地读。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M12 14v4M10 16h4"/></svg></div>
+          <h3 class="feature__title">打卡日历</h3>
+          <p class="feature__desc">农历日期与十斋日一并标出，并记录你的每日阅读打卡。想知道今天是什么日子，看一眼就知道。</p>
+        </div>
+
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+          <h3 class="feature__title">离线阅读</h3>
+          <p class="feature__desc">经文按需下载，地铁、山里、飞机上都没有信号也能读。笔记全部存在本地，登录后可跨设备同步。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--alt">
+    <div class="container">
+      <div class="section__head section__head--bar">
+        <div>
+          <span class="eyebrow">界面</span>
+          <h2 class="section__title">看看实际界面</h2>
+          <p class="section__sub">从经藏检索到逐段精读，从菩提空间到功课打卡，App 里最常用的四个地方。</p>
+        </div>
+        <div class="shots__nav">
+          <button class="shots__btn" type="button" data-shots="prev" aria-label="向左滑动查看上一张">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <button class="shots__btn" type="button" data-shots="next" aria-label="向右滑动查看下一张">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="shots" data-shots-track>
+        <figure class="shot">
+          <img src="assets/shot-reading.jpg" alt="精读界面" width="852" height="1846" loading="lazy" data-zoom>
+          <figcaption class="shot__cap">精读 · 逐段呈现</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/shot-sect.jpg" alt="宗派法门" width="852" height="1846" loading="lazy" data-zoom>
+          <figcaption class="shot__cap">经藏 · 八宗十二门</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/shot-note.jpg" alt="菩提空间" width="852" height="1846" loading="lazy" data-zoom>
+          <figcaption class="shot__cap">菩提空间 · 同修交流社区</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/shot-duty.jpg" alt="功课打卡" width="852" height="1846" loading="lazy" data-zoom>
+          <figcaption class="shot__cap">功课 · 诵经持咒念佛记数</figcaption>
+        </figure>
+      </div>
+      <p class="shots__hint">左右滑动查看全部 · 点击图片看大图</p>
+    </div>
+  </section>
+
+  <section class="section" id="download">
+    <div class="container">
+      <div class="download">
+        <div>
+          <div class="download__head">
+            <img class="download__logo" src="assets/icon.png" alt="" width="60" height="60">
+            <div>
+              <div class="download__name">{{SITE_NAME}}</div>
+              <div class="download__ver">最新版本 <b>v{{VERSION}}</b> · {{APK_SIZE}} · {{MIN_ANDROID}}</div>
+            </div>
+          </div>
+
+          <div class="download__notes">
+            <b>本次更新：</b>{{NOTES}}
+          </div>
+
+          <a class="btn btn--primary btn--lg btn--block" href="{{APK_HREF}}" download="{{APK_FILENAME}}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            下载 {{APK_FILENAME}}
+          </a>
+        </div>
+
+        <div class="download__qr">
+          <img src="assets/qr-download.png" alt="扫码下载二维码" width="168" height="168" loading="lazy">
+          <p class="download__qr-tip">手机扫码，直接跳转下载</p>
+          <p class="download__qr-note">二维码指向下载页，页面永远是最新版</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--alt">
+    <div class="container">
+      <div class="section__head">
+        <span class="eyebrow">安装</span>
+        <h2 class="section__title">四步装好</h2>
+        <p class="section__sub">燃灯不在应用商店上架，安装包由官方直接分发，因此需要手动允许一次安装权限。</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step__title">下载 APK</div>
+          <p class="step__desc">点上方按钮，或用手机扫码下载。文件约 {{APK_SIZE}}。</p>
+        </div>
+        <div class="step">
+          <div class="step__title">点击安装</div>
+          <p class="step__desc">下载完成后系统会弹出安装提示，点「安装」。</p>
+        </div>
+        <div class="step">
+          <div class="step__title">允许未知来源</div>
+          <p class="step__desc">若提示「未知来源应用」，按提示允许本次安装即可，不需要长期授权。</p>
+        </div>
+        <div class="step">
+          <div class="step__title">风险提示选继续</div>
+          <p class="step__desc">部分系统会提示「存在风险」，选择「仍要安装」或「继续安装」。</p>
+        </div>
+      </div>
+      <div class="note">
+        <b>提示：</b>后续升级会直接覆盖安装，不会删除你的笔记与阅读记录。若系统提示安装包「解析失败」，多半是下载未完成，删掉重下一次即可。
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <div class="section__head">
+        <h2 class="section__title">用得放心</h2>
+      </div>
+      <div class="features">
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <h3 class="feature__title">隐私说清楚</h3>
+          <p class="feature__desc">不读取通讯录与短信，权限逐项说明。完整条款见<a href="privacy.html">隐私政策</a>。</p>
+        </div>
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg></div>
+          <h3 class="feature__title">无广告无内购</h3>
+          <p class="feature__desc">没有开屏广告，没有付费解锁，所有功能对所有人开放。</p>
+        </div>
+        <div class="feature">
+          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+          <h3 class="feature__title">数据可带走</h3>
+          <p class="feature__desc">笔记支持导出为 PDF 与文本，不绑架你的记录。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer__inner">
+      <div>
+        <div class="footer__brand">
+          <img src="assets/icon.png" alt="" width="24" height="24">
+          <span>{{SITE_NAME}}</span>
+        </div>
+        <p class="footer__about">{{TAGLINE}}</p>
+      </div>
+      <ul class="footer__links">
+        <li><a href="download.html">下载</a></li>
+        <li><a href="changelog.html">更新日志</a></li>
+        <li><a href="privacy.html">隐私政策</a></li>
+        <li><a href="terms.html">用户协议</a></li>
+      </ul>
+      <div class="footer__contact">
+        <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
+        <div>邮箱：{{CONTACT_EMAIL}}</div>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <span>© {{YEAR}} {{SITE_NAME}} · 经文内容依据公开流通的《大正新修大藏经》整理</span>
+      <span>{{PACKAGE_NAME}} · v{{VERSION}} ({{VERSION_CODE}})</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// 移动端菜单展开/收起。纯 CSS 无法在 sticky 定位下正确覆盖，这里只管开关。
+(function () {
+  var toggle = document.querySelector('[data-nav-toggle]');
+  var links = document.querySelector('[data-nav-links]');
+  if (!toggle || !links) return;
+  toggle.addEventListener('click', function () {
+    var open = links.classList.toggle('is-open');
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+  });
+})();
+
+// 看大图：点击首屏图或界面缩略图 → 全屏灯箱。
+// ESC、关闭按钮、点遮罩均可退出，打开时锁住页面滚动。
+(function () {
+  var box = document.createElement('div');
+  box.className = 'zoom';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.innerHTML =
+    '<button class="zoom__close" type="button" aria-label="关闭大图">' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+      '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+    '</button>' +
+    '<img class="zoom__img" alt="">' +
+    '<div class="zoom__cap"></div>';
+  document.body.appendChild(box);
+
+  var pic = box.querySelector('.zoom__img');
+  var cap = box.querySelector('.zoom__cap');
+  var lastFocus = null;
+
+  function open(img) {
+    pic.src = img.currentSrc || img.src;
+    pic.alt = img.alt || '';
+    var fig = img.closest('figure');
+    var fc = fig && fig.querySelector('figcaption');
+    var text = fc ? fc.textContent.trim() : '';
+    cap.textContent = text;
+    cap.style.display = text ? '' : 'none';
+    lastFocus = document.activeElement;
+    box.classList.add('is-open');
+    document.documentElement.style.overflow = 'hidden';
+    box.querySelector('.zoom__close').focus();
+  }
+
+  function close() {
+    box.classList.remove('is-open');
+    document.documentElement.style.overflow = '';
+    pic.removeAttribute('src');
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  document.addEventListener('click', function (e) {
+    var trigger = e.target.closest('[data-zoom]');
+    if (trigger) {
+      e.preventDefault();
+      open(trigger);
+      return;
+    }
+    if (e.target.closest('.zoom__close') || e.target === box) close();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && box.classList.contains('is-open')) close();
+  });
+})();
+
+// 界面横滑：左右箭头按一张图的宽度滚动，到头自动禁用。
+(function () {
+  var track = document.querySelector('[data-shots-track]');
+  var prev = document.querySelector('[data-shots="prev"]');
+  var next = document.querySelector('[data-shots="next"]');
+  if (!track || !prev || !next) return;
+
+  function step(dir) {
+    var max = track.scrollWidth - track.clientWidth;
+    var card = track.querySelector('.shot');
+    var w = card ? card.getBoundingClientRect().width + 20 : track.clientWidth * 0.8;
+    var target = track.scrollLeft + dir * w;
+    if (target > max) target = max;
+    if (target < 0) target = 0;
+    // 末尾只剩一小截时直接滚到底，免得点了却几乎没动。
+    if (dir > 0 && target > 0 && max - target < 60) target = max;
+    track.scrollTo({ left: target, behavior: 'smooth' });
+  }
+
+  function sync() {
+    var max = track.scrollWidth - track.clientWidth;
+    prev.disabled = track.scrollLeft <= 2;
+    next.disabled = track.scrollLeft >= max - 2;
+  }
+
+  prev.addEventListener('click', function () { step(-1); });
+  next.addEventListener('click', function () { step(1); });
+  track.addEventListener('scroll', sync, { passive: true });
+  window.addEventListener('resize', sync);
+  sync();
+})();
+</script>
+</body>
+</html>

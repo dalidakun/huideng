@@ -4214,20 +4214,70 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
   List<Sutra> get _sutras =>
       widget.parent._getAllSutrasInFolder(widget.folderName);
 
+  /// 本页就是「打开的经文文件夹」：经文多时上滑翻卷难回顶栏，
+  /// 复用菩提空间同款右下角「回到顶部」箭头。
+  final ScrollController _listScroll = ScrollController();
+
+  /// 箭头显隐：默认隐藏，只在本页（文件夹已打开）往下滑过一段才出现。
+  bool _showBackToTop = false;
+
   @override
   void initState() {
     super.initState();
     widget.parent._sutraDataVersion.addListener(_onParentChanged);
+    _listScroll.addListener(_updateBackToTop);
   }
 
   @override
   void dispose() {
     widget.parent._sutraDataVersion.removeListener(_onParentChanged);
+    _listScroll.removeListener(_updateBackToTop);
+    _listScroll.dispose();
     super.dispose();
   }
 
   void _onParentChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _updateBackToTop() {
+    final show = _listScroll.hasClients && _listScroll.offset > 60;
+    if (show != _showBackToTop) {
+      setState(() => _showBackToTop = show);
+    }
+  }
+
+  void _scrollToTop() {
+    if (_listScroll.hasClients && _listScroll.offset > 0) {
+      _listScroll.animateTo(0,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+  }
+
+  /// 与菩提空间右下角那颗箭头同一套样式；底距再抬高一截，避开底部手势条。
+  Widget _buildBackToTopButton() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 40),
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: FloatingActionButton(
+          onPressed: _scrollToTop,
+          heroTag: 'sutra_folder_back_to_top',
+          backgroundColor: AppPalette.instance.isPlain
+              ? const Color(0xFF1A1A1A)
+              : const Color(0xFF71867A),
+          elevation: 8,
+          highlightElevation: 12,
+          shape: const CircleBorder(),
+          child: Image.asset(
+            'assets/images/top.png',
+            width: 21,
+            height: 21,
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -4239,6 +4289,9 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
     final desc = kSutraDescriptions[widget.folderName];
     return Scaffold(
       backgroundColor: AppPalette.p.bg,
+      // 打开文件夹后往下滑才露出；停在顶部时整颗按钮隐藏。
+      floatingActionButton:
+          _showBackToTop ? _buildBackToTopButton() : null,
       appBar: AppBar(
         backgroundColor: AppPalette.p.bg,
         elevation: 0,
@@ -4287,6 +4340,7 @@ class _SutraFolderPageState extends State<SutraFolderPage> {
               child: Text('暂无经文', style: TextStyle(color: Color(0xFF999999), fontSize: 13)),
             )
           : ListView.builder(
+              controller: _listScroll,
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: total + (desc != null ? 1 : 0),
               itemBuilder: (ctx, i) {

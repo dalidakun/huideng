@@ -1,0 +1,35 @@
+{
+  "siteName": "燃灯",
+  "tagline": "一款面向现代人的佛学学习与修行 App。",
+  "description": "燃灯 App：收录大正藏 8982 部经文，按八大宗派与十二法门归类。逐段精读、随手笔记、AI 助手答疑，经文可离线阅读。",
+
+  "baseUrl": "https://randeng-d8gs968w22a3d98e8-1461892767.tcloudbaseapp.com/huideng",
+  "baseUrlNote": "当前指向 CloudBase 静态托管（可用）。ICP 备案通过后：把 baseUrl 改回 https://aibuilder.top ，再把本地址填进 mirrors 当备用源即可。注意：.tcb.qcloud.la 旧域名已失效(418)，正确域名是 .tcloudbaseapp.com。",
+
+  "apkPath": "/downloads/huideng.apk",
+  "apkFilename": "huideng.apk",
+  "releaseArchivePath": "/downloads/archive",
+
+  "mirrors": [],
+  "mirrorsNote": "主源不可用时，用户可依次尝试镜像。留空数组则下载页只显示官方源。备案通过后把 CloudBase 地址填进来作备用源。",
+
+  "packageName": "com.huideng.reader",
+  "platform": "Android",
+  "minAndroid": "Android 7.0 及以上",
+
+  "deploy": {
+    "cloudbaseEnvId": "randeng-d8gs968w22a3d98e8",
+    "cloudPath": "huideng",
+    "note": "tcb hosting deploy site/dist <cloudPath> -e <cloudbaseEnvId>。cloudPath 必须与 baseUrl 的路径部分一致；根目录 index.html 是 App 用的隐私政策，不能覆盖，所以站点放子目录。"
+  },
+
+  "contactEmail": "liyankun007@gmail.com",
+
+  "nav": [
+    { "label": "首页", "href": "index.html" },
+    { "label": "下载", "href": "download.html" },
+    { "label": "更新日志", "href": "changelog.html" },
+    { "label": "隐私政策", "href": "privacy.html" },
+    { "label": "用户协议", "href": "terms.html" }
+  ]
+}

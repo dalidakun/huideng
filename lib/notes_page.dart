@@ -1,8 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'cloud_notes_service.dart';
 import 'note_edit_page.dart';
+import 'note_store.dart';
 import 'recycle_bin_page.dart';
 
 import 'app_palette.dart';
@@ -29,10 +28,9 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   Future<void> _loadNotes() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('notes') ?? '[]';
+    final notes = await NoteStore.load();
     setState(() {
-      _notes = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
+      _notes = notes;
       _notes.sort((a, b) => b['updatedAt'].compareTo(a['updatedAt']));
     });
   }
@@ -70,21 +68,11 @@ class _NotesPageState extends State<NotesPage> {
       } catch (_) {}
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final trashRaw = prefs.getString('trash_notes') ?? '[]';
-    final trash = (jsonDecode(trashRaw) as List<dynamic>).cast<Map<String, dynamic>>();
-    trash.add({...note, 'deletedAt': DateTime.now().toIso8601String()});
-    await prefs.setString('trash_notes', jsonEncode(trash));
+    await NoteStore.softDelete(note);
 
     setState(() {
       _notes.removeAt(index);
     });
-    await _saveNotes();
-  }
-
-  Future<void> _saveNotes() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('notes', jsonEncode(_notes));
   }
 
   void _openEdit({int? index}) {

@@ -16,6 +16,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_edit_page.dart';
+import 'note_store.dart';
 import 'pdf_export.dart';
 import 'login_page.dart';
 import 'sutra_list_page.dart' show routeObserver;
@@ -172,17 +173,14 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
       return;
     }
 
-    // 作者本人：从 SharedPreferences 加载
+    // 作者本人：从本地缓存加载
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes') ?? '[]';
-      final List<dynamic> notesList = jsonDecode(raw);
+      final notesList = await NoteStore.load();
 
       // 筛选与当前经文相关的笔记（内容包含 $经文名）
       final sutraTag = '\$$_sutraName';
       final filtered = <_NoteItem>[];
       for (final note in notesList) {
-        if (note is! Map<String, dynamic>) continue;
         final content = (note['content'] ?? '').toString();
         if (content.contains(sutraTag)) {
           final updatedAtStr = (note['updatedAt'] ?? '').toString();
@@ -320,27 +318,13 @@ class _ReadingSutraNotesPageState extends State<ReadingSutraNotesPage>
       } catch (_) {}
     }
 
-    // 移入回收站
-    final prefs = await SharedPreferences.getInstance();
-    final trashRaw = prefs.getString('trash_notes') ?? '[]';
-    final trash =
-        (jsonDecode(trashRaw) as List<dynamic>).cast<Map<String, dynamic>>();
-    trash.add({
+    await NoteStore.softDelete({
       'id': note.id,
       'content': note.content,
       'updatedAt': note.updatedAt.toIso8601String(),
       'shared': note.shared,
       'cloudId': note.cloudId,
-      'deletedAt': DateTime.now().toIso8601String(),
     });
-    await prefs.setString('trash_notes', jsonEncode(trash));
-
-    // 从本地笔记列表中移除
-    final notesRaw = prefs.getString('notes') ?? '[]';
-    final notesList =
-        (jsonDecode(notesRaw) as List<dynamic>).cast<Map<String, dynamic>>();
-    notesList.removeWhere((n) => n['id'] == note.id);
-    await prefs.setString('notes', jsonEncode(notesList));
 
     setState(() => _notes.removeAt(index));
     ScaffoldMessenger.of(context).showSnackBar(

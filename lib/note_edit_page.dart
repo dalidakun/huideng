@@ -1,13 +1,12 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'drafts_page.dart';
 import 'login_page.dart';
 import 'note_detail_page.dart';
+import 'note_store.dart';
 import 'note_sutra_links.dart';
 
 import 'app_palette.dart';
@@ -453,30 +452,24 @@ class _NoteEditPageState extends State<NoteEditPage> {
       } catch (_) {}
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('notes') ?? '[]';
-    final List<dynamic> notes = jsonDecode(raw);
     final now = DateTime.now().toIso8601String();
 
     final sharedNow =
         _shared && (cloudOk || (_cloudId != null && _cloudId!.isNotEmpty));
     final targetId = _savedId ?? widget.note?['id'] ?? now;
+    // 编辑已有笔记时沿用原 createdAt：它是时间线排序依据，改一次就该
+    // 保持「当初何时写下」，不能被编辑动作顶到今天。
+    final originalCreatedAt = widget.note?['createdAt'];
     final newNote = <String, dynamic>{
       'id': targetId,
       'title': '',
       'content': content,
       'updatedAt': now,
+      if (originalCreatedAt != null) 'createdAt': originalCreatedAt,
       'shared': sharedNow,
       'cloudId': sharedNow ? (_cloudId ?? newCloudId) : null,
     };
-    final index = notes.indexWhere((n) => n['id'] == targetId);
-    if (index >= 0) {
-      notes[index] = newNote;
-    } else {
-      notes.add(newNote);
-    }
-
-    await prefs.setString('notes', jsonEncode(notes));
+    await NoteStore.save(newNote);
     if (mounted) {
       FocusScope.of(context).unfocus();
       setState(() {

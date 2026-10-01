@@ -98,6 +98,18 @@ class AuthService {
   /// 本地登录身份缓存（uid/手机号/昵称）：会话恢复失败时兜底保持登录态。
   AuthUser? _cachedLogin;
 
+  /// 用户是否已显式退出登录。
+  ///
+  /// 为 true 时，所有「把会话写回登录态」的路径（[ensureFreshSession] /
+  /// [_repairExpiredSession] / [_syncUserFromSession]）一律不得执行。
+  /// 原因：退出流程里 [logout] 清掉 SDK 会话到删除 [_kSessionBackupKey]
+  /// 之间存在时间窗口，而这期间任何后台轮询（通知角标 30s、云同步 5min、
+  /// 经藏页新帖检查、App 回到前台续期）都可能走 ensureFreshSession，
+  /// 由 [_repairExpiredSession] 从备份重建**真实用户**会话并自动
+  /// 「登录」回来——表现就是点了退出、确认了、界面却一直还是已登录。
+  /// 只在真正登录（[loginWithSmsCode] / [loginWithAccount]）时置回 false。
+  bool _loggedOut = false;
+
   /// 登录态保活定时器：登录期间每 25 分钟主动刷新一次 access token，
   /// 避免「界面仍显示已登录、实际 token 已过期」的静默失效
   /// （CloudBase access token 2 小时过期且 SDK 不自动刷新）。
@@ -109,6 +121,16 @@ class AuthService {
 
   /// 会话修复备份：过期 access token 修复时暂存会话 JSON，失败时恢复原会话。
   static const String _kSessionBackupKey = 'auth_session_backup';
+
+  /// 登录用户的资料缓存键：退出登录时一并清除，避免残留上一个账号的身份。
+  static const List<String> _kProfilePrefKeys = [
+    'user_account_name',
+    'user_nickname',
+    'user_tagline',
+    'user_verified',
+    'user_verified_name',
+    'user_created_at',
+  ];
 
   /// 最近一次 [requestSmsCode] 返回的验证码校验回调，用于 [loginWithSmsCode]。
   Future<SignInRes> Function(VerifyOtpParams params)? _pendingVerifyOtp;
@@ -250,6 +272,7 @@ class AuthService {
   }
 
   Future<bool> _ensureFreshSession() async {
+    if (_loggedOut) return false;
     final app = await _ensureApp();
     if (app == null) return false;
     try {
@@ -404,6 +427,7 @@ class AuthService {
   /// 成功后手动构建 Session 写入 SDK currentSession（含 user），这样 SDK 后续
   /// 请求都用新 access token。不再调 SDK setSession 避免过期 header 路径。
   Future<void> _repairExpiredSession(CloudBase app) async {
+    if (_loggedOut) return;
     // ignore: invalid_use_of_visible_for_testing_member
     var session = app.httpClient.currentSession;
     if (session?.user?.isAnonymous == true) {
@@ -523,6 +547,7 @@ class AuthService {
   /// 智能比较：只有当 user.id / nickname / phone 与当前值不同时才更新，
   /// 避免 re-entrant 调用导致无限循环（_applyUser → 监听器 → 云调用 → 刷新 → 再进入）。
   void _syncUserFromSession(Session? session) {
+    if (_loggedOut) return;
     final user = session?.user;
     if (user == null || user.isAnonymous == true) return;
     final current = currentUser.value;
@@ -646,7 +671,7 @@ class AuthService {
       // 恢复失败：有本地登录身份缓存时保持登录态并安排一次后台重试，
       // 避免瞬时网络/会话刷新失败把用户踢下线；确无缓存才显示未登录。
       debugPrint('[auth] restoreSession failed: $e');
-      final cached = _cachedLogin;
+      final cached = _loggedOut ? null : _cachedLogin;
       if (cached != null) {
         _currentUserIsCached = true;
         currentUser.value = cached;
@@ -682,7 +707,10 @@ class AuthService {
   }
 
   /// 把一次真实登录会话应用到当前状态：写缓存身份、广播登录态、补默认昵称。
+  /// 用户已显式退出登录时直接忽略：退出前已在飞行中的启动恢复/刷新流程
+  /// 完成后不能把登录态又写回来（见 [_loggedOut]）。
   Future<void> _applyUser(User user) async {
+    if (_loggedOut) return;
     final authUser = _toAuthUser(user);
     _cachedLogin = authUser;
     await _saveCachedLogin(authUser);
@@ -757,6 +785,7 @@ class AuthService {
     if (verify == null || _pendingPhone != phone) {
       throw AuthException('no_pending_otp', '请先获取验证码');
     }
+    _loggedOut = false;
     _pendingVerifyOtp = null;
     _pendingPhone = null;
     await ensureFreshSession();
@@ -808,26 +837,46 @@ class AuthService {
   }
 
   /// 退出登录：通知云端并清除本地登录态。
+  ///
+  /// 关键顺序：**先同步落 [_loggedOut] 标记与广播未登录态**，再做任何 await
+  /// 与网络请求。否则「清 SDK 会话 → 删会话备份」之间的窗口会被后台轮询
+  /// 抓住——它从备份重建真实用户会话并调用 [_applyUser] 把用户又「登录」
+  /// 回来，表现为点了退出、确认了、界面却始终还是已登录。
+  /// SDK 的 `app.auth.signOut()` 是一次带 30s 超时的 HTTP 请求，
+  /// 放在最后并限时等待，保证弱网下退出也不会卡住不动。
   Future<void> logout() async {
+    _loggedOut = true;
     _pendingVerifyOtp = null;
     _pendingPhone = null;
     _pendingPhoneChangeVerify = null;
-    final app = await _ensureApp();
-    if (app != null) {
-      try {
-        await app.auth.signOut();
-      } catch (_) {}
-    }
     _cachedLogin = null;
-    await _clearCachedLogin();
     _stopKeepAlive();
     _restoreRetried = false;
     _currentUserIsCached = false;
     _restoreCompleted = true;
     currentUser.value = null;
+    // 本地凭证清理与云端登出解耦：无论网络好坏，本地一定退干净。
+    unawaited(_clearLocalAuthState());
+  }
+
+  /// 退出登录的收尾：删除本地身份缓存、资料残留与会话备份，并尽力通知云端吊销会话。
+  Future<void> _clearLocalAuthState() async {
     try {
+      await _clearCachedLogin();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kSessionBackupKey);
+      // 账户名/昵称/认证/加入时间都是登录用户的资料，登录后由 [_applyUser]
+      // 与云同步重新拉取；留着会让退出后仍显示上一个账号的身份。
+      for (final key in _kProfilePrefKeys) {
+        await prefs.remove(key);
+      }
+    } catch (_) {}
+    try {
+      final app = await _ensureApp();
+      if (app == null) return;
+      // 限时等待：signOut 是一次 30s 超时的 HTTP 请求，弱网/断网下
+      // 不能让退出流程一直挂着（此时登录态已在本地清完，吊销只是锦上添花）。
+      await app.auth.signOut().timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 
@@ -898,6 +947,7 @@ class AuthService {
     if (user == null) {
       throw AuthException('no_user', '登录失败，未获取到用户信息');
     }
+    _loggedOut = false;
     await _loadLocalTagline();
     await _loadLocalNickname();
     await _applyUser(user);

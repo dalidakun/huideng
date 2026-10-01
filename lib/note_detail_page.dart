@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
@@ -11,6 +10,7 @@ import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'my_page.dart';
 import 'note_stats_center.dart';
+import 'note_store.dart';
 import 'note_sutra_links.dart';
 import 'quote_box.dart';
 import 'reading_badges.dart';
@@ -819,7 +819,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: Text('笔记详情',
+        title: Text('帖子详情',
             style: TextStyle(
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       ),
@@ -2434,20 +2434,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   /// 同步菩提空间编辑到本地笔记。
   Future<void> _syncLocalNote(PlazaNote note, String newContent) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes');
-      if (raw == null || raw.isEmpty) return;
-      final List<dynamic> notes = jsonDecode(raw);
+      final notes = await NoteStore.load();
+      if (notes.isEmpty) return;
       // 先按 cloudId 匹配（单独分享的笔记）
       for (final n in notes) {
-        if (n is Map) {
-          final cloudId = (n['cloudId'] ?? '').toString();
-          if (cloudId.isNotEmpty && cloudId == note.id) {
-            n['content'] = newContent;
-            n['updatedAt'] = DateTime.now().toIso8601String();
-            await prefs.setString('notes', jsonEncode(notes));
-            return;
-          }
+        final cloudId = (n['cloudId'] ?? '').toString();
+        if (cloudId.isNotEmpty && cloudId == note.id) {
+          n['content'] = newContent;
+          n['updatedAt'] = DateTime.now().toIso8601String();
+          await NoteStore.save(n);
+          return;
         }
       }
       // cloudId 匹配不到时，按内容前缀匹配（SutraNotesPost 批量分享）
@@ -2464,32 +2460,30 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
               .toList();
           // 更新匹配的本地笔记：按内容前半段匹配
-          var updated = false;
+          final changed = <Map<String, dynamic>>[];
           for (final n in notes) {
-            if (n is Map) {
-              final content = (n['content'] ?? '').toString();
-              if (content.contains(sutraTag)) {
-                // 提取本地笔记中 $经文名 之后的正文部分
-                final localParts = content.split(RegExp(r'\n\s*\n'))
-                    .map((s) => s.trim())
-                    .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
-                    .toList();
-                if (localParts.isNotEmpty && parts.isNotEmpty) {
-                  // 用新内容的对应段落替换本地笔记正文
-                  final header = content.split(RegExp(r'\n\s*\n'))
-                      .firstWhere((s) => s.trim().startsWith(r'$'),
-                          orElse: () => '');
-                  if (header.isNotEmpty) {
-                    n['content'] = '$header\n\n${parts.first}';
-                    n['updatedAt'] = DateTime.now().toIso8601String();
-                    updated = true;
-                  }
+            final content = (n['content'] ?? '').toString();
+            if (content.contains(sutraTag)) {
+              // 提取本地笔记中 $经文名 之后的正文部分
+              final localParts = content.split(RegExp(r'\n\s*\n'))
+                  .map((s) => s.trim())
+                  .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
+                  .toList();
+              if (localParts.isNotEmpty && parts.isNotEmpty) {
+                // 用新内容的对应段落替换本地笔记正文
+                final header = content.split(RegExp(r'\n\s*\n'))
+                    .firstWhere((s) => s.trim().startsWith(r'$'),
+                        orElse: () => '');
+                if (header.isNotEmpty) {
+                  n['content'] = '$header\n\n${parts.first}';
+                  n['updatedAt'] = DateTime.now().toIso8601String();
+                  changed.add(n);
                 }
               }
             }
           }
-          if (updated) {
-            await prefs.setString('notes', jsonEncode(notes));
+          for (final n in changed) {
+            await NoteStore.save(n);
           }
         }
       }

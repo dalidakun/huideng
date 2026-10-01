@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'dart:isolate';
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
 import 'loading_widgets.dart';
 import 'note_detail_page.dart';
+import 'note_store.dart';
 import 'post_rich_content.dart';
 import 'reading_notes_page.dart';
 import 'reading_sutra_notes_page.dart';
@@ -345,19 +345,14 @@ class _SutraNotesPostViewState extends State<SutraNotesPostView> {
 
   Future<void> _loadLiveCount() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('notes');
-      if (raw == null || raw.isEmpty) return;
-      final arr = jsonDecode(raw);
-      if (arr is! List) return;
+      final arr = await NoteStore.load();
+      if (arr.isEmpty) return;
       final sutraTag = '\$${widget.post.sutraTitle}';
       var count = 0;
       for (final note in arr) {
-        if (note is Map) {
-          final content = (note['content'] ?? '').toString();
-          final shared = note['shared'] == true;
-          if (content.contains(sutraTag) && shared) count++;
-        }
+        final content = (note['content'] ?? '').toString();
+        final shared = note['shared'] == true;
+        if (content.contains(sutraTag) && shared) count++;
       }
       if (mounted) setState(() => _liveCount = count);
     } catch (_) {}

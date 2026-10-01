@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
-import 'hot_discussion_spot.dart';
+import 'community_daily_spot.dart';
 import 'user_avatar.dart';
 
 /// 栏目类别：八大宗派 / 十二法门。详情页据其把介绍标题写成「宗派介绍 / 法门介绍」。
@@ -148,14 +148,31 @@ const List<SectInfo> kGateList = [
 /// 写死是为了让两列四行的 8 个格子等高，不受副标题长短影响。
 const double _kSectDescHeight = 33;
 
-/// 底部「宗门」菜单页：标题栏 + 热门讨论展示位 + 「八大宗派」两列格子 + 「十二法门」列表。
+/// 八大宗派 + 十二法门共 20 个社区的标记（`${栏目名}社区`），
+/// 与社区页 `PlazaNote.community` 的写法一致（见 sect_community_page）。
+/// 顶部展示位只在这 20 个社区里挑昨日发帖最多的那个。
+Set<String> get kCommunityKeys => {
+      for (final s in [...kSectList, ...kGateList]) '${s.name}社区',
+    };
+
+/// 底部「宗门」菜单页：标题栏 + 昨日最热社区展示位 + 「八大宗派」两列格子 + 「十二法门」列表。
 ///
 /// 宗门与法门不分栏切换，同页自上而下依次排布；两者共用 [onOpen] 与同一个
 /// [SectDetailPage]，所以宗门与法门的详情页完全同构。
 class SectPage extends StatefulWidget {
-  const SectPage({super.key, this.onOpen, this.onOpenSideMenu});
+  const SectPage({
+    super.key,
+    this.onOpen,
+    this.onOpenCommunity,
+    this.onOpenSideMenu,
+  });
 
   final void Function(SectInfo sect)? onOpen;
+
+  /// 进入某个社区（展示位点「进入社区」时用）：回传社区标记（如「禅宗社区」）。
+  /// 跳转交给宿主页做，本页不引社区页、也就不会与它形成循环依赖。
+  final void Function(String community)? onOpenCommunity;
+
   final VoidCallback? onOpenSideMenu;
 
   @override
@@ -176,8 +193,11 @@ class _SectPageState extends State<SectPage> {
               child: ListView(
                 padding: const EdgeInsets.only(bottom: 28),
                 children: [
-                  // 顶部展示位：按天轮流放最热门经文讨论 / 最热门话题讨论。
-                  const HotDiscussionSpot(),
+                  // 顶部展示位：八大宗派 + 十二法门里，前一天发帖最多的那一个社区。
+                  CommunityDailySpot(
+                    communities: kCommunityKeys,
+                    onOpen: widget.onOpenCommunity,
+                  ),
                   _buildSectionTitle(p, '八大宗派'),
                   _buildSectGrid(p),
                   _buildSectionTitle(p, '十二法门'),
@@ -444,7 +464,7 @@ class _SectPageState extends State<SectPage> {
       final gateColor = AppPalette.instance.isPlain
           ? const Color(0xFF000000)
           : const Color(0xFFD3A069);
-      return CustomPaint(painter: _GatePainter(color: gateColor));
+      return CustomPaint(painter: GatePainter(color: gateColor));
     }
     final suffix = AppPalette.instance.isPlain ? '1' : '2';
     return Image.asset(
@@ -457,10 +477,10 @@ class _SectPageState extends State<SectPage> {
 
 // ─────────────── 图标绘制（律宗专属，暂无切图） ───────────────
 
-class _GatePainter extends CustomPainter {
+class GatePainter extends CustomPainter {
   final Color color;
 
-  _GatePainter({required this.color});
+  GatePainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -487,7 +507,7 @@ class _GatePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _GatePainter oldDelegate) =>
+  bool shouldRepaint(covariant GatePainter oldDelegate) =>
       color != oldDelegate.color;
 }
 
