@@ -1306,18 +1306,22 @@ class CloudNotesService {
     return (_withoutDeleted(list), hasMore);
   }
 
-  /// 拉取某个栏目社区的帖子：按 [PlazaNote.community] 字段精确过滤，
-  /// 排序与话题页同款（热度衰减分倒序）。正文里没有 `#话题` 标记，
-  /// 所以这些帖子不会混进任何话题榜。未登录也可浏览。
+  /// 拉取某个栏目社区的帖子：按 [PlazaNote.community] 字段精确过滤。
+  /// 正文里没有 `#话题` 标记，所以这些帖子不会混进任何话题榜。未登录也可浏览。
+  ///
+  /// [sort] 与广场同款：hot = 热度衰减分倒序（「热门」档），
+  /// latest = 发帖时间倒序（「最新」档）。两者由服务端各排各的，
+  /// 客户端不再拿热门那份在本地重排冒充最新——那样只能排出热门前 [pageSize] 条里的最新。
   Future<(List<PlazaNote>, bool hasMore)> getCommunityNotes(
     String community, {
     int page = 1,
     int pageSize = 100,
+    String sort = 'hot',
   }) async {
     final res = await _call('getPlazaNotes', params: {
       'page': page,
       'pageSize': pageSize,
-      'sort': 'hot',
+      'sort': sort,
       'community': community,
     });
     final list = (res['notes'] as List<dynamic>? ?? [])

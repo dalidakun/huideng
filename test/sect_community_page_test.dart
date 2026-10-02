@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:my_flutter_app/auth_service.dart';
 import 'package:my_flutter_app/cloud_notes_service.dart';
+import 'package:my_flutter_app/community_feed_cache.dart';
 import 'package:my_flutter_app/custom_tab_store.dart';
 import 'package:my_flutter_app/my_page.dart';
 import 'package:my_flutter_app/sect_community_page.dart';
@@ -29,8 +30,11 @@ void main() {
     return found;
   }
 
-  setUp(() {
+setUp(() {
     SharedPreferences.setMockInitialValues({});
+    // 社区帖子流缓存是进程内全局的：上一个用例留下的缓存会让下一个用例秒出内容，
+    // 也就不再走「首屏拉一次」那条路了，逐个用例都要清干净。
+    CommunityFeedCache.clear();
   });
 
   /// 合并页默认落在核心经典那一侧，`initialTab` 可直接指定停在哪一半。
@@ -566,5 +570,94 @@ void main() {
     expect(tester.takeException(), isNull, reason: '帖子卡片渲染抛异常');
     expect(find.text('行深'), findsOneWidget, reason: '作者昵称');
     expect(find.textContaining('五蕴皆空'), findsOneWidget, reason: '正文');
+  });
+
+  // ───────────────── 帖子流的刷新/缓存逻辑 ─────────────────
+
+  /// 造一条能上屏的社区帖子：正文带 [body]，方便在屏上按正文找到它。
+  PlazaNote post(String id, String body, {String? owner}) => PlazaNote(
+        id: id,
+        ownerUserId: owner ?? 'u_$id',
+        title: '',
+        content: body,
+        authorName: '行深',
+        visibility: 'public',
+        status: 'published',
+        likeCount: 0,
+        commentCount: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      );
+
+  testWidgets('来回切核心经典/社区不再重转加载圈：拉过一次的内容留在原处',
+      (tester) async {
+    // 预置一份热门缓存：模拟「这个社区刚拉过一次」。打开与来回切都该直接上屏，
+    // 屏上不该再出现加载圈——先前每次切回来都要重转一遍，这就是那个体验 bug。
+    CommunityFeedCache.put('天台宗社区', 'hot', [post('n1', '热门档第一条帖子')]);
+
+    await pumpSect(tester, kSectList[2]); // 天台宗
+    await tester.tap(find.text('天台宗社区').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('热门档第一条帖子'), findsOneWidget,
+        reason: '缓存命中就该秒出屏，不转加载圈');
+    expect(find.text('正在加载...'), findsNothing);
+
+    // 切回核心经典，再切回社区 —— 先前必在这里重刷一遍的那一个来回。
+    await tester.tap(find.text('核心经典').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('热门档第一条帖子'), findsNothing,
+        reason: '经典侧不该露出社区内容');
+
+    await tester.tap(find.text('天台宗社区').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('热门档第一条帖子'), findsOneWidget,
+        reason: '切回来内容原样在原处');
+    expect(find.text('正在加载...'), findsNothing,
+        reason: '来回切不该再盖一轮加载圈');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('热门与最新各用各的那份：最新不是热门在本地重排出来的',
+      (tester) async {
+    CommunityFeedCache.put('天台宗社区', 'hot', [post('h1', '热门档的帖子')]);
+    CommunityFeedCache.put('天台宗社区', 'latest', [post('l1', '最新档的帖子')]);
+
+    await pumpCommunity(tester, kSectList[2]); // 天台宗，默认落在热门
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('热门档的帖子'), findsOneWidget);
+    expect(find.textContaining('最新档的帖子'), findsNothing);
+
+    await tester.tap(find.text('最新'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('最新档的帖子'), findsOneWidget,
+        reason: '最新档是云端按发帖时间另排的一份');
+    expect(find.textContaining('热门档的帖子'), findsNothing);
+
+    // 切回热门：那份一直都在，不该因为切了一趟最新就被清掉重拉。
+    await tester.tap(find.text('热门'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('热门档的帖子'), findsOneWidget,
+        reason: '热门那份不该被最新牵连');
+    expect(find.text('正在加载...'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('两个社区各存各的，热门缓存不会串到别的栏目', (tester) async {
+    CommunityFeedCache.put('天台宗社区', 'hot', [post('t1', '天台宗的那条')]);
+
+    await pumpCommunity(tester, kSectList[3]); // 华严宗，没有缓存
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('天台宗的那条'), findsNothing,
+        reason: '别的栏目的帖子绝不串进本社区');
+
+    await pumpCommunity(tester, kSectList[2]); // 天台宗，自己那份还在
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('天台宗的那条'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

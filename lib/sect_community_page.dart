@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_palette.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
+import 'community_feed_cache.dart';
 import 'community_invite.dart';
 import 'custom_tab_store.dart';
 import 'loading_widgets.dart';
@@ -82,11 +83,17 @@ class CommunitySection extends StatefulWidget {
   /// 由外层宗门页提供，与经典那半用的是同一个组件，各挂各的内容里、都随内容上滑滚走。
   final Widget? header;
 
+  /// 停在「热门」（第一个选项卡）时再往右滑 = 回到经典那半。
+  /// 三个选项卡内部的左右滑由本页的 PageView 认领，
+  /// 越过最左这一下交给外层宗门页切边——两条路互不重复触发。
+  final VoidCallback? onSwipeBack;
+
   const CommunitySection({
     super.key,
     required this.sect,
     this.active = true,
     this.header,
+    this.onSwipeBack,
   });
 
   @override
@@ -96,12 +103,34 @@ class CommunitySection extends StatefulWidget {
 /// 社区内容的状态。单独暴露出来是为了让外层宗门页用 [GlobalKey] 拿到 [openCompose]，
 /// 把「发帖」浮钮挂在自己的 Scaffold 上（社区这一侧没有自己的 Scaffold）。
 class CommunitySectionState extends State<CommunitySection> {
-  /// 0 热门（云端热度序）/ 1 最新（按发帖时间倒序）/ 2 规则
+  /// 0 热门（云端热度序）/ 1 最新（云端发帖时间倒序）/ 2 规则
   int _tab = 0;
 
-  List<PlazaNote> _notes = [];
-  bool _loading = true;
-  bool _failed = false;
+  /// 页面控制器，用于社区子页面内的左右滑动切换三个选项卡
+  late final PageController _pageController;
+
+  /// 原始指针跟踪（越过左边界回经典用）：PageView 认领手势后不会通知外层，
+  /// 这里用不进手势竞技场的 [Listener] 原样记账，松手再判断。
+  int? _backPointer;
+
+  /// 本次指针从按下起累计的横向位移（右正左负）。
+  double _backDx = 0;
+
+  /// 本次指针累计的纵向位移：用来分辨「横滑」与「竖划帖子时的横向漂移」。
+  double _backDy = 0;
+
+  /// 按下时停在哪个选项卡：只有从「热门」（0）起手的右滑才是「回经典」。
+  int _backStartTab = 0;
+
+  /// 回经典所需的净右移距离：与外层宗门页换边的阈值保持一个量级，
+  /// 轻轻一带不误切，一划到位才换边。
+  static const double _backThreshold = 48;
+
+  /// 热门 / 最新各一份帖子流（规则 tab 没有数据）。两个档各排各的，不互相冒充。
+  final Map<int, CommunityFeedSlot> _feeds = {
+    0: CommunityFeedSlot(),
+    1: CommunityFeedSlot(),
+  };
 
   bool _introOpen = false;
   bool _joined = false;
@@ -112,16 +141,10 @@ class CommunitySectionState extends State<CommunitySection> {
 
   /// 本社区发过帖的人 = 已加入的成员，按最近发言倒序去重。
   /// 后端还没有成员云函数，「发帖即加入」是目前唯一真实的成员信号。
-  List<String> get _postedMemberIds {
-    final sorted = [..._notes]
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final ids = <String>[];
-    for (final n in sorted) {
-      if (n.ownerUserId.isEmpty || ids.contains(n.ownerUserId)) continue;
-      ids.add(n.ownerUserId);
-    }
-    return ids;
-  }
+  ///
+  /// 在 [_applyFeed] 里随帖子一起算好存下，build 只读不再现算——
+  /// 原先是 getter，每帧都要把整份帖子重排一遍，成员行一渲染就调好几次。
+  List<String> _postedMemberIds = const <String>[];
 
   /// 当前登录用户 id；没登录为 null。
   String? get _myUserId =>
@@ -161,8 +184,9 @@ class CommunitySectionState extends State<CommunitySection> {
   @override
   void initState() {
     super.initState();
+    _pageController = PageController(initialPage: _tab);
     // 只有切到社区这一侧才去拉帖子：进页面先看核心经典时不必白等一次网络。
-    if (widget.active) _load();
+    if (widget.active) _ensureCurrentTabLoaded();
     _restoreJoinState();
     _restoreStarState();
     // 星标可能在别处被改（菩提空间的列表里把社区移走），改完立刻同步点亮态。
@@ -172,55 +196,241 @@ class CommunitySectionState extends State<CommunitySection> {
   @override
   void didUpdateWidget(CommunitySection oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 首次切到社区侧才加载；来回切不重复请求。
-    if (widget.active && !oldWidget.active && _notes.isEmpty && !_loading) {
-      _load();
+    // 换栏目：社区 key 变了，屏上那份已经不是这个社区的，两档连成员表一起作废重来。
+    // 注意 `active` 两边都是 true（栏目页原地换了 sect），所以这里要自己发起重拉，
+    // 不能只靠下面那句「切到社区这一侧」。
+    final sectChanged = oldWidget.sect.name != widget.sect.name;
+    if (sectChanged) {
+      setState(_clearSlots);
+    }
+    // 切到社区这一侧时才考虑拉帖子；来来回回不再重复请求（见 [_ensureCurrentTabLoaded]）。
+    if (sectChanged || (widget.active && !oldWidget.active)) {
+      _ensureCurrentTabLoaded();
     }
   }
 
   @override
   void dispose() {
+    _pageController.dispose();
     CustomTabStore.revision.removeListener(_restoreStarState);
     super.dispose();
   }
 
   // ───────────────────────── 数据 ─────────────────────────
 
-  Future<void> _load({bool silent = false}) async {
-    if (!silent && mounted) {
+  /// 某个 tab 档位对应的云端排序：[CommunityFeedCache] 的键与请求都用它。
+  static String _sortOf(int tab) => tab == 0 ? 'hot' : 'latest';
+
+  /// 当前档位还没请求过时才去拉：首屏、切到社区侧、切到「最新」都走这里。
+  ///
+  /// 判据是 [CommunityFeedSlot.attempted]（「有没有试过」），不是「帖子是否为空」——
+  /// 空社区和拉失败的社区都已经试过了，每次切回来不该再被拖着干等一轮网络。
+  /// 失败后屏上是带重试按钮的错误态，要再试由用户点，或下拉刷新。
+  Future<void> _ensureCurrentTabLoaded() {
+    if (!widget.active || _tab == 2) return Future<void>.value();
+    final slot = _feeds[_tab]!;
+    if (slot.attempted || slot.loading) return Future<void>.value();
+    return _loadFeed(_tab);
+  }
+
+  /// 拉某个排序档的帖子。
+  ///
+  /// 缓存命中就直接端上屏（这就是「打开社区不再干等」的那一下，不碰网络）；
+  /// 没命中才转圈等云端。
+  ///
+  /// [silent] = 手上有内容时不清屏不转圈，回来原地替换（下拉刷新、看帖返回）。
+  /// [force] = 跳过缓存直连云端（已知数据变了，缓存那份必然过期）。
+  Future<void> _loadFeed(int tab, {bool silent = false, bool force = false}) async {
+    final slot = _feeds[tab]!;
+    if (slot.loading) return;
+    final sort = _sortOf(tab);
+    // 这一次是替哪个社区发的：等回来时社区可能已经换了（外层原地换成别的栏目），
+    // 那就整份丢掉——既不端到新社区的屏上，也不去动它已经重置过的档位。
+    final community = _community;
+
+    final cached = force ? null : CommunityFeedCache.peek(community, sort);
+    if (cached != null) {
+      if (!identical(cached, slot.notes)) {
+        setState(() => _applyFeed(tab, cached));
+      }
+      return;
+    }
+
+    slot.attempted = true;
+    if (!silent && slot.notes == null) {
       setState(() {
-        _loading = true;
-        _failed = false;
+        slot.loading = true;
+        slot.failed = false;
       });
     }
     try {
-      final (list, _) = await CloudNotesService.instance
-          .getCommunityNotes(_community, pageSize: 100);
-      // 双保险：只留本社区的帖子，菩提空间的普通帖绝不串进来。
-      // 云函数还没重新部署时服务端的 community 过滤不生效，这里也能兜住。
-      final own =
-          list.where((n) => n.community == _community).toList(growable: false);
-      // 作者头像/账号兜底补齐失败时退回原列表，不让整页变错误态。
-      List<PlazaNote> notes;
-      try {
-        notes = await CloudNotesService.instance.enrichFeedAuthors(own);
-      } catch (_) {
-        notes = own;
-      }
-      if (!mounted) return;
-      setState(() {
-        _notes = notes;
-        _loading = false;
-        _failed = false;
-      });
+      final notes = await CommunityFeedCache.coalesce(
+          community, sort, () => _fetchFeed(community, sort));
+      if (!mounted || community != _community) return;
+      setState(() => _applyFeed(tab, notes));
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || community != _community) return;
       setState(() {
-        _notes = [];
-        _loading = false;
-        _failed = true;
+        slot.loading = false;
+        // 手上有内容就别把它打成错误态，只是这一次没刷成而已。
+        slot.failed = slot.notes == null;
       });
     }
+  }
+
+  /// 真去云端取一份，落进缓存再交出去。
+  /// [community] 显式传进来而不是读 [_community]：这次请求可能就是上一个社区的。
+  Future<List<PlazaNote>> _fetchFeed(String community, String sort) async {
+    final (list, _) = await CloudNotesService.instance
+        .getCommunityNotes(community, pageSize: 100, sort: sort);
+    // 双保险：只留本社区的帖子，菩提空间的普通帖绝不串进来。
+    // 云函数还没重新部署时服务端的 community 过滤不生效，这里也能兜住。
+    final own =
+        list.where((n) => n.community == community).toList(growable: false);
+    // 作者头像/账号兜底补齐失败时退回原列表，不让整页变错误态。
+    List<PlazaNote> notes;
+    try {
+      notes = await CloudNotesService.instance.enrichFeedAuthors(own);
+    } catch (_) {
+      notes = own;
+    }
+    CommunityFeedCache.put(community, sort, notes);
+    return notes;
+  }
+
+  /// 把一份帖子落到某个排序档上：顺带重算成员表。
+  void _applyFeed(int tab, List<PlazaNote> notes) {
+    final slot = _feeds[tab]!;
+    slot.notes = notes;
+    slot.attempted = true;
+    slot.loading = false;
+    slot.failed = false;
+    _recomputeMembers();
+  }
+
+  /// 重算成员表：两个档的帖子并起来（只看其中一份会漏人），
+  /// 按最近发言倒序去重。算完存进 [_postedMemberIds]，build 里直接读。
+  void _recomputeMembers() {
+    final byId = <String, PlazaNote>{};
+    for (final slot in _feeds.values) {
+      for (final n in slot.notes ?? const <PlazaNote>[]) {
+        byId.putIfAbsent(n.id, () => n);
+      }
+    }
+    final sorted = byId.values.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final ids = <String>[];
+    for (final n in sorted) {
+      if (n.ownerUserId.isEmpty || ids.contains(n.ownerUserId)) continue;
+      ids.add(n.ownerUserId);
+    }
+    _postedMemberIds = ids;
+  }
+
+  /// 把两档都清成「还没拉过」。换栏目时用：社区 key 变了，屏上那份已经不是
+  /// 这个社区的。
+  ///
+  /// 只清内存态、不动 [CommunityFeedCache]——缓存本来就按社区分键，
+  /// 新社区那份还得留着（正是它让重新打开这个社区秒出）。
+  void _clearSlots() {
+    for (final slot in _feeds.values) {
+      slot.notes = null;
+      slot.attempted = false;
+      slot.loading = false;
+      slot.failed = false;
+    }
+    _postedMemberIds = const <String>[];
+  }
+
+  /// 作废本社区两档的缓存（下拉刷新、写操作之后用）：缓存里那份已经过期，
+  /// 留着就会把旧数据又端上屏。
+  ///
+  /// [keepVisible] = 屏上正看着的那一档，留着手上的内容——
+  /// 刷新中只原地替换，不清屏；没在看的那一档连数据一起清空、记成没试过，
+  /// 用户切过去时才会重新拉（拉到的自然是刷新后的数据）。
+  void _invalidateFeeds({required int keepVisible}) {
+    for (final entry in _feeds.entries) {
+      CommunityFeedCache.drop(_community, _sortOf(entry.key));
+      if (entry.key == keepVisible) continue;
+      entry.value.notes = null;
+      entry.value.attempted = false;
+      entry.value.failed = false;
+    }
+  }
+
+  /// 下拉刷新：当前看的那一档作废缓存后重拉；规则页没有帖子，替它刷新热门。
+  Future<void> _onPullToRefresh() {
+    if (!mounted) return Future<void>.value();
+    final keep = _tab == 2 ? 0 : _tab;
+    setState(() => _invalidateFeeds(keepVisible: keep));
+    return _loadFeed(keep, silent: true, force: true);
+  }
+
+  /// 写操作（发帖 / 编辑 / 删除 / 屏蔽）之后重拉本社区：
+  /// 缓存里那份必然过期，先作废再拉，否则拉回来的还是旧数据。
+  Future<void> _reloadAfterWrite() {
+    if (!mounted) return Future<void>.value();
+    final keep = _tab == 2 ? 0 : _tab;
+    setState(() => _invalidateFeeds(keepVisible: keep));
+    return _loadFeed(keep, force: true);
+  }
+
+  /// 切档：规则页没有数据，切走切回都留在原处；
+  /// 热门/最新各拉各的——切到还没拉过的那一档才去拉，已有数据的那档照常秒出。
+  void _onTabTap(int i) {
+    if (_tab == i) return;
+    setState(() => _tab = i);
+    if (_pageController.hasClients) {
+      // 直接跳页不做动画：与旧版「点了立刻换内容」一致，
+      // 也让「点规则 → 一帧后规则就在屏上」这种即时响应保留下来。
+      _pageController.jumpToPage(i);
+    }
+    if (i != 2) _ensureCurrentTabLoaded();
+  }
+
+  /// PageView 切换时同步 tab
+  void _onPageChanged(int i) {
+    if (_tab == i) return;
+    setState(() => _tab = i);
+    if (i != 2) _ensureCurrentTabLoaded();
+  }
+
+  // ─────────── 停在最左选项卡再往右滑 = 回经典（越过边界的一下） ───────────
+
+  void _onBackPointerDown(PointerDownEvent e) {
+    _backPointer = e.pointer;
+    _backDx = 0;
+    _backDy = 0;
+    _backStartTab = _tab;
+  }
+
+  void _onBackPointerMove(PointerMoveEvent e) {
+    if (e.pointer != _backPointer) return;
+    _backDx += e.delta.dx;
+    _backDy += e.delta.dy;
+  }
+
+  void _onBackPointerEnd(PointerEvent e) {
+    if (e.pointer != _backPointer) return;
+    _backPointer = null;
+    // 只有起手就在「热门」、净位移朝右越过阈值、且整体是一次横向滑动
+    // （横移压过竖移）才算「回经典」——竖着划帖子时手指带出的横向漂移不误触。
+    // 从「最新/规则」起手的右滑是切回前一个选项卡，归 PageView，不外传。
+    if (_backStartTab == 0 &&
+        _backDx >= _backThreshold &&
+        _backDx > _backDy.abs()) {
+      widget.onSwipeBack?.call();
+    }
+    _backDx = 0;
+    _backDy = 0;
+  }
+
+  /// 手指被系统取消（来电、多指接管等）：只清账，不切边。
+  void _onBackPointerCancel(PointerCancelEvent e) {
+    if (e.pointer != _backPointer) return;
+    _backPointer = null;
+    _backDx = 0;
+    _backDy = 0;
   }
 
   Future<void> _restoreJoinState() async {
@@ -304,7 +514,9 @@ class CommunitySectionState extends State<CommunitySection> {
       context,
       MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: n.id)),
     ).then((_) {
-      if (mounted) _load(silent: true);
+      // 回来时静默校一遍（点赞数/评论数在详情页里变了）：手上有内容就不清屏、
+      // 不转圈，回来原地替换，所以看不出是一次刷新。
+      if (mounted && _tab != 2) _loadFeed(_tab, silent: true, force: true);
     });
   }
 
@@ -347,7 +559,7 @@ class CommunitySectionState extends State<CommunitySection> {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('已发布')));
       setState(() => _tab = 0);
-      await _load();
+      await _reloadAfterWrite();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -371,7 +583,7 @@ class CommunitySectionState extends State<CommunitySection> {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
         // 屏蔽/关注后刷新，让被屏蔽用户的帖子立刻从社区消失。
-        if (mounted) _load(silent: true);
+        if (mounted) await _reloadAfterWrite();
       }
       return;
     }
@@ -429,7 +641,7 @@ class CommunitySectionState extends State<CommunitySection> {
           .updateSharedNote(cloudId: note.id, content: saved.trim());
       if (!mounted) return;
       showPostToast(context, '已更新');
-      await _load(silent: true);
+      await _reloadAfterWrite();
     } catch (e) {
       if (mounted) showPostToast(context, e.toString());
     }
@@ -466,7 +678,7 @@ class CommunitySectionState extends State<CommunitySection> {
       await CloudNotesService.instance.deleteCloudNote(note.id);
       if (!mounted) return;
       showPostToast(context, '已删除');
-      await _load(silent: true);
+      await _reloadAfterWrite();
     } catch (e) {
       if (mounted) showPostToast(context, e.toString());
     }
@@ -476,23 +688,47 @@ class CommunitySectionState extends State<CommunitySection> {
 
   @override
   Widget build(BuildContext context) {
-    return RefreshIndicator(
-      color: _gold,
-      onRefresh: () => _load(silent: true),
-      child: NestedScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        headerSliverBuilder: (context, innerScrolled) => [
-          // 标题水墨图 + 切换胶囊：与经典那半共用同一个头部组件，各随自己那半滚。
-          if (widget.header != null)
-            SliverToBoxAdapter(child: widget.header!),
-          SliverToBoxAdapter(child: _buildHeader()),
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _FixedHeaderDelegate(child: _buildTabBar()),
-          ),
-        ],
-        body: _tab == 2 ? _buildRules() : _buildFeed(),
+    // 最外层 Listener 只记账、不参赛（原始指针事件，不进手势竞技场）：
+    // 社区这一侧整页——头部水墨图、切换胶囊、帖子流——的横滑都记到它名下，
+    // 起手在「热门」、松手时净右移越过阈值的那一下外传回经典。
+    // 三个选项卡之间的左右滑由内容里的 PageView 认领，两路互不重复触发。
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onBackPointerDown,
+      onPointerMove: _onBackPointerMove,
+      onPointerUp: _onBackPointerEnd,
+      onPointerCancel: _onBackPointerCancel,
+      child: RefreshIndicator(
+        color: _gold,
+        onRefresh: _onPullToRefresh,
+        child: NestedScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          headerSliverBuilder: (context, innerScrolled) => [
+            // 标题水墨图 + 切换胶囊：与经典那半共用同一个头部组件，各随自己那半滚。
+            if (widget.header != null)
+              SliverToBoxAdapter(child: widget.header!),
+            SliverToBoxAdapter(child: _buildHeader()),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _FixedHeaderDelegate(child: _buildTabBar()),
+            ),
+          ],
+          body: _buildPageView(),
+        ),
       ),
+    );
+  }
+
+  /// 社区子页面的三个选项卡，支持左右滑动切换
+  Widget _buildPageView() {
+    return PageView(
+      controller: _pageController,
+      onPageChanged: _onPageChanged,
+      children: [
+        _buildFeedForTab(0),
+        _buildFeedForTab(1),
+        _buildRules(),
+      ],
     );
   }
 
@@ -773,10 +1009,7 @@ class CommunitySectionState extends State<CommunitySection> {
               Expanded(
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    if (_tab == i) return;
-                    setState(() => _tab = i);
-                  },
+                  onTap: () => _onTabTap(i),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Column(
@@ -814,16 +1047,21 @@ class CommunitySectionState extends State<CommunitySection> {
     );
   }
 
-  Widget _buildFeed() {
-    if (_loading) {
+
+  /// 为指定tab构建feed，支持PageView中的多个页面
+  Widget _buildFeedForTab(int tabIndex) {
+    final slot = _feeds[tabIndex]!;
+    final notes = slot.notes;
+    if (notes == null) {
+      if (slot.failed) {
+        return AppLoadError(title: '帖子加载失败', onRetry: () => _loadFeed(tabIndex));
+      }
       return const AppLoadingIndicator(message: '正在加载...');
     }
-    if (_failed) {
-      return AppLoadError(title: '帖子加载失败', onRetry: _load);
-    }
-    final notes = _visibleNotes();
     if (notes.isEmpty) return _buildEmptyFeed();
     return ListView.separated(
+      // 每档一个存储键：热门↔最新来回切，各自的滚动位置留在原处。
+      key: PageStorageKey('sect_community_feed_'),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
       itemCount: notes.length,
       separatorBuilder: (_, __) => Padding(
@@ -848,14 +1086,6 @@ class CommunitySectionState extends State<CommunitySection> {
       },
     );
   }
-
-  /// 热门：云端返回的热度衰减分倒序原样展示；
-  /// 最新：同一份数据按发帖时间倒序，不额外打一次云端。
-  List<PlazaNote> _visibleNotes() {
-    if (_tab != 1) return _notes;
-    return [..._notes]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  }
-
   /// 空态：外层已经包了 [RefreshIndicator]，这里只给一张可滚的空列表，
   /// 下拉刷新仍能从这里透出去。
   Widget _buildEmptyFeed() {

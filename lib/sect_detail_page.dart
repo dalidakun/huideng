@@ -142,8 +142,12 @@ class _SectDetailPageState extends State<SectDetailPage> {
   void didUpdateWidget(SectDetailPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sect.name != widget.sect.name) {
-      _expanded.clear();
-      _future = SectSutraManifest.load();
+      // 栏目页原地换 sect 时，State 是被复用的：不 setState 的话这一帧仍是
+      // 旧栏目的经典与展开状态（_updateBackToTop 不一定触发 setState）。
+      setState(() {
+        _expanded.clear();
+        _future = SectSutraManifest.load();
+      });
       _updateBackToTop();
     }
   }
@@ -258,11 +262,15 @@ class _SectDetailPageState extends State<SectDetailPage> {
   /// 切到另一半时换成那一半自己的头。非当前侧用 [Offstage] 留在树上：既不画也不参与
   /// 命中测试，切回来时滚动位置还在原地。
   Widget _buildTabBody(PaletteData p) {
+    // 换边的横向手势**只在经典那一侧参赛**：社区侧的横滑由它内部三个选项卡的
+    // PageView 认领，两边同时挂横向手势会一起进手势竞技场，一次滑动可能切两层。
+    // 社区停在最左（热门）再往右滑时，由 CommunitySection 通过 onSwipeBack 外传。
+    final bool classicSide = _tab == 0;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onHorizontalDragStart: _onDragStart,
-      onHorizontalDragUpdate: _onDragUpdate,
-      onHorizontalDragEnd: _onDragEnd,
+      onHorizontalDragStart: classicSide ? _onDragStart : null,
+      onHorizontalDragUpdate: classicSide ? _onDragUpdate : null,
+      onHorizontalDragEnd: classicSide ? _onDragEnd : null,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -277,6 +285,7 @@ class _SectDetailPageState extends State<SectDetailPage> {
               sect: widget.sect,
               active: _tab == 1,
               header: _buildHeader(p),
+              onSwipeBack: () => _goTo(0),
             ),
           ),
         ],
