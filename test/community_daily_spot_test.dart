@@ -66,6 +66,41 @@ void main() {
     });
   });
 
+  group('回溯窗口（昨天没人发帖时一天天往前找）', () {
+    test('previousDayRange 就是回溯 1 天', () {
+      expect(dayRange(DateTime(2026, 9, 27, 15, 30), 1),
+          previousDayRange(DateTime(2026, 9, 27, 15, 30)));
+    });
+
+    test('回溯 3 天 = 前天的前一整天，两端都是零点', () {
+      final (since, until) = dayRange(DateTime(2026, 9, 27, 22, 10), 3);
+      expect(DateTime.fromMillisecondsSinceEpoch(since), DateTime(2026, 9, 24));
+      expect(DateTime.fromMillisecondsSinceEpoch(until), DateTime(2026, 9, 25));
+    });
+
+    test('每天一个窗口，彼此不重叠（当天窗口不被算进去）', () {
+      final now = DateTime(2026, 9, 27, 22, 10);
+      // 更早那天的窗口右端 = 更近那天的窗口左端，交叠处不重复统计。
+      expect(dayRange(now, 2).$2, dayRange(now, 1).$1);
+      expect(dayRange(now, 3).$2, dayRange(now, 2).$1);
+      // 每个窗口都只有一天：回溯到上限时窗口右端也在今天之前。
+      expect(DateTime.fromMillisecondsSinceEpoch(dayRange(now, kMaxLookbackDays).$2),
+          DateTime(2026, 9, 21));
+    });
+
+    test('跨月回溯交给 DateTime 进位（9 月 1 日回溯 2 天落到 8 月 30 日）', () {
+      expect(
+        DateTime.fromMillisecondsSinceEpoch(dayRange(DateTime(2026, 9, 1, 9, 0), 2).$1),
+        DateTime(2026, 8, 30),
+      );
+    });
+
+    test('回溯上限与服务端 7 天窗口对齐', () {
+      // 服务端 getCommunityDailyTop 拒绝超过 7 天的窗口，上限不能大于 7。
+      expect(kMaxLookbackDays, 7);
+    });
+  });
+
   group('挑昨日发帖最多的社区', () {
     test('无人发帖返回 null（展示位退回引语卡）', () {
       expect(pickRandomTopCommunity(const []), isNull);

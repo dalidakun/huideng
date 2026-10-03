@@ -36,6 +36,7 @@ import 'sync_service.dart';
 import 'reading_time_service.dart';
 import 'sect_community_page.dart';
 import 'loading_widgets.dart';
+import 'sutra_list_page.dart';
 import 'ui_sound.dart';
 import 'reading_note_post.dart';
 
@@ -503,7 +504,7 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                   child: _MyRepostsTab(
                       isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
               _TabContent(
-                  child: _MyBookmarksTab(
+                  child: _MyLikesTab(
                       isLoggedIn: isLoggedIn, reloadNotifier: _reloadNotifier)),
             ],
           ),
@@ -878,7 +879,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
           Tab(text: '帖子'),
           Tab(text: '回复'),
           Tab(text: '转发'),
-          Tab(text: '书签'),
+          Tab(text: '喜欢'),
         ],
       ),
     );
@@ -4083,25 +4084,20 @@ class _MyRepostsTabState extends State<_MyRepostsTab>
   }
 }
 
-/// 书签 Tab：我收藏的笔记（已登录）。
-class _MyBookmarksTab extends StatefulWidget {
+/// 喜欢 Tab：我点过喜欢的帖子（最新点赞在前）。
+class _MyLikesTab extends StatefulWidget {
   final bool isLoggedIn;
   final ValueNotifier<int> reloadNotifier;
-  const _MyBookmarksTab(
-      {required this.isLoggedIn, required this.reloadNotifier});
+  const _MyLikesTab({required this.isLoggedIn, required this.reloadNotifier});
 
   @override
-  State<_MyBookmarksTab> createState() => _MyBookmarksTabState();
+  State<_MyLikesTab> createState() => _MyLikesTabState();
 }
 
-class _MyBookmarksTabState extends State<_MyBookmarksTab>
-    with _SharedNoteActions<_MyBookmarksTab> {
+class _MyLikesTabState extends State<_MyLikesTab> {
   List<PlazaNote>? _notes;
   bool _loading = true;
   String? _error;
-
-  @override
-  void onSharedNotesChanged() => _load(silent: true);
 
   @override
   void initState() {
@@ -4122,9 +4118,8 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
   }
 
   @override
-  void didUpdateWidget(covariant _MyBookmarksTab oldWidget) {
+  void didUpdateWidget(covariant _MyLikesTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // didUpdateWidget：widget 属性变化检测保留。
     if (widget.isLoggedIn && !oldWidget.isLoggedIn) _load();
     if (widget.reloadNotifier != oldWidget.reloadNotifier) {
       oldWidget.reloadNotifier.removeListener(_onReload);
@@ -4149,16 +4144,17 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
       return;
     }
     try {
-      // 置顶记录与「帖子」Tab 共用，每次加载时同步一次。
-      await loadSharedPinnedIds();
-      final notes = await CloudNotesService.instance.getFavoriteNotes();
+      // 先同步已赞集合，行内红心才是最新状态。
+      await CloudNotesService.instance.refreshLikedNoteIds();
+      // 服务端已按点赞时间倒序返回，无需客户端再排。
+      final notes = await CloudNotesService.instance.getLikedNotes();
       if (!mounted) return;
       setState(() {
         _notes = notes;
         _loading = false;
       });
     } catch (e, st) {
-      debugPrint('[Bookmarks] _load error: $e\n$st');
+      debugPrint('[Likes] _load error: $e\n$st');
       if (!mounted) return;
       setState(() {
         _notes = [];
@@ -4176,7 +4172,7 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
     if (_loading) return _tabLoading();
     if (_error != null) return _tabEmpty(_error!, Icons.error_outline);
     if (_notes == null || _notes!.isEmpty) {
-      return _tabEmpty('还没有收藏过帖子', Icons.bookmark_border);
+      return _tabEmpty('还没有喜欢过帖子', Icons.favorite_border);
     }
     return Builder(
       builder: (context) => CustomScrollView(
@@ -4207,14 +4203,9 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
                             color: AppPalette.p.divider),
                       PostFeedRow(
                         note: note,
-                        onReplyPosted: (_) => _load(),
-                        pinned: isSharedPinned(note),
-                        onTogglePin: () => toggleSharedPin(note),
-                        onEdit: () => editSharedNote(note),
-                        onDelete: () => deleteSharedNote(note,
-                            onRemoved: () =>
-                                _notes!.removeWhere((n) => n.id == note.id)),
-                        // 书签 Tab 不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                        onReplyPosted: (_) => _load(silent: true),
+                        // 喜欢的是别人的帖子：不提供置顶/编辑/删除，
+                        // 三点菜单只剩关注/屏蔽，行内也不显示关注按钮。
                         showFollowButton: false,
                       ),
                     ],
@@ -4265,6 +4256,248 @@ class _MyBookmarksTabState extends State<_MyBookmarksTab>
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 书签页：我收藏的笔记。入口在左上角头像的侧边菜单（「书签」），
+/// 原为「个人资料」页的第四个标签，移出后独立成页。
+class BookmarksPage extends StatefulWidget {
+  const BookmarksPage({super.key});
+
+  @override
+  State<BookmarksPage> createState() => _BookmarksPageState();
+}
+
+class _BookmarksPageState extends State<BookmarksPage>
+    with _SharedNoteActions<BookmarksPage>, RouteAware {
+  List<PlazaNote>? _notes;
+  bool _loading = true;
+  String? _error;
+
+  /// 登录态读实时值：本页独立于「个人资料」页，不再由父级传入。
+  bool get _isLoggedIn => AuthService.instance.isLoggedIn;
+
+  @override
+  void onSharedNotesChanged() => _load(silent: true);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    AuthService.instance.currentUser.addListener(_onAuthChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  @override
+  void dispose() {
+    AuthService.instance.currentUser.removeListener(_onAuthChanged);
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// 从笔记详情返回时静默刷新：详情页里可能已收藏/取消收藏，列表要与云端一致。
+  @override
+  void didPopNext() => _load(silent: true);
+
+  /// 登录态变化（登录/登出/会话恢复）后重新拉取，避免停在旧列表或错误态。
+  void _onAuthChanged() {
+    if (!mounted) return;
+    _load();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    // 先校验登录态：避免 widget 属性过时导致误判。
+    if (!AuthService.instance.isLoggedIn) {
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _loading = false;
+      });
+      return;
+    }
+    try {
+      // 置顶记录与「帖子」Tab 共用，每次加载时同步一次。
+      await loadSharedPinnedIds();
+      final notes = await CloudNotesService.instance.getFavoriteNotes();
+      if (!mounted) return;
+      setState(() {
+        _notes = notes;
+        _loading = false;
+      });
+    } catch (e, st) {
+      debugPrint('[Bookmarks] _load error: $e\n$st');
+      if (!mounted) return;
+      setState(() {
+        _notes = [];
+        _error = '加载失败：${e.toString().replaceAll('Exception: ', '')}';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: Column(
+        children: [
+          _buildHeader(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  /// 顶部栏：返回 + 「书签」+ 收藏条数（与「设置」页同一套外观）。
+  Widget _buildHeader() {
+    final count = _notes?.length ?? 0;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [AppPalette.p.gradTop, AppPalette.p.gradBot],
+        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 10, 20, 18),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon:
+                    Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+              ),
+              const SizedBox(width: 4),
+              Text('书签',
+                  style: TextStyle(
+                      fontSize: 19, fontWeight: FontWeight.w600, color: _text)),
+              const Spacer(),
+              if (_error == null && !_loading)
+                Text('$count 条',
+                    style: TextStyle(fontSize: 13, color: _textSec)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (!_isLoggedIn) {
+      return _buildEmpty('请先登录后查看收藏', Icons.lock_outlined, login: true);
+    }
+    if (_loading) {
+      return const Center(child: AppLoadingIndicator(message: '正在加载内容...'));
+    }
+    if (_error != null) return _buildEmpty(_error!, Icons.error_outline);
+    final notes = _notes;
+    if (notes == null || notes.isEmpty) {
+      return _buildEmpty('还没有收藏过帖子', Icons.bookmark_border);
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: _primary,
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          const SliverToBoxAdapter(child: SizedBox(height: 4)),
+          SliverPadding(
+            // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
+                  if (index == notes.length) {
+                    return Divider(
+                        height: 1,
+                        thickness: 0.5,
+                        color: AppPalette.p.divider);
+                  }
+                  final note = notes[index];
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 帖子顶部分割线（首条不画，避免顶部多一条线）。
+                      if (index > 0)
+                        Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            color: AppPalette.p.divider),
+                      PostFeedRow(
+                        note: note,
+                        onReplyPosted: (_) => _load(),
+                        pinned: isSharedPinned(note),
+                        onTogglePin: () => toggleSharedPin(note),
+                        onEdit: () => editSharedNote(note),
+                        onDelete: () => deleteSharedNote(note,
+                            onRemoved: () =>
+                                _notes!.removeWhere((n) => n.id == note.id)),
+                        // 书签页不单独显示关注按钮，三点菜单仍可操作关注/屏蔽。
+                        showFollowButton: false,
+                      ),
+                    ],
+                  );
+                },
+                childCount: notes.length + 1,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 空态/错误态：图标 + 文案，未登录时额外给一个登录按钮。
+  Widget _buildEmpty(String text, IconData icon, {bool login = false}) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 48, color: _textHint),
+          const SizedBox(height: 12),
+          Text(text, style: TextStyle(fontSize: 14, color: _textHint)),
+          if (login) ...[
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const LoginPage()))
+                  .then((_) {
+                if (mounted) _load();
+              }),
+              style: FilledButton.styleFrom(
+                backgroundColor: _gold,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                minimumSize: const Size(0, 38),
+                shape:
+                    RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                elevation: 0,
+              ),
+              child: const Text('登录',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+          ],
         ],
       ),
     );

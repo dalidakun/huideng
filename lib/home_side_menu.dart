@@ -11,7 +11,7 @@ import 'user_avatar.dart';
 ///
 /// 自上而下：头像、昵称 + 认证徽章（或「获得认证」提示）与 @账户名（右侧为阅藏进度圆环），
 /// 其下为累计读经时长（原样式），两者同步更新，
-/// 随后是菜单项：个人资料、记录、关注、设置、登录或退出登录。
+/// 随后是菜单项：个人资料、笔记、书签、关注、设置、登录或退出登录。
 /// 点击面板外的遮罩即可关闭，面板上不放关闭按钮。
 class HomeSideMenu extends StatefulWidget {
   /// 点击「个人资料」。
@@ -19,6 +19,9 @@ class HomeSideMenu extends StatefulWidget {
 
   /// 点击「记录」（读经画线/感想/笔记的时间线）。
   final VoidCallback onOpenRecord;
+
+  /// 点击「书签」（我收藏的笔记）。
+  final VoidCallback onOpenBookmarks;
 
   /// 点击「关注」（我关注的用户列表）。
   final VoidCallback onOpenFollowing;
@@ -39,6 +42,7 @@ class HomeSideMenu extends StatefulWidget {
     super.key,
     required this.onOpenProfile,
     required this.onOpenRecord,
+    required this.onOpenBookmarks,
     required this.onOpenFollowing,
     required this.onOpenSettings,
     required this.onLogin,
@@ -145,6 +149,13 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                     (_) => const _RecordMenuIcon(),
                     '笔记',
                     onTap: widget.onOpenRecord,
+                  ),
+                  _buildItem(
+                    // 矢量书签比同排的 PNG 图标（my1/gz 都缩绘到 18、21 槽居中）
+                    // 视觉偏小，这里放到 24 才与之齐平。
+                    (c) => Icon(Icons.bookmark_border, size: 24, color: c),
+                    '书签',
+                    onTap: widget.onOpenBookmarks,
                   ),
                   _buildItem(
                     (_) => const _FollowMenuIcon(),

@@ -16,6 +16,7 @@ void main() {
         body: HomeSideMenu(
           onOpenProfile: () {},
           onOpenRecord: () {},
+          onOpenBookmarks: () {},
           onOpenFollowing: () {},
           onOpenSettings: () {},
           onLogin: () {},

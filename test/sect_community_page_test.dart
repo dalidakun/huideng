@@ -520,7 +520,7 @@ setUp(() {
     expect(await CustomTabStore.isStarred('天台宗社区'), isTrue,
         reason: '写进了菩提空间的自定义列表');
     expect(find.byIcon(Icons.star_rounded), findsOneWidget, reason: '点亮了');
-    expect(find.text('已添加到「列表」'), findsOneWidget, reason: 'toast 提示');
+    expect(find.text('已添加到菩提空间列表'), findsOneWidget, reason: 'toast 提示');
 
     // 清掉 toast 的 2 秒移除定时器，免得测试收尾报 pending timer。
     await tester.pump(const Duration(seconds: 3));

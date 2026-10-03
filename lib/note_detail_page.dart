@@ -1489,7 +1489,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     );
   }
 
-  /// 评论节点三点菜单：收藏笔记/分享笔记（作用于原贴）；自己或帖主可删除，他人可关注/屏蔽。
+  /// 评论节点三点菜单：添加到书签/分享笔记（作用于原贴）；自己或帖主可删除，他人可关注/屏蔽。
   Future<void> _showCommentMenu(PlazaComment c) async {
     final me = AuthService.instance.currentUser.value;
     if (me == null || c.authorId.isEmpty) return;
@@ -1533,7 +1533,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 favorited
                     ? Icons.bookmark_rounded
                     : Icons.bookmark_border_rounded,
-                favorited ? '取消收藏' : '收藏笔记'),
+                favorited ? '取消收藏' : '添加到书签'),
             postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除评论'),
             const SizedBox(height: 8),
@@ -1551,7 +1551,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
-  /// 他人帖子/评论/回复的三点菜单：收藏笔记 + 分享笔记 + 关注/屏蔽该用户。
+  /// 他人帖子/评论/回复的三点菜单：添加到书签 + 分享笔记 + 关注/屏蔽该用户。
   /// 收藏与分享的目标由调用方通过回调指定（评论作用于原贴，回复作用于该回复帖）。
   Future<void> _showNoteActionsAndUserMenu({
     required String userId,
@@ -1587,7 +1587,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 favorited
                     ? Icons.bookmark_rounded
                     : Icons.bookmark_border_rounded,
-                favorited ? '取消收藏' : '收藏笔记'),
+                favorited ? '取消收藏' : '添加到书签'),
             postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
             postMenuItem(ctx, following ? 'unfollow' : 'follow',
                 Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
@@ -1872,7 +1872,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     });
   }
 
-  /// 回复节点三点菜单：收藏笔记/分享笔记（作用于该回复）；自己可置顶/编辑/删除，他人可关注/屏蔽。
+  /// 回复节点三点菜单：添加到书签/分享笔记（作用于该回复）；自己可置顶/编辑/删除，他人可关注/屏蔽。
   Future<void> _showReplyNodeMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
     // 展示昵称优先用预取资料（存储的 authorName 可能是"同修"或已过期）。
@@ -1920,7 +1920,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 favorited
                     ? Icons.bookmark_rounded
                     : Icons.bookmark_border_rounded,
-                favorited ? '取消收藏' : '收藏笔记'),
+                favorited ? '取消收藏' : '添加到书签'),
             postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
             postMenuItem(
                 ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
@@ -2278,7 +2278,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   favorited
                       ? Icons.bookmark_rounded
                       : Icons.bookmark_border_rounded,
-                  favorited ? '取消收藏' : '收藏笔记'),
+                  favorited ? '取消收藏' : '添加到书签'),
               _menuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
               _menuItem(
                   ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
@@ -2345,7 +2345,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 favorited
                     ? Icons.bookmark_rounded
                     : Icons.bookmark_border_rounded,
-                favorited ? '取消收藏' : '收藏笔记'),
+                favorited ? '取消收藏' : '添加到书签'),
             _menuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
             _menuItem(
               ctx,

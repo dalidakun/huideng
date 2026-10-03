@@ -777,6 +777,12 @@ class _MainPageState extends State<MainPage>
     unawaited(_sideMenuGo(() async => _openRecordPage()));
   }
 
+  /// 抽屉「书签」入口：进书签页（原本挂在个人资料页的标签栏，现移到这里）。
+  void _sideMenuOpenBookmarks() {
+    unawaited(_sideMenuGo(() =>
+        Navigator.of(context).push(slideInFromLeft(const BookmarksPage()))));
+  }
+
   /// 切到记录页：重读本地索引（读经页新写的画线/感想、笔记改动即时可见）。
   void _openRecordPage() {
     if (!mounted) return;
@@ -1093,6 +1099,7 @@ class _MainPageState extends State<MainPage>
                 child: HomeSideMenu(
                   onOpenProfile: _sideMenuOpenProfile,
                   onOpenRecord: _sideMenuOpenRecord,
+                  onOpenBookmarks: _sideMenuOpenBookmarks,
                   onOpenFollowing: _sideMenuOpenFollowing,
                   onOpenSettings: _sideMenuOpenSettings,
                   onLogin: _sideMenuLogin,

@@ -475,7 +475,7 @@ class CommunitySectionState extends State<CommunitySection> {
       await CustomTabStore.setStarred(_community, next);
       if (!mounted) return;
       final tab = (await CustomTabStore.read())['name'];
-      _toast(next ? '已添加到「$tab」' : '已从「$tab」移除');
+      _toast(next ? '已添加到菩提空间列表' : '已从「$tab」移除');
     } catch (e) {
       if (!mounted) return;
       setState(() => _starred = !next);

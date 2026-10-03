@@ -7,22 +7,32 @@ import 'app_palette.dart';
 import 'cloud_notes_service.dart';
 import 'note_sutra_links.dart';
 
-/// 前一天（本地时区）的毫秒区间 `[since, until)`：昨天零点 → 今天零点。
+/// 往前回溯的天数上限。
+///
+/// 服务端 `getCommunityDailyTop` 只接受 0~7 天的统计窗口，这里与那个上限对齐；
+/// 再往前就得改云函数，不如停在引语卡。
+const int kMaxLookbackDays = 7;
+
+/// [daysBack] 天前那一整天的毫秒区间 `[since, until)`（本地时区）。
 ///
 /// 日界必须按本地时区切：服务端是拿 `createdAt` 落在这个区间来统计的，
 /// 若用 UTC 切，晚上发的帖会被算进「今天」，昨天反而少了内容。
-/// 月份交给 [DateTime] 自己进位（`day - 1` 为 0 或负时自动退到上月末）。
-(int, int) previousDayRange(DateTime now) => (
-      DateTime(now.year, now.month, now.day - 1).millisecondsSinceEpoch,
-      DateTime(now.year, now.month, now.day).millisecondsSinceEpoch,
+/// 月份交给 [DateTime] 自己进位（`day - daysBack` 为 0 或负时自动退到上月末）。
+(int, int) dayRange(DateTime now, int daysBack) => (
+      DateTime(now.year, now.month, now.day - daysBack).millisecondsSinceEpoch,
+      DateTime(now.year, now.month, now.day - daysBack + 1)
+          .millisecondsSinceEpoch,
     );
 
-/// 展示位挑社区：取前一天发帖最多的那个；并列第一时在并列者里随机挑一个。
+/// 前一天（本地时区）的毫秒区间 `[since, until)`：昨天零点 → 今天零点。
+(int, int) previousDayRange(DateTime now) => dayRange(now, 1);
+
+/// 展示位挑社区：取窗口内发帖最多的那个；并列第一时在并列者里随机挑一个。
 ///
 /// 并列不写本地缓存、每次加载重抽：并列本身就说明几家一样热，
 /// 让每位同修都有机会被推到首位，也不用维护「今天抽到过谁」。
 /// [stats] 需已过滤成八大宗派 + 十二法门这 20 个社区；无人发帖时返回 null，
-/// 由展示位退回引语卡。
+/// 由展示位继续往前找一天，或退回引语卡。
 CommunityDailyStat? pickRandomTopCommunity(
   List<CommunityDailyStat> stats, {
   Random? random,
@@ -53,12 +63,16 @@ const double _kNameSize = 17;
 const double _kCardRadius = 12;
 
 /// 宗门菜单页顶部展示位：在八大宗派 + 十二法门这 20 个社区里，
-/// 挑出「前一天发帖数量最多」的那一个，把它的名号、当日发帖数和最热的一条帖子
-/// 摆在这块位上，点一下直接进那个社区。
+/// 挑出「最近一个有人发帖的日子」里发帖数量最多的那一个，把它的名号、
+/// 当日发帖数和最热的一条帖子摆在这块位上，点一下直接进那个社区。
 ///
-/// 数据口径全在服务端：按客户端给的本地「昨天」窗口统计各社区发帖数，
+/// 先看昨天；昨天没人发帖就一天天往前找，最多回溯 [kMaxLookbackDays] 天——
+/// 连着几天冷清时不该退回引语卡，该把最近一次热闹的那个社区和它的热帖
+/// 继续摆出来（小字里会标明这是几天前的数据）。
+///
+/// 数据口径全在服务端：按客户端给的本地日窗口统计各社区发帖数，
 /// 每个社区再按互动量（阅读 +1、赞×3、评论×5、转发×8）取窗内最热一条。
-/// 昨日无人发帖、或接口尚未部署时退回引语卡，不显示「暂无」这类占位文案。
+/// 一周内无人发帖、或接口尚未部署时才退回引语卡，不显示「暂无」这类占位文案。
 class CommunityDailySpot extends StatefulWidget {
   const CommunityDailySpot({
     super.key,
@@ -80,35 +94,52 @@ class CommunityDailySpot extends StatefulWidget {
 class _CommunityDailySpotState extends State<CommunityDailySpot> {
   CommunityDailyStat? _stat;
 
+  /// [_stat] 取自几天前的窗口（1 = 昨天）：只用于小字文案。
+  int _daysBack = 1;
+
   @override
   void initState() {
     super.initState();
     unawaited(_load());
   }
 
+  /// 先查昨天；昨天没人发帖就一天天往前找，找到最近一个有发帖的日子为止。
+  ///
+  /// 冷清期（连着几天没人发帖）不该退回引语卡，那会让同修以为整个社区都空着；
+  /// 该显示的是最近一次热闹时的那个社区与它的热帖，日期由小字点明。
   Future<void> _load() async {
-    final (since, until) = previousDayRange(DateTime.now());
-    List<CommunityDailyStat> stats = const [];
-    try {
-      stats = await CloudNotesService.instance
-          .getCommunityDailyTop(sinceMs: since, untilMs: until);
-    } catch (_) {
-      // 接口没部署 / 网络异常：当作无人发帖，退回引语卡。
-      stats = const [];
+    final now = DateTime.now();
+    for (var back = 1; back <= kMaxLookbackDays; back++) {
+      final (since, until) = dayRange(now, back);
+      List<CommunityDailyStat> stats;
+      try {
+        stats = await CloudNotesService.instance
+            .getCommunityDailyTop(sinceMs: since, untilMs: until);
+      } catch (_) {
+        // 接口没部署 / 网络异常：再往后试也是白试，直接退回引语卡。
+        break;
+      }
+      // 只认栏目表里的 20 个社区；其余（历史脏数据、手改的 community）不进展示位。
+      final known =
+          stats.where((s) => widget.communities.contains(s.community)).toList();
+      final picked = pickRandomTopCommunity(known);
+      if (picked == null) continue;
+      if (!mounted) return;
+      setState(() {
+        _stat = picked;
+        _daysBack = back;
+      });
+      return;
     }
-    // 只认栏目表里的 20 个社区；其余（历史脏数据、手改的 community）不进展示位。
-    final known =
-        stats.where((s) => widget.communities.contains(s.community)).toList();
-    final picked = pickRandomTopCommunity(known);
     if (!mounted) return;
-    setState(() => _stat = picked);
+    setState(() => _stat = null);
   }
 
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
     final stat = _stat;
-    // 前一天无人发帖（或接口没起来）：退回引语卡，不显示占位文案。
+    // 一周内都没人发帖（或接口没起来）：退回引语卡，不显示占位文案。
     if (stat == null) return _buildHero(p);
     final note = stat.top;
     return Padding(
@@ -218,21 +249,30 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
     );
   }
 
-  /// 卡片下缘的一行小字：最热帖的发出时间 + 互动数。
+/// 卡片下缘的一行小字：最热帖的发出时间 + 互动数。
   /// 没有帖子时只报发帖数，不留「0 赞 0 回复」这种空信息。
+  /// 时间已带月日，几天的数据一眼看得出，不必再补「前天热门」这类标签。
   String _metaText(CommunityDailyStat stat) {
     final note = stat.top;
-    if (note == null) return '昨日 ${stat.posts} 帖';
+    if (note == null) return '${_dayWord()} ${stat.posts} 帖';
     final parts = <String>[
       if (note.createdAt > 0) _timeText(note.createdAt),
       if (note.likeCount > 0) '${note.likeCount} 赞',
       if (note.commentCount > 0) '${note.commentCount} 回复',
       if (note.viewCount > 0) '${note.viewCount} 阅读',
     ];
-    return parts.isEmpty ? '昨日 ${stat.posts} 帖' : parts.join(' · ');
+    return parts.isEmpty ? '${_dayWord()} ${stat.posts} 帖' : parts.join(' · ');
   }
 
-  /// 展示位里的帖子必然来自昨天，所以时间只标到时分；数据异常时退回日期。
+  /// 这块位的数据是几天前的：昨日 / 前天 / N 天前。
+  /// 只用在「只有发帖数、没有帖子可显示」的那行小字上。
+  String _dayWord() {
+    if (_daysBack <= 1) return '昨日';
+    if (_daysBack == 2) return '前天';
+    return '${_daysBack - 1} 天前';
+  }
+
+  /// 帖子的发出时间：月日 + 时分。数据可能来自前几天，所以月日不能省。
   String _timeText(int ms) {
     final t = DateTime.fromMillisecondsSinceEpoch(ms);
     final h = t.hour.toString().padLeft(2, '0');
@@ -301,7 +341,7 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
   }
 
   /// 引语卡：大标题 + 两行小字，右下贴一幅淡墨远山。
-  /// 昨日无人发帖（或接口没起来）时顶在页面最上面，替代「暂无」占位文案。
+  /// 一周内无人发帖（或接口没起来）时顶在页面最上面，替代「暂无」占位文案。
   /// 远山与社区卡同图同铺法（mih.png 整铺贴底、20% 淡墨）。
   Widget _buildHero(PaletteData p) {
     return Padding(
