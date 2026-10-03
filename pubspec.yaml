@@ -108,6 +108,8 @@ flutter:
     - assets/images/gao2.png
     # 侧边栏「关注」菜单图标：两种外观统一用黑色 gz.png。
     - assets/images/gz.png
+    # 侧边栏「书签」菜单图标：两种外观统一用黑色 shu.png。
+    - assets/images/shu.png
     # 菩提空间页右下角悬浮按钮图标：添加笔记 write，回到顶部 top。
     - assets/images/write.png
     - assets/images/top.png

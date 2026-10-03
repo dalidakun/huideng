@@ -151,9 +151,7 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                     onTap: widget.onOpenRecord,
                   ),
                   _buildItem(
-                    // 矢量书签比同排的 PNG 图标（my1/gz 都缩绘到 18、21 槽居中）
-                    // 视觉偏小，这里放到 24 才与之齐平。
-                    (c) => Icon(Icons.bookmark_border, size: 24, color: c),
+                    (_) => const _BookmarkMenuIcon(),
                     '书签',
                     onTap: widget.onOpenBookmarks,
                   ),
@@ -450,6 +448,23 @@ class _RecordMenuIcon extends StatelessWidget {
       'assets/images/bcode1.png',
       width: 21,
       height: 21,
+      fit: BoxFit.contain,
+    );
+  }
+}
+
+/// 侧边菜单「书签」图标：沿用底部菜单那组细线资源，两种外观统一用黑色 shu.png。
+/// 该图字形横向只占画布七成，纵向占满（200×200 里墨迹 139×199），
+/// 比同排 my1/gz 显得瘦高，故按 20 号绘制（略小于 21 槽，视觉上与相邻几项相称）。
+class _BookmarkMenuIcon extends StatelessWidget {
+  const _BookmarkMenuIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/shu.png',
+      width: 20,
+      height: 20,
       fit: BoxFit.contain,
     );
   }
