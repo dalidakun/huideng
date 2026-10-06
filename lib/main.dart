@@ -1213,14 +1213,17 @@ class _BodhiTabIcon extends StatelessWidget {
         return Stack(
           clipBehavior: Clip.none,
           children: [
+            // 素材四周留白比同排图标多（200x200 中墨迹约占 80%x92%，
+            // 而 study 是 86%x88%、sutra_book 是 95%x95%），22 号下显得比邻项小，
+            // 故放到 23 号，视觉大小才与其它菜单项一致。
             Image.asset(
               AppPalette.instance.isPlain
                   ? (active ? 'assets/images/su2.png' : 'assets/images/su1.png')
                   : (active
                       ? 'assets/images/mi2.png'
                       : 'assets/images/mi1.png'),
-              width: 22,
-              height: 22,
+              width: 23,
+              height: 23,
             ),
             if (count > 0)
               Positioned(
