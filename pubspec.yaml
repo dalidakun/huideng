@@ -119,6 +119,8 @@ flutter:
     - assets/images/leaf-sharp.png
     # 首页精读经文卡片右侧莲花装饰图。
     - assets/images/lianhua.png
+    # 右下角「继续阅读」圆形按钮图标。
+    - assets/images/yt.png
     # 宗门/法门页核心经典的文件夹图标（两种外观同一张）。
     - assets/images/fojing.png
     # 宗门页行首图标（首字母缩写，1=素白外观，2=米黄外观；律宗暂无切图）。

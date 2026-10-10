@@ -669,29 +669,21 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Future<void> _showRecentSutras() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('daily_sutra_history') ?? '{}';
-    final Map<String, dynamic> history = jsonDecode(raw);
-
-    // 最近三天（今天 + 前两日）阅读的经文：按日期从新到旧、同日内最新在前
-    // 聚合，同一部经书（可能跨天/多路径重复出现）只保留最近一次记录。
-    final now = DateTime.now();
-    final dayKeys = <String>[];
-    for (var i = 0; i < 3; i++) {
-      final d = now.subtract(Duration(days: i));
-      dayKeys.add(
-          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}');
-    }
-    final seenTitles = <String>{};
-    final sutras = <dynamic>[];
-    for (final d in dayKeys) {
-      final list = history[d];
-      if (list is! List) continue;
-      for (final s in list) {
-        final title = s is Map ? (s['title']?.toString() ?? '') : '';
-        if (title.isEmpty || !seenTitles.add(title)) continue;
-        sutras.add(s);
-      }
-    }
+    // 最近阅读记录（recent_sutras，格式 `经名|||路径`，新读在前）取前 5 部：
+    // 不限最近几天，哪怕是一个月前读过的也照常展示，保证列表始终有内容。
+    final raw = prefs.getStringList('recent_sutras') ?? [];
+    final sutras = raw
+        .map((e) {
+          final parts = e.split('|||');
+          if (parts.isEmpty || parts[0].isEmpty) return null;
+          return <String, dynamic>{
+            'title': parts[0],
+            'filePath': parts.length > 1 ? parts[1] : '',
+          };
+        })
+        .whereType<Map<String, dynamic>>()
+        .take(10)
+        .toList();
 
     if (!mounted) return;
 
@@ -703,17 +695,8 @@ class StudyHubPageState extends State<StudyHubPage>
       final title = s['title']?.toString() ?? '';
       final fp = s['filePath']?.toString();
       if (title.isEmpty || fp == null || fp.isEmpty) continue;
-      final variants =
-          await SutraDownloader.pathKeyVariants(fp, title: title);
-      final canonical = prefs.getDouble('progress_${variants.first}');
-      var p = canonical ?? 0.0;
-      if (canonical == null) {
-        for (final v in variants) {
-          final cur = prefs.getDouble('progress_$v') ?? 0.0;
-          if (cur > p) p = cur;
-        }
-      }
-      liveProgress[title] = p;
+      liveProgress[title] =
+          await SutraDownloader.latestProgressForPath(prefs, fp, title: title);
     }
 
     showModalBottomSheet(
@@ -730,7 +713,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
                 child: Row(
                   children: [
-                    Text('最近3天阅读',
+                    Text('最近阅读',
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
@@ -743,7 +726,10 @@ class StudyHubPageState extends State<StudyHubPage>
               ),
               Divider(height: 1, color: _border),
               Flexible(
-                child: sutras.isEmpty
+                child: ConstrainedBox(
+                  constraints:
+                      const BoxConstraints(maxHeight: 430),
+                  child: sutras.isEmpty
                     ? Padding(
                         padding:
                             const EdgeInsets.symmetric(vertical: 40),
@@ -796,6 +782,7 @@ class StudyHubPageState extends State<StudyHubPage>
                     );
                   }).toList(),
                 ),
+              ),
               ),
               const SizedBox(height: 8),
             ],

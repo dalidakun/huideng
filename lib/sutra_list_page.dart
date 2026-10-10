@@ -507,6 +507,10 @@ class SutraListPage extends StatefulWidget {
   State<SutraListPage> createState() => SutraListPageState();
 }
 
+/// 阅读页路由构造器：默认用 Material 滑动路由；
+/// 也可注入带圆形展开动画的路由（首页右下角「继续阅读」按钮用）。
+typedef ReadingRouteBuilder = Route<dynamic> Function(WidgetBuilder builder);
+
 class SutraListPageState extends State<SutraListPage>
     with SingleTickerProviderStateMixin, RouteAware {
   static const MethodChannel _appChannel = MethodChannel('app_channel');
@@ -807,7 +811,11 @@ class SutraListPageState extends State<SutraListPage>
     _sutraDataVersion.value++;
   }
 
-  Future<void> _downloadSingle(Sutra sutra, String id) async {
+  Future<void> _downloadSingle(
+    Sutra sutra,
+    String id, {
+    ReadingRouteBuilder? routeBuilder,
+  }) async {
     // 本地已有完整文件时直接标记为已下载并打开，不重新下载。
     // 这是防止「已下载经文被误判为未下载而反复重下」的关键兜底：
     // 即使上游 _canOpenSutra / _downloadedIds 因任何原因误判，
@@ -816,7 +824,7 @@ class SutraListPageState extends State<SutraListPage>
       _markDownloaded(id);
       await _persistDownloadedIds();
       if (!mounted) return;
-      _openReading(sutra);
+      _openReading(sutra, routeBuilder: routeBuilder);
       return;
     }
     setState(() {
@@ -856,7 +864,7 @@ class SutraListPageState extends State<SutraListPage>
         ),
       );
       if (shouldRead == true && mounted) {
-        _openReading(sutra);
+        _openReading(sutra, routeBuilder: routeBuilder);
       }
     } catch (e) {
       if (!mounted) return;
@@ -2084,34 +2092,36 @@ class SutraListPageState extends State<SutraListPage>
     return !_isSutraContentMissing(sutra);
   }
 
-  void _openReading(Sutra sutra) {
+  void _openReading(Sutra sutra, {ReadingRouteBuilder? routeBuilder}) {
     _dismissKeyboard();
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ReadingPage(
+    Widget builder(BuildContext context) => ReadingPage(
           title: sutra.title,
           filePath: _filePathForReading(sutra),
-        ),
-      ),
+        );
+    Navigator.push(
+      context,
+      routeBuilder?.call(builder) ?? MaterialPageRoute(builder: builder),
     );
   }
 
-  Future<void> _openSutra(Sutra sutra) async {
+  Future<void> _openSutra(
+    Sutra sutra, {
+    ReadingRouteBuilder? routeBuilder,
+  }) async {
     _dismissKeyboard();
     if (await _canOpenSutra(sutra)) {
-      _openReading(sutra);
+      _openReading(sutra, routeBuilder: routeBuilder);
       return;
     }
     final id = SutraDownloader.extractId(sutra.title, sutra.filePath);
     if (id == null) {
-      _openReading(sutra);
+      _openReading(sutra, routeBuilder: routeBuilder);
       return;
     }
     // 该经书正在下载中时，避免重复启动下载。
     final inFlight = _downloadProgress[id];
     if (inFlight != null && inFlight < 1.0) return;
-    await _downloadSingle(sutra, id);
+    await _downloadSingle(sutra, id, routeBuilder: routeBuilder);
   }
 
   Widget _buildContinueReadingCard() {
@@ -2282,17 +2292,26 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   /// 打开一部经书：优先走本地列表（保持已读/收藏等状态），否则直接进入阅读页。
-  void openRecentSutra(String title, String? filePath) {
+  /// [routeBuilder] 可注入自定义路由（默认 Material 滑动路由）。
+  void openRecentSutra(
+    String title,
+    String? filePath, {
+    ReadingRouteBuilder? routeBuilder,
+  }) {
     _dismissKeyboard();
     final sutra = _findSutra(title);
     if (sutra != null) {
-      _openSutra(sutra);
+      _openSutra(sutra, routeBuilder: routeBuilder);
     } else {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (context) => ReadingPage(title: title, filePath: filePath),
-        ),
+        routeBuilder?.call(
+              (context) => ReadingPage(title: title, filePath: filePath),
+            ) ??
+            MaterialPageRoute(
+              builder: (context) =>
+                  ReadingPage(title: title, filePath: filePath),
+            ),
       );
     }
   }

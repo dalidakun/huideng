@@ -34,6 +34,9 @@ class ReadingTimeService {
   final ValueNotifier<int> todaySeconds = ValueNotifier<int>(0);
   final ValueNotifier<int> totalSeconds = ValueNotifier<int>(0);
 
+  /// 当前是否正在计时（持有者集合非空且会话已开启）。供测试与诊断读取。
+  bool get isRunning => _running;
+
   SharedPreferences? _prefs;
   Timer? _timer;
   bool _running = false;
@@ -42,6 +45,10 @@ class ReadingTimeService {
   int _todaySec = 0;
   int _totalSec = 0;
   String _todayKey = '';
+
+  /// 计时持有者集合：多层阅读页先后并存时，任一持有者在场即计时，
+  /// 全部离场才真正停止。
+  final Set<Object> _owners = <Object>{};
 
   String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -91,6 +98,20 @@ class ReadingTimeService {
     await _prefs!.setInt(_kSessionStart, now);
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  /// 带归属的开始计时：owner 加入持有者集合后确保计时在跑。
+  /// 多层阅读页实例先后调用互不干扰（start 自身幂等）。
+  Future<void> startFor(Object owner) async {
+    _owners.add(owner);
+    await start();
+  }
+
+  /// 带归属的结束计时：owner 离开集合；仍有其他持有者时继续计时。
+  Future<void> stopFor(Object owner) async {
+    _owners.remove(owner);
+    if (_owners.isNotEmpty) return;
+    await stop();
   }
 
   /// 离开阅读页或应用退到后台时调用：结束累计。

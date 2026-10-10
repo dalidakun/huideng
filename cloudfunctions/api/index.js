@@ -35,9 +35,10 @@ function resolveUidByToken(token) {
       headers: { Authorization: `Bearer ${token}` },
     };
     const req = https.request(options, (res) => {
-      let body = "";
-      res.on("data", (chunk) => (body += chunk));
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       res.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
         if (res.statusCode === 200) {
           try {
             const profile = JSON.parse(body);
@@ -182,7 +183,7 @@ function fail(error) {
 // model：默认 deepseek-chat（性好价廉，适合佛经白话翻译）。
 //        deepseek-reasoner 供「深入讨论」时按需选用。
 // ─────────────────────────────────────────────────────────────
-function callDeepSeek({ model, messages, maxTokens, timeoutMs }) {
+function callDeepSeek({ model, messages, maxTokens, timeoutMs, temperature }) {
   const apiKey = process.env.DEEPSEEK_API_KEY || "";
   if (!apiKey) {
     return Promise.reject(new Error("AI服务未配置（缺少 DEEPSEEK_API_KEY）"));
@@ -191,7 +192,8 @@ function callDeepSeek({ model, messages, maxTokens, timeoutMs }) {
     model: model || "deepseek-chat",
     messages: messages || [],
     max_tokens: maxTokens || 600,
-    temperature: 0.3,
+    // 默认 0.3（问答/翻译求稳）；白话译文要更自然流畅时可略调高。
+    temperature: typeof temperature === "number" ? temperature : 0.3,
     stream: false,
   });
   const options = {
@@ -217,9 +219,13 @@ function callDeepSeek({ model, messages, maxTokens, timeoutMs }) {
     return new Promise((resolve, reject) => {
       const opt = { ...options, rejectUnauthorized };
       const req = https.request(opt, (res) => {
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
+        // 必须先用 Buffer 收齐再按 UTF-8 一次性解码：
+        // 若 `string += chunk` 逐块转字符串，汉字（UTF-8 三字节）恰好被
+        // TCP 分块切断时会解码失败变成替换字符，界面上就显示成问号。
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on("end", () => {
+          const data = Buffer.concat(chunks).toString("utf8");
           if (res.statusCode !== 200) {
             try {
               const j = JSON.parse(data);
@@ -520,6 +526,30 @@ exports.main = async (event, context) => {
     } catch (e) {
       // 已存在或其它错误均忽略。
     }
+  }
+
+  // 译文缓存版本号：提示词/翻译策略升级时递增，让旧的直译缓存自动失效，
+  // 各端（生成、查缓存、客户端本地缓存键前缀）用同一版本，保证一致。
+  const AI_TRANSLATE_PROMPT_VERSION = "v2";
+
+  // 段落 → 缓存键：sha1(版本 + 段落)，同一段在同版本下全站复用一条译文。
+  function paragraphTranslationHash(paragraph) {
+    return crypto
+      .createHash("sha1")
+      .update(AI_TRANSLATE_PROMPT_VERSION + "\n" + paragraph)
+      .digest("hex")
+      .slice(0, 24);
+  }
+
+  // 清理模型输出：去掉行首「译文：」前缀与末尾「注：…」补充说明，
+  // 让所有入口（阅读页弹层、段落查看页、菩提空间分享帖）拿到的都是纯正文。
+  function cleanAiTranslation(raw) {
+    let t = String(raw || "").replace(/^\s*(?:白话)?(?:译文|翻译)\s*[:：]\s*/, "");
+    const noteRe =
+      /(?:\r?\n|。|；)[　\s]*(?:【|\[|（|\(|〔|『)?(?:注\s*[:：]?\s*\d*|注\s*释[:：]|说明[:：]|备注[:：]|注释[:：])/;
+    const m = noteRe.exec(t);
+    if (m) t = t.slice(0, m.index);
+    return t.trim();
   }
 
   // 确保 readingParagraphNotes 集合存在。
@@ -3997,14 +4027,28 @@ exports.main = async (event, context) => {
         if (!paragraph) return fail("缺少需要翻译的经文段落");
         if (paragraph.length > 4000) return fail("段落过长，请分段后重试");
         // 同一段经文只生成一次译文，之后所有用户直接复用（省 API 费用）。
-        const paraHash = crypto.createHash("sha1").update(paragraph).digest("hex").slice(0, 24);
+        const paraHash = paragraphTranslationHash(paragraph);
 
+        // 白话翻译提示词：重点是「重组语序的意译」而不是逐词对译，
+        // 否则译文会残留文言句式、读起来仍然费解。
         const sysPrompt =
-          "你是一位精通汉传佛教经典的佛学翻译与讲解助手。" +
-          "任务：把用户提供的佛经古文段落翻译为通俗易懂的现代白话文。" +
-          "要求：1)忠于原文，不增删、不改义，佛学专有名词（名相、科判、术语）保留原词并自然融入译文，不再额外加注释；" +
-          "2)用通顺流畅的白话表达，保留原意的同时又让现代读者能读懂；" +
-          "3)只输出译文正文本身，不要输出『注：』、『说明：』等任何补充说明或标注，也不要输出与翻译无关的内容。";
+          "你是一位资深的佛经白话译者，长期为现代读者做汉传佛教经典的今译，译文要像现代人写的流畅散文。\n" +
+          "任务：把用户提供的佛经古文整段译成现代汉语白话文。\n\n" +
+          "硬性要求：\n" +
+          "1) 忠于原意：不增删义理、不改动因果、次第与并列关系；但必须重组语序、拆分长句、补出古文省略的主语和连接词，让它读起来是通顺的现代句子，而不是逐词对应的文言直译。\n" +
+          "2) 消除直译腔：不要保留「所谓……者，……也」「其义为」「即是」这类生硬套式；「夫、盖、乃、者、也、欤、乎」等虚字不要硬译出来；古文里的判断句、被动句要改写成现代汉语说法。\n" +
+          "3) 佛学名相（五蕴、八正道、真如、菩提、涅槃等）保留原词；同一段中某个名相第一次出现时，用括号极简补充一次（不超过12个字），例如「三界（欲界、色界、无色界）」「二谛（世俗谛、胜义谛）」，第二次出现起不再括注。普通词语一律不要括注。\n" +
+          "4) 数量、次第、分条必须显式译出（如「有三点：第一……第二……第三……」），不要合并、省略或改写成模糊表达。\n" +
+          "5) 语气连贯自然，可以用「就、那么、也就是说、其实、只要」等现代口语连接词过渡；但不得添加原文没有的解释、评论、例子或引申。\n" +
+          "6) 只输出译文正文：禁止输出「注：」「说明：」「译者按」「原文」等任何标注、标题、前缀，也不要输出与翻译无关的内容。\n\n" +
+          "风格示例（只示范语气与处理方式，不要照抄内容）：\n" +
+          "原文：一切众生之类，若卵生、若胎生、若湿生、若化生，若有色、若无色，若有想、若无想，若非有想非无想，我皆令入无余涅槃而灭度之。\n" +
+          "译文：一切众生，不论是从卵里出生的、母胎里出生的、湿气中出生的，还是变化而生的；不论是有形体的还是没有形体的，有念头的、没有念头的，乃至既非有念也非无念的，我都要帮助他们进入无余涅槃，彻底得到解脱。\n" +
+          "现在请翻译用户提供的段落。";
+
+        // 输出长度按段落长度给足：古文段落最长 4000 字，
+        // 固定 800 token 会在长段落中途截断，导致译文残缺难懂。
+        const maxTokens = Math.min(6000, Math.max(800, Math.ceil(paragraph.length * 1.8) + 300));
 
         // 讨论模式：本质是普通聊天。译文只是开场背景，但回答要像正常对话一样，
         // 直接回答用户的问题，不要把话题强拉回经文，也不要重复附带译文。
@@ -4046,10 +4090,14 @@ exports.main = async (event, context) => {
 
           // 默认：白话翻译（带跨用户共享缓存）
           // 1) 先查缓存：命中直接返回，不重复调用 API。
+          // 含替换字符（历史版本逐块解码把汉字切断产生的问号）的缓存视为脏数据，
+          // 跳过并重新生成，之后覆盖回缓存，实现自愈。
+          let cachedDoc = null;
           try {
             const { data } = await aiTranslations.where({ h: paraHash }).limit(1).get();
-            if (data && data.length > 0 && data[0].text) {
-              return ok({ text: data[0].text, type: "translate", done: true, cached: true });
+            if (data && data.length > 0) cachedDoc = data[0];
+            if (cachedDoc && cachedDoc.text && !cachedDoc.text.includes("\uFFFD")) {
+              return ok({ text: cachedDoc.text, type: "translate", done: true, cached: true });
             }
           } catch (e) {
             // 缓存查询失败不阻塞：当作未命中继续调用 API。
@@ -4062,19 +4110,29 @@ exports.main = async (event, context) => {
               { role: "system", content: sysPrompt },
               { role: "user", content: "请把下面这段佛经古文翻译成现代白话文：\n\n" + paragraph },
             ],
-            maxTokens: 800,
-            timeoutMs: 60000,
+            maxTokens,
+            // 长段落输出可达数千 token，60s 不够用；控制台函数超时需 ≥150s。
+            timeoutMs: 120000,
+            // 略高于默认 0.3：让句式更自然流畅，同时仍足以保证忠实。
+            temperature: 0.4,
           });
 
+          const cleaned = cleanAiTranslation(text);
+
           // 2) 生成成功后写入缓存，供后续所有用户复用。
+          // 命中的是脏缓存则原地覆盖（用 update），否则新增。
           try {
             await ensureAiTranslations();
-            await aiTranslations.add({ h: paraHash, paragraph, text, createdAt: now() });
+            if (cachedDoc && cachedDoc.id) {
+              await aiTranslations.doc(cachedDoc.id).update({ text: cleaned, createdAt: now() });
+            } else {
+              await aiTranslations.add({ h: paraHash, paragraph, text: cleaned, createdAt: now() });
+            }
           } catch (e) {
             console.log("[api] aiTranslate 缓存写入失败（不影响本次返回）:", e.message);
           }
 
-          return ok({ text, type: "translate", done: true, cached: false });
+          return ok({ text: cleaned, type: "translate", done: true, cached: false });
         } catch (e) {
           console.error("[api] aiTranslate error:", e && e.message ? e.message : e);
           return fail(e && e.message ? e.message : "AI翻译失败，请稍后重试");
@@ -4088,11 +4146,12 @@ exports.main = async (event, context) => {
         const paragraph = String(event.paragraph || "").trim();
         if (!paragraph) return fail("缺少需要查询的经文段落");
         try {
-          const paraHash = crypto.createHash("sha1").update(paragraph).digest("hex").slice(0, 24);
+          const paraHash = paragraphTranslationHash(paragraph);
           await ensureAiTranslations();
           const { data } = await aiTranslations.where({ h: paraHash }).limit(1).get();
-          if (data && data.length > 0 && data[0].text) {
-            return ok({ text: data[0].text, found: true });
+          // 含替换字符的缓存视为未命中，让客户端走重新生成以自愈。
+          if (data && data.length > 0 && data[0].text && !data[0].text.includes("\uFFFD")) {
+            return ok({ text: cleanAiTranslation(data[0].text), found: true });
           }
           return ok({ text: "", found: false });
         } catch (e) {

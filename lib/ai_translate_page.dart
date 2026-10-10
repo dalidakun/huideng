@@ -123,12 +123,15 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
       _error = null;
     });
     try {
-      final cacheKey = 'ai_translate_${_hashParagraph(widget.paragraph)}';
+      // 本地缓存键带译文版本号：提示词升级后（云端 AI_TRANSLATE_PROMPT_VERSION
+      // 同步为 v2）旧的直译结果自动失效，重新取新版译文。
+      final cacheKey = 'ai_translate_v2_${_hashParagraph(widget.paragraph)}';
       final prefs = await SharedPreferences.getInstance();
 
       // 1. 优先读本地缓存（最快）。
+      // 含替换字符（历史解码 bug 产生的问号）的缓存视为脏数据，跳过重新取。
       final local = prefs.getString(cacheKey);
-      if (local != null && local.isNotEmpty) {
+      if (local != null && local.isNotEmpty && !local.contains('\uFFFD')) {
         setState(() {
           _translation = _stripAnnotation(local);
           _loading = false;
@@ -153,7 +156,8 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
       final text =
           await CloudNotesService.instance.aiTranslate(paragraph: widget.paragraph);
       if (!mounted) return;
-      await prefs.setString(cacheKey, text);
+      // 脏结果不落本地缓存，避免问号被反复展示。
+      if (!text.contains('\uFFFD')) await prefs.setString(cacheKey, text);
       setState(() {
         _translation = _stripAnnotation(text);
         _loading = false;

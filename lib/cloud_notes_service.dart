@@ -812,8 +812,9 @@ class CloudNotesService {
         'mode': action,
         if (history.isNotEmpty) 'history': history,
       },
-      // 大模型生成耗时较长，放宽云调用超时（内部另设服务端 60s 上限）。
-      timeout: const Duration(seconds: 70),
+      // 大模型生成耗时较长，放宽云调用超时（内部另设服务端 120s 上限，
+      // 长段落全量白话译文可达数千 token）。
+      timeout: const Duration(seconds: 130),
     );
     final text = res['text']?.toString() ?? '';
     if (text.isEmpty) {

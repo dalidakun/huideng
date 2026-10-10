@@ -183,7 +183,7 @@ class ReadingNotePostView extends StatelessWidget {
   final ReadingNotePost note;
   final String noteId;
   final Map<String, dynamic> sutraLibrary;
-  // 帖子作者昵称，用于在经文色块顶部标注「xxx的感想」（选择性文字分享）。
+  // 帖子作者昵称，用于在经文色块顶部标注「xxx的感想·经文」（选择性文字分享）。
   final String? authorName;
 
   const ReadingNotePostView({
@@ -278,8 +278,10 @@ class ReadingNotePostView extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (authorName != null && authorName!.trim().isNotEmpty) ...[
+                    // 块内下方是段原文，标题需点明「感想 · 经文」，
+                    // 否则会被误读成下面是感想正文。
                     Text(
-                      '$authorName的感想',
+                      '$authorName的感想·经文',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,

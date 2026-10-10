@@ -29,6 +29,7 @@ import 'user_avatar_cache.dart';
 import 'update_service.dart';
 import 'reading_badges.dart';
 import 'recent_sutras_page.dart';
+import 'reading_page.dart';
 import 'sect_community_page.dart';
 import 'sect_detail_page.dart';
 import 'sect_page.dart';
@@ -38,6 +39,12 @@ import 'agreements.dart';
 import 'ui_sound.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// 右下角「继续阅读」按钮几何：与菩提空间右下角「新建笔记」按钮一致
+/// （直径 42、右边距 16、圆底距菜单栏上缘 28）。
+const double _readingFabSize = 42;
+const double _readingFabRight = 16;
+const double _readingFabGap = 28;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -235,13 +242,17 @@ class MainPage extends StatefulWidget {
 }
 
 class _MainPageState extends State<MainPage>
-    with WidgetsBindingObserver, TickerProviderStateMixin {
+    with WidgetsBindingObserver, TickerProviderStateMixin, RouteAware {
   int _currentIndex = 0;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
   final _bodhiKey = GlobalKey<BodhiSpacePageState>();
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
   final _recordKey = GlobalKey<RecordPageState>();
+  String? _recentTitle;
+  String? _recentFilePath;
+  bool _recentLoaded = false;
+  bool _mainPageSubscribed = false;
   late final ValueNotifier<int> _tabIndex;
   List<Widget> _pages = [];
   // 底部菜单自动隐藏动画：value 0=完全显示，1=完全隐藏。
@@ -292,6 +303,8 @@ class _MainPageState extends State<MainPage>
     NotificationCenter.instance.start();
     // 启动时清理应用目录里残留的旧头像/横幅文件（只保留当前使用的）。
     unawaited(_cleanupAvatarBannerFiles());
+    // 最近阅读记录 → 右下角「继续阅读」按钮打开阅读页。
+    unawaited(_loadRecentReading());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
       // 启动时检查是否需要显示 20:00 打卡提醒（当天 20:00 后打开 App）。
@@ -301,7 +314,25 @@ class _MainPageState extends State<MainPage>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 订阅主页所在路由：从任何页面（含全屏阅读页）返回主页时刷新最近阅读记录。
+    final route = ModalRoute.of(context);
+    if (route != null && !_mainPageSubscribed) {
+      _mainPageSubscribed = true;
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  /// 回到主页：全屏阅读页可能读了新的经书/更新了进度。
+  @override
+  void didPopNext() {
+    unawaited(_loadRecentReading());
+  }
+
+  @override
   void dispose() {
+    if (_mainPageSubscribed) routeObserver.unsubscribe(this);
     _checkInReminderTimer?.cancel();
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
     AppPalette.instance.removeListener(_onPaletteChanged);
@@ -643,6 +674,32 @@ class _MainPageState extends State<MainPage>
     }
   }
 
+  /// 读取最近阅读记录（last_read_title / last_read_filePath），
+  /// 回退到 recent_sutras 首条（格式 `title|||filePath`）。
+  Future<void> _loadRecentReading() async {
+    final prefs = await SharedPreferences.getInstance();
+    var t = prefs.getString('last_read_title');
+    var fp = prefs.getString('last_read_filePath');
+    if (t == null || t.isEmpty) {
+      final raw = prefs.getStringList('recent_sutras');
+      if (raw != null && raw.isNotEmpty) {
+        final parts = raw.first.split('|||');
+        if (parts.isNotEmpty && parts[0].isNotEmpty) {
+          t = parts[0];
+          fp = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : null;
+        }
+      }
+    }
+    if (t != null && t.isEmpty) t = null;
+    if (!mounted) return;
+    if (_recentLoaded && t == _recentTitle && fp == _recentFilePath) return;
+    setState(() {
+      _recentTitle = t;
+      _recentFilePath = fp;
+      _recentLoaded = true;
+    });
+  }
+
   /// 经藏页处于搜索模式时退出搜索（根路由侧滑返回调用）。返回是否消费了本次返回。
   bool exitSutraSearchIfActive() {
     if (_currentIndex != 2) return false;
@@ -650,6 +707,8 @@ class _MainPageState extends State<MainPage>
   }
 
   void _switchToTab(int index) {
+    // 切页前重读最近阅读记录——离开期间可能已从全屏阅读页换了经书。
+    unawaited(_loadRecentReading());
     // 已停留在经藏页再次点击经藏菜单图标：处于搜索模式则先退出搜索。
     if (index == 2 && _currentIndex == 2) {
       _sutraListKey.currentState?.exitSearchIfActive();
@@ -842,39 +901,49 @@ class _MainPageState extends State<MainPage>
     await AuthService.instance.logout();
   }
 
-  /// 左边缘横向拖拽打开个人菜单的触发区宽度。
-  static const double _sideMenuEdgeWidth = 28;
-
-  double? _edgeDragStartX;
-  double? _edgeDragStartY;
-
-  /// 左边缘往右滑动打开菜单：只在起始点位于左边缘、且位移以水平为主时触发，
-  /// 避免与页面内横向滚动（如轮播、横向列表）冲突。
-  void _onEdgeDragStart(Offset pos) {
-    if (_sideMenuOpen || pos.dx > _sideMenuEdgeWidth) {
-      _edgeDragStartX = null;
+  /// 打开最近阅读页：与经藏页「继续阅读」走同一条路径
+  /// （SutraListPage.openRecentSutra），保证和正常点经进入的阅读页完全一致。
+  /// 路由是从右下角按钮圆心逐渐展开的圆形效果（同经藏页右上角 DeepSeek 按钮）。
+  /// 没有阅读记录时不响应。
+  void _openRecentReading() {
+    final title = _recentTitle;
+    if (title == null) return;
+    final routeBuilder = _readingRevealRoute();
+    final sutraState = _sutraListKey.currentState;
+    if (sutraState != null) {
+      sutraState.openRecentSutra(
+        title,
+        _recentFilePath,
+        routeBuilder: routeBuilder,
+      );
       return;
     }
-    _edgeDragStartX = pos.dx;
-    _edgeDragStartY = pos.dy;
+    Navigator.push(
+      context,
+      routeBuilder(
+        (context) => ReadingPage(title: title, filePath: _recentFilePath),
+      ),
+    );
   }
 
-  void _onEdgeDragUpdate(Offset pos, Size size) {
-    final startX = _edgeDragStartX;
-    final startY = _edgeDragStartY;
-    if (startX == null || startY == null) return;
-    final dx = pos.dx - startX;
-    final dy = pos.dy - startY;
-    if (dx < 16 || dx.abs() <= dy.abs() * 1.5) return;
-    if (pos.dy < 0 || pos.dy > size.height) return;
-    _edgeDragStartX = null;
-    _edgeDragStartY = null;
-    _openSideMenu();
-  }
-
-  void _onEdgeDragEnd() {
-    _edgeDragStartX = null;
-    _edgeDragStartY = null;
+  /// 构造「从按钮圆心展开/收起」的阅读页路由：打开时圆从按钮铺满全屏，
+  /// 返回时同圆收回按钮；时长与曲线同经藏页 DeepSeek 按钮（480ms easeInOutCubic）。
+  ReadingRouteBuilder _readingRevealRoute() {
+    final media = MediaQuery.of(context);
+    final center = Offset(
+      media.size.width - _readingFabRight - _readingFabSize / 2,
+      media.size.height -
+          media.padding.bottom -
+          _BottomNavBar.heightOnly(context) -
+          _readingFabGap -
+          _readingFabSize / 2,
+    );
+    // 圆心在右下角，覆盖整屏只需到左上角的距离。
+    return (builder) => _CircleRevealPageRoute(
+          builder: builder,
+          center: center,
+          maxRadius: center.distance,
+        );
   }
 
   /// 阅读统计入口：打开阅读统计页面。
@@ -932,13 +1001,7 @@ class _MainPageState extends State<MainPage>
   void _revealNavBar() {
     _scrollDir = 0;
     _lastScrollPixels = 0;
-    if (_navCtrl.value > 0) {
-      _navCtrl.animateTo(
-        0,
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutBack,
-      );
-    }
+    _navCtrl.value = 0;
   }
 
   void switchToTab(int index) {
@@ -1015,6 +1078,7 @@ class _MainPageState extends State<MainPage>
     // 关闭键盘自适应压缩：WebView（助手/DeepSeek）在 adjustResize 下会被键盘
     // 压成小视口，页面在消息区与输入框之间露出大片空白遮挡内容。
     // 改为不压缩，由 DeepSeek 页面自身处理键盘重叠，输入框保持在键盘上方。
+    final navBase = _BottomNavBar.heightOnly(context);
     return Scaffold(
       resizeToAvoidBottomInset: false,
       body: Stack(
@@ -1027,30 +1091,54 @@ class _MainPageState extends State<MainPage>
               child: MediaQuery(
                 data: MediaQuery.of(context).copyWith(
                   padding: MediaQuery.of(context).padding.copyWith(
-                        bottom: MediaQuery.of(context).padding.bottom +
-                            _BottomNavBar.heightOnly(context),
+                        bottom: MediaQuery.of(context).padding.bottom + navBase,
                       ),
                   // Scaffold 的 FAB 定位读取的是 viewPadding，需同步加高，
                   // 否则右下角加号按钮会落到菜单栏上重叠。
-                  viewPadding: MediaQuery.of(context).viewPadding.copyWith(
-                        bottom: MediaQuery.of(context).viewPadding.bottom +
-                            _BottomNavBar.heightOnly(context),
+                  viewPadding: MediaQuery.of(context)
+                      .viewPadding
+                      .copyWith(
+                        bottom:
+                            MediaQuery.of(context).viewPadding.bottom + navBase,
                       ),
                 ),
-                child: Listener(
-                  onPointerDown: (e) => _onEdgeDragStart(e.position),
-                  onPointerMove: (e) => _onEdgeDragUpdate(
-                      e.position, MediaQuery.of(context).size),
-                  onPointerUp: (_) => _onEdgeDragEnd(),
-                  onPointerCancel: (_) => _onEdgeDragEnd(),
-                  child: IndexedStack(
-                    index: _currentIndex,
-                    children: _pages,
-                  ),
+                child: IndexedStack(
+                  index: _currentIndex,
+                  children: _pages,
                 ),
               ),
             ),
           ),
+          // 右下角「继续阅读」圆形按钮：仅首页(0)、消息(4)、宗门(5) 三个菜单页
+          // 显示，点击打开最近阅读的经书；没有阅读记录时不显示。
+          if (_recentTitle != null &&
+              (_currentIndex == 0 || _currentIndex == 4 || _currentIndex == 5))
+            Positioned(
+              right: _readingFabRight,
+              bottom: MediaQuery.of(context).padding.bottom +
+                  navBase +
+                  _readingFabGap,
+              child: SizedBox(
+                width: _readingFabSize,
+                height: _readingFabSize,
+                child: FloatingActionButton(
+                  heroTag: 'continue_reading_fab',
+                  onPressed: _openRecentReading,
+                  // 与菩提空间「新建笔记」按钮同款：素白黑底、米黄绿底，白色图标。
+                  backgroundColor: AppPalette.instance.isPlain
+                      ? const Color(0xFF1A1A1A)
+                      : const Color(0xFF71867A),
+                  elevation: 8,
+                  highlightElevation: 12,
+                  shape: const CircleBorder(),
+                  child: Image.asset(
+                    'assets/images/yt.png',
+                    width: 21,
+                    height: 21,
+                  ),
+                ),
+              ),
+            ),
           // X 风格毛玻璃悬浮菜单：向下滚动时轻微变淡（不位移、不隐藏），
           // 向上滚动时恢复。
           Positioned(
@@ -1175,11 +1263,18 @@ class _BottomNavBar extends StatelessWidget {
                           width: 32,
                           height: 32,
                           child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 200),
-                            switchInCurve: Curves.easeInOut,
-                            switchOutCurve: Curves.easeInOut,
-                            transitionBuilder: (child, anim) =>
-                                FadeTransition(opacity: anim, child: child),
+                            duration: const Duration(milliseconds: 160),
+                            reverseDuration: const Duration(milliseconds: 70),
+                            switchInCurve: Curves.easeOutCubic,
+                            switchOutCurve: Curves.easeInCubic,
+                            transitionBuilder: (child, anim) => FadeTransition(
+                              opacity: anim,
+                              child: ScaleTransition(
+                                scale: Tween<double>(begin: 0.88, end: 1)
+                                    .animate(anim),
+                                child: child,
+                              ),
+                            ),
                             child: KeyedSubtree(
                               key: ValueKey<bool>(selected),
                               child: Center(child: icon),
@@ -1298,8 +1393,9 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
           navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
               : 'assets/images/chat.png'),
-          width: 22,
-          height: 22,
+          // 比同排 22 号略大一号：素材墨迹占比略小，23 号视觉才齐平。
+          width: 23,
+          height: 23,
         ),
         Positioned(
           top: -6,
@@ -1672,7 +1768,7 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
   }
 }
 
-/// 圆形展开裁剪器：以右上角为圆心，半径随 progress 从 0 增长到全屏对角线。
+/// 圆形展开裁剪器：以 center 为圆心，半径随 progress 从 0 增长到 maxRadius。
 class _CircleRevealClipper extends CustomClipper<Path> {
   final double progress;
   final Offset center;
@@ -1697,5 +1793,118 @@ class _CircleRevealClipper extends CustomClipper<Path> {
     return oldClipper.progress != progress ||
         oldClipper.center != center ||
         oldClipper.maxRadius != maxRadius;
+  }
+}
+
+/// 从指定圆心逐渐展开/收起的路由：与经藏页右上角 DeepSeek 按钮
+/// （[_AssistantRevealOverlay]）相同的圆形展开效果，圆心取右下角按钮中心。
+/// 打开时圆从 0 铺满全屏，返回时同圆收回按钮。
+///
+/// 关键：路由压栈后先停在「半径 0」（不可见），等阅读页正文完成首帧布局
+/// （[ReadingContentReadyNotification]）再开始展开。否则长经文整段构建会占满
+/// UI 线程，动画按真实时间推进就会「先冒出小圆再猛地跳满屏」。
+class _CircleRevealPageRoute<T> extends PageRoute<T> {
+  _CircleRevealPageRoute({
+    required this.builder,
+    required this.center,
+    required this.maxRadius,
+  });
+
+  final WidgetBuilder builder;
+  final Offset center;
+  final double maxRadius;
+
+  bool _revealStarted = false;
+  bool _disposed = false;
+  Timer? _fallbackTimer;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  String? get barrierLabel => null;
+
+  @override
+  bool get maintainState => true;
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 480);
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 480);
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    return builder(context);
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    return NotificationListener<ReadingContentReadyNotification>(
+      onNotification: (_) {
+        _startReveal();
+        return true;
+      },
+      child: ClipPath(
+        clipper: _CircleRevealClipper(
+          progress: Curves.easeInOutCubic.transform(animation.value),
+          center: center,
+          maxRadius: maxRadius,
+        ),
+        child: child,
+      ),
+    );
+  }
+
+  @override
+  TickerFuture didPush() {
+    // 先按默认流程压栈（请求焦点、注册），但立刻停住动画：保持半径 0。
+    final future = super.didPush();
+    controller!.stop();
+    controller!.value = 0.0;
+    // 兜底：正文迟迟不就绪（网络/异常）时也按时展开，显示加载态而非卡住。
+    _fallbackTimer = Timer(const Duration(milliseconds: 1200), _startReveal);
+    return future;
+  }
+
+  void _startReveal() {
+    if (_revealStarted || _disposed) return;
+    final ctrl = controller;
+    if (ctrl == null || ctrl.isAnimating || ctrl.isCompleted) {
+      _revealStarted = true;
+      _fallbackTimer?.cancel();
+      _fallbackTimer = null;
+      return;
+    }
+    _revealStarted = true;
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
+    ctrl.forward();
+  }
+
+  @override
+  bool didPop(T? result) {
+    // 返回时不再触发延迟展开；若已展开则按原路径缩回。
+    _revealStarted = true;
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
+    return super.didPop(result);
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
+    super.dispose();
   }
 }

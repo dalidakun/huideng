@@ -38,6 +38,16 @@ import 'record_index.dart';
 
 import 'app_palette.dart';
 
+/// 阅读页正文「已构建并完成首帧布局」的通知。
+///
+/// 右下角「继续阅读」圆形展开路由监听它：正文（长经文的整段 Column）构建耗时会
+/// 阻塞 UI 线程，若此时圆形正在展开，动画按真实时间推进就会「卡一下再跳到底」。
+/// 收到本通知后再开始展开，页面已经渲染好，圆形便能顺滑铺满（与经藏页右上角
+/// DeepSeek 按钮一致）。其他入口没有监听者，派发无副作用。
+class ReadingContentReadyNotification extends Notification {
+  const ReadingContentReadyNotification();
+}
+
 class ReadingPage extends StatefulWidget {
   final String title;
   final String? filePath;
@@ -51,10 +61,10 @@ class ReadingPage extends StatefulWidget {
   });
 
   @override
-  State<ReadingPage> createState() => _ReadingPageState();
+  State<ReadingPage> createState() => ReadingPageState();
 }
 
-class _ReadingPageState extends State<ReadingPage>
+class ReadingPageState extends State<ReadingPage>
     with WidgetsBindingObserver, RouteAware {
   String _content = '';
   List<String> _paragraphs = [];
@@ -76,9 +86,14 @@ class _ReadingPageState extends State<ReadingPage>
   Offset? _pointerDownPos;
   bool _longPressActive = false;
   bool _menuOpenAtDown = false;
+  // 按下时「阅读设置」面板正打开、且这次按在面板外（用于收起面板）：
+  // 抬起后只收起面板，不再触发正文单击面板，避免切换翻页方式后
+  // 收起设置面板的同一次点击顺带弹出「画线/感想/笔记」速览面板。
+  bool _stylePanelDismissAtDown = false;
   bool _hasTextSelection = false;
   bool _actionRowTapped = false; // 点击段落操作栏（AI译/笔记/方框）时置true，阻止外层Listener触发面板
   final GlobalKey _moreMenuKey = GlobalKey();
+  final GlobalKey _stylePanelKey = GlobalKey();
 
   // 搜索命中列表：每项为 (段落下标, 段内起始字符下标)。
   // 必须在「实际渲染的段落」上匹配（与高亮同一数据源），命中数才恒等于
@@ -131,6 +146,8 @@ class _ReadingPageState extends State<ReadingPage>
   final TextEditingController _noteInputController = TextEditingController();
   late final String? _resolvedFilePath;
   bool _isLoadingContent = true;
+  // 正文首帧渲染完成后是否已派发 [ReadingContentReadyNotification]（只派发一次）。
+  bool _contentReadyNotified = false;
   bool _needsDownload = false;
   bool _isDownloading = false;
   double _downloadProgress = 0;
@@ -185,7 +202,7 @@ class _ReadingPageState extends State<ReadingPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    ReadingTimeService.instance.start();
+    ReadingTimeService.instance.startFor(this);
     _resolvedFilePath =
         widget.filePath == null ? null : _canonicalFilePath(widget.filePath!);
     _scrollController = ScrollController();
@@ -287,18 +304,20 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   @override
-  void didPush() => ReadingTimeService.instance.start();
+  void didPush() {
+    ReadingTimeService.instance.startFor(this);
+  }
 
   @override
   void didPopNext() {
-    ReadingTimeService.instance.start();
+    ReadingTimeService.instance.startFor(this);
     // 回到本页：恢复允许弹窗（下次长按选中）。
     _coveredByRoute = false;
   }
 
   @override
   void didPushNext() {
-    ReadingTimeService.instance.stop();
+    ReadingTimeService.instance.stopFor(this);
     // 有新页面盖在本页上（如感想编辑页）：清掉浮层菜单并禁止其重建。
     // 否则失焦导致选区收起时 contextMenuBuilder 会再次回调，
     // 把「复制/画线」弹窗重新插到新页面上方，形成残留。
@@ -307,14 +326,16 @@ class _ReadingPageState extends State<ReadingPage>
   }
 
   @override
-  void didPop() => ReadingTimeService.instance.stop();
+  void didPop() {
+    ReadingTimeService.instance.stopFor(this);
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      ReadingTimeService.instance.start();
+      ReadingTimeService.instance.startFor(this);
     } else {
-      ReadingTimeService.instance.stop();
+      ReadingTimeService.instance.stopFor(this);
     }
   }
 
@@ -322,7 +343,7 @@ class _ReadingPageState extends State<ReadingPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     if (_subscribed) routeObserver.unsubscribe(this);
-    ReadingTimeService.instance.stop();
+    ReadingTimeService.instance.stopFor(this);
     _scrollController.dispose();
     _pageController?.dispose();
     _searchController.dispose();
@@ -1374,8 +1395,20 @@ class _ReadingPageState extends State<ReadingPage>
     await prefs.setBool('read_$keyPath', true);
   }
 
+  /// 正文加载完成、且已完成一帧布局后，向上派发一次就绪通知
+  /// （供右下角圆形展开路由在动画开始前等待，避免展开过程卡顿）。
+  void _notifyContentReadyIfNeeded() {
+    if (_contentReadyNotified || _isLoadingContent) return;
+    _contentReadyNotified = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      const ReadingContentReadyNotification().dispatch(context);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    _notifyContentReadyIfNeeded();
     // 单击画线改为在正文 Listener 上按几何命中判定（见 _resolveUnderlineHit），
     // 不再依赖 TextSpan 识别器，无需在这里维护识别器生命周期。
     return PopScope(
@@ -1389,7 +1422,12 @@ class _ReadingPageState extends State<ReadingPage>
           Navigator.of(context).pop();
         }
       },
-      child: Scaffold(
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
+    return Scaffold(
         backgroundColor: Color(ReaderPreferences.bgColors[_bgColorIndex]),
         appBar: AppBar(
           backgroundColor: ReaderPreferences.appBarColor(_bgColorIndex),
@@ -1503,6 +1541,15 @@ class _ReadingPageState extends State<ReadingPage>
                 _menuOpenAtDown = true;
                 setState(() {
                   _showMoreMenu = false;
+                });
+              }
+              if (_showStylePanel &&
+                  !_isPointerInsideStylePanel(event.position)) {
+                // 标记这次点击是用来收起阅读设置面板的：只收起面板，
+                // 抬起后内容区不再弹「画线/感想/笔记」速览面板。
+                _stylePanelDismissAtDown = true;
+                setState(() {
+                  _showStylePanel = false;
                 });
               }
             },
@@ -1633,6 +1680,9 @@ class _ReadingPageState extends State<ReadingPage>
                           // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
                           final menuOpenAtDown = _menuOpenAtDown;
                           _menuOpenAtDown = false;
+                          // 记下按下时是否是「收阅读设置面板」的点击（由外层 Listener 设置）。
+                          final styleDismissAtDown = _stylePanelDismissAtDown;
+                          _stylePanelDismissAtDown = false;
                           final downPos = _pointerDownPos;
                           _pointerDownPos = null;
                           // 长按或滑动均不触发面板。
@@ -1645,6 +1695,9 @@ class _ReadingPageState extends State<ReadingPage>
                               (event.position - downPos).distance > 10) return;
                           // 按下时菜单是展开的 → 这次点击是收菜单，不弹面板。
                           if (menuOpenAtDown) return;
+                          // 按下时阅读设置面板展开、点在面板外 → 这次点击是收面板，
+                          // 不弹「画线/感想/笔记」速览面板（模式切换后收起设置不误弹）。
+                          if (styleDismissAtDown) return;
                           // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
                           // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
                           if (_selectionActiveAtDown || _hasTextSelection) {
@@ -1915,7 +1968,10 @@ class _ReadingPageState extends State<ReadingPage>
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    child: _buildReadingSettingsPanel(),
+                    child: Container(
+                      key: _stylePanelKey,
+                      child: _buildReadingSettingsPanel(),
+                    ),
                   ),
                 ],
                 if (_showQuickPanel) ...[
@@ -1935,16 +1991,28 @@ class _ReadingPageState extends State<ReadingPage>
                   ),
                 ],
               ],
+              ),
             ),
-          ),
         ),
-      ),
     );
   }
 
   /// 判断点击位置是否落在「⋯」展开菜单内。
   bool _isPointerInsideMenu(Offset position) {
     final ctx = _moreMenuKey.currentContext;
+    if (ctx == null) return false;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null) return false;
+    final local = box.globalToLocal(position);
+    return local.dx >= 0 &&
+        local.dy >= 0 &&
+        local.dx <= box.size.width &&
+        local.dy <= box.size.height;
+  }
+
+  /// 判断点击位置是否落在「阅读设置」面板内。
+  bool _isPointerInsideStylePanel(Offset position) {
+    final ctx = _stylePanelKey.currentContext;
     if (ctx == null) return false;
     final box = ctx.findRenderObject() as RenderBox?;
     if (box == null) return false;
@@ -4724,6 +4792,13 @@ class _ReadingPageState extends State<ReadingPage>
     if (_paragraphs.isEmpty) return const [];
     // 每段除文字外的高度：操作栏行(~20) + 贴段留白(4) + 段间距(24)。
     const extras = 48.0;
+    // 正文块在渲染时左右各有 16px 内边距（见 _buildClusterParagraph），
+    // 实际可用排版宽度比视口窄 32px。测量必须按同一宽度，否则会把文字
+    // 估矮、一页塞进过多段落，导致末段操作栏越过页面底边被裁掉看不见。
+    final textWidth = (width - 32.0).clamp(1.0, double.infinity).toDouble();
+    // 末段操作栏正好贴到页面底边时，TextPainter 与选择文本实际排版可能有
+    // 一两像素出入，留出少量余量，保证操作栏完整落在页内、不被裁切。
+    final pageHeight = height - 4.0;
     final pages = <List<int>>[];
     var current = <int>[];
     var used = 0.0;
@@ -4731,9 +4806,9 @@ class _ReadingPageState extends State<ReadingPage>
       final tp = TextPainter(
         text: TextSpan(text: _paragraphs[i], style: _flipTextStyle),
         textDirection: TextDirection.ltr,
-      )..layout(maxWidth: width);
+      )..layout(maxWidth: textWidth);
       final h = tp.height + extras;
-      if (current.isNotEmpty && used + h > height) {
+      if (current.isNotEmpty && used + h > pageHeight) {
         pages.add(current);
         current = [];
         used = 0.0;
@@ -4799,7 +4874,7 @@ class _ReadingPageState extends State<ReadingPage>
         children: [
           for (final group in _clusterGroups(paras))
             _buildClusterParagraph(group,
-                showUnaligned: false, actionsRight: true),
+                showUnaligned: false, actionsRight: false),
         ],
       ),
     );
