@@ -1274,6 +1274,20 @@ class ReadingPageState extends State<ReadingPage>
     // 排版更新恢复（_scheduleRestoreScroll）又用陈旧的 _savedProgress 把进度拽回去。
     _savedPosition = null;
     _savedProgress = null;
+    _flipPageRestored = true;
+    if (_pageMode == ReaderPreferences.pageModeFlip &&
+        (_pageController?.hasClients ?? false)) {
+      // 左右翻页模式：直接切回第一页（无分页时不触发 onPageChanged，需同步状态）。
+      final wasAtStart = _currentFlipPage == 0;
+      setState(() {
+        _currentFlipPage = 0;
+        _scrollProgress =
+            _flipPages.length > 1 ? 1.0 / _flipPages.length : 1.0;
+      });
+      if (!wasAtStart) _pageController?.jumpToPage(0);
+      _saveFlipProgress();
+      return;
+    }
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         0,
