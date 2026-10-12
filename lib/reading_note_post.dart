@@ -281,7 +281,7 @@ class ReadingNotePostView extends StatelessWidget {
                     // 块内下方是段原文，标题需点明「感想 · 经文」，
                     // 否则会被误读成下面是感想正文。
                     Text(
-                      '$authorName的感想·经文',
+                      '$authorName的备注·经文',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -1222,7 +1222,7 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
                 children: [
                   if (widget.authorName != null && widget.authorName!.trim().isNotEmpty) ...[
                     Text(
-                      '${widget.authorName}的所有感想',
+                      '${widget.authorName}的所有备注',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -1242,7 +1242,7 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
                   if (count > 0) ...[
                     const SizedBox(height: 6),
                     Text(
-                      '共 $count 篇感想，点击查看',
+                      '共 $count 篇备注，点击查看',
                       style: TextStyle(
                         fontSize: 12,
                         color: p.accent,

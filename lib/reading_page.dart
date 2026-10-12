@@ -3072,7 +3072,7 @@ class ReadingPageState extends State<ReadingPage>
                   ),
                   const SizedBox(width: 2),
                   Text(
-                    '所有感想',
+                    '所有备注',
                     style: TextStyle(
                       fontSize: 13,
                       color: hasNote ? activeFg : fg,
@@ -3621,7 +3621,7 @@ class ReadingPageState extends State<ReadingPage>
                 ),
                 _buildQuickPanelItem(
                   icon: Icons.sticky_note_2_outlined,
-                  label: '感想',
+                  label: '备注',
                   onTap: _openReadingNotes,
                 ),
                 _buildQuickPanelItem(
@@ -5021,7 +5021,7 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             // 同步把屏幕上的选中高亮扩展到整段（长按选中场景）。
             widget.onSelectFull?.call();
           }),
-          _item(Icons.edit_note, widget.initialHasIdea ? '编辑感想' : '感想', () {
+          _item(Icons.edit_note, widget.initialHasIdea ? '编辑备注' : '备注', () {
             final (s, e) = _activeRange;
             widget.close();
             widget.onOpenNote(s, e);
