@@ -218,7 +218,8 @@ setUp(() {
   });
 
   testWidgets('十二法门社区页逐个渲染都不抛异常', (tester) async {
-    for (final gate in kGateList) {
+    // 缠习社是自定义入口，不在此列。
+    for (final gate in kGateList.where((g) => !g.isCustom)) {
       await pumpCommunity(tester, gate);
       expect(find.text('${gate.name}社区'), findsWidgets,
           reason: '缺栏目「${gate.name}」的社区标题');

@@ -412,6 +412,14 @@ class _SectDetailPageState extends State<SectDetailPage> {
   /// 原先这块在社区页 banner 上，社区并进本页后跟着挪到顶图上。
   Widget _buildSectIcon() {
     final isPlain = AppPalette.instance.isPlain;
+    final fixed = widget.sect.icon.fixedAsset;
+    if (fixed.isNotEmpty) {
+      return Image.asset(
+        fixed,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+      );
+    }
     final gate = widget.sect.icon.gateCode;
     if (gate.isNotEmpty) {
       final suffix = isPlain ? '' : '2';

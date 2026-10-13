@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
+import 'login_page.dart';
 import 'community_daily_spot.dart';
 import 'user_avatar.dart';
 
@@ -17,8 +18,12 @@ class SectInfo {
   /// 属于哪一栏，决定顶栏标题与行首图标样式。
   final SectMenuKind kind;
 
+  /// 自定义入口：不在宗门/法门详情页承接，由宿主页（main.dart）路由到独立页面。
+  /// 缠习社属于此类，其社区、核心经典与法门介绍都没有准备。
+  final bool isCustom;
+
   const SectInfo(this.name, this.desc, this.icon,
-      {this.kind = SectMenuKind.sect});
+      {this.kind = SectMenuKind.sect, this.isCustom = false});
 }
 
 /// 宗门行首图标类型：宗门除律宗用线条手绘外，其余取 assets/menpai/ 切图；
@@ -81,6 +86,10 @@ extension SectIconKindAsset on SectIconKind {
 
   /// 是否法门图标（决定走 assets/famen/ 切图还是宗门切图/手绘）。
   bool get isGate => gateCode.isNotEmpty;
+
+  /// 直接指向单张固定切图（不区分素白/米黄后缀）时返回资源路径，否则空串。
+  /// 缠习社等自定义入口用现成图，不在 assets/famen/ 的配对切图体系里。
+  String get fixedAsset => '';
 
   /// 图标视觉缩放：只放大/缩小图形，不动行高与分割线位置。
   double get iconScale => switch (this) {
@@ -151,8 +160,10 @@ const double _kSectDescHeight = 33;
 /// 八大宗派 + 十二法门共 20 个社区的标记（`${栏目名}社区`），
 /// 与社区页 `PlazaNote.community` 的写法一致（见 sect_community_page）。
 /// 顶部展示位只在这 20 个社区里挑昨日发帖最多的那个。
+/// 缠习社这类自定义入口还没开社区，不在此列。
 Set<String> get kCommunityKeys => {
-      for (final s in [...kSectList, ...kGateList]) '${s.name}社区',
+      for (final s in [...kSectList, ...kGateList])
+        if (!s.isCustom) '${s.name}社区',
     };
 
 /// 底部「宗门」菜单页：标题栏 + 昨日最热社区展示位 + 「八大宗派」两列格子 + 「十二法门」列表。
@@ -229,8 +240,16 @@ class _SectPageState extends State<SectPage> {
         child: Row(
           children: [
             GestureDetector(
-              // 左上角头像：从左侧滑出个人菜单，与首页一致。
-              onTap: widget.onOpenSideMenu,
+              // 左上角头像：未登录时进入登录页面；已登录时从左侧滑出个人菜单，与首页一致。
+              onTap: () {
+                if (!AuthService.instance.isLoggedIn) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LoginPage()),
+                  );
+                  return;
+                }
+                widget.onOpenSideMenu?.call();
+              },
               child: UserAvatar(
                 userId: AuthService.instance.currentUser.value?.id,
                 radius: 16,
@@ -449,6 +468,14 @@ class _SectPageState extends State<SectPage> {
   /// 行首图标：法门用 assets/famen/ 拼音切图（素白无后缀、米黄加 2）；
   /// 宗门优先用 assets/menpai/ 切图（素白 1 / 米黄 2），没有切图的律宗走手绘。
   Widget _buildIcon(PaletteData p, SectInfo sect) {
+    final fixed = sect.icon.fixedAsset;
+    if (fixed.isNotEmpty) {
+      return Image.asset(
+        fixed,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+      );
+    }
     final gate = sect.icon.gateCode;
     if (gate.isNotEmpty) {
       final suffix = AppPalette.instance.isPlain ? '' : '2';

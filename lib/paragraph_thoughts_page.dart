@@ -1,71 +1,75 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
 import 'cloud_notes_service.dart';
-import 'reading_badges.dart';
 import 'reading_note_post.dart';
-import 'user_avatar.dart';
 
-/// 单条感想的展示数据（兼容云端已分享感想与本地未分享感想）。
+/// 单条备注的展示数据。
 class _Thought {
-  /// 云端感想 id；本地感想（未分享）为空串，表示不可点赞。
+  /// 云端备注 id；本地未分享备注为空串。
   final String noteId;
   final String text;
+
+  /// 该备注针对的选中经文（可空，空表示针对整段）。
+  final String quoted;
+
+  /// 当前用户自己的这条备注（非空表示可编辑 / 删除）。
+  final ParaNote? ownNote;
+
+  /// 作者用户 id（仅用于合并当前用户自己的备注去重，不再展示）。
   final String authorUserId;
-  final String authorName;
-  final bool authorVerified;
-  final String authorAccount;
-  final int canonRead;
-  final int canonTotal;
-  final int likeCount;
-  final int createdAt;
 
   const _Thought({
     required this.noteId,
     required this.text,
-    required this.authorUserId,
-    required this.authorName,
-    this.authorVerified = false,
-    this.authorAccount = '',
-    this.canonRead = 0,
-    this.canonTotal = 0,
-    this.likeCount = 0,
-    this.createdAt = 0,
+    this.quoted = '',
+    this.ownNote,
+    this.authorUserId = '',
   });
 
-  factory _Thought.fromPlaza(PlazaNote n, String text) => _Thought(
+  factory _Thought.fromPlaza(PlazaNote n, String text, String quoted) => _Thought(
         noteId: n.id,
         text: text,
+        quoted: quoted,
         authorUserId: n.ownerUserId,
-        authorName: n.authorName,
-        authorVerified: n.authorVerified,
-        authorAccount: n.authorAccount,
-        canonRead: n.canonRead,
-        canonTotal: n.canonTotal,
-        likeCount: n.likeCount,
-        createdAt: n.createdAt,
+      );
+
+  _Thought withOwn(ParaNote note) => _Thought(
+        noteId: noteId,
+        text: text,
+        quoted: quoted.isEmpty ? note.quoted : quoted,
+        ownNote: note,
+        authorUserId: authorUserId,
       );
 }
 
-/// 「段落感想」汇总底部弹层：列出该段经文下所有用户分享的感想，
-/// 并附带当前用户自己在本段记录的感想（无论是否分享到菩提空间）。
+/// 「段落备注」汇总底部弹层：列出该段经文下所有用户分享的备注，
+/// 并附带当前用户自己在本段记录的备注（无论是否分享到菩提空间）。
 ///
 /// 打开时从底部向上滑出，顶部只停在标题栏下方一个标题栏高度的位置
 /// （`顶部安全区 + 2 倍标题栏高度`），且路由透明白色不遮挡：
 /// 上方的经文仍清晰可见，也不会出现黑色蒙层。
-/// 每个感想展示：头像 + 昵称/认证/@账户 + 阅藏百分比 + 感想正文（可折叠），
-/// 只有一个「喜欢」指标，并按其数量从高到低排序。
+/// 每条备注只展示「选中的经文字符 + 备注正文」；当前用户自己的备注
+/// 额外提供「编辑 / 删除」入口。
 class ParagraphThoughtsPage extends StatefulWidget {
   final String sutraTitle;
   final String paragraph;
 
-  /// 经书 filePath（sutra key），用于拉取当前用户本段本地感想。
+  /// 经书 filePath（sutra key），用于拉取当前用户本段本地备注（回退用）。
   final String sutraKey;
 
-  /// 当前段落在本经中的下标，用于匹配本地感想。
+  /// 当前段落在本经中的下标，用于匹配本地备注（回退用）。
   final int paragraphIndex;
+
+  /// 当前用户本段全部备注的读取器（每次刷新重新读取，编辑后能反映最新）。
+  final List<ParaNote> Function()? loadMyNotes;
+
+  /// 编辑当前用户的一条备注（打开编辑页），返回后弹层会重新加载。
+  final Future<void> Function(ParaNote note)? onEditNote;
+
+  /// 删除当前用户的一条备注，返回后弹层会重新加载。
+  final Future<void> Function(ParaNote note)? onDeleteNote;
 
   const ParagraphThoughtsPage({
     super.key,
@@ -73,6 +77,9 @@ class ParagraphThoughtsPage extends StatefulWidget {
     required this.paragraph,
     this.sutraKey = '',
     this.paragraphIndex = -1,
+    this.loadMyNotes,
+    this.onEditNote,
+    this.onDeleteNote,
   });
 
   /// 打开该弹层时使用下滑渐显的过渡路由（底部抽屉效果）。
@@ -84,6 +91,9 @@ class ParagraphThoughtsPage extends StatefulWidget {
     required String paragraph,
     String sutraKey = '',
     int paragraphIndex = -1,
+    List<ParaNote> Function()? loadMyNotes,
+    Future<void> Function(ParaNote note)? onEditNote,
+    Future<void> Function(ParaNote note)? onDeleteNote,
   }) {
     return Navigator.of(context).push(
       PageRouteBuilder<void>(
@@ -95,6 +105,9 @@ class ParagraphThoughtsPage extends StatefulWidget {
           paragraph: paragraph,
           sutraKey: sutraKey,
           paragraphIndex: paragraphIndex,
+          loadMyNotes: loadMyNotes,
+          onEditNote: onEditNote,
+          onDeleteNote: onDeleteNote,
         ),
         transitionsBuilder: (_, anim, __, child) {
           final topOffset =
@@ -156,16 +169,8 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
   int _total = 0;
   String? _error;
 
-  /// 当前用户自己的昵称/账号/认证（为本地未分享感想渲染用）。
-  String _myName = '同修';
-  String _myAccount = '';
-  bool _myVerified = false;
-
-  /// 折叠状态：key 为感想正文，true 表示展开全文。
+  /// 折叠状态：key 为备注正文，true 表示展开全文。
   final Set<String> _expanded = {};
-
-  /// 本地（未分享）感想的本地点赞状态：key 为感想正文。
-  final Map<String, bool> _myLocalLiked = {};
 
   /// 下拉关闭：手指向下拖动的距离。
   double _dragY = 0;
@@ -173,23 +178,10 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
   @override
   void initState() {
     super.initState();
-    _initSelf();
     _loadPage(reset: true);
   }
 
-  Future<void> _initSelf() async {
-    final me = AuthService.instance.currentUser.value;
-    if (me == null) return;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (!mounted) return;
-      setState(() {
-        _myName = me.displayName;
-        _myAccount = prefs.getString('user_account_name') ?? '';
-        _myVerified = prefs.getBool('user_verified') ?? false;
-      });
-    } catch (_) {}
-  }
+  List<ParaNote> _ownNotes() => widget.loadMyNotes?.call() ?? const <ParaNote>[];
 
   /// 解析读经笔记帖，仅保留「段原文」与当前段落一致的帖子。
   _Thought? _toThought(PlazaNote n) {
@@ -200,6 +192,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     return _Thought.fromPlaza(
       n,
       parsed.noteText.isNotEmpty ? parsed.noteText : parsed.paragraph,
+      parsed.paragraph,
     );
   }
 
@@ -217,12 +210,9 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
       final (list, hasMore, total) = await CloudNotesService.instance
           .getParagraphThoughts(widget.paragraph, page: _page, pageSize: 20);
       final thoughts = list.map(_toThought).whereType<_Thought>().toList();
-
-      // 把当前用户自己在本段记录的感想（无论是否分享）合并进来，
-      // 避免出现「已经记录却不在本页显示」。
-      final ownNote = await _findOwnNoteText();
       if (!mounted) return;
 
+      final ownNotes = _ownNotes();
       setState(() {
         if (reset) {
           _thoughts
@@ -231,11 +221,12 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
         } else {
           _thoughts.addAll(thoughts);
         }
-        if (ownNote != null) {
-          _mergeOwnThought(ownNote.$1, ownNote.$2, ownNote.$3);
-        }
+        _mergeOwnNotes(ownNotes);
         _hasMore = hasMore;
-        _total = total + (ownNote != null ? 1 : 0);
+        final localOwn = ownNotes
+            .where((n) => n.text.trim().isNotEmpty && n.cloudId.isEmpty)
+            .length;
+        _total = total + localOwn;
         _page += 1;
         _loading = false;
         _loadingMore = false;
@@ -254,127 +245,80 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     }
   }
 
-  /// 拉取当前用户在本段的本地感想（正文 + 更新时间 + 云端分享 id）；
-  /// 没有则返回 null。cloudId 非空表示该感想已分享，可用于点赞。
-  Future<(String, int, String)?> _findOwnNoteText() async {
-    if (widget.sutraKey.isEmpty || widget.paragraphIndex < 0) return null;
-    if (AuthService.instance.cachedUserId == null) return null;
-    try {
-      final items =
-          await CloudNotesService.instance.getParagraphNotes(widget.sutraKey);
-      for (final it in items) {
-        final idx = it['index'];
-        if (idx is int && idx == widget.paragraphIndex) {
-          final note = (it['note'] ?? '').toString().trim();
-          if (note.isNotEmpty) {
-            final updatedAt = (it['updatedAt'] as num?)?.toInt() ?? 0;
-            final cloudId = (it['cloudId'] ?? '').toString();
-            return (note, updatedAt, cloudId);
-          }
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  /// 把当前用户自己的感想合并进列表；若内容与云端已展示的重复则跳过。
-  void _mergeOwnThought(String text, int createdAt, String noteId) {
+  /// 把当前用户自己的备注合并进列表：云端已有同 id / 同正文的标记为可编辑，
+  /// 否则插入到最前（方便自己就近编辑）。
+  void _mergeOwnNotes(List<ParaNote> ownNotes) {
     final me = AuthService.instance.currentUser.value;
     if (me == null) return;
-    final already = _thoughts.any((t) =>
-        t.authorUserId == me.id &&
-        t.text.replaceAll(RegExp(r'\s'), '') ==
-            text.replaceAll(RegExp(r'\s'), ''));
-    if (already) return;
-    _thoughts.add(_Thought(
-      noteId: noteId,
-      text: text,
-      authorUserId: me.id,
-      authorName: _myName,
-      authorVerified: _myVerified,
-      authorAccount: _myAccount,
-      canonRead: LocalCanonProgress.read,
-      canonTotal: LocalCanonProgress.total,
-      createdAt: createdAt,
-    ));
+    for (final n in ownNotes) {
+      final text = n.text.trim();
+      if (text.isEmpty) continue;
+      final cloudId = n.cloudId;
+      var idx = -1;
+      if (cloudId.isNotEmpty) {
+        idx = _thoughts.indexWhere((t) => t.noteId == cloudId);
+      }
+      if (idx < 0) {
+        idx = _thoughts.indexWhere((t) =>
+            t.authorUserId == me.id &&
+            t.text.replaceAll(RegExp(r'\s'), '') ==
+                text.replaceAll(RegExp(r'\s'), ''));
+      }
+      if (idx >= 0) {
+        _thoughts[idx] = _thoughts[idx].withOwn(n);
+      } else {
+        _thoughts.insert(
+          0,
+          _Thought(
+            noteId: cloudId,
+            text: text,
+            quoted: n.quoted,
+            ownNote: n,
+            authorUserId: me.id,
+          ),
+        );
+      }
+    }
   }
 
-  /// 是否已喜欢：云端感想看全局已赞集合，本地（未分享）感想看本地点赞状态。
-  bool _isLiked(_Thought t) {
-    if (t.noteId.isNotEmpty) {
-      return CloudNotesService.instance.likedNoteIds.contains(t.noteId);
-    }
-    return _myLocalLiked[t.text] ?? false;
+  Future<void> _editOwn(ParaNote note) async {
+    final cb = widget.onEditNote;
+    if (cb == null) return;
+    await cb(note);
+    if (!mounted) return;
+    await _loadPage(reset: true);
   }
 
-  /// 有效喜欢数：本地（未分享）感想在本地点赞时 +1。
-  int _effectiveLikeCount(_Thought t) {
-    if (t.noteId.isEmpty && (_myLocalLiked[t.text] ?? false)) {
-      return t.likeCount + 1;
-    }
-    return t.likeCount;
-  }
-
-  Future<void> _toggleLike(_Thought t) async {
-    // 本地（未分享）感想：本地点赞，即时生效并增加数量。
-    if (t.noteId.isEmpty) {
-      setState(() {
-        _myLocalLiked[t.text] = !(_myLocalLiked[t.text] ?? false);
-        _thoughts.sort(
-            (a, b) => _effectiveLikeCount(b).compareTo(_effectiveLikeCount(a)));
-      });
-      return;
-    }
-    try {
-      final (liked, count) =
-          await CloudNotesService.instance.toggleLike(t.noteId);
-      if (!mounted) return;
-      setState(() {
-        final idx = _thoughts.indexWhere((x) => x.noteId == t.noteId);
-        if (idx >= 0) {
-          final cur = _thoughts[idx];
-          _thoughts[idx] = _Thought(
-            noteId: cur.noteId,
-            text: cur.text,
-            authorUserId: cur.authorUserId,
-            authorName: cur.authorName,
-            authorVerified: cur.authorVerified,
-            authorAccount: cur.authorAccount,
-            canonRead: cur.canonRead,
-            canonTotal: cur.canonTotal,
-            likeCount: count,
-            createdAt: cur.createdAt,
-          );
-          _thoughts.sort((a, b) => b.likeCount.compareTo(a.likeCount));
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
-    }
+  Future<void> _deleteOwn(ParaNote note) async {
+    final cb = widget.onDeleteNote;
+    if (cb == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除这条备注？', style: TextStyle(fontSize: 16)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消', style: TextStyle(color: Color(0xFF666666))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child:
+                const Text('删除', style: TextStyle(color: Color(0xFFDD6B6B))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await cb(note);
+    if (!mounted) return;
+    await _loadPage(reset: true);
   }
 
   void _close() {
     Navigator.of(context).pop();
-  }
-
-  String _formatTime(int ms) {
-    if (ms <= 0) return '';
-    final t = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    final diff = now.difference(t);
-    if (diff.inMinutes < 1) return '刚刚';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}分钟前';
-    if (diff.inHours < 24 && t.day == now.day) return '${diff.inHours}小时前';
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(t.year, t.month, t.day);
-    final dayDiff = today.difference(day).inDays;
-    if (dayDiff == 1) return '昨天';
-    if (dayDiff == 2) return '前天';
-    if (t.year == now.year) return '${t.month}月${t.day}日';
-    return '${t.year}年${t.month}月${t.day}日';
   }
 
   void _onVerticalDragStart(DragStartDetails d) {
@@ -433,7 +377,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '本段所有感想·$_total条',
+                        '本段所有备注·$_total条',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -492,7 +436,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
               Icon(Icons.auto_stories_outlined, size: 40, color: p.textHint),
               const SizedBox(height: 12),
               Text(
-                '还没有同修记录感想。\n选择文字，记录感想。',
+                '还没有同修记录备注。\n选择文字，记录备注。',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, height: 1.6, color: p.textSec),
               ),
@@ -504,8 +448,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
       itemCount: _thoughts.length + (_hasMore ? 1 : 0),
-      separatorBuilder: (_, __) =>
-          Divider(height: 16, thickness: 1, color: AppPalette.p.border),
+      separatorBuilder: (_, __) => const SizedBox(height: 18),
       itemBuilder: (context, i) {
         if (i >= _thoughts.length) {
           if (_loadingMore) {
@@ -537,124 +480,63 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
 
   Widget _buildThoughtCard(_Thought t) {
     final p = AppPalette.p;
-    final liked = _isLiked(t);
-    final likeCount = _effectiveLikeCount(t);
-
-    final cachedUid = AuthService.instance.cachedUserId;
-    final isSelf = cachedUid != null && t.authorUserId == cachedUid;
-    final postPct = postCanonPercent(
-      isSelf: isSelf,
-      cloudRead: t.canonRead,
-      cloudTotal: t.canonTotal,
-    );
-
-    return Row(
+    final own = t.ownNote;
+    // 旧备注（未记录选中文字）没有 quoted，回退显示整段经文，保证每段都能看到「经文」。
+    final quotedText =
+        t.quoted.trim().isNotEmpty ? t.quoted.trim() : widget.paragraph.trim();
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        UserAvatar(userId: t.authorUserId, radius: 18),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        // 1) 经文字符（无选中文字时回退为整段）：浅底圆角，与备注正文区分。
+        if (quotedText.isNotEmpty)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            decoration: BoxDecoration(
+              color: AppPalette.p.accent.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              quotedText,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.6,
+                fontWeight: FontWeight.w600,
+                color: p.textSec,
+              ),
+            ),
+          ),
+        // 2) 备注正文
+        _buildCollapsibleText(t.text),
+        // 3) 仅「自己的备注」显示编辑 / 删除（其他用户、菩提空间分享帖均不显示）。
+        if (own != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                // 用户信息（一行，与主页帖子同款）：昵称 + 认证 + @账户 · 阅藏百分比
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        t.authorName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: p.text,
-                        ),
-                      ),
-                    ),
-                    if (t.authorVerified) ...[
-                      const SizedBox(width: 3),
-                      const Icon(Icons.verified,
-                          size: 14, color: Color(0xFF70867A)),
-                    ],
-                    if (t.authorAccount.isNotEmpty) ...[
-                      const SizedBox(width: 3),
-                      Flexible(
-                        child: Text(
-                          '@${t.authorAccount}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, color: p.textSec),
-                        ),
-                      ),
-                      const SizedBox(width: 3),
-                      Text('·',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF8C8C8C))),
-                      const SizedBox(width: 2),
-                      Text(
-                        postPct,
-                        maxLines: 1,
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF8C8C8C)),
-                      ),
-                    ],
-                  ],
+                _OwnAction(
+                  icon: Icons.edit_outlined,
+                  color: AppPalette.p.accentDeep,
+                  onTap: () => _editOwn(own),
                 ),
-                const SizedBox(height: 8),
-                // 感想正文：与昵称左对齐（同在右侧列）
-                _buildCollapsibleText(t.text),
-                const SizedBox(height: 8),
-                // 底部一行：时间戳在左侧，喜欢在右侧，二者不相邻。
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _formatTime(t.createdAt),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: p.textHint),
-                      ),
-                    ),
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => _toggleLike(t),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            liked ? Icons.favorite : Icons.favorite_border,
-                            size: 19,
-                            color: liked
-                                ? const Color(0xFF71867A)
-                                : const Color(0xFFB0B0B0),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '$likeCount',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color:
-                                  liked ? const Color(0xFF71867A) : p.textSec,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 4),
+                _OwnAction(
+                  icon: Icons.delete_outline,
+                  color: const Color(0xFFDD6B6B),
+                  onTap: () => _deleteOwn(own),
                 ),
               ],
             ),
           ),
-        ),
       ],
     );
   }
 
-  /// 感想正文，超过 5 行可折叠；点击「显示更多/收起」切换展开。
+  /// 备注正文，超过 5 行可折叠；点击「显示更多/收起」切换展开。
   Widget _buildCollapsibleText(String text) {
     final p = AppPalette.p;
     final expanded = _expanded.contains(text);
@@ -665,7 +547,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
           text,
           maxLines: expanded ? null : 5,
           overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 14, height: 1.6, color: p.text),
+          style: TextStyle(fontSize: 15, height: 1.6, color: p.text),
         ),
         if (text.length > 80) ...[
           const SizedBox(height: 4),
@@ -691,6 +573,31 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// 自己备注右下角的「编辑 / 删除」小图标按钮。
+class _OwnAction extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _OwnAction({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Icon(icon, size: 18, color: color),
+      ),
     );
   }
 }

@@ -9,9 +9,11 @@ import 'package:my_flutter_app/sect_page.dart';
 
 void main() {
   /// 八大宗派 + 十二法门的名字，键名必须与 `SectInfo.name` 逐字一致。
+  /// 缠习社是自定义入口，还没开社区与分享落地页，不在此列。
   final names = <String>{
     for (final s in kSectList) s.name,
-    for (final g in kGateList) g.name,
+    for (final g in kGateList)
+      if (!g.isCustom) g.name,
   };
 
   test('20 个栏目各有唯一 slug，且 slug 是小写 URL 文件名', () {

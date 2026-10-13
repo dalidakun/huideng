@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app_palette.dart';
+import 'sutra_edit_drafts.dart';
 Future<String> editedSutraFilePath(String keyPath) async {
   final dir = await getApplicationDocumentsDirectory();
   final folder = Directory('${dir.path}/edited_sutras');
@@ -38,10 +39,23 @@ class _SutraEditPageState extends State<SutraEditPage> {
   late final FocusNode _focusNode;
   bool _positioned = false;
 
+  /// 进入编辑页时的原文（与之比较判断是否有未保存改动）。
+  late final String _initialText;
+
+  /// 最近一次确认已与本地编辑副本一致的正文：进入时等于原文（此时磁盘上
+  /// 就是这份内容或尚无副本），每次成功写盘后更新为写入的内容。
+  String? _writtenText;
+
+  /// 防抖自动保存定时器：停笔片刻即落盘，避免「改完直接返回/杀进程」丢字。
+  Timer? _autoSaveTimer;
+
   @override
   void initState() {
     super.initState();
+    _initialText = widget.content;
+    _writtenText = widget.content;
     _controller = TextEditingController(text: widget.content);
+    _controller.addListener(_onTextChanged);
     _focusNode = FocusNode();
     final targetText = widget.topParagraphText;
     int? targetOffset;
@@ -76,9 +90,84 @@ class _SutraEditPageState extends State<SutraEditPage> {
 
   @override
   void dispose() {
+    _autoSaveTimer?.cancel();
+    // 兜底：还有没落盘的改动（防抖未到点就被销毁）时补写一次，
+    // 保证退出编辑页后正文一定在本地编辑副本里。
+    if (_controller.text != _writtenText) {
+      unawaited(_writeToDisk());
+    }
+    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  /// 文本变化：重置防抖定时器，停笔片刻后自动落盘。
+  void _onTextChanged() {
+    if (_controller.text == _writtenText) return;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      unawaited(_writeToDisk());
+    });
+  }
+
+  /// 把当前正文写入本地编辑副本，并同步一份到可上云的草稿（重装不丢）。
+  Future<void> _writeToDisk() async {
+    final text = _controller.text;
+    try {
+      final path = await editedSutraFilePath(widget.keyPath);
+      await File(path).writeAsString(text, flush: true);
+      _writtenText = text;
+      await SutraEditDraft.save(
+        title: widget.title,
+        filePath: widget.keyPath,
+        content: text,
+      );
+    } catch (_) {
+      // 写盘失败（存储权限/空间等）：保留脏标记，下次变化或退出时重试。
+    }
+  }
+
+  /// 返回给阅读页的结果：正文相对进入时有改动才让阅读页重新加载。
+  Map<String, dynamic>? _resultPayload() {
+    if (_controller.text == _initialText) return null;
+    String? cursorParagraphText;
+    if (_controller.text.isNotEmpty) {
+      final cursor =
+          _controller.selection.end.clamp(0, _controller.text.length);
+      final lastNewline = _controller.text.lastIndexOf('\n', cursor - 1);
+      final nextNewline = _controller.text.indexOf('\n', cursor);
+      final start = lastNewline + 1;
+      final end =
+          nextNewline < 0 ? _controller.text.length : nextNewline;
+      final para = _controller.text.substring(start, end).trim();
+      if (para.isNotEmpty) cursorParagraphText = para;
+    }
+    return {
+      'changed': true,
+      'progress': _controller.text.isEmpty
+          ? 0.0
+          : (_controller.selection.end / _controller.text.length)
+              .clamp(0.0, 1.0),
+      'cursorParagraphText': cursorParagraphText,
+    };
+  }
+
+  /// 点「保存」：立即落盘 + 提示，然后返回阅读页。
+  Future<void> _save() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    await _writeToDisk();
+
+    if (mounted) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('已保存到本地（已同步备份）')),
+      );
+    }
+    if (mounted) {
+      navigator.pop(_resultPayload());
+    }
   }
 
   int _offsetInOriginal(int rawIdx, int rawLength) {
@@ -100,41 +189,26 @@ class _SutraEditPageState extends State<SutraEditPage> {
     _focusNode.requestFocus();
   }
 
-  Future<void> _save() async {
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    final path = await editedSutraFilePath(widget.keyPath);
-    await File(path).writeAsString(_controller.text);
-
-    if (mounted) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('已保存到本地')),
-      );
-    }
-    if (mounted) {
-      String? cursorParagraphText;
-      if (_controller.text.isNotEmpty) {
-        final cursor = _controller.selection.end.clamp(0, _controller.text.length);
-        final lastNewline = _controller.text.lastIndexOf('\n', cursor - 1);
-        final nextNewline = _controller.text.indexOf('\n', cursor);
-        final start = lastNewline + 1;
-        final end = nextNewline < 0 ? _controller.text.length : nextNewline;
-        final para = _controller.text.substring(start, end).trim();
-        if (para.isNotEmpty) cursorParagraphText = para;
-      }
-      navigator.pop({
-        'changed': true,
-        'progress': _controller.text.isEmpty
-            ? 0.0
-            : (_controller.selection.end / _controller.text.length).clamp(0.0, 1.0),
-        'cursorParagraphText': cursorParagraphText,
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        // 返回键 / 手势返回：有未保存改动先落盘，再带结果返回阅读页，
+        // 避免「编辑完直接返回（没点保存/完成排版）」导致改动丢失。
+        if (_controller.text != _writtenText) {
+          await _writeToDisk();
+        }
+        if (!context.mounted) return;
+        Navigator.of(context).pop(_resultPayload());
+      },
+      child: _buildScaffold(p),
+    );
+  }
+
+  Widget _buildScaffold(PaletteData p) {
     return Scaffold(
       backgroundColor: p.bg,
       appBar: AppBar(

@@ -683,6 +683,82 @@ class SetUserDataResult {
   const SetUserDataResult([this.skippedKeys = const {}]);
 }
 
+/// 同一段经文的单条备注（同一人同段可追加多条相互独立）。
+///
+/// [quoted] 为该备注针对的选中经文（可空，空表示针对整段经文）；
+/// [shared]/[cloudId] 表示该条是否已分享到菩提空间及分享后的云端帖子 ID。
+class ParaNote {
+  final String id;
+  final String text;
+  final String quoted;
+  final bool shared;
+  final String cloudId;
+  final int createdAt;
+  final int updatedAt;
+
+  const ParaNote({
+    required this.id,
+    required this.text,
+    this.quoted = '',
+    this.shared = false,
+    this.cloudId = '',
+    this.createdAt = 0,
+    this.updatedAt = 0,
+  });
+
+  bool get isBlank => text.trim().isEmpty;
+
+  ParaNote copyWith({
+    String? id,
+    String? text,
+    String? quoted,
+    bool? shared,
+    String? cloudId,
+    int? createdAt,
+    int? updatedAt,
+  }) =>
+      ParaNote(
+        id: id ?? this.id,
+        text: text ?? this.text,
+        quoted: quoted ?? this.quoted,
+        shared: shared ?? this.shared,
+        cloudId: cloudId ?? this.cloudId,
+        createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'text': text,
+        'quoted': quoted,
+        'shared': shared,
+        'cloudId': cloudId,
+        'createdAt': createdAt,
+        'updatedAt': updatedAt,
+      };
+
+  factory ParaNote.fromJson(Map<String, dynamic> m) => ParaNote(
+        id: (m['id'] ?? '').toString(),
+        text: (m['text'] ?? '').toString(),
+        quoted: (m['quoted'] ?? '').toString(),
+        shared: m['shared'] == true,
+        cloudId: (m['cloudId'] ?? '').toString(),
+        createdAt: (m['createdAt'] is num)
+            ? (m['createdAt'] as num).toInt()
+            : int.tryParse('${m['createdAt']}') ?? 0,
+        updatedAt: (m['updatedAt'] is num)
+            ? (m['updatedAt'] as num).toInt()
+            : int.tryParse('${m['updatedAt']}') ?? 0,
+      );
+
+  static int _seq = 0;
+
+  /// 生成一个本地唯一 id（毫秒时间戳 + 会话内自增，够用且无外部依赖）。
+  static String newId() =>
+      'n${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}'
+      '${(_seq++).toRadixString(36)}';
+}
+
 /// 广场云端数据服务：所有操作统一走「api」云函数。
 class CloudNotesService {
   CloudNotesService._();
@@ -854,12 +930,42 @@ class CloudNotesService {
     if (items is List) {
       return items.map((it) {
         final m = Map<String, dynamic>.from(it as Map);
-        final raw = m['underlines'];
-        m['underlines'] = _normalizeUnderlines(raw);
+        m['underlines'] = _normalizeUnderlines(m['underlines']);
+        m['notes'] = _parseParaNotes(m);
         return m;
       }).toList();
     }
     return const [];
+  }
+
+  /// 从云端返回的单条段落记录里解析多备注列表；旧数据（无 notes 数组但
+  /// 有顶层 note）合成一条 id="legacy" 的备注，保证前后兼容。
+  List<ParaNote> _parseParaNotes(Map<String, dynamic> m) {
+    final raw = m['notes'];
+    final out = <ParaNote>[];
+    if (raw is List) {
+      for (final n in raw) {
+        if (n is Map) {
+          final pn = ParaNote.fromJson(Map<String, dynamic>.from(n));
+          if (!pn.isBlank || pn.shared || pn.cloudId.isNotEmpty) out.add(pn);
+        }
+      }
+    }
+    if (out.isEmpty) {
+      final legacy = (m['note'] ?? '').toString().trim();
+      if (legacy.isNotEmpty) {
+        out.add(ParaNote(
+          id: 'legacy',
+          text: legacy,
+          shared: m['shared'] == true,
+          cloudId: (m['cloudId'] ?? '').toString(),
+          updatedAt: (m['updatedAt'] is num)
+              ? (m['updatedAt'] as num).toInt()
+              : int.tryParse('${m['updatedAt']}') ?? 0,
+        ));
+      }
+    }
+    return out;
   }
 
   /// 拉取某本经所有有感想（任意用户）的段落下标集合，用于阅读页操作栏「所有感想」变绿。
@@ -922,25 +1028,25 @@ class CloudNotesService {
     return result;
   }
 
-  /// 保存某段的备注文本（note 为空表示清除该段备注）。
-  /// [shared] 表示该段读经笔记是否分享到菩提空间，[cloudId] 为分享后的云端帖子 ID。
+  /// 保存某段的全部备注（[notes] 为该段当前所有备注，空列表表示清除该段备注）。
   /// [underlines] 为该段已画线的文字区间列表（[{start, end}]）。
   Future<void> saveParagraphNote({
     required String sutraKey,
     required int index,
     required String text,
-    required String note,
-    bool shared = false,
-    String cloudId = '',
+    required List<ParaNote> notes,
     List<Map<String, int>> underlines = const [],
   }) async {
     await _call('saveParagraphNote', params: {
       'sutraKey': sutraKey,
       'index': index,
       'text': text,
-      'note': note,
-      'shared': shared,
-      'cloudId': cloudId,
+      'notes': [for (final n in notes) n.toJson()],
+      // 兼容旧后端（尚未部署多备注版本时）：note/shared/cloudId 取第一条，
+      // 旧云函数只认这些字段，至少能保底保存首条备注，不至于保存后消失。
+      'note': notes.isNotEmpty ? notes.first.text : '',
+      'shared': notes.isNotEmpty ? notes.first.shared : false,
+      'cloudId': notes.isNotEmpty ? notes.first.cloudId : '',
       'underlines': _normalizeUnderlines(underlines),
     });
   }
@@ -1062,13 +1168,18 @@ class CloudNotesService {
     });
   }
 
-  /// 删除某段全部段落数据（备注 + 完成态）。
+  /// 删除某段数据。带 [noteId]：只删这一条备注（保留画线/完成态与其余备注）；
+  /// 不带：删整段全部数据（备注 + 完成态）。
   Future<void> deleteParagraphNote({
     required String sutraKey,
     required int index,
+    String? noteId,
   }) async {
-    await _call('deleteParagraphNote',
-        params: {'sutraKey': sutraKey, 'index': index});
+    await _call('deleteParagraphNote', params: {
+      'sutraKey': sutraKey,
+      'index': index,
+      if (noteId != null && noteId.isNotEmpty) 'noteId': noteId,
+    });
   }
 
   Future<Map<String, dynamic>> _call(

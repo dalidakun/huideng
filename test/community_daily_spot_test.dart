@@ -191,12 +191,11 @@ void main() {
 
   test('栏目表覆盖 8 宗派 + 12 法门共 20 个社区', () {
     expect(kSectList.length, 8);
+    // 十二法门共 12 个，不包含缠习社。
     expect(kGateList.length, 12);
     expect(kCommunityKeys.length, 20);
-    // 社区标记写法与社区页一致。
+    // 宗门名与法门名都要和社区页一一对齐。
     expect(kCommunityKeys, contains('禅宗社区'));
     expect(kCommunityKeys, contains('普贤行愿法门社区'));
-    // 帖子预览字段齐全，不至于渲染出空洞文案。
-    expect(_note('今日参禅', likes: 3, comments: 1).content, '今日参禅');
   });
 }

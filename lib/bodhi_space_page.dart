@@ -1971,8 +1971,16 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
             Align(
               alignment: Alignment.centerLeft,
               child: GestureDetector(
-                // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
-                onTap: widget.onOpenSideMenu,
+                // 未登录时进入登录页面；已登录时打开左侧个人菜单。
+                onTap: () {
+                  if (!AuthService.instance.isLoggedIn) {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const LoginPage()),
+                    );
+                    return;
+                  }
+                  widget.onOpenSideMenu?.call();
+                },
                 child: UserAvatar(
                   userId: AuthService.instance.currentUser.value?.id,
                   radius: 16,

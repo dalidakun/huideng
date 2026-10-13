@@ -195,7 +195,8 @@ void main() {
         expect(manifest.byName(sect.name), isNotNull, reason: '${sect.name} 缺清单');
         expect(sect.kind, SectMenuKind.sect, reason: sect.name);
       }
-      for (final gate in kGateList) {
+      // 缠习社是自定义入口，没有核心经典清单，跳过。
+      for (final gate in kGateList.where((g) => !g.isCustom)) {
         expect(manifest.byName(gate.name), isNotNull, reason: '${gate.name} 缺清单');
         expect(gate.kind, SectMenuKind.gate, reason: gate.name);
       }
@@ -209,7 +210,8 @@ void main() {
     });
 
     test('法门图标用 assets/famen/ 拼音切图，宗门仍走 menpai 切图/手绘', () {
-      for (final gate in kGateList) {
+      // 缠习社是自定义入口，用单张固定切图，不在此列。
+      for (final gate in kGateList.where((g) => !g.isCustom)) {
         final code = gate.icon.gateCode;
         expect(code, isNotEmpty, reason: gate.name);
         expect(gate.icon.isGate, isTrue, reason: gate.name);

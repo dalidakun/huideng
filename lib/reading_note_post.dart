@@ -1051,7 +1051,7 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
       if (computed != null && mounted) {
         final livePairs = <(String, String)>[];
         for (final item in computed) {
-          final note = (item.note ?? '').trim();
+          final note = item.note.trim();
           if (note.isNotEmpty) {
             livePairs.add((item.paragraph, note));
           }

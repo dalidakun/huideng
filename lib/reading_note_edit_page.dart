@@ -320,7 +320,7 @@ class _ReadingNoteEditPageState extends State<ReadingNoteEditPage> {
         appBar: AppBar(
           backgroundColor: p.bg,
           elevation: 0,
-          title: Text('读经感想',
+          title: Text('读经备注',
               style:
                   TextStyle(color: p.text, fontSize: 18, fontWeight: FontWeight.w600)),
           actions: [

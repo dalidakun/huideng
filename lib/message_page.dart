@@ -449,13 +449,21 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
           padding: const EdgeInsets.only(left: 2),
           child: Row(
             children: [
-              GestureDetector(
-                onTap: widget.onOpenSideMenu,
-                child: UserAvatar(
-                  userId: AuthService.instance.currentUser.value?.id,
-                  radius: 16,
-                ),
-              ),
+               GestureDetector(
+                 onTap: () {
+                   if (!AuthService.instance.isLoggedIn) {
+                     Navigator.of(context).push(
+                       MaterialPageRoute(builder: (_) => const LoginPage()),
+                     );
+                     return;
+                   }
+                   widget.onOpenSideMenu?.call();
+                 },
+                 child: UserAvatar(
+                   userId: AuthService.instance.currentUser.value?.id,
+                   radius: 16,
+                 ),
+               ),
               const SizedBox(width: 10),
               Text(
                 '消息',

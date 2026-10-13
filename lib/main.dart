@@ -973,6 +973,7 @@ class _MainPageState extends State<MainPage>
   }
 
   /// 宗门入口：打开该宗核心经典详情页，分卷正文复用经藏页的下载/阅读逻辑。
+  /// 缠习社等自定义入口不走详情页，先进独立占位页。
   void _openSectDetail(SectInfo sect) {
     Navigator.push(
       context,

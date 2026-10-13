@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'login_page.dart';
 import 'user_avatar.dart';
 import 'reading_page.dart';
 import 'checkin_settings_page.dart';
@@ -836,9 +837,16 @@ class StudyHubPageState extends State<StudyHubPage>
             child: Row(
               children: [
                 GestureDetector(
-                  // 左上角头像：从左侧滑出个人菜单（个人资料/记录/关注/设置/退出）。
-                  // 不依赖 currentUser，避免冷启动会话未恢复时点击无反应。
-                  onTap: widget.onOpenSideMenu,
+                  // 左上角头像：未登录时进入登录页面；已登录时从左侧滑出个人菜单。
+                  onTap: () {
+                    if (!AuthService.instance.isLoggedIn) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const LoginPage()),
+                      );
+                      return;
+                    }
+                    widget.onOpenSideMenu?.call();
+                  },
                   child: UserAvatar(
                     userId: AuthService.instance.currentUser.value?.id,
                     radius: 16,

@@ -29,7 +29,8 @@ class SectProfile {
   final String history;
 }
 
-/// 八宗门 + 十二法门各一条介绍。key 用 [SectIconKind]，与 [kSectList]、[kGateList] 一一对应。
+/// 八宗门 + 十二法门各一条介绍。key 用 [SectIconKind]，与 [kSectList]、
+/// [kGateList] 一一对应；缠习社这类自定义入口（isCustom）不在此列。
 const Map<SectIconKind, SectProfile> kSectProfiles = {
   SectIconKind.zen: SectProfile(
     idea: '主张「不立文字，教外别传，直指人心，见性成佛」。禅宗认为人人皆有佛性，'

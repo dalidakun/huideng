@@ -7,7 +7,9 @@ void main() {
   test('20 个栏目在 kCommunityIntros 里都有非空社区介绍', () {
     final names = <String>{
       for (final s in kSectList) s.name,
-      for (final g in kGateList) g.name,
+      // 缠习社是自定义入口，还没开社区，不要求社区介绍。
+      for (final g in kGateList)
+        if (!g.isCustom) g.name,
     };
     expect(names, hasLength(20), reason: '八大宗派 + 十二法门');
 

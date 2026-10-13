@@ -9,7 +9,8 @@ void main() {
   group('介绍内容', () {
     test('八宗门 + 十二法门都有介绍，且四维齐全', () {
       expect(kSectProfiles.length, 20);
-      for (final sect in [...kSectList, ...kGateList]) {
+      // 缠习社是自定义入口，没有法门介绍，跳过。
+      for (final sect in [...kSectList, ...kGateList].where((s) => !s.isCustom)) {
         final profile = sectProfileOf(sect);
         expect(profile, isNotNull, reason: '${sect.name} 缺介绍');
         expect(profile!.idea, isNotEmpty, reason: sect.name);
@@ -23,10 +24,11 @@ void main() {
     });
 
     test('介绍 key 与两栏栏目一一对应，不多不少', () {
-      expect(
-        kSectProfiles.keys.toSet(),
-        [...kSectList, ...kGateList].map((s) => s.icon).toSet(),
-      );
+      final menuIcons = [...kSectList, ...kGateList]
+          .where((s) => !s.isCustom)
+          .map((s) => s.icon)
+          .toSet();
+      expect(kSectProfiles.keys.toSet(), menuIcons);
     });
 
     test('宗门祖师条目格式：姓名（贡献说明）', () {
@@ -39,7 +41,7 @@ void main() {
     });
 
     test('文本不带半角引号，统一用「」', () {
-      for (final sect in [...kSectList, ...kGateList]) {
+      for (final sect in [...kSectList, ...kGateList].where((s) => !s.isCustom)) {
         final profile = sectProfileOf(sect)!;
         final all = [
           profile.idea,
@@ -154,7 +156,7 @@ void main() {
     });
 
     testWidgets('二十栏介绍默认收起，展开后四节都在', (tester) async {
-      for (final sect in [...kSectList, ...kGateList]) {
+      for (final sect in [...kSectList, ...kGateList].where((s) => !s.isCustom)) {
         final title =
             sect.kind == SectMenuKind.gate ? '法门介绍' : '宗派介绍';
         await tester.pumpWidget(_host(sectProfileOf(sect)!, title: title));

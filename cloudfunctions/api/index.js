@@ -622,6 +622,53 @@ exports.main = async (event, context) => {
     return null;
   }
 
+  // 规整同一段的多条备注：[{id,text,quoted,shared,cloudId,createdAt,updatedAt}]。
+  // 过滤空正文（除非已分享/带 cloudId），补齐 id 与时间戳，保证 id 唯一。
+  function normalizeReadingNotes(arr) {
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const n of arr) {
+      if (!n || typeof n !== "object") continue;
+      const text = (n.text || "").toString();
+      const cloudId = (n.cloudId || "").toString();
+      const shared = !!n.shared;
+      if (text.trim() === "" && !shared && !cloudId) continue;
+      let id = (n.id || "").toString().slice(0, 64);
+      if (!id || seen.has(id)) {
+        id = "n" + now().toString(36) + Math.random().toString(36).slice(2, 8);
+      }
+      seen.add(id);
+      out.push({
+        id,
+        text,
+        quoted: (n.quoted || "").toString(),
+        shared,
+        cloudId,
+        createdAt: Number(n.createdAt) || now(),
+        updatedAt: Number(n.updatedAt) || now(),
+      });
+    }
+    return out;
+  }
+
+  // 读取时的备注列表：优先用 notes 数组；旧数据（无 notes 但有 note）合成一条 id="legacy"。
+  function readingNotesWithLegacy(notesField, legacyNote, legacyShared, legacyCloudId, legacyTs) {
+    const arr = normalizeReadingNotes(notesField);
+    if (arr.length > 0) return arr;
+    const text = (legacyNote || "").toString();
+    if (text.trim() === "") return [];
+    return [{
+      id: "legacy",
+      text,
+      quoted: "",
+      shared: !!legacyShared,
+      cloudId: (legacyCloudId || "").toString(),
+      createdAt: Number(legacyTs) || 0,
+      updatedAt: Number(legacyTs) || 0,
+    }];
+  }
+
   // 确保 userAccounts 集合存在（首次使用自动创建，避免 DATABASE_COLLECTION_NOT_EXIST）。
   async function ensureUserAccounts() {
     try {
@@ -4308,6 +4355,7 @@ exports.main = async (event, context) => {
           const list = (data || []).map((d) => ({
             index: parseInt(d.index, 10),
             note: d.note || "",
+            notes: readingNotesWithLegacy(d.notes, d.note, d.shared, d.cloudId, d.updatedAt),
             underlines: Array.isArray(d.underlines) ? d.underlines : [],
             done: !!d.done,
             shared: !!d.shared,
@@ -4437,9 +4485,6 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         const sutraKey = event.sutraKey;
         const index = event.index;
-        const note = (event.note || "").toString().trim();
-        const shared = !!event.shared;
-        const cloudId = (event.cloudId || "").toString();
         const rawUnderlines = Array.isArray(event.underlines) ? event.underlines : [];
         const underlines = rawUnderlines
           .filter((u) => u && typeof u === "object")
@@ -4451,12 +4496,37 @@ exports.main = async (event, context) => {
         if (!sutraKey || index === undefined || index === null) {
           return fail("缺少参数");
         }
+        // 多备注：优先使用 notes 数组（同一人同段可追加多条独立备注）；
+        // 未传 notes 时按旧协议用单个 note 合成一条，兼容旧客户端。
+        let notes;
+        if (Array.isArray(event.notes)) {
+          notes = normalizeReadingNotes(event.notes);
+        } else {
+          const legacyNote = (event.note || "").toString().trim();
+          notes = legacyNote
+            ? [{
+                id: "legacy",
+                text: legacyNote,
+                quoted: "",
+                shared: !!event.shared,
+                cloudId: (event.cloudId || "").toString(),
+                createdAt: now(),
+                updatedAt: now(),
+              }]
+            : [];
+        }
+        // note/shared/cloudId 为兼容字段，始终派生自第一条备注。
+        const primary = notes[0] || null;
+        const note = primary ? primary.text : "";
+        const shared = primary ? !!primary.shared : false;
+        const cloudId = primary ? primary.cloudId : "";
         try {
           await ensureReadingParagraphNotes();
           const existing = await findReadingParagraph(uid, sutraKey, String(index));
           if (existing) {
             await readingParagraphNotes.doc(existing._id).update({
               note,
+              notes,
               underlines,
               shared,
               cloudId,
@@ -4469,6 +4539,7 @@ exports.main = async (event, context) => {
               index: String(index),
               text: (event.text || "").toString().slice(0, 200),
               note,
+              notes,
               underlines,
               shared,
               cloudId,
@@ -4476,7 +4547,7 @@ exports.main = async (event, context) => {
               updatedAt: now(),
             });
           }
-          return ok({ note });
+          return ok({ note, notes });
         } catch (e) {
           console.error("[api] saveParagraphNote error:", e && e.message ? e.message : e);
           return fail(e && e.message ? e.message : "保存段落笔记失败");
@@ -4519,7 +4590,8 @@ exports.main = async (event, context) => {
         }
       }
 
-      // 删除某段的全部数据（备注 + 完成态）。
+      // 删除某段数据。带 noteId：只删这一条备注（保留画线/完成态与其余备注）；
+      // 不带 noteId：删整段全部数据（备注 + 完成态），兼容旧客户端。
       case "deleteParagraphNote": {
         if (!uid) return fail("unauthorized");
         const sutraKey = event.sutraKey;
@@ -4527,11 +4599,33 @@ exports.main = async (event, context) => {
         if (!sutraKey || index === undefined || index === null) {
           return fail("缺少参数");
         }
+        const noteId = (event.noteId || "").toString();
         try {
           await ensureReadingParagraphNotes();
           const existing = await findReadingParagraph(uid, sutraKey, String(index));
-          if (existing) {
+          if (!existing) return ok({ deleted: true });
+          if (!noteId) {
             await readingParagraphNotes.doc(existing._id).remove();
+            return ok({ deleted: true });
+          }
+          const current = readingNotesWithLegacy(
+            existing.notes, existing.note, existing.shared, existing.cloudId, existing.updatedAt
+          );
+          const next = current.filter((n) => n.id !== noteId);
+          const primary = next[0] || null;
+          const hasUnderlines =
+            Array.isArray(existing.underlines) && existing.underlines.length > 0;
+          const done = !!existing.done;
+          if (next.length === 0 && !hasUnderlines && !done) {
+            await readingParagraphNotes.doc(existing._id).remove();
+          } else {
+            await readingParagraphNotes.doc(existing._id).update({
+              notes: next,
+              note: primary ? primary.text : "",
+              shared: primary ? !!primary.shared : false,
+              cloudId: primary ? primary.cloudId : "",
+              updatedAt: now(),
+            });
           }
           return ok({ deleted: true });
         } catch (e) {

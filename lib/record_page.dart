@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
+import 'login_page.dart';
 import 'note_sutra_links.dart';
 import 'record_cards.dart';
 import 'record_index.dart';
@@ -371,7 +372,16 @@ class RecordPageState extends State<RecordPage> {
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: widget.onOpenSideMenu,
+                  // 未登录时进入登录页面；已登录时打开左侧个人菜单。
+                  onTap: () {
+                    if (!AuthService.instance.isLoggedIn) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const LoginPage()),
+                      );
+                      return;
+                    }
+                    widget.onOpenSideMenu?.call();
+                  },
                   child: UserAvatar(
                     userId: AuthService.instance.currentUser.value?.id,
                     radius: 16,

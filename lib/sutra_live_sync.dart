@@ -30,8 +30,8 @@ typedef LiveHighlightSegment = ({int para, int start, int end});
 /// 一条实时画线项：合并后的展示文字 + 组成它的各段画线（多段时可跨 `。。。///` 连段）。
 typedef LiveHighlightItem = ({String text, List<LiveHighlightSegment> segments});
 
-/// 一条实时感想项：经文 + 感想 + 所属段落下标。
-typedef LiveThoughtItem = ({String paragraph, String note, int para});
+/// 一条实时感想项：经文 + 感想 + 所属段落下标 + 该条备注 id（可能为空）。
+typedef LiveThoughtItem = ({String paragraph, String note, String id, int para});
 
 /// 拆段逻辑与读经页 `_parseParagraphs` 一致（剔除 `。。。`、`///` 等分段标记），
 /// 并额外返回「紧密连段」段落下标集合：`tight.contains(j)` 表示段落 j 与 j+1 之间无间隔。
@@ -382,6 +382,13 @@ Map<String, dynamic> _normalizedNoteEntry(Map<String, dynamic> it) => {
       'note': it['note'],
       'shared': it['shared'],
       'cloudId': it['cloudId'],
+      'notes': [
+        for (final n in (it['notes'] as List? ?? []))
+          if (n is ParaNote)
+            n.toJson()
+          else if (n is Map)
+            Map<String, dynamic>.from(n),
+      ],
       if (it['underlines'] is List)
         'underlines': [
           for (final u in it['underlines'] as List)
@@ -389,6 +396,11 @@ Map<String, dynamic> _normalizedNoteEntry(Map<String, dynamic> it) => {
         ]
     };
 
+/// 多备注合并去重键：优先用 id，缺失时退回正文。
+String _noteDedupeKey(Map n) {
+  final id = (n['id'] ?? '').toString();
+  return id.isNotEmpty ? id : 'text:${(n['text'] ?? '').toString()}';
+}
 /// 纯合并：把「候选 key → 原始笔记」合成为按段合并的作者笔记。
 /// 同一段来自多个 key 时：画线区间按 start-end 去重合并，感想取首个非空。
 /// 返回合并后的条目 + 命中笔记最多的主 key（供实时删除写回同一位置）；
@@ -426,6 +438,17 @@ Map<String, dynamic> _normalizedNoteEntry(Map<String, dynamic> it) => {
         if (seen.add('${u['start']}-${u['end']}')) merged.add({...u});
       }
       prev['underlines'] = merged;
+      // 多备注：按 id（缺失时按正文）去重合并两条来源的 notes。
+      final notesSeen = <String>{
+        for (final n in (prev['notes'] as List? ?? []))
+          if (n is Map) _noteDedupeKey(n),
+      };
+      final mergedNotes = [...(prev['notes'] as List? ?? [])];
+      for (final n in (it['notes'] as List? ?? [])) {
+        if (n is! Map) continue;
+        if (notesSeen.add(_noteDedupeKey(n))) mergedNotes.add({...n});
+      }
+      prev['notes'] = mergedNotes;
       if ((prev['note'] ?? '').toString().trim().isEmpty &&
           (it['note'] ?? '').toString().trim().isNotEmpty) {
         prev['note'] = it['note'];
@@ -525,29 +548,58 @@ List<LiveHighlightItem> buildLiveHighlights(
 }
 
 /// 由「段落原文 + 紧密连段标记 + 云端段落笔记」重建当前全部感想项（过滤空感想）。
+/// 同一段可有多条独立备注：逐条输出，各自带 id，便于分享帖页按条展示/删除。
 /// 感想所属段落若位于 `。。。///` 连段簇内，则用整簇合并文本作为经文展示。
 List<LiveThoughtItem> buildLiveThoughts(
   List<String> paragraphs,
   Set<int> tight,
   List<Map<String, dynamic>> items,
 ) {
-  final notesByIndex = <int, String>{};
+  // 每段可能有多条备注：按段序、按备注原顺序逐条输出。
+  final byIndex = <int, List<({String id, String text, String quote})>>{};
   for (final it in items) {
     final idx = it['index'];
     if (idx is! int) continue;
-    final note = (it['note'] ?? '').toString().trim();
-    if (note.isNotEmpty) notesByIndex[idx] = note;
+    var added = false;
+    final notesRaw = it['notes'];
+    if (notesRaw is List) {
+      for (final n in notesRaw) {
+        ParaNote? pn;
+        if (n is ParaNote) {
+          pn = n;
+        } else if (n is Map) {
+          pn = ParaNote.fromJson(Map<String, dynamic>.from(n));
+        }
+        if (pn == null) continue;
+        final text = pn.text.trim();
+        if (text.isEmpty) continue;
+        (byIndex[idx] ??= [])
+            .add((id: pn.id, text: text, quote: pn.quoted.trim()));
+        added = true;
+      }
+    }
+    if (!added) {
+      final note = (it['note'] ?? '').toString().trim();
+      if (note.isNotEmpty) {
+        (byIndex[idx] ??= []).add((id: '', text: note, quote: ''));
+      }
+    }
   }
   final out = <LiveThoughtItem>[];
-  final idxs = notesByIndex.keys.toList()..sort();
+  final idxs = byIndex.keys.toList()..sort();
   for (final i in idxs) {
-    if (out.length >= kLiveMaxNotes) break;
     if (i < 0 || i >= paragraphs.length) continue;
-    out.add((
-      paragraph: tightClusterTextFor(paragraphs, tight, i),
-      note: notesByIndex[i]!,
-      para: i,
-    ));
+    final para = tightClusterTextFor(paragraphs, tight, i);
+    for (final n in byIndex[i]!) {
+      if (out.length >= kLiveMaxNotes) break;
+      // 有选中文字时展示选中文字，否则回退整段/整簇经文。
+      out.add((
+        paragraph: n.quote.isNotEmpty ? n.quote : para,
+        note: n.text,
+        id: n.id,
+        para: i
+      ));
+    }
   }
   return out;
 }
@@ -599,9 +651,7 @@ Future<bool> deleteLiveUnderline({
         sutraKey: sutraKey,
         index: index,
         text: paragraphs[index],
-        note: (it['note'] ?? '').toString(),
-        shared: it['shared'] == true,
-        cloudId: (it['cloudId'] ?? '').toString(),
+        notes: (it['notes'] as List? ?? const []).whereType<ParaNote>().toList(),
         underlines: next,
       );
     }
@@ -612,10 +662,12 @@ Future<bool> deleteLiveUnderline({
 }
 
 /// 删除某段感想（用于分享帖页面的实时删除）。保留该段画线；返回是否真正删除了内容。
+/// 传 [noteId] 只删该条备注；不传则清空该段全部备注。
 Future<bool> deleteLiveNote({
   required String sutraKey,
   required List<String> paragraphs,
   required int index,
+  String? noteId,
 }) async {
   if (index < 0 || index >= paragraphs.length) return false;
   if (!AuthService.instance.isLoggedIn) return false;
@@ -629,8 +681,17 @@ Future<bool> deleteLiveNote({
       }
     }
     if (it.isEmpty) return false;
-    final note = (it['note'] ?? '').toString().trim();
-    if (note.isEmpty) return false;
+    if (noteId != null && noteId.isNotEmpty) {
+      await CloudNotesService.instance.deleteParagraphNote(
+        sutraKey: sutraKey,
+        index: index,
+        noteId: noteId,
+      );
+      return true;
+    }
+    final notes =
+        (it['notes'] as List? ?? const []).whereType<ParaNote>().toList();
+    if (notes.isEmpty) return false;
     List<Map<String, int>> underlines = const [];
     if (it['underlines'] is List) {
       underlines = (it['underlines'] as List)
@@ -651,9 +712,7 @@ Future<bool> deleteLiveNote({
       sutraKey: sutraKey,
       index: index,
       text: paragraphs[index],
-      note: '',
-      shared: false,
-      cloudId: '',
+      notes: const [],
       underlines: underlines,
     );
     return true;

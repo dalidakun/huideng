@@ -146,9 +146,9 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('删除这段感想？', style: TextStyle(fontSize: 16)),
+        title: const Text('删除这段备注？', style: TextStyle(fontSize: 16)),
         content: Text(
-          '删除后阅读页的这段感想也会一并移除',
+          '删除后阅读页的这段备注也会一并移除',
           style: const TextStyle(fontSize: 13, color: Color(0xFF666666)),
         ),
         actions: [
@@ -173,7 +173,8 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     } catch (_) {}
     if (!mounted) return;
     if (ok) {
-      setState(() => _items.removeAt(index));
+      // 同一段的多条备注一并移除（该页删除按段落落地）。
+      setState(() => _items.removeWhere((it) => it.para == para));
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已删除'), duration: Duration(seconds: 1)),
       );
@@ -186,7 +187,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     if (_exporting) return;
     final pairs = _pairs;
     if (pairs.isEmpty) {
-      _toast('没有可导出的感想');
+      _toast('没有可导出的备注');
       return;
     }
     setState(() => _exporting = true);
@@ -216,7 +217,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
     final safeTitle = _sutraName
         .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
         .replaceAll(RegExp(r'\s+'), '');
-    final filename = '${safeTitle}_感想.pdf';
+    final filename = '${safeTitle}_备注.pdf';
     // 优先：用原生保存对话框，由插件写入用户选择的位置。
     try {
       final savedPath = await FlutterFileDialog.saveFile(
@@ -513,7 +514,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
         backgroundColor: _bg,
         foregroundColor: _fg,
         elevation: 0,
-        title: Text('感想：$_sutraName',
+        title: Text('备注：$_sutraName',
             style: const TextStyle(fontSize: 16, color: _fg)),
         actions: [
           IconButton(
@@ -533,7 +534,7 @@ class _ReadingNotesPageState extends State<ReadingNotesPage> {
                     ? Center(
                         child: Text(
                           widget.emptyHint ??
-                              '还没有为《$_sutraName》添加感想\n点击每段右侧的「感想」按钮即可记录',
+                              '还没有为《$_sutraName》添加备注\n点击每段右侧的「所有备注」按钮即可记录',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                               fontSize: 14, height: 1.6, color: Colors.black38),
