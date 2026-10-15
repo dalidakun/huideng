@@ -670,7 +670,7 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Future<void> _showRecentSutras() async {
     final prefs = await SharedPreferences.getInstance();
-    // 最近阅读记录（recent_sutras，格式 `经名|||路径`，新读在前）取前 5 部：
+    // 最近阅读记录（recent_sutras，格式 `经名|||路径`，新读在前）最多取前 20 部：
     // 不限最近几天，哪怕是一个月前读过的也照常展示，保证列表始终有内容。
     final raw = prefs.getStringList('recent_sutras') ?? [];
     final sutras = raw
@@ -683,7 +683,7 @@ class StudyHubPageState extends State<StudyHubPage>
           };
         })
         .whereType<Map<String, dynamic>>()
-        .take(10)
+        .take(20)
         .toList();
 
     if (!mounted) return;

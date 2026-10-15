@@ -29,27 +29,37 @@ class SutraEditDraft {
   }
 
   /// 写入草稿。内容与上次一致时不写，避免每次打开经书都触发一次云同步推送。
+  /// [displayTitle] 为管理员订正的经名（可选），随草稿备份。
   static Future<void> save({
     String? title,
     required String filePath,
     required String content,
+    String? displayTitle,
   }) async {
     if (content.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final key = keyFor(title: title, filePath: filePath);
+    final cleanTitle = (displayTitle ?? '').trim();
     final existing = prefs.getString(key);
     if (existing != null) {
       try {
         final decoded = jsonDecode(existing);
-        if (decoded is Map && decoded['content'] == content) return;
+        if (decoded is Map &&
+            decoded['content'] == content &&
+            (decoded['displayTitle'] ?? '') == cleanTitle) {
+          return;
+        }
       } catch (_) {
         // 旧值损坏：直接覆盖。
       }
     }
-    await prefs.setString(key, jsonEncode({
-      'savedAt': DateTime.now().millisecondsSinceEpoch,
-      'content': content,
-    }));
+    await prefs.setString(
+        key,
+        jsonEncode({
+          'savedAt': DateTime.now().millisecondsSinceEpoch,
+          'content': content,
+          if (cleanTitle.isNotEmpty) 'displayTitle': cleanTitle,
+        }));
   }
 
   /// 读取草稿；不存在或损坏返回 null。
@@ -66,9 +76,11 @@ class SutraEditDraft {
       final content = decoded['content'];
       if (content is! String || content.isEmpty) return null;
       final savedAt = decoded['savedAt'];
+      final dt = decoded['displayTitle'];
       return SutraEditDraftData(
         content: content,
         savedAt: savedAt is num ? savedAt.toInt() : 0,
+        displayTitle: dt is String ? dt : null,
       );
     } catch (_) {
       return null;
@@ -80,6 +92,11 @@ class SutraEditDraft {
 class SutraEditDraftData {
   final String content;
   final int savedAt;
+  final String? displayTitle;
 
-  const SutraEditDraftData({required this.content, required this.savedAt});
+  const SutraEditDraftData({
+    required this.content,
+    required this.savedAt,
+    this.displayTitle,
+  });
 }

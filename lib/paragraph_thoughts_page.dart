@@ -222,6 +222,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
           _thoughts.addAll(thoughts);
         }
         _mergeOwnNotes(ownNotes);
+        _sortByParagraphPosition();
         _hasMore = hasMore;
         final localOwn = ownNotes
             .where((n) => n.text.trim().isNotEmpty && n.cloudId.isEmpty)
@@ -279,6 +280,33 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
         );
       }
     }
+  }
+
+  /// 按备注针对的经文在本段中的位置排序：越靠段首越靠前。
+  ///
+  /// 画线选中的文字在段内的起始下标即排序键；针对整段（未记录选中文字）
+  /// 的备注视为位于段首（下标 0）；本段找不到选中文字时排到最后。
+  /// 排序稳定：位置相同的备注保持原有先后顺序。
+  void _sortByParagraphPosition() {
+    final keyed = <(int, int, _Thought)>[];
+    for (var i = 0; i < _thoughts.length; i++) {
+      keyed.add((_notePosition(_thoughts[i].quoted), i, _thoughts[i]));
+    }
+    keyed.sort((a, b) {
+      final c = a.$1.compareTo(b.$1);
+      return c != 0 ? c : a.$2.compareTo(b.$2);
+    });
+    _thoughts
+      ..clear()
+      ..addAll([for (final e in keyed) e.$3]);
+  }
+
+  /// 备注针对的经文在本段中的起始下标；针对整段返回 0，找不到返回一个极大值。
+  int _notePosition(String quoted) {
+    final q = quoted.trim();
+    if (q.isEmpty) return 0;
+    final idx = widget.paragraph.indexOf(q);
+    return idx < 0 ? 1 << 30 : idx;
   }
 
   Future<void> _editOwn(ParaNote note) async {

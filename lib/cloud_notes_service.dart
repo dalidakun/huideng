@@ -1224,6 +1224,7 @@ class CloudNotesService {
       'toggleParagraphDone',
       'deleteParagraphNote',
       'sutraEditSave',
+      'sutraEditTitleSave',
       'upsertUserNotes',
       'upsertUserRecords',
     };
@@ -2213,9 +2214,31 @@ class CloudNotesService {
     }
   }
 
-  /// 管理员保存「编辑经文」的最新排版。
-  Future<void> saveSutraEdit(String id, String content) async {
-    await _call('sutraEditSave', params: {'id': id, 'content': content});
+  /// 管理员保存「编辑经文」的最新排版。[title] 为可选的经名订正覆盖。
+  Future<void> saveSutraEdit(String id, String content, {String? title}) async {
+    await _call('sutraEditSave', params: {
+      'id': id,
+      'content': content,
+      if (title != null) 'title': title,
+    });
+  }
+
+  /// 管理员单独保存经名覆盖（只改标题、不改正文）。
+  Future<void> saveSutraTitle(String id, String title) async {
+    await _call('sutraEditTitleSave', params: {'id': id, 'title': title});
+  }
+
+  /// 拉取所有经名覆盖（id → 标题），供客户端缓存后统一套用显示名。
+  /// 查询失败时抛异常，由调用方决定是否保留本地缓存。
+  Future<Map<String, String>> getSutraEditTitles() async {
+    final res = await _call('sutraEditTitles');
+    final raw = res['titles'];
+    if (raw is! Map) return const {};
+    return {
+      for (final e in raw.entries)
+        if (e.value is String && (e.value as String).trim().isNotEmpty)
+          e.key.toString(): (e.value as String).trim(),
+    };
   }
 
   /// 管理员撤销「完成排版」：删除云端编辑版（GitHub 文件 + sutraEdits 记录），

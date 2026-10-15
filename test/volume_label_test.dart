@@ -144,6 +144,39 @@ void main() {
       expect(identical(repairLegacySutraList(src), src), true);
     });
 
+    test('同部经不同写法按规范 ID 合并（如来师子吼经：无编号条目并入带编号条目）', () {
+      final list = repairLegacySutraList([
+        Sutra('如来师子吼经', '8.9k',
+            filePath: 'assets/大正藏经简体txt/T17经集部/如来师子吼经T17n0835_001.txt',
+            isRead: true),
+        Sutra('如来师子吼经T17n0835_001', '8.9k',
+            filePath: 'assets/大正藏经简体txt/T17经集部/如来师子吼经T17n0835_001.txt'),
+      ]);
+      expect(list.length, 1);
+      expect(list[0].title, '如来师子吼经T17n0835_001');
+      expect(list[0].isRead, true);
+    });
+
+    test('无编号基础经名唯一对应一个编号时合并（无路径也判定）', () {
+      final list = repairLegacySutraList([
+        Sutra('如来师子吼经', '8.9k', isFavorite: true),
+        Sutra('如来师子吼经T17n0835_001', '8.9k'),
+      ]);
+      expect(list.length, 1);
+      expect(list[0].title, '如来师子吼经T17n0835_001');
+      expect(list[0].isFavorite, true);
+    });
+
+    test('多卷经书的聚合基础名不被并入某一卷', () {
+      final list = repairLegacySutraList([
+        Sutra('高僧传', '1k'),
+        Sutra('高僧传T50n2059_001', '1k'),
+        Sutra('高僧传T50n2059_002', '1k'),
+      ]);
+      expect(list.length, 3);
+      expect(list.map((s) => s.title), contains('高僧传'));
+    });
+
     test('大般若经 T05/T06/T07 后缀即全局卷号（第201卷～第600卷）', () {
       expect(disp('大般若波罗蜜多经T05n0220_001'), '大般若波罗蜜多经卷一');
       expect(disp('大般若波罗蜜多经T06n0220_201'), '大般若波罗蜜多经卷二百零一');

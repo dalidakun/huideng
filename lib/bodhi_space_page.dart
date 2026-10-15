@@ -19,6 +19,7 @@ import 'note_sutra_links.dart';
 import 'hot_discussion_list_page.dart';
 import 'post_rich_content.dart';
 import 'sutra_list_page.dart';
+import 'sutra_title_overrides.dart';
 import 'custom_tab_store.dart';
 import 'sect_community_page.dart';
 import 'sect_detail_page.dart';
@@ -1181,6 +1182,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
             base,
             filePath: path.isNotEmpty ? path : it.path,
             multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
+            applyTitleOverride: false,
           );
           final (_, _, total) = await CloudNotesService.instance
               .getSutraDiscussions(sutraTitle: key, page: 1, pageSize: 1);
@@ -1624,7 +1626,10 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
                                                 children: [
-                                                  Text(s.title,
+                                                  Text(
+                                                      SutraTitleOverrides
+                                                              .forTitle(s.title) ??
+                                                          s.title,
                                                       maxLines: 1,
                                                       overflow: TextOverflow
                                                           .ellipsis,

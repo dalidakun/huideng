@@ -503,6 +503,9 @@ exports.main = async (event, context) => {
   const readingParagraphNotes = db.collection("readingParagraphNotes");
   // 管理员编辑的经文：按 id（规范 ID，如 T01n0031_001）唯一，存最新排版与版本时间戳。
   const sutraEdits = db.collection("sutraEdits");
+  // 管理员订正的经名（显示名覆盖）：按 id 唯一，独立于正文排版版本，
+  // 因此改标题不会影响「更新排版」的版本判断。供全站搜索/列表/最近阅读统一套用。
+  const sutraTitles = db.collection("sutraTitles");
   // 用户私有笔记（独立笔记 + 回收站）：一条笔记一个文档。
   // 与 userData 那个「所有 prefs 塞进一个文档」的存储彻底分开，单文档体积
   // 上限只约束单条笔记，不再随笔记条数线性增长，也就不会再撞上体积上限。
@@ -760,6 +763,44 @@ exports.main = async (event, context) => {
       await db.createCollection("sutraEdits");
     } catch (e) {
       // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
+    }
+  }
+
+  // 确保 sutraTitles 集合存在（管理员订正的经名覆盖）。
+  async function ensureSutraTitles() {
+    try {
+      await db.createCollection("sutraTitles");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 写入/更新某部经文的显示名覆盖。空标题视为清除覆盖（删除记录）。
+  async function upsertSutraTitle(id, title, uid) {
+    await ensureSutraTitles();
+    const clean = String(title || "").trim().slice(0, 80);
+    const existing = await sutraTitles.where({ id }).limit(1).get();
+    if (!clean) {
+      if (existing.data && existing.data.length > 0) {
+        await sutraTitles.doc(existing.data[0]._id).remove();
+      }
+      return;
+    }
+    const updatedAt = now();
+    if (existing.data && existing.data.length > 0) {
+      await sutraTitles.doc(existing.data[0]._id).update({
+        title: clean,
+        updatedAt,
+        updatedBy: uid,
+      });
+    } else {
+      await sutraTitles.add({
+        id,
+        title: clean,
+        updatedAt,
+        updatedBy: uid,
+        createdAt: updatedAt,
+      });
     }
   }
 
@@ -3199,6 +3240,10 @@ exports.main = async (event, context) => {
         if (!(await isAdminUser(uid))) return fail("forbidden");
         const id = String(event.id || "").trim();
         const content = String(event.content ?? "");
+        // 可选标题覆盖：管理员在编辑页订正的经名。未携带该字段时保留原值
+        // （老客户端不带 title，避免误清空已保存的标题）。
+        const hasTitle = event.title !== undefined;
+        const title = hasTitle ? String(event.title ?? "").trim().slice(0, 80) : undefined;
         if (!/^T\d{2}n\d{4}[A-Za-z]?_\d{3}$/.test(id)) return fail("bad_request");
         if (!content.trim()) return fail("empty_content");
         const vol = id.substring(0, 3);
@@ -3233,7 +3278,24 @@ exports.main = async (event, context) => {
             createdAt: updatedAt,
           });
         }
+        // 若同时携带标题（管理员在编辑页订正了经名），一并更新显示名覆盖。
+        if (title !== undefined) {
+          await upsertSutraTitle(id, title, uid);
+        }
         return ok({ updatedAt });
+      }
+
+      // 单独保存经名覆盖（管理员只订正标题、不改正文时使用）。
+      // 独立于 sutraEdits，故不会影响「更新排版」的版本判断。
+      case "sutraEditTitleSave": {
+        if (!uid) return fail("unauthorized");
+        await ensureAdmins();
+        if (!(await isAdminUser(uid))) return fail("forbidden");
+        const id = String(event.id || "").trim();
+        const title = String(event.title ?? "").trim().slice(0, 80);
+        if (!/^T\d{2}n\d{4}[A-Za-z]?_\d{3}$/.test(id)) return fail("bad_request");
+        await upsertSutraTitle(id, title, uid);
+        return ok({ title });
       }
 
       // 取某部经文的编辑版元信息（是否有管理员编辑版及其更新时间）。
@@ -3248,6 +3310,20 @@ exports.main = async (event, context) => {
           return ok({ found: true, updatedAt: r.updatedAt || 0 });
         }
         return ok({ found: false, updatedAt: 0 });
+      }
+
+      // 批量下发所有经名覆盖（id → 标题），供客户端缓存后统一套用显示名。
+      // 只返回有非空标题的记录；管理员订正过的经书数量有限，整表很小。
+      case "sutraEditTitles": {
+        await ensureSutraTitles();
+        const res = await sutraTitles.limit(1000).get();
+        const titles = {};
+        for (const r of (res.data || [])) {
+          if (r && r.id && typeof r.title === "string" && r.title.trim()) {
+            titles[r.id] = r.title.trim();
+          }
+        }
+        return ok({ titles });
       }
 
       // 管理员撤销「完成排版」：删除 GitHub 编辑版文件 + 云端 sutraEdits 记录，

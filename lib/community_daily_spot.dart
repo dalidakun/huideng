@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'cloud_notes_service.dart';
@@ -10,8 +12,12 @@ import 'note_sutra_links.dart';
 /// 往前回溯的天数上限。
 ///
 /// 服务端 `getCommunityDailyTop` 只接受 0~7 天的统计窗口，这里与那个上限对齐；
-/// 再往前就得改云函数，不如停在引语卡。
+/// 回溯到头仍无人发帖时，沿用本地记住的上一条热帖（不退回引语卡）。
 const int kMaxLookbackDays = 7;
+
+/// 本地记住的「上一条展示过的热帖」缓存键（SharedPreferences）。
+/// 近 7 天都无人发帖时继续摆它，直到有新的热帖把缓存顶掉。
+const String kCommunitySpotCacheKey = 'community_daily_spot_last';
 
 /// [daysBack] 天前那一整天的毫秒区间 `[since, until)`（本地时区）。
 ///
@@ -66,13 +72,13 @@ const double _kCardRadius = 12;
 /// 挑出「最近一个有人发帖的日子」里发帖数量最多的那一个，把它的名号、
 /// 当日发帖数和最热的一条帖子摆在这块位上，点一下直接进那个社区。
 ///
-/// 先看昨天；昨天没人发帖就一天天往前找，最多回溯 [kMaxLookbackDays] 天——
-/// 连着几天冷清时不该退回引语卡，该把最近一次热闹的那个社区和它的热帖
-/// 继续摆出来（小字里会标明这是几天前的数据）。
+/// 先看昨天；昨天没人发帖就一天天往前找，最多回溯 [kMaxLookbackDays] 天。
+/// 连 7 天都无人发帖时也不退回引语卡：继续显示本地记住的上一条热帖
+/// （每次拿到新热帖就写入缓存），直到以后有新的热帖把它顶掉——
+/// 引语卡只剩整个社区从未有过热帖、或接口不可用又无缓存时才出现。
 ///
 /// 数据口径全在服务端：按客户端给的本地日窗口统计各社区发帖数，
 /// 每个社区再按互动量（阅读 +1、赞×3、评论×5、转发×8）取窗内最热一条。
-/// 一周内无人发帖、或接口尚未部署时才退回引语卡，不显示「暂无」这类占位文案。
 class CommunityDailySpot extends StatefulWidget {
   const CommunityDailySpot({
     super.key,
@@ -97,6 +103,10 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
   /// [_stat] 取自几天前的窗口（1 = 昨天）：只用于小字文案。
   int _daysBack = 1;
 
+  /// [_stat] 是否来自本地缓存的「上一条热帖」（近 7 天都无人发帖时沿用）。
+  /// 此时小字不再标「昨日/N 天前」，有帖子就直接展示帖子的发出时间。
+  bool _fromCache = false;
+
   @override
   void initState() {
     super.initState();
@@ -104,9 +114,8 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
   }
 
   /// 先查昨天；昨天没人发帖就一天天往前找，找到最近一个有发帖的日子为止。
-  ///
-  /// 冷清期（连着几天没人发帖）不该退回引语卡，那会让同修以为整个社区都空着；
-  /// 该显示的是最近一次热闹时的那个社区与它的热帖，日期由小字点明。
+  /// 回溯到 [kMaxLookbackDays] 天仍一无所获时，沿用本地记住的上一条热帖——
+  /// 冷清不该让整块位变成引语卡，等以后有新帖再自然顶掉缓存。
   Future<void> _load() async {
     final now = DateTime.now();
     for (var back = 1; back <= kMaxLookbackDays; back++) {
@@ -116,7 +125,7 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
         stats = await CloudNotesService.instance
             .getCommunityDailyTop(sinceMs: since, untilMs: until);
       } catch (_) {
-        // 接口没部署 / 网络异常：再往后试也是白试，直接退回引语卡。
+        // 接口没部署 / 网络异常：再往后试也是白试，直接走缓存兜底。
         break;
       }
       // 只认栏目表里的 20 个社区；其余（历史脏数据、手改的 community）不进展示位。
@@ -124,22 +133,79 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
           stats.where((s) => widget.communities.contains(s.community)).toList();
       final picked = pickRandomTopCommunity(known);
       if (picked == null) continue;
+      await _saveCache(picked);
       if (!mounted) return;
       setState(() {
         _stat = picked;
         _daysBack = back;
+        _fromCache = false;
       });
       return;
     }
+    // 近 7 天窗口都空（或接口不可用）：沿用上次记住的那条热帖。
+    final cached = await _loadCache();
     if (!mounted) return;
-    setState(() => _stat = null);
+    setState(() {
+      _stat = cached;
+      _fromCache = cached != null;
+    });
+  }
+
+  /// 把这次选中的热帖整份存进本地缓存（字段与服务端返回的摘要对齐，
+  /// 之后 PlazaNote.fromJson 可直接还原）。写失败不影响展示。
+  Future<void> _saveCache(CommunityDailyStat stat) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final note = stat.top;
+      await prefs.setString(
+        kCommunitySpotCacheKey,
+        jsonEncode({
+          'community': stat.community,
+          'posts': stat.posts,
+          'note': note == null
+              ? null
+              : {
+                  'id': note.id,
+                  'content': note.content,
+                  'title': note.title,
+                  'authorName': note.authorName,
+                  'authorAccount': note.authorAccount,
+                  'likeCount': note.likeCount,
+                  'commentCount': note.commentCount,
+                  'viewCount': note.viewCount,
+                  'createdAt': note.createdAt,
+                },
+        }),
+      );
+    } catch (_) {
+      // 存不进就算了：下次进页面重新拉即可。
+    }
+  }
+
+  /// 读上次记住的热帖；没有、损坏、或社区已不在栏目表里时返回 null。
+  Future<CommunityDailyStat?> _loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(kCommunitySpotCacheKey);
+      if (raw == null || raw.isEmpty) return null;
+      final map = jsonDecode(raw);
+      if (map is! Map<String, dynamic>) return null;
+      final stat = CommunityDailyStat.fromJson(map);
+      if (stat.community.isEmpty ||
+          !widget.communities.contains(stat.community)) {
+        return null;
+      }
+      return stat;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
     final stat = _stat;
-    // 一周内都没人发帖（或接口没起来）：退回引语卡，不显示占位文案。
+    // 缓存兜底也空、或接口不可用又从未有过热帖：退回引语卡，不显示占位文案。
     if (stat == null) return _buildHero(p);
     final note = stat.top;
     return Padding(
@@ -266,7 +332,9 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
 
   /// 这块位的数据是几天前的：昨日 / 前天 / N 天前。
   /// 只用在「只有发帖数、没有帖子可显示」的那行小字上。
+  /// 缓存兜底且无帖子可展示时不标天数，只报发帖数。
   String _dayWord() {
+    if (_fromCache) return '往昔';
     if (_daysBack <= 1) return '昨日';
     if (_daysBack == 2) return '前天';
     return '${_daysBack - 1} 天前';
@@ -341,7 +409,8 @@ class _CommunityDailySpotState extends State<CommunityDailySpot> {
   }
 
   /// 引语卡：大标题 + 两行小字，右下贴一幅淡墨远山。
-  /// 一周内无人发帖（或接口没起来）时顶在页面最上面，替代「暂无」占位文案。
+  /// 只在社区从未有过热帖（无缓存）或接口不可用时才顶在页面最上面，
+  /// 替代「暂无」占位文案——近一周冷清会先沿用本地记住的上一条热帖。
   /// 远山与社区卡同图同铺法（mih.png 整铺贴底、20% 淡墨）。
   Widget _buildHero(PaletteData p) {
     return Padding(

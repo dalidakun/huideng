@@ -37,6 +37,7 @@ import 'sect_page.dart';
 import 'app_palette.dart';
 import 'agreements.dart';
 import 'ui_sound.dart';
+import 'sutra_title_overrides.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -51,6 +52,8 @@ void main() async {
   await StudyHubPageState.warmPrefs();
   // 先加载外观偏好（暖黄/素白），再启动应用，避免首帧闪错主题。
   await AppPalette.instance.load();
+  // 预加载管理员订正的经名覆盖（纯本地缓存，无网络），保证首帧即显示订正名。
+  await SutraTitleOverrides.ensureLoaded();
   // 预加载磁盘缓存的头像到内存（不阻塞启动，下次 request() 即可命中）。
   unawaited(UserAvatarCache.instance.loadFromDisk());
   // 隐私合规：先读本地协议同意状态（纯本地读取，无网络）。用户首次启动
@@ -75,6 +78,8 @@ void main() async {
 void startBackgroundServices() {
   unawaited(AuthService.instance.restoreSession());
   SyncService.instance.init();
+  // 拉取管理员订正的经名覆盖（联网），供全站搜索/列表/最近阅读统一套用。
+  unawaited(SutraTitleOverrides.refresh());
   unawaited(NotificationService.instance.init());
   AppLifecycleListener(
     onResume: () {

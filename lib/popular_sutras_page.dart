@@ -139,7 +139,7 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
                     ),
                     const SizedBox(height: 3),
                     const Text(
-                      '锁定精读越多越靠前',
+                      '锁定越多越靠前',
                       style: TextStyle(fontSize: 11, color: _warmGray, letterSpacing: 0.4),
                     ),
                   ],
@@ -201,7 +201,7 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
           const SizedBox(height: 20),
           const Text('暂无数据', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w400, color: _inkBlack, letterSpacing: 1.0)),
           const SizedBox(height: 8),
-          const Text('锁定精读经书后\n热门经书会出现在这里', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: _warmGray, height: 1.6, letterSpacing: 0.3)),
+          const Text('锁定经书后\n热门经书会出现在这里', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: _warmGray, height: 1.6, letterSpacing: 0.3)),
         ],
       ),
     );
@@ -287,14 +287,14 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          '${item.count}人精读',
+                          '${item.count}人锁定',
                           style: const TextStyle(fontSize: 11.5, color: _warmGray, letterSpacing: 0.3),
                         ),
                       ],
                     ),
                   ),
                 ),
-                // 火把（右侧边缘，与"人精读"对齐）
+                // 火把（右侧边缘，与"人锁定"对齐）
                 _buildFireIcons(index),
               ],
             ),
@@ -344,7 +344,7 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
                 const SizedBox(width: 10),
                 // 人数
                 Text(
-                  '${item.count}人精读',
+                  '${item.count}人锁定',
                   style: const TextStyle(fontSize: 11, color: _warmGray, letterSpacing: 0.2),
                 ),
                 const SizedBox(width: 4),

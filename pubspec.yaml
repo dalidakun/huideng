@@ -2,7 +2,7 @@
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.4.0+12
+version: 1.5.0+13
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -112,6 +112,7 @@ flutter:
     - assets/images/shu.png
     # 菩提空间页右下角悬浮按钮图标：添加笔记 write，回到顶部 top。
     - assets/images/write.png
+    - assets/images/l1.png
     - assets/images/top.png
     # 经藏页「我的收藏」快捷入口图标。
     - assets/images/like.png

@@ -21,6 +21,7 @@ import 'favorite_sutras_page.dart';
 import 'popular_sutras_page.dart';
 import 'hot_ranking_page.dart';
 import 'note_sutra_links.dart';
+import 'sutra_title_overrides.dart';
 
 import 'app_palette.dart';
 import 'sutra_descriptions.dart';
@@ -158,38 +159,39 @@ final RegExp _legacyTitleGarbageRe = RegExp(r'(第卷)+');
 String repairLegacySutraTitle(String title) =>
     title.contains('第卷') ? title.replaceAll(_legacyTitleGarbageRe, '') : title;
 
-/// 修复列表中历史遗留的「第卷」脏标题；修复后若与已有条目重复
-/// （如 APK 更新时已补入干净条目），合并双方状态（已读/收藏/置顶取并集），
-/// 保持原有顺序。无脏数据时原样返回 [sutras]。
+/// 修复列表中历史遗留的「第卷」脏标题；并按规范 ID 合并同一部经的不同写法
+/// （如「如来师子吼经」与「如来师子吼经T17n0835_001」实为同一部，路径里含同一
+/// 编号），状态取并集、优先保留带编号的经名，保持原有顺序。
+/// 无脏数据且无重复时原样返回 [sutras]。
 List<Sutra> repairLegacySutraList(List<Sutra> sutras) {
+  // 预统计带编号条目：基础经名 -> 编号列表（用于把无编号的同名条目并进去）。
+  final idsByBase = <String, List<String>>{};
+  for (final s in sutras) {
+    final t = repairLegacySutraTitle(s.title);
+    final id = SutraDownloader.extractId(t, s.filePath);
+    if (id == null) continue;
+    idsByBase
+        .putIfAbsent(t.replaceAll(_sutraIdSuffixRe, '').trim(), () => <String>[])
+        .add(id);
+  }
+
   var changed = false;
-  final indexByTitle = <String, int>{};
+  final indexByKey = <String, int>{};
   final result = <Sutra>[];
   for (final s in sutras) {
     final t = repairLegacySutraTitle(s.title);
     if (t != s.title) changed = true;
-    final exist = indexByTitle[t];
-    if (exist != null) {
-      changed = true;
-      final e = result[exist];
-      result[exist] = Sutra(
-        t,
-        e.size,
-        charCount: e.charCount > 0 ? e.charCount : s.charCount,
-        isPinned: e.isPinned || s.isPinned,
-        isRead: e.isRead || s.isRead,
-        isFavorite: e.isFavorite || s.isFavorite,
-        isReadLater: e.isReadLater || s.isReadLater,
-        filePath: e.filePath ?? s.filePath,
-        folder: e.folder ?? s.folder,
-        favoriteTime: e.favoriteTime ?? s.favoriteTime,
-        readTime: e.readTime ?? s.readTime,
-        readLaterTime: e.readLaterTime ?? s.readLaterTime,
-      );
-      continue;
+    final id = SutraDownloader.extractId(t, s.filePath);
+    // 归一键：有编号用编号；无编号但基础经名唯一对应一个编号时用该编号
+    // （并入同名带编号条目）；否则用经名。
+    final String key;
+    if (id != null) {
+      key = id;
+    } else {
+      final ids = idsByBase[t];
+      key = (ids != null && ids.length == 1) ? ids.first : t;
     }
-    indexByTitle[t] = result.length;
-    result.add(t == s.title
+    final repaired = t == s.title
         ? s
         : Sutra(
             t,
@@ -204,9 +206,42 @@ List<Sutra> repairLegacySutraList(List<Sutra> sutras) {
             favoriteTime: s.favoriteTime,
             readTime: s.readTime,
             readLaterTime: s.readLaterTime,
-          ));
+          );
+    final exist = indexByKey[key];
+    if (exist != null) {
+      changed = true;
+      result[exist] = _mergeSutraEntries(result[exist], repaired);
+      continue;
+    }
+    indexByKey[key] = result.length;
+    result.add(repaired);
   }
   return changed ? result : sutras;
+}
+
+/// 合并同一部经的两条记录：状态取并集，经名与体量优先取带规范 ID 编号的一方，
+/// 路径/部类/时间取先有值的那个。
+Sutra _mergeSutraEntries(Sutra a, Sutra b) {
+  final bHasId = _sutraIdSuffixRe.hasMatch(b.title);
+  final aHasId = _sutraIdSuffixRe.hasMatch(a.title);
+  final preferB = bHasId && !aHasId;
+  final title = preferB ? b.title : a.title;
+  final size = preferB ? b.size : a.size;
+  final charCount = a.charCount > b.charCount ? a.charCount : b.charCount;
+  return Sutra(
+    title,
+    size,
+    charCount: charCount,
+    isPinned: a.isPinned || b.isPinned,
+    isRead: a.isRead || b.isRead,
+    isFavorite: a.isFavorite || b.isFavorite,
+    isReadLater: a.isReadLater || b.isReadLater,
+    filePath: a.filePath ?? b.filePath,
+    folder: a.folder ?? b.folder,
+    favoriteTime: a.favoriteTime ?? b.favoriteTime,
+    readTime: a.readTime ?? b.readTime,
+    readLaterTime: a.readLaterTime ?? b.readLaterTime,
+  );
 }
 
 /// 归一化热门经文名称：先去掉 CBETA 编号后缀，再去掉末尾中文卷标，
@@ -328,7 +363,10 @@ Set<String> collectMultiVolumeBases(Iterable<Sutra> sutras) {
 
 /// 经书展示名：单卷经书只显示经名；多卷经书显示「经名 + 卷X」。
 /// [multiVolumeBases] 为空（或未提供）时表示无法判断多卷，只显示经名。
+/// 管理员在「编辑经文」订正过的经名（云端覆盖表）优先。
 String sutraDisplayTitle(String title, {Set<String>? multiVolumeBases}) {
+  final override = SutraTitleOverrides.forTitle(title);
+  if (override != null) return override;
   final base = title.replaceAll(_sutraIdSuffixRe, '').trim();
   if (multiVolumeBases == null || !multiVolumeBases.contains(base)) return base;
   final volume = _sutraVolumeOf(title);
@@ -339,8 +377,14 @@ String sutraDisplayTitle(String title, {Set<String>? multiVolumeBases}) {
 /// 当 [multiVolumeBases] 非空时，仅多卷经书显示卷标（如「高僧传卷五」），
 /// 单卷经书直接显示基础名（如「金刚经」）。
 /// 当 [multiVolumeBases] 为 null 时，只要有卷号后缀就显示卷标。
+/// [applyTitleOverride] 为 false 时忽略管理员经名覆盖（用于讨论键等存储键，
+/// 避免显示名改动影响按经名聚合的数据）。
 String sutraDisplayNameWithVolume(String title,
-    {Set<String>? multiVolumeBases}) {
+    {Set<String>? multiVolumeBases, bool applyTitleOverride = true}) {
+  if (applyTitleOverride) {
+    final override = SutraTitleOverrides.forTitle(title);
+    if (override != null) return override;
+  }
   final base = title.replaceAll(_sutraIdSuffixRe, '').trim();
   final volume = _sutraVolumeOf(title);
   if (volume <= 0) return base;
@@ -354,15 +398,16 @@ String sutraDisplayNameWithVolume(String title,
 
 /// 「标题 + 可选路径」条目的展示名：标题本身不带卷号后缀时（如从 $引用、
 /// 讨论页跳转进入，标题只有基础经名），尝试从 [filePath] 中提取规范 ID
-/// 补齐卷号，保证卷标与实际打开的卷一致。
+/// 补齐卷号，保证卷标与实际打开的卷一致。管理员经名覆盖优先。
 String sutraDisplayTitleWithPath(String title,
-    {String? filePath, Set<String>? multiVolumeBases}) {
+    {String? filePath, Set<String>? multiVolumeBases, bool applyTitleOverride = true}) {
   var t = title;
   if (_sutraVolumeOf(t) <= 0) {
     final id = SutraDownloader.extractId(null, filePath);
     if (id != null) t = '$t$id';
   }
-  return sutraDisplayNameWithVolume(t, multiVolumeBases: multiVolumeBases);
+  return sutraDisplayNameWithVolume(t,
+      multiVolumeBases: multiVolumeBases, applyTitleOverride: applyTitleOverride);
 }
 
 /// 聚合场景（经书讨论页、热门榜等）的展示名：标题带卷号后缀时显示具体卷标；
@@ -1523,13 +1568,16 @@ class SutraListPageState extends State<SutraListPage>
     final hits = <(int, int, int, int, Sutra)>[];
     for (var i = 0; i < list.length; i++) {
       final s = list[i];
-      final idx = s.title.indexOf(q);
+      final display = _displayTitle(s.title, filePath: s.filePath);
+      // 按显示名（含管理员经名订正）匹配，未命中时回退原经名匹配。
+      var idx = display.indexOf(q);
+      if (idx < 0 && s.title != display) idx = s.title.indexOf(q);
       final folderHit = (_folderDisplayNames[s.folder] ?? '').contains(q);
       if (idx < 0 && !folderHit) continue;
       final int rank;
       if (idx < 0) {
         rank = 3;
-      } else if (s.title == q) {
+      } else if (display == q || s.title == q) {
         rank = 0;
       } else if (idx == 0) {
         rank = 1;
@@ -1577,6 +1625,8 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 云端同步拉取后刷新经书列表与最近阅读。
   Future<void> reload() async {
+    // 先拉取最新经名覆盖（联网），再重建列表，保证显示名是最新订正版。
+    await SutraTitleOverrides.refresh();
     await _loadSutras();
     await _loadLastRead();
     await _loadReadingStats();
@@ -1584,6 +1634,7 @@ class SutraListPageState extends State<SutraListPage>
     // 同步刷新下载标记：reload 之前不调这一步，导致云同步后 _downloadedIds
     // 反映的还是旧的内存状态，已下载的经文被误显示为未下载。
     await _loadDownloadedIds();
+    if (mounted) setState(() {});
   }
 
   Future<File> _sutraListFile() async {
@@ -1670,17 +1721,22 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   List<Sutra> _mergeMissingDefaultSutras(List<Sutra> current) {
-    // 用标题作为唯一键（目录 JSON 中默认经书没有 filePath）。
+    // 按标题与规范 ID 双重去重：目录默认经书可能没有 filePath，
+    // 但本地同名条目可能只带编号（或反之），仅比标题会漏判成重复。
     final existingTitles = <String>{};
+    final existingIds = <String>{};
     for (final s in current) {
       existingTitles.add(s.title);
+      final id = SutraDownloader.extractId(s.title, s.filePath);
+      if (id != null) existingIds.add(id);
     }
 
     final merged = List<Sutra>.from(current);
     for (final d in _defaultSutras) {
-      if (!existingTitles.contains(d.title)) {
-        merged.add(d);
-      }
+      if (existingTitles.contains(d.title)) continue;
+      final did = SutraDownloader.extractId(d.title, d.filePath);
+      if (did != null && existingIds.contains(did)) continue;
+      merged.add(d);
     }
     return merged;
   }

@@ -21,6 +21,9 @@ class SutraEditPage extends StatefulWidget {
   final double scrollProgress;
   final String? topParagraphText;
 
+  /// 顶部标题输入框的默认值（当前展示的经名）；为空时回退 [title]。
+  final String? initialTitle;
+
   const SutraEditPage({
     super.key,
     required this.title,
@@ -28,6 +31,7 @@ class SutraEditPage extends StatefulWidget {
     required this.keyPath,
     this.scrollProgress = 0.0,
     this.topParagraphText,
+    this.initialTitle,
   });
 
   @override
@@ -38,6 +42,10 @@ class _SutraEditPageState extends State<SutraEditPage> {
   late final TextEditingController _controller;
   late final FocusNode _focusNode;
   bool _positioned = false;
+
+  /// 顶部经名（标题）输入框：管理员可订正显示名。
+  late final TextEditingController _titleController;
+  late final String _initialTitle;
 
   /// 进入编辑页时的原文（与之比较判断是否有未保存改动）。
   late final String _initialText;
@@ -57,6 +65,9 @@ class _SutraEditPageState extends State<SutraEditPage> {
     _controller = TextEditingController(text: widget.content);
     _controller.addListener(_onTextChanged);
     _focusNode = FocusNode();
+    _initialTitle = (widget.initialTitle ?? widget.title).trim();
+    _titleController = TextEditingController(text: _initialTitle);
+    _titleController.addListener(_onTitleChanged);
     final targetText = widget.topParagraphText;
     int? targetOffset;
     if (targetText != null && targetText.trim().isNotEmpty) {
@@ -98,8 +109,15 @@ class _SutraEditPageState extends State<SutraEditPage> {
     }
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
+    _titleController.removeListener(_onTitleChanged);
+    _titleController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  /// 标题变化：仅刷新 AppBar 显示。
+  void _onTitleChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 文本变化：重置防抖定时器，停笔片刻后自动落盘。
@@ -123,17 +141,22 @@ class _SutraEditPageState extends State<SutraEditPage> {
         title: widget.title,
         filePath: widget.keyPath,
         content: text,
+        displayTitle: _titleController.text.trim(),
       );
     } catch (_) {
       // 写盘失败（存储权限/空间等）：保留脏标记，下次变化或退出时重试。
     }
   }
 
-  /// 返回给阅读页的结果：正文相对进入时有改动才让阅读页重新加载。
+  /// 返回给阅读页的结果：正文相对进入时有改动才让阅读页重新加载；
+  /// 标题有改动则一并带回（正文没变时也会返回，供阅读页同步经名覆盖）。
   Map<String, dynamic>? _resultPayload() {
-    if (_controller.text == _initialText) return null;
+    final title = _titleController.text.trim();
+    final titleChanged = title != _initialTitle;
+    final contentChanged = _controller.text != _initialText;
+    if (!contentChanged && !titleChanged) return null;
     String? cursorParagraphText;
-    if (_controller.text.isNotEmpty) {
+    if (contentChanged && _controller.text.isNotEmpty) {
       final cursor =
           _controller.selection.end.clamp(0, _controller.text.length);
       final lastNewline = _controller.text.lastIndexOf('\n', cursor - 1);
@@ -145,7 +168,9 @@ class _SutraEditPageState extends State<SutraEditPage> {
       if (para.isNotEmpty) cursorParagraphText = para;
     }
     return {
-      'changed': true,
+      if (contentChanged) 'changed': true,
+      'title': title,
+      'titleChanged': titleChanged,
       'progress': _controller.text.isEmpty
           ? 0.0
           : (_controller.selection.end / _controller.text.length)
@@ -217,7 +242,9 @@ class _SutraEditPageState extends State<SutraEditPage> {
         shadowColor: Colors.transparent,
         iconTheme: IconThemeData(color: p.text),
         title: Text(
-          widget.title,
+          _titleController.text.trim().isEmpty
+              ? widget.title
+              : _titleController.text.trim(),
           style: TextStyle(
             color: p.text,
             fontSize: 16,
@@ -239,6 +266,7 @@ class _SutraEditPageState extends State<SutraEditPage> {
       body: SafeArea(
         child: Column(
           children: [
+            _buildTitleField(p),
             _buildToolbar(p),
             Expanded(
               child: Container(
@@ -269,6 +297,42 @@ class _SutraEditPageState extends State<SutraEditPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 顶部标题编辑栏：管理员可订正经名（显示名），保存后同步到云端，
+  /// 所有用户的搜索/列表/最近阅读都会显示订正后的名称。
+  Widget _buildTitleField(PaletteData p) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 8),
+      color: p.bg,
+      child: Row(
+        children: [
+          Text('标题', style: TextStyle(fontSize: 13, color: p.textSec)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              controller: _titleController,
+              textInputAction: TextInputAction.done,
+              maxLines: 1,
+              style: TextStyle(
+                color: p.text,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: '输入经文标题',
+                hintStyle: TextStyle(color: p.textHint, fontSize: 15),
+                border: UnderlineInputBorder(
+                  borderSide: BorderSide(color: p.border, width: 0.5),
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 6),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

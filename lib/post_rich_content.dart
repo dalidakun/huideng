@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' show pow;
 
 import 'package:flutter/material.dart';
@@ -17,6 +18,7 @@ import 'reading_badges.dart';
 import 'reading_note_post.dart';
 import 'reading_page.dart';
 import 'sutra_downloader.dart';
+import 'sutra_edit_page.dart' show editedSutraFilePath;
 import 'sutra_list_page.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
@@ -271,7 +273,8 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       if (id != null) t = '${widget.title}$id';
     }
     _discussionVolume = sutraVolumeOf(t);
-    _discussionKey = sutraDisplayNameWithVolume(t, multiVolumeBases: bases);
+    _discussionKey = sutraDisplayNameWithVolume(t,
+        multiVolumeBases: bases, applyTitleOverride: false);
   }
 
   /// 经书展示名：从带卷标的链接进入时（filePath 指向具体卷）显示具体卷标；
@@ -414,12 +417,19 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     );
   }
 
-  /// 检测经文是否已下载（本地副本优先，其次按 ID 判断下载目录）。
+  /// 检测经文是否已在本地可读：与阅读页加载正文的口径一致，
+  /// 依次检查「本地编辑副本」「本地下载副本」，其次按 ID 判断下载目录。
+  /// 有云端管理员排版版时阅读页只落盘编辑副本（不写下载副本），
+  /// 只查下载副本会把已经能阅读的经书误判成未下载。
   Future<void> _checkDownload() async {
     var ok = false;
     final path = widget.filePath;
     try {
-      if (path.startsWith('assets/sutras_ascii/')) {
+      if (path.isNotEmpty) {
+        final edited = File(await editedSutraFilePath(path));
+        ok = await edited.exists();
+      }
+      if (!ok && path.startsWith('assets/sutras_ascii/')) {
         final local = await SutraDownloader.localFileForAssetPath(path);
         ok = local != null;
       }
