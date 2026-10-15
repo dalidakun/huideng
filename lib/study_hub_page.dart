@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'app_state.dart';
 import 'auth_service.dart';
 import 'login_page.dart';
 import 'user_avatar.dart';
@@ -61,6 +62,8 @@ class StudyHubPage extends StatefulWidget {
 class StudyHubPageState extends State<StudyHubPage>
     with TickerProviderStateMixin, RouteAware {
   static SharedPreferences? _warmPrefs;
+
+  double _pullAccum = 0;
 
   static Future<void> warmPrefs() async {
     _warmPrefs = await SharedPreferences.getInstance();
@@ -900,9 +903,22 @@ class StudyHubPageState extends State<StudyHubPage>
       ),
       body: Stack(
         children: [
-          RefreshIndicator(
-            onRefresh: _loadData,
-            color: _gold,
+          NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              if (n is OverscrollNotification && n.overscroll < 0) {
+                _pullAccum -= n.overscroll;
+                if (_pullAccum > 120 && !homeReveal.value) {
+                  homeReveal.value = true;
+                }
+              } else if (n is ScrollEndNotification ||
+                  n is ScrollUpdateNotification) {
+                if (n is ScrollUpdateNotification && n.metrics.pixels > 0) {
+                  _pullAccum = 0;
+                }
+                if (n is ScrollEndNotification) _pullAccum = 0;
+              }
+              return false;
+            },
             child: ListView(
               controller: _scrollController,
               physics: const AlwaysScrollableScrollPhysics(),

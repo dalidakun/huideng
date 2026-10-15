@@ -3653,6 +3653,75 @@ exports.main = async (event, context) => {
         }
       }
 
+      // 聚合「某部经所有用户」的画线，供经书讨论页「画线」标签自动展示。
+      //
+      // 画线文字就是被画的那段经文本身，不含用户私人内容，故可跨用户聚合：
+      // 客户端每次画线都会把片段写进 userRecords（type=0，text=片段），这里按
+      // 归一后的「基础经名」匹配（覆盖 经名 / 经名+卷X / 经名+CBETA编号 等形态），
+      // 让同一部经在不同 key 形态下保存的画线都能被聚合到。不去重：同一段被
+      // 多人或多次画线都各算一条（与产品预期一致，重复画线照显示）。
+      // 只返回被画线的经文片段 + 归属信息，不含其它用户笔记正文。
+      case "getSutraHighlights": {
+        if (!uid) return fail("unauthorized");
+        const sutraKey = String(event.sutraKey || "").trim();
+        if (!sutraKey) return fail("缺少经名参数");
+        const limit = Math.min(Math.max(Number(event.limit) || 300, 1), 500);
+        // 归一成基础经名：去掉末尾的 CBETA 编号与「卷X」后缀，与 getParagraphNotes
+        // 的隐私校验所用口径一致。
+        const normBase = (s) =>
+          String(s || "")
+            .replace(/T\d+n[0-9A-Za-z]+_\d+$/, "")
+            .replace(/卷[\u4e00-\u9fa5]+$/, "")
+            .trim();
+        const baseKey = normBase(sutraKey) || sutraKey;
+        try {
+          await ensureUserRecords();
+          const esc = baseKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const cond = {
+            type: 0,
+            sutraKey: db.RegExp({ regexp: `^${esc}`, options: "" }),
+          };
+          let data = [];
+          try {
+            // 按时间倒序：正则前缀查询用不上「(type,sutraKey)」复合索引的排序，
+            // 若该表没有可支撑 orderBy 的索引会报错——此时退回不排序查询，
+            // 由客户端按 createdAt 自行排序，保证接口在缺索引时依然可用。
+            const r = await userRecords
+              .where(cond)
+              .orderBy("createdAt", "desc")
+              .limit(limit)
+              .get();
+            data = r.data || [];
+          } catch (e1) {
+            const r2 = await userRecords.where(cond).limit(limit).get();
+            data = r2.data || [];
+          }
+          const items = [];
+          for (const d of data || []) {
+            const key = String(d.sutraKey || "");
+            // 前缀匹配会带上「基础名前缀相同」的别经（如「金刚经」与「金刚经论」），
+            // 这里再用归一后的基础名做一次精确比对，剔除误伤。
+            if (normBase(key) !== baseKey) continue;
+            const text = String(d.text || "").trim();
+            if (!text) continue;
+            items.push({
+              text,
+              sutraKey: key,
+              para: Number(d.para) || -1,
+              ownerUserId: String(d.ownerUserId || ""),
+              createdAt: Number(d.createdAt) || 0,
+            });
+          }
+          return ok({ items, baseKey });
+        } catch (e) {
+          console.error(
+            "[api] getSutraHighlights error:",
+            e && e.message ? e.message : e
+          );
+          return fail(e && e.message ? e.message : "获取画线失败");
+        }
+      }
+
       case "setUserData": {
         if (!uid) return fail("unauthorized");
         const payload = event.payload && typeof event.payload === "object" ? event.payload : null;

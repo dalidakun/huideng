@@ -141,7 +141,7 @@ class _MyAppState extends State<MyApp> {
       builder: (context, child) {
         return Stack(
           children: [
-            if (child != null) child,
+            if (child != null) _HomeRevealStage(child: child),
             const _AssistantPanelOverlay(),
             const _AssistantRevealOverlay(),
           ],
@@ -158,7 +158,12 @@ class _MyAppState extends State<MyApp> {
               canPop: false,
               onPopInvokedWithResult: (didPop, _) async {
                 if (didPop) return;
-                // 圆形助手面板展开时，先收起它而不是退出应用。
+                // 主页下拉打开的 DeepSeek 页展开时，先收起它而不是退出应用
+                if (homeReveal.value) {
+                  homeReveal.value = false;
+                  return;
+                }
+                // 圆形助手面板展开时，先收起它而不是退出应用
                 if (assistantReveal.value) {
                   assistantReveal.value = false;
                   return;
@@ -1663,6 +1668,9 @@ class _AssistantPanelOverlayState extends State<_AssistantPanelOverlay>
 
 /// 经藏页右上角「助手」圆形展开面板：
 /// 从右上角一个点以圆形伸展为全屏 DeepSeek 页面，关闭时按原路径缩回。
+/// 深色的翻页式：从上方滑入显示 DeepSeek 聊天页，左上角叉号关闭
+/// Circle-reveal overlay for the assistant button at the top-right of the
+/// sutra library page. Unrelated to the home page pull-down reveal.
 class _AssistantRevealOverlay extends StatefulWidget {
   const _AssistantRevealOverlay();
 
@@ -1688,12 +1696,9 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
   void _onVisible() {
     if (!mounted) return;
     if (assistantReveal.value) {
-      // 展开：把共享 WebView 挂到圆形展开表面（首次打开才真正创建）。
       AssistantSession.instance.claim(AssistantSurface.reveal);
       _ctrl.forward();
     } else {
-      // 收起动画结束后才让出 WebView；若动画中途被取消（用户立刻重开），
-      // 仍处于打开态则不让出。
       _ctrl.reverse().whenCompleteOrCancel(() {
         if (!mounted || assistantReveal.value) return;
         AssistantSession.instance.release(AssistantSurface.reveal);
@@ -1716,12 +1721,9 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
         builder: (context, child) {
           final t = Curves.easeInOutCubic.transform(_ctrl.value);
           final size = MediaQuery.of(context).size;
-          // 键盘弹出高度：输入框激活时 WebView 底部让出，输入框保持在键盘上方。
           final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-          // 圆心取屏幕右上角，半径需覆盖整屏（对角线）。
           final center = Offset(size.width, 0);
           final maxRadius = Offset(size.width, size.height).distance;
-          // 完全收起时不拦截任何点击；开始展开即可交互。
           return IgnorePointer(
             ignoring: t == 0,
             child: ClipPath(
@@ -1731,14 +1733,11 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
                 maxRadius: maxRadius,
               ),
               child: SafeArea(
-                // 顶部避开状态栏，底部避开手势条，避免遮挡 DeepSeek 页面的内容。
                 child: Padding(
                   padding: EdgeInsets.only(bottom: keyboard),
                   child: Stack(
                     children: [
-                      // 背景 + DeepSeek 页面。
                       ColoredBox(color: AppPalette.p.bg, child: child),
-                      // 右上角收起按钮。
                       if (t > 0.6)
                         Positioned(
                           top: 10,
@@ -1774,41 +1773,129 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
   }
 }
 
-/// 圆形展开裁剪器：以 center 为圆心，半径随 progress 从 0 增长到 maxRadius。
-class _CircleRevealClipper extends CustomClipper<Path> {
-  final double progress;
-  final Offset center;
-  final double maxRadius;
+/// Home page pull-down reveal.
+///
+/// Wraps the whole app content ([child]). When [homeReveal] becomes true the
+/// home content is pushed straight down while the DeepSeek chat page slides in
+/// from the top; closing reverses the motion. A close (X) button floats at the
+/// top-left of the DeepSeek page.
+class _HomeRevealStage extends StatefulWidget {
+  const _HomeRevealStage({required this.child});
 
-  const _CircleRevealClipper({
-    required this.progress,
-    required this.center,
-    required this.maxRadius,
-  });
+  final Widget child;
 
   @override
-  Path getClip(Size size) {
-    return Path()
-      ..addOval(
-        Rect.fromCircle(center: center, radius: maxRadius * progress),
-      );
+  State<_HomeRevealStage> createState() => _HomeRevealStageState();
+}
+
+class _HomeRevealStageState extends State<_HomeRevealStage>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    homeReveal.addListener(_onVisible);
+  }
+
+  void _onVisible() {
+    if (!mounted) return;
+    if (homeReveal.value) {
+      AssistantSession.instance.claim(AssistantSurface.home);
+      _ctrl.forward();
+    } else {
+      _ctrl.reverse().whenCompleteOrCancel(() {
+        if (!mounted || homeReveal.value) return;
+        AssistantSession.instance.release(AssistantSurface.home);
+      });
+    }
   }
 
   @override
-  bool shouldReclip(_CircleRevealClipper oldClipper) {
-    return oldClipper.progress != progress ||
-        oldClipper.center != center ||
-        oldClipper.maxRadius != maxRadius;
+  void dispose() {
+    homeReveal.removeListener(_onVisible);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        final t = Curves.easeInOutCubic.transform(_ctrl.value);
+        final height = MediaQuery.of(context).size.height;
+        return Stack(
+          children: [
+            Transform.translate(
+              offset: Offset(0, height * t),
+              child: IgnorePointer(
+                ignoring: t > 0.01,
+                child: widget.child,
+              ),
+            ),
+            IgnorePointer(
+              ignoring: t < 0.99,
+              child: Transform.translate(
+                offset: Offset(0, -height * (1 - t)),
+                child: Material(
+                  color: const Color(0xFFf0f3f8),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: SafeArea(
+                          bottom: true,
+                          child: const DiscussionPage(
+                            surface: AssistantSurface.home,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: SafeArea(
+                          bottom: false,
+                          child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Center(
+                              child: Material(
+                                color: Colors.white,
+                                shape: const CircleBorder(),
+                                elevation: 3,
+                                child: InkWell(
+                                  customBorder: const CircleBorder(),
+                                  onTap: () => homeReveal.value = false,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Icon(
+                                      Icons.close,
+                                      size: 20,
+                                      color: AppPalette.p.primary,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 }
 
-/// 从指定圆心逐渐展开/收起的路由：与经藏页右上角 DeepSeek 按钮
-/// （[_AssistantRevealOverlay]）相同的圆形展开效果，圆心取右下角按钮中心。
-/// 打开时圆从 0 铺满全屏，返回时同圆收回按钮。
-///
-/// 关键：路由压栈后先停在「半径 0」（不可见），等阅读页正文完成首帧布局
-/// （[ReadingContentReadyNotification]）再开始展开。否则长经文整段构建会占满
-/// UI 线程，动画按真实时间推进就会「先冒出小圆再猛地跳满屏」。
 class _CircleRevealPageRoute<T> extends PageRoute<T> {
   _CircleRevealPageRoute({
     required this.builder,
@@ -1912,5 +1999,33 @@ class _CircleRevealPageRoute<T> extends PageRoute<T> {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
     super.dispose();
+  }
+}
+
+/// 圆形展开裁剪器：以 center 为圆心，半径随 progress 从 0 增长到 maxRadius。
+class _CircleRevealClipper extends CustomClipper<Path> {
+  final double progress;
+  final Offset center;
+  final double maxRadius;
+
+  const _CircleRevealClipper({
+    required this.progress,
+    required this.center,
+    required this.maxRadius,
+  });
+
+  @override
+  Path getClip(Size size) {
+    return Path()
+      ..addOval(
+        Rect.fromCircle(center: center, radius: maxRadius * progress),
+      );
+  }
+
+  @override
+  bool shouldReclip(_CircleRevealClipper oldClipper) {
+    return oldClipper.progress != progress ||
+        oldClipper.center != center ||
+        oldClipper.maxRadius != maxRadius;
   }
 }

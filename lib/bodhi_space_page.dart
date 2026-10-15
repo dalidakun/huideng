@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'app_state.dart';
 import 'auth_service.dart';
 import 'loading_widgets.dart';
 import 'login_page.dart';
@@ -122,6 +123,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     }
   }
 
+  double _pullAccum = 0;
   int _tabIndex = 0;
   List<String> _plazaTabs = ['discuss', 'hot', 'follow'];
   /// 自定义工具栏：栏目名（默认「列表」，可改名）+ 经文/话题条目（数量不限），
@@ -1883,9 +1885,20 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
         top: true,
         child: Stack(
           children: [
-            RefreshIndicator(
-              onRefresh: _loadFeed,
-              color: _gold,
+            NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                if (n is OverscrollNotification && n.overscroll < 0) {
+                  _pullAccum -= n.overscroll;
+                  if (_pullAccum > 120 && !homeReveal.value) {
+                    homeReveal.value = true;
+                  }
+                } else if (n is ScrollUpdateNotification) {
+                  if (n.metrics.pixels > 0) _pullAccum = 0;
+                } else if (n is ScrollEndNotification) {
+                  _pullAccum = 0;
+                }
+                return false;
+              },
               child: GestureDetector(
                 // 左右滑动切换栏目：与纵向滚动在手势竞技场按方向共存；
                 // 胶囊行等自身可横滑的区域会优先消费横向手势。

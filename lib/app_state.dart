@@ -9,6 +9,10 @@ final ValueNotifier<bool> assistantVisible = ValueNotifier<bool>(false);
 /// 点击入口从右上角圆点展开为全屏 DeepSeek 页面；再点关闭/系统返回时缩回。
 final ValueNotifier<bool> assistantReveal = ValueNotifier<bool>(false);
 
+/// Home page pull-down reveal: the home content slides down while the
+/// DeepSeek chat slides in from the top.
+final ValueNotifier<bool> homeReveal = ValueNotifier<bool>(false);
+
 /// 全局夜间模式信号：跟随阅读页「夜间模式」开关。
 /// 消息中心等非阅读页面据此切换浅色/深色配色。
 final ValueNotifier<bool> appDarkMode = ValueNotifier<bool>(false);

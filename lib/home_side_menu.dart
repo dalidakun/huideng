@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -299,7 +301,8 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
   }
 
   /// 阅藏进度圆环（昵称/账户名右侧，高度与两行文字相当）：
-  /// 边缘弧线展示进度（已完成黑色、未完成浅灰），圆心只显示百分比。
+  /// 边缘弧线展示进度（已完成黑色、未完成浅灰），
+  /// 圆内再用一块浅灰扇形铺出已完成的比例，圆心只显示百分比。
   /// 点击进入徽章详情页。
   Widget _buildProgressRing() {
     final read = LocalCanonProgress.read;
@@ -316,6 +319,15 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
         child: Stack(
           alignment: Alignment.center,
           children: [
+            // 已完成进度的灰色扇形，垫在圆环与百分比之下，避免盖住文字。
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _ProgressSectorPainter(
+                  progress: progress,
+                  color: const Color(0xFFE0E0E0),
+                ),
+              ),
+            ),
             Positioned.fill(
               child: CircularProgressIndicator(
                 value: progress,
@@ -476,7 +488,7 @@ class _FollowMenuIcon extends StatelessWidget {
   }
 }
 
-/// 侧边菜单「时间线」图标：使用 sjx.png，22 号绘制比同排略大。
+/// 侧边菜单「时间线」图标：使用 sjx.png，21 号绘制与同排相称。
 /// 资源未打进包时（如新增图后未重新构建）回退到线性图标，避免出现破图叉号。
 class _TimelineMenuIcon extends StatelessWidget {
   const _TimelineMenuIcon();
@@ -484,18 +496,43 @@ class _TimelineMenuIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 22,
-      height: 22,
+      width: 21,
+      height: 21,
       child: Center(
         child: Image.asset(
           'assets/images/sjx.png',
-          width: 22,
-          height: 22,
+          width: 21,
+          height: 21,
           fit: BoxFit.contain,
           errorBuilder: (_, __, ___) =>
-              const Icon(Icons.timeline, size: 22, color: Color(0xFF1C1C1C)),
+              const Icon(Icons.timeline, size: 21, color: Color(0xFF1C1C1C)),
         ),
       ),
     );
   }
+}
+
+/// 进度圆环内部的灰色扇形：从正上方（12 点）起顺时针铺出已完成的比例。
+/// 仅作圆内底色，取浅灰以免压住圆心的百分比文字。
+class _ProgressSectorPainter extends CustomPainter {
+  _ProgressSectorPainter({required this.progress, required this.color});
+
+  final double progress;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0) return;
+    final rect = Offset.zero & size;
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    // -π/2 为 12 点方向；drawArc 的 useCenter=true 从圆心拉出扇面。
+    canvas.drawArc(
+        rect, -math.pi / 2, 2 * math.pi * progress.clamp(0.0, 1.0), true, paint);
+  }
+
+  @override
+  bool shouldRepaint(_ProgressSectorPainter old) =>
+      old.progress != progress || old.color != color;
 }

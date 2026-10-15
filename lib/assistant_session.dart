@@ -10,7 +10,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'app_state.dart';
 
 /// AI 助手展示面：底部 Tab、上滑面板、圆形展开面板。
-enum AssistantSurface { tab, panel, reveal }
+enum AssistantSurface { tab, panel, reveal, home }
 
 /// 全局唯一的 DeepSeek WebView 会话。
 ///
@@ -61,6 +61,7 @@ class AssistantSession {
   }
 
   AssistantSurface? _fallback() {
+    if (homeReveal.value) return AssistantSurface.home;
     if (assistantReveal.value) return AssistantSurface.reveal;
     if (assistantVisible.value) return AssistantSurface.panel;
     if (_tabActive) return AssistantSurface.tab;

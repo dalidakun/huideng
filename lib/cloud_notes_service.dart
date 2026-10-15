@@ -178,6 +178,35 @@ class PlazaNote {
       );
 }
 
+/// 某部经「全站所有用户」的一条画线（由云端从各用户时间线聚合而来）。
+///
+/// [text] 是被画的那段经文本身；[ownerUserId] 仅供去重/归属判断，不下发展示。
+/// 画线不按用户或区间去重：同一段被多人画过就并列多条。
+class SutraHighlightItem {
+  final String text;
+  final String sutraKey;
+  final int para;
+  final String ownerUserId;
+  final int createdAt;
+
+  const SutraHighlightItem({
+    required this.text,
+    this.sutraKey = '',
+    this.para = -1,
+    this.ownerUserId = '',
+    this.createdAt = 0,
+  });
+
+  factory SutraHighlightItem.fromJson(Map<String, dynamic> e) =>
+      SutraHighlightItem(
+        text: e['text']?.toString() ?? '',
+        sutraKey: e['sutraKey']?.toString() ?? '',
+        para: (e['para'] as num?)?.toInt() ?? -1,
+        ownerUserId: e['ownerUserId']?.toString() ?? '',
+        createdAt: (e['createdAt'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// 热门讨论中的单个话题 / 经文条目（由云端聚合热度后返回）。
 class HotDiscussionItem {
   final String name;
@@ -966,6 +995,39 @@ class CloudNotesService {
       }
     }
     return out;
+  }
+
+  /// 拉取某部经「全站所有用户」的画线（云端从各用户 userRecords 聚合）。
+  /// [sutraKey] 用读经页的经名形态即可，云端会归一到基础经名再做匹配。
+  /// 返回的每条只有被画线的经文片段与归属信息；失败时返回空列表（画线标签
+  /// 不应因网络问题而阻塞讨论页其它内容）。
+  Future<List<SutraHighlightItem>> getSutraHighlights(
+    String sutraKey, {
+    int limit = 300,
+  }) async {
+    if (sutraKey.trim().isEmpty) return const [];
+    try {
+      final res = await _call('getSutraHighlights', params: {
+        'sutraKey': sutraKey,
+        'limit': limit,
+      });
+      final items = res['items'];
+      if (items is List) {
+        final out = <SutraHighlightItem>[];
+        for (final it in items) {
+          if (it is Map) {
+            final m = SutraHighlightItem.fromJson(
+              Map<String, dynamic>.from(it),
+            );
+            if (m.text.trim().isNotEmpty) out.add(m);
+          }
+        }
+        return out;
+      }
+    } catch (_) {
+      // 忽略：画线标签取不到就展示空态，不影响备注/笔记。
+    }
+    return const [];
   }
 
   /// 拉取某本经所有有感想（任意用户）的段落下标集合，用于阅读页操作栏「所有感想」变绿。

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:my_flutter_app/cloud_notes_service.dart';
 import 'package:my_flutter_app/post_rich_content.dart';
 
 Map<String, dynamic> _meta(List<Map<String, String>> items) =>
@@ -61,6 +62,32 @@ void main() {
       final content =
           '\$金刚般若波罗蜜经\n\n第一条笔记\n\n§§SN§§${_notesMeta()}';
       expect(classifySutraNote(content), isNot(SutraNoteKind.remark));
+    });
+  });
+
+  group('SutraHighlightItem.fromJson', () {
+    test('解析云端聚合的画线条目', () {
+      final item = SutraHighlightItem.fromJson({
+        'text': '凡所有相，皆是虚妄。',
+        'sutraKey': '金刚般若波罗蜜经卷五',
+        'para': 3,
+        'ownerUserId': 'u123',
+        'createdAt': 1700000000000,
+      });
+      expect(item.text, '凡所有相，皆是虚妄。');
+      expect(item.sutraKey, '金刚般若波罗蜜经卷五');
+      expect(item.para, 3);
+      expect(item.ownerUserId, 'u123');
+      expect(item.createdAt, 1700000000000);
+    });
+
+    test('缺字段时回退到安全默认值', () {
+      final item = SutraHighlightItem.fromJson({'text': '如是我闻'});
+      expect(item.text, '如是我闻');
+      expect(item.sutraKey, '');
+      expect(item.para, -1);
+      expect(item.ownerUserId, '');
+      expect(item.createdAt, 0);
     });
   });
 }

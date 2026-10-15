@@ -14,6 +14,7 @@ import 'post_time_link.dart';
 import 'reading_badges.dart';
 import 'reading_note_post.dart';
 import 'reading_page.dart';
+import 'reading_sutra_notes_page.dart';
 import 'sect_community_page.dart' show communityTone;
 import 'sect_switch.dart';
 import 'sutra_availability.dart';
@@ -233,6 +234,17 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
   /// 相关帖子（笔记/备注）是否正在加载。
   bool _relatedLoading = false;
 
+  /// 本经「全站所有用户」的画线聚合（云端从各用户时间线聚合而来）。
+  /// 与 [_relatedNotes] 里的「分享画线帖」并列展示在画线标签页：前者是每个人
+  /// 各自画下的经文原句（自动同步、无需手动分享），后者是用户主动分享的汇总帖。
+  List<SutraHighlightItem> _sutraHighlights = [];
+
+  /// 全站画线是否正在加载。
+  bool _highlightsLoading = false;
+
+  /// 全站画线的作者资料（uid → 资料），用于在每条单独画线上显示用户名。
+  Map<String, UserProfile> _highlightAuthors = const {};
+
   /// 相关帖子的本地点藏状态（按帖子 id 记录）。
   final Set<String> _relatedFavIds = {};
 
@@ -245,7 +257,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
   /// 相关帖子的滚动控制器。
   final ScrollController _scroll = ScrollController();
 
-  /// 当前选中的标签页：0=画线，1=备注，2=笔记。
+  /// 当前选中的标签页：0=笔记，1=备注，2=画线。
   int _currentTab = 0;
 
   @override
@@ -264,6 +276,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     _initVolume();
     setState(() {});
     _loadRelatedNotes();
+    _loadSutraHighlights();
   }
 
   /// 计算按卷区分的卷号：标题或 filePath 能定位具体卷时取其卷号，否则为 0。
@@ -281,6 +294,33 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
   String get _displayTitle => sutraDiscussionDisplayName(widget.title,
       filePath: widget.filePath,
       multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
+
+  /// 本经元信息（部类 · N 字）：供「本经没有笔记」时的顶部卡片使用。
+  /// 部类取编目里基础经名的部类；字数优先当前这一卷，取不到再退全书。
+  String get _sutraMeta {
+    var base = sutraBaseTitle(widget.title);
+    var volume = sutraVolumeOf(widget.title);
+    if (volume <= 0) {
+      final m = chineseVolumeSuffixRe.firstMatch(base);
+      if (m != null) {
+        base = base.substring(0, m.start).trim();
+        volume = parseChineseVolumeNumber(m.group(0)!);
+      }
+    }
+    final parts = <String>[];
+    final link = NoteSutraCatalog.cachedTitleMap?[base];
+    if (link != null) {
+      final dept = link.folder.replaceAll(RegExp(r'^T\d+'), '').trim();
+      if (dept.isNotEmpty) parts.add(dept);
+    }
+    var chars = NoteSutraCatalog.cachedCharCountForRawTitle(widget.title);
+    if (chars <= 0 && volume > 0) {
+      chars = NoteSutraCatalog.cachedVolumeCharCount(base, volume);
+    }
+    if (chars <= 0) chars = NoteSutraCatalog.cachedCharCount(base);
+    if (chars > 0) parts.add('$chars 字');
+    return parts.join(' · ');
+  }
 
   @override
   void dispose() {
@@ -372,9 +412,59 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     }
   }
 
+  /// 拉取本经「全站所有用户」的画线（云端聚合）。每条是被画下的经文原句，
+  /// 不去重；能定位具体卷时只留本卷的画线（卷一含只写基础经名的记录）。
+  Future<void> _loadSutraHighlights() async {
+    if (mounted && !_highlightsLoading) {
+      setState(() => _highlightsLoading = true);
+    }
+    final base = sutraBaseTitle(widget.title);
+    final vol = _discussionVolume;
+    try {
+      final all =
+          await CloudNotesService.instance.getSutraHighlights(base);
+      if (!mounted) return;
+      final filtered = vol <= 0
+          ? List<SutraHighlightItem>.of(all)
+          : all
+              .where((h) => referencesSutraVolume('\$${h.sutraKey}', base, vol))
+              .toList();
+      // 云端在缺索引时可能不排序：这里统一按时间倒序，最新画线在前。
+      filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      // 单独画线要显示用户名：按去重后的作者 uid 批量取资料（一条画线不带昵称）。
+      final ids = <String>{
+        for (final h in filtered)
+          if (h.ownerUserId.isNotEmpty) h.ownerUserId,
+      }.take(100).toList();
+      var authors = _highlightAuthors;
+      if (ids.isNotEmpty) {
+        try {
+          final profiles =
+              await CloudNotesService.instance.getUserProfiles(ids);
+          if (!mounted) return;
+          authors = {for (final p in profiles) p.id: p};
+        } catch (_) {
+          // 取不到资料就退回昵称占位（同修），不影响画线文字展示。
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _sutraHighlights = filtered;
+        _highlightAuthors = authors;
+        _highlightsLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _sutraHighlights = [];
+        _highlightsLoading = false;
+      });
+    }
+  }
+
   /// 下拉刷新：重新拉取「广场相关帖子」（备注 / 笔记数据源）。
   Future<void> _refreshAll() async {
-    await _loadRelatedNotes();
+    await Future.wait([_loadRelatedNotes(), _loadSutraHighlights()]);
   }
 
   void _promptLogin() {
@@ -401,7 +491,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
       ),
       // 右下角：进入本经阅读页（未下载时先下载并在按钮上转圈）。
       floatingActionButton: _buildReadFab(),
-      // 左右滑动切换「画线 / 备注 / 笔记」。
+      // 左右滑动切换「笔记 / 备注 / 画线」。
       body: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onHorizontalDragEnd: _onHorizontalDragEnd,
@@ -414,26 +504,30 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
             // 底部留出悬浮按钮的高度，避免遮住最后一条。
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
             children: [
-              // 顶部卡片：本经最热门的一条笔记（样式同宗门页顶部展示位）。
+              // 顶部卡片：本经最热门的一条笔记（样式同宗门页顶部展示位）；
+              // 本经没有笔记时改为展示经文标题 + 部类 · 字数，点击进入阅读。
               if (hottest != null) ...[
                 _buildHottestCard(hottest),
                 const SizedBox(height: 16),
+              ] else ...[
+                _buildSutraInfoCard(),
+                const SizedBox(height: 16),
               ],
-              // 三个入口：画线 / 备注 / 笔记（采用宗派法门页的连体切换条样式）。
+              // 三个入口：笔记 / 备注 / 画线（采用宗派法门页的连体切换条样式）。
               SegmentedSwitch(
                 index: _currentTab,
-                labels: const ['画线', '备注', '笔记'],
+                labels: const ['笔记', '备注', '画线'],
                 onChanged: (i) => setState(() => _currentTab = i),
                 tone: communityTone(AppPalette.instance.isPlain),
               ),
               // 内容区域
               const SizedBox(height: 16),
               if (_currentTab == 0)
-                _buildHighlightsTab()
+                _buildNotesTab()
               else if (_currentTab == 1)
                 _buildRemarksTab()
               else
-                _buildNotesTab(),
+                _buildHighlightsTab(),
             ],
           ),
         ),
@@ -441,7 +535,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     );
   }
 
-  /// 左右滑动切换「画线 / 备注 / 笔记」标签页（与三个按钮联动）。
+  /// 左右滑动切换「笔记 / 备注 / 画线」标签页（与三个按钮联动）。
   void _onHorizontalDragEnd(DragEndDetails details) {
     final v = details.primaryVelocity ?? 0;
     if (v <= -200 && _currentTab < 2) {
@@ -465,7 +559,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     final busy = _loading || _downloading;
     final isPlain = AppPalette.instance.isPlain;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.only(bottom: 24),
       child: SizedBox(
         width: 42,
         height: 42,
@@ -499,11 +593,13 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     }
   }
 
-  /// 本经相关笔记里最热的一条（互动量与时间衰减口径同广场热榜）。
+  /// 本经相关帖子里的「笔记」中最热的一条（互动量与时间衰减口径同广场热榜）。
+  /// 只从笔记里挑，不从画线 / 备注里挑（顶部展示位只展示笔记）。
   PlazaNote? get _hottestNote {
     PlazaNote? best;
     var bestScore = 0.0;
     for (final n in _relatedNotes) {
+      if (!_isKind(n, SutraNoteKind.note)) continue;
       final s = discussionHotScore(
         n.createdAt,
         n.viewCount + n.likeCount * 3 + n.commentCount * 5 + n.repostCount * 8,
@@ -524,7 +620,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
       child: Material(
         color: _card,
         child: InkWell(
-          onTap: () => _openRelatedDetail(n),
+          onTap: () => _openHottestNote(n),
           child: Stack(
             children: [
               Positioned.fill(
@@ -588,7 +684,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        _buildViewNoteButton(),
+                        _buildCardHint('查看笔记'),
                       ],
                     ),
                   ],
@@ -601,8 +697,80 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     );
   }
 
-  /// 卡片右下角「查看笔记 ›」按钮：底色随外观切换（素白青绿 / 米黄暖金）。
-  Widget _buildViewNoteButton() {
+  /// 顶部卡片（本经没有笔记时）：展示经文标题 + 部类 · 字数，点击进入阅读。
+  /// 视觉与「最热门笔记」卡片同款（淡墨远山铺底 + 经文图标 + 元信息 + 右下角「阅读」）。
+  Widget _buildSutraInfoCard() {
+    final meta = _sutraMeta;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Material(
+        color: _card,
+        child: InkWell(
+          onTap: _openRead,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.2,
+                  child: Image.asset(
+                    'assets/menpai/mih.png',
+                    fit: BoxFit.cover,
+                    alignment: Alignment.bottomRight,
+                    filterQuality: FilterQuality.medium,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.menu_book_rounded, size: 18, color: _gold),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(_displayTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  color: _text,
+                                  letterSpacing: 0.8)),
+                        ),
+                      ],
+                    ),
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(meta,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12.5,
+                              color: _textSec,
+                              height: 1.55,
+                              letterSpacing: 0.2)),
+                    ],
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Spacer(),
+                        _buildCardHint('阅读'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 卡片右下角「… ›」按钮：底色随外观切换（素白青绿 / 米黄暖金）。
+  Widget _buildCardHint(String label) {
     final tone = communityTone(AppPalette.instance.isPlain);
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
@@ -613,7 +781,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('查看笔记',
+          Text(label,
               style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -840,6 +1008,40 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => NoteDetailPage(noteId: n.id)),
+    ).then((_) {
+      if (mounted) _loadRelatedNotes();
+    });
+  }
+
+  /// 顶部卡片「查看笔记」：打开该笔记帖的「读经笔记」详情页（笔记详情），
+  /// 而不是菩提空间的帖子详情页。帖子不是读经笔记帖时退回帖子详情。
+  void _openHottestNote(PlazaNote n) {
+    final post = SutraNotesPost.parse(n.content);
+    if (post == null) {
+      _openRelatedDetail(n);
+      return;
+    }
+    final initialNotes = <Map<String, dynamic>>[
+      for (final text in post.notes)
+        {
+          'id': '',
+          'content': text,
+          'updatedAt': DateTime.now().toIso8601String(),
+          'shared': true,
+          'cloudId': null,
+        },
+    ];
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReadingSutraNotesPage(
+          title: post.sutraTitle,
+          ownerUserId: n.ownerUserId,
+          initialNotes: initialNotes,
+          noteId: n.id,
+          canDelete: false,
+        ),
+      ),
     ).then((_) {
       if (mounted) _loadRelatedNotes();
     });
@@ -1163,18 +1365,130 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     );
   }
 
-  /// 「画线」标签页：该经文所有用户分享到菩提空间的画线汇总。
+  /// 「画线」标签页：本经所有用户画下的经文原句（自动聚合、无需手动分享）
+  /// + 用户主动分享到菩提空间的画线汇总帖。与其他帖子行一样用分割线分隔，
+  /// 单条画线不加边框卡片。
   Widget _buildHighlightsTab() {
-    if (_relatedLoading && _relatedNotes.isEmpty) {
+    final loading = (_relatedLoading && _relatedNotes.isEmpty) ||
+        (_highlightsLoading && _sutraHighlights.isEmpty);
+    if (loading) {
       return _buildRelatedLoading();
     }
     final lines = _relatedNotes
         .where((n) => _isKind(n, SutraNoteKind.highlight))
         .toList();
-    if (lines.isEmpty) {
-      return _buildRelatedEmpty('还没有同修分享画线');
+    if (_sutraHighlights.isEmpty && lines.isEmpty) {
+      return _buildRelatedEmpty('还没有同修画线');
     }
-    return _buildRelatedList(lines);
+    return _buildDividedRows([
+      // 全站画线：每个人各自画下的经文原句，重复画线也照显示（不去重）。
+      for (final h in _sutraHighlights) _buildHighlightItem(h),
+      for (final n in lines) _buildRelatedNote(n),
+    ]);
+  }
+
+  /// 用与其他帖子一致的分割线列表渲染一批行（画线与分享帖混排共用）。
+  Widget _buildDividedRows(List<Widget> rows) {
+    return Column(
+      children: [
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i > 0) ...[
+            const SizedBox(height: 8),
+            Divider(height: 1, thickness: 0.5, color: AppPalette.p.divider),
+            const SizedBox(height: 8),
+          ],
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: rows[i],
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 一条全站画线：作者（头像 + 昵称/认证/@账号/阅藏百分比，同帖子行）+ 经文原句 + 时间。
+  Widget _buildHighlightItem(SutraHighlightItem h) {
+    final author = _highlightAuthors[h.ownerUserId];
+    final name = (author?.name.isNotEmpty ?? false) ? author!.name : '同修';
+    final account = author?.account ?? '';
+    final verified = author?.verified ?? false;
+    final me = AuthService.instance.currentUser.value;
+    final pct = postCanonPercent(
+      isSelf: me != null && me.id == h.ownerUserId,
+      cloudRead: author?.canonRead ?? 0,
+      cloudTotal: author?.canonTotal ?? 0,
+    );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        UserAvatar(userId: h.ownerUserId, radius: 22),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: _text)),
+                  ),
+                  if (verified) ...[
+                    const SizedBox(width: 3),
+                    const Icon(Icons.verified,
+                        size: 14, color: Color(0xFF70867A)),
+                  ],
+                  if (account.isNotEmpty) ...[
+                    const SizedBox(width: 3),
+                    Flexible(
+                      child: AccountLink(
+                        account: account,
+                        onTap: () {
+                          if (h.ownerUserId.isNotEmpty) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => UserSpacePage(
+                                      userId: h.ownerUserId)),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 3),
+                    const Text('·',
+                        style: TextStyle(
+                            fontSize: 12, color: Color(0xFF8C8C8C))),
+                    const SizedBox(width: 2),
+                    Text(pct,
+                        maxLines: 1,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF8C8C8C))),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 4),
+              // 画线经文：用读经页同款「每行点线」下划线标出（与真实画线一致）。
+              SutraUnderlineText(
+                text: h.text,
+                style: TextStyle(fontSize: 15, color: _text, height: 1.7),
+                lineColor: _gold.withValues(alpha: 0.8),
+              ),
+              // 画线时间：与帖子行同款（内容之后展示）。
+              const SizedBox(height: 6),
+              Text(_fmtTime(h.createdAt),
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF8C8C8C))),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   /// 「备注」标签页：该经文所有用户分享到菩提空间的备注（按段感想）。
