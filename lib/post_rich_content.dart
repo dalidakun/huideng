@@ -18,6 +18,7 @@ import 'reading_sutra_notes_page.dart';
 import 'sect_community_page.dart' show communityTone;
 import 'sect_switch.dart';
 import 'sutra_availability.dart';
+import 'sutra_underline.dart';
 import 'sutra_downloader.dart';
 import 'sutra_list_page.dart';
 import 'text_input_sheet.dart';
