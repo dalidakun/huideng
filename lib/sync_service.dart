@@ -607,6 +607,10 @@ class SyncService with WidgetsBindingObserver {
         if (skipped.isNotEmpty) {
           lastError.value =
               '${skipped.length} 项数据过大未能备份：${skipped.take(3).join('、')}';
+        } else {
+          // 本次推送成功：清掉上一次的错误，否则「我的」页的失败提示
+          // 会一直挂着，用户点「重试」成功后也看不到任何变化。
+          lastError.value = null;
         }
       } on CloudApiException catch (e) {
         // 静默失败是最糟的一种失败：用户以为一直在备份，实际云端副本早已

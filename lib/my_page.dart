@@ -5315,7 +5315,7 @@ class _SettingsPhoneTile extends StatelessWidget {
   }
 }
 
-/// 导出笔记行：点击进入「导出笔记」页面，把自己发的帖子按年份导出为 PDF。
+/// 导出笔记行：点击进入「导出笔记」页面，把时间线的画线 / 备注 / 笔记按年份导出为 PDF。
 class _SettingsExportNotesTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -5354,7 +5354,7 @@ class _SettingsExportNotesTile extends StatelessWidget {
                           color: _text,
                           fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text('按年份把我的帖子导出为 PDF',
+                  Text('按年份把画线 · 备注 · 笔记导出为 PDF',
                       style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),

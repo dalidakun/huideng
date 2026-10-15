@@ -116,4 +116,64 @@ void main() {
     expect(String.fromCharCodes(bytes.skip(bytes.length - 5)).trimRight(),
         endsWith('%EOF'));
   });
+
+  const timeline = PdfRecordYear(year: 2026, records: [
+    PdfRecord(
+      kind: PdfRecordKind.highlight,
+      date: '2026-01-02 10:30',
+      sutraName: '地藏菩萨本愿经卷二',
+      sutraText: '地狱不空，誓不成佛',
+    ),
+    PdfRecord(
+      kind: PdfRecordKind.thought,
+      date: '2026-02-08 21:05',
+      sutraName: '金刚般若波罗蜜经',
+      sutraText: '凡所有相，皆是虚妄。',
+      userText: '不执着于相，方见真如。',
+      userLabel: '备注',
+    ),
+    PdfRecord(
+      kind: PdfRecordKind.note,
+      date: '2026-03-01 07:00',
+      sutraName: '六祖坛经',
+      userText: '今天读了一遍，深感法喜。',
+      userLabel: '笔记',
+      footnote: '已分享',
+    ),
+  ]);
+
+  group('sanitizePunctuation 归一化字体不支持的标点', () {
+    test('弯引号转成直引号，不丢字', () {
+      final out = PdfExporter.sanitizePunctuation('他说:\u201c一切有为法。\u201d');
+      expect(out, '他说:"一切有为法。"');
+      expect(out.contains('\u201c'), isFalse);
+      expect(out.contains('\u201d'), isFalse);
+    });
+
+    test('破折号 / 省略号 / 撇号归一化', () {
+      final out =
+          PdfExporter.sanitizePunctuation('如是我闻\u2014\u2014善哉\u2026\u2026好\u2018坏\u2019');
+      expect(out, '如是我闻--善哉......好\'坏\'');
+    });
+
+    test('中文标点与常用字符保持原样', () {
+      const src = '《金刚经》【卷一】，如实。';
+      expect(PdfExporter.sanitizePunctuation(src), src);
+    });
+
+    test('丢弃零宽字符', () {
+      expect(PdfExporter.sanitizePunctuation('a\u200bb'), 'ab');
+    });
+  });
+
+  test('buildTimelinePdf 生成可解析的非空 PDF', () async {
+    final bytes = await PdfExporter.buildTimelinePdf(
+      author: '测试用户',
+      years: [timeline],
+    );
+    expect(bytes, isNotEmpty);
+    expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+    expect(String.fromCharCodes(bytes.skip(bytes.length - 5)).trimRight(),
+        endsWith('%EOF'));
+  });
 }

@@ -152,3 +152,137 @@ class SectSwitch extends StatelessWidget {
     );
   }
 }
+
+/// 多段（N 段）连体胶囊切换条：[SectSwitch] 的通用版。
+///
+/// 与 [SectSwitch] 同一套样式（连通外框 + 内部滑动实心填充，不描边、不挂横向手势），
+/// 但支持任意段数：填充宽度为 `1/N`，停在第 [index] 段。用于「画线 / 备注 / 笔记」
+/// 这类多入口的场景。
+class SegmentedSwitch extends StatelessWidget {
+  const SegmentedSwitch({
+    super.key,
+    required this.index,
+    required this.labels,
+    required this.onChanged,
+    required this.tone,
+    this.height = 44,
+  });
+
+  /// 当前选中段下标（0 起）。
+  final int index;
+
+  /// 各段文字，从左到右。
+  final List<String> labels;
+
+  /// 点选某段时回调新下标。
+  final ValueChanged<int> onChanged;
+
+  /// 本色（与 [SectSwitch.tone] 相同来源）。
+  final Color tone;
+
+  final double height;
+
+  /// 滑动填充相对外框的内缩，留出一圈淡底的余地。
+  static const double _inset = 3;
+
+  @override
+  Widget build(BuildContext context) {
+    final n = labels.length;
+    return SizedBox(
+      height: height,
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final w = c.maxWidth;
+          final slotW = w / n;
+          // 填充块的对齐：n 段时第 i 段对应 -1 + 2*i/(n-1)（与左右两端对齐）。
+          final alignX = n <= 1 ? 0.0 : -1 + 2 * index / (n - 1);
+          return Semantics(
+            container: true,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (d) {
+                final i =
+                    (d.localPosition.dx / slotW).floor().clamp(0, n - 1);
+                if (i != index) onChanged(i);
+              },
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: tone.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(height / 2),
+                    ),
+                  ),
+                  AnimatedAlign(
+                    duration: const Duration(milliseconds: 240),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment(alignX, 0),
+                    child: FractionallySizedBox(
+                      widthFactor: 1 / n,
+                      heightFactor: 1,
+                      child: Padding(
+                        padding: const EdgeInsets.all(_inset),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: tone,
+                            borderRadius:
+                                BorderRadius.circular((height - _inset * 2) / 2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: tone.withValues(alpha: 0.28),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (var i = 0; i < n; i++)
+                    _label(labels[i], index == i, slotW * i, slotW),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 一段文字：在自己那格居中，选中白字、未选中次级字色。
+  Widget _label(String text, bool active, double left, double slotW) {
+    final p = AppPalette.p;
+    final fg = active ? Colors.white : p.textSec;
+    return Positioned(
+      left: left,
+      width: slotW,
+      top: 0,
+      bottom: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOut,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: fg,
+                letterSpacing: 0.8,
+              ),
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

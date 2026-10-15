@@ -1177,9 +1177,9 @@ class ReadingPageState extends State<ReadingPage>
         notes: clean,
         underlines: underlines ?? _paraUnderlines[index] ?? const [],
       );
-      if (!mounted) return;
-      _loadParagraphNotes();
       // 「记录」时间线：以该段第一条备注作为时间线条目文本。
+      // 放在 mounted 判断之前：即便本页已销毁，这条备注也必须进时间线，
+      // 否则会出现「云端有、时间线没有」的丢失（重新打开该经才会补上）。
       final primaryText = clean.isNotEmpty ? clean.first.text.trim() : '';
       final synced = <({int start, int end})>[
         for (final u in underlines ?? _paraUnderlines[index] ?? const [])
@@ -1195,6 +1195,8 @@ class ReadingPageState extends State<ReadingPage>
         thought: primaryText,
         underlines: synced,
       ));
+      if (!mounted) return;
+      _loadParagraphNotes();
     } catch (e) {
       debugPrint('[reading] 保存段落笔记失败: $e');
       if (!mounted) return;

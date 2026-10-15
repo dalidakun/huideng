@@ -124,6 +124,8 @@ flutter:
     - assets/images/yt.png
     # 宗门/法门页核心经典的文件夹图标（两种外观同一张）。
     - assets/images/fojing.png
+    # 侧边菜单「时间线」图标。
+    - assets/images/sjx.png
     # 宗门页行首图标（首字母缩写，1=素白外观，2=米黄外观；律宗暂无切图）。
     - assets/menpai/
     - assets/famen/

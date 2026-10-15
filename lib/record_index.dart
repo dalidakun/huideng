@@ -378,40 +378,66 @@ class RecordIndex {
     if (changed) _touch();
   }
 
-  /// 读经页拉取本经段落笔记后调用：为回填记录补上段落原文 / 画线文字。
-  /// 只填空字段，不改动任何时间戳。
+  /// 读经页拉取本经段落笔记后调用：把时间线里**还没有**的备注 / 画线补进来，
+  /// 已有条目则只回填缺失的段落原文 / 画线文字（不改动任何时间戳）。
+  ///
+  /// 这是「备注没进时间线」的兜底：读经页每次拉到本经云端段落笔记都会走这里，
+  /// 因此只要数据在云端，重新打开该经就会出现在时间线上（无需全量回填扫描）。
   Future<void> enrichParagraphs({
     required String sutraKey,
     required List<String> paragraphs,
     required List<Map<String, dynamic>> rows,
   }) async {
     await load();
+    final now = DateTime.now().millisecondsSinceEpoch;
     var changed = false;
     for (final row in rows) {
       final idx = (row['index'] as num?)?.toInt() ?? -1;
       if (idx < 0) continue;
       final paraText = idx < paragraphs.length ? paragraphs[idx] : '';
-      if (paraText.isEmpty) continue;
+      final ts = (row['updatedAt'] as num?)?.toInt() ?? now;
 
-      final note = (row['note'] ?? '').toString().trim();
+      // 备注：时间线里没有就补一条；已有条目仅在原文为空时回填原文。
+      final note = (row['notes'] as List?)
+              ?.whereType<ParaNote>()
+              .map((n) => n.text.trim())
+              .firstWhere((t) => t.isNotEmpty,
+                  orElse: () => (row['note'] ?? '').toString().trim()) ??
+          (row['note'] ?? '').toString().trim();
       if (note.isNotEmpty) {
-        final pos = _pos['t|$sutraKey|$idx'];
-        if (pos != null && _items[pos].paraText.isEmpty) {
-          _items[pos] = RecordItem(
-            id: _items[pos].id,
-            type: _items[pos].type,
-            sutraKeys: _items[pos].sutraKeys,
-            para: _items[pos].para,
-            text: _items[pos].text,
+        final id = 't|$sutraKey|$idx';
+        final pos = _pos[id];
+        if (pos == null) {
+          changed |= _upsert(RecordItem(
+            id: id,
+            type: RecordType.thought,
+            sutraKeys: [sutraKey],
+            para: idx,
+            text: note,
             paraText: paraText,
-            createdAt: _items[pos].createdAt,
-            updatedAt: _items[pos].updatedAt,
-            shared: _items[pos].shared,
+            createdAt: ts,
+            updatedAt: ts,
+            backfilled: paraText.isEmpty,
+          ));
+        } else if (_items[pos].paraText.isEmpty && paraText.isNotEmpty) {
+          final old = _items[pos];
+          _items[pos] = RecordItem(
+            id: old.id,
+            type: old.type,
+            sutraKeys: old.sutraKeys,
+            para: old.para,
+            text: old.text,
+            paraText: paraText,
+            createdAt: old.createdAt,
+            updatedAt: old.updatedAt,
+            shared: old.shared,
+            backfilled: old.backfilled,
           );
           changed = true;
         }
       }
 
+      // 画线：时间线里没有就补一条；已有条目仅在文字为空时回填。
       final raw = row['underlines'];
       if (raw is! List) continue;
       for (final u in raw) {
@@ -420,24 +446,37 @@ class RecordIndex {
         final end = (u['end'] as num?)?.toInt() ?? 0;
         if (end <= start) continue;
         final id = 'h|$sutraKey|$idx|$start|$end';
+        final snippet = paraText.isEmpty ? '' : _slice(paraText, start, end);
         final pos = _pos[id];
-        if (pos == null || _items[pos].text.isNotEmpty) continue;
-        final snippet = _slice(paraText, start, end);
-        if (snippet.isEmpty) continue;
-        final old = _items[pos];
-        _items[pos] = RecordItem(
-          id: old.id,
-          type: old.type,
-          sutraKeys: old.sutraKeys,
-          para: old.para,
-          text: snippet,
-          paraText: '',
-          createdAt: old.createdAt,
-          updatedAt: old.updatedAt,
-          shared: old.shared,
-          backfilled: old.backfilled,
-        );
-        changed = true;
+        if (pos == null) {
+          // 没有原文就切不出片段，不建空画线条目（等下次带原文再补）。
+          if (snippet.isEmpty) continue;
+          changed |= _upsert(RecordItem(
+            id: id,
+            type: RecordType.highlight,
+            sutraKeys: [sutraKey],
+            para: idx,
+            text: snippet,
+            paraText: '',
+            createdAt: ts,
+            updatedAt: ts,
+          ));
+        } else if (_items[pos].text.isEmpty && snippet.isNotEmpty) {
+          final old = _items[pos];
+          _items[pos] = RecordItem(
+            id: old.id,
+            type: old.type,
+            sutraKeys: old.sutraKeys,
+            para: old.para,
+            text: snippet,
+            paraText: '',
+            createdAt: old.createdAt,
+            updatedAt: old.updatedAt,
+            shared: old.shared,
+            backfilled: old.backfilled,
+          );
+          changed = true;
+        }
       }
     }
     if (changed) _touch();

@@ -4,12 +4,18 @@ import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
+import 'cloud_notes_service.dart';
 import 'login_page.dart';
+import 'note_edit_page.dart';
+import 'note_store.dart';
 import 'note_sutra_links.dart';
+import 'reading_note_edit_page.dart';
+import 'reading_page.dart';
 import 'record_cards.dart';
 import 'record_index.dart';
+import 'sutra_asset_path.dart';
 import 'sutra_list_page.dart'
-    show chineseVolumeSuffixRe, sutraDisplayNameWithVolume;
+    show chineseVolumeSuffixRe, splitHotSutraName, sutraDisplayNameWithVolume;
 import 'user_avatar.dart';
 
 /// 纯 CBETA 编号（如「T13n0412_002」），即记录里只存了编号、没有经名。
@@ -45,7 +51,7 @@ String recordSutraDisplayName(
   return name.isEmpty ? t : name;
 }
 
-/// 「记录」标签页：把读经时留下的**画线 / 感想 / 笔记**按时间先后汇成一条流水。
+/// 「记录」标签页：把读经时留下的**画线 / 备注 / 笔记**按时间先后汇成一条流水。
 ///
 /// 数据源是本地 [RecordIndex]（写入时顺手记下的动作时间戳），因此首屏秒开、
 /// 离线可用；三种记录各用各的版式（见 record_cards.dart）。
@@ -95,7 +101,7 @@ class RecordPageState extends State<RecordPage> {
   String _rowsQueryCache = '';
   List<_Row>? _rowsCache;
 
-  /// 展开状态：经文引用、感想正文、笔记正文各自独立。
+  /// 展开状态：经文引用、备注正文、笔记正文各自独立。
   final Set<String> _paraExpanded = {};
   final Set<String> _thoughtExpanded = {};
   final Set<String> _noteExpanded = {};
@@ -389,7 +395,7 @@ class RecordPageState extends State<RecordPage> {
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  '笔记',
+                  '时间线',
                   style: TextStyle(
                     color: p.text,
                     fontSize: 17,
@@ -487,38 +493,225 @@ class RecordPageState extends State<RecordPage> {
           item: item,
           sutraName: sutraName,
           timeText: _timeLabel(item),
+          onTapSutraName: () => _openSutraFor(item),
         );
       case RecordType.thought:
-        return ThoughtRecordCard(
-          item: item,
-          sutraName: sutraName,
-          timeText: _timeLabel(item),
-          paraExpanded: _paraExpanded.contains(item.id),
-          noteExpanded: _thoughtExpanded.contains(item.id),
-          onTogglePara: () => setState(() {
-            _paraExpanded.contains(item.id)
-                ? _paraExpanded.remove(item.id)
-                : _paraExpanded.add(item.id);
-          }),
-          onToggleNote: () => setState(() {
-            _thoughtExpanded.contains(item.id)
-                ? _thoughtExpanded.remove(item.id)
-                : _thoughtExpanded.add(item.id);
-          }),
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _editThought(item),
+          child: ThoughtRecordCard(
+            item: item,
+            sutraName: sutraName,
+            timeText: _timeLabel(item),
+            paraExpanded: _paraExpanded.contains(item.id),
+            noteExpanded: _thoughtExpanded.contains(item.id),
+            onTogglePara: () => setState(() {
+              _paraExpanded.contains(item.id)
+                  ? _paraExpanded.remove(item.id)
+                  : _paraExpanded.add(item.id);
+            }),
+            onToggleNote: () => setState(() {
+              _thoughtExpanded.contains(item.id)
+                  ? _thoughtExpanded.remove(item.id)
+                  : _thoughtExpanded.add(item.id);
+            }),
+            onTapSutraName: () => _openSutraFor(item),
+          ),
         );
       case RecordType.note:
-        return SutraNoteRecordCard(
-          item: item,
-          sutraName: sutraName,
-          timeText: _timeLabel(item),
-          expanded: _noteExpanded.contains(item.id),
-          onToggleExpand: () => setState(() {
-            _noteExpanded.contains(item.id)
-                ? _noteExpanded.remove(item.id)
-                : _noteExpanded.add(item.id);
-          }),
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _editNote(item),
+          child: SutraNoteRecordCard(
+            item: item,
+            sutraName: sutraName,
+            timeText: _timeLabel(item),
+            expanded: _noteExpanded.contains(item.id),
+            onToggleExpand: () => setState(() {
+              _noteExpanded.contains(item.id)
+                  ? _noteExpanded.remove(item.id)
+                  : _noteExpanded.add(item.id);
+            }),
+            onTapSutraName: () => _openSutraFor(item),
+          ),
         );
     }
+  }
+
+  /// 点击「备注」卡片：打开「读经备注」编辑页编辑这一条备注。
+  ///
+  /// 段落备注以「整段全部备注」的形式存云端，所以先拉取该段最新备注与画线，
+  /// 改完再整段回存，最后同步时间线索引并刷新列表。
+  Future<void> _editThought(RecordItem item) async {
+    final sutraKey = item.sutraKey;
+    final index = item.para;
+    if (sutraKey.isEmpty || index < 0) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    final List<Map<String, dynamic>> rows;
+    try {
+      rows = await CloudNotesService.instance.getParagraphNotes(sutraKey);
+    } catch (e) {
+      if (!mounted) return;
+      _toast('打开备注失败，${e is CloudApiException ? e.message : '网络异常，请稍后重试'}');
+      return;
+    }
+    if (!mounted) return;
+    Map<String, dynamic>? row;
+    for (final r in rows) {
+      if ((r['index'] as num?)?.toInt() == index) {
+        row = r;
+        break;
+      }
+    }
+    final notes =
+        (row?['notes'] as List?)?.whereType<ParaNote>().toList() ?? <ParaNote>[];
+    final underlines = <Map<String, int>>[
+      for (final u in (row?['underlines'] as List? ?? const []))
+        if (u is Map)
+          {
+            'start': (u['start'] as num?)?.toInt() ?? 0,
+            'end': (u['end'] as num?)?.toInt() ?? 0,
+          },
+    ];
+    // 时间线条目文本取自该段第一条非空备注；先按文本定位，找不到退回首条。
+    var pos = notes.indexWhere((n) => n.text.trim() == item.text.trim());
+    if (pos < 0) pos = notes.indexWhere((n) => !n.isBlank);
+    if (pos < 0) return;
+    final note = notes[pos];
+
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => ReadingNoteEditPage(
+          paragraph:
+              note.quoted.trim().isNotEmpty ? note.quoted : item.paraText,
+          initialText: note.text,
+          hasExistingNote: true,
+          sutraTitle: _sutraNameOf(item),
+          initialShared: note.shared,
+          initialCloudId: note.cloudId.isEmpty ? null : note.cloudId,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+
+    final updated = List<ParaNote>.of(notes);
+    if (result['note'] == '__delete__') {
+      updated.removeAt(pos);
+    } else {
+      final text = (result['note'] as String? ?? '').trim();
+      if (text.isEmpty) {
+        updated.removeAt(pos);
+      } else {
+        final shared = result['shared'] == true;
+        updated[pos] = note.copyWith(
+          text: text,
+          shared: shared,
+          cloudId: shared ? ((result['cloudId'] as String?) ?? '') : '',
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        );
+      }
+    }
+    final clean = [for (final n in updated) if (!n.isBlank) n];
+    try {
+      await CloudNotesService.instance.saveParagraphNote(
+        sutraKey: sutraKey,
+        index: index,
+        text: item.paraText,
+        notes: clean,
+        underlines: underlines,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _toast('保存备注失败，${e is CloudApiException ? e.message : '网络异常，请稍后重试'}');
+      return;
+    }
+    // 时间线以该段第一条备注作为条目文本（与读经页保持一致）。
+    await RecordIndex.instance.syncParagraph(
+      sutraKey: sutraKey,
+      para: index,
+      paraText: item.paraText,
+      thought: clean.isEmpty ? '' : clean.first.text.trim(),
+      underlines: [
+        for (final u in underlines)
+          (start: u['start'] ?? 0, end: u['end'] ?? 0),
+      ],
+    );
+    await reload();
+  }
+
+  /// 点击「笔记」卡片：打开「笔记编辑页」编辑这条笔记。
+  Future<void> _editNote(RecordItem item) async {
+    final noteId = item.id.startsWith('n|') ? item.id.substring(2) : '';
+    if (noteId.isEmpty) return;
+    final notes = await NoteStore.load();
+    if (!mounted) return;
+    Map<String, dynamic>? target;
+    for (final n in notes) {
+      if ((n['id'] ?? '').toString() == noteId) {
+        target = n;
+        break;
+      }
+    }
+    if (target == null) {
+      _toast('这条笔记已不存在');
+      return;
+    }
+    await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (_) => NoteEditPage(note: target)),
+    );
+    if (!mounted) return;
+    // 笔记的保存 / 删除 / 回收站都只改本地 `notes`，重新对账即可反映到时间线。
+    await reload(syncNotes: true);
+  }
+
+  /// 点击卡片上的经名：进入该经的阅读页。
+  ///
+  /// 沿用记录里的原始 sutraKey 作为标题，保证读经页的段落笔记仍落在同一把
+  /// key 上；正文路径按 key 的形态解析（编号→资产路径，展示名→查目录）。
+  Future<void> _openSutraFor(RecordItem item) async {
+    final key = item.sutraKey.trim();
+    if (key.isEmpty) return;
+    // 首次进入时目录可能还没加载完，补加载一次再解析。
+    if (NoteSutraCatalog.cachedTitleMap == null) {
+      try {
+        await NoteSutraCatalog.load();
+      } catch (_) {}
+      if (!mounted) return;
+    }
+    final filePath = _sutraFilePath(key);
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReadingPage(title: key, filePath: filePath),
+      ),
+    );
+  }
+
+  /// 由记录的 sutraKey 解析正文资产路径；解析不出返回 null（读经页会给出提示）。
+  String? _sutraFilePath(String key) {
+    // 含标准 CBETA 编号（列表进入的常见形态）：按编号映射到 assets/sutras_ascii/...。
+    if (RegExp(r'T\d{2}n\d{4}[A-Za-z]?_\d{3}').hasMatch(key)) {
+      return SutraAssetPath.resolve(title: key);
+    }
+    // 纯展示名（可能带「卷X」）：查目录拿该卷正文路径。
+    final (base, volume) = splitHotSutraName(key);
+    final entry = NoteSutraCatalog.cachedTitleMap?[base];
+    return (volume > 0
+            ? NoteSutraCatalog.cachedVolumePath(base, volume)
+            : null) ??
+        entry?.filePath;
+  }
+
+  void _promptLogin() {
+    _toast('登录后才能编辑备注（跨设备同步），请先在「我的」页面登录');
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _buildEmpty(PaletteData p) {
@@ -534,7 +727,7 @@ class RecordPageState extends State<RecordPage> {
               child: Text(
                 searching
                     ? '没有匹配「$_query」的记录'
-                    : '还没有任何记录\n读经时选中文字「画线」、写下「感想」或「笔记」，都会按时间汇集到这里',
+                    : '还没有任何记录\n读经时选中文字「画线」、写下「备注」或「笔记」，都会按时间汇集到这里',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,

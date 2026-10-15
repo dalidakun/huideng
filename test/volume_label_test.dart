@@ -51,6 +51,30 @@ void main() {
       );
     });
 
+    test('多卷判定：同名异本（不同 CBETA 作品）不误判为多卷', () {
+      // 金刚经在目录里有 T08n0235/0236a/0236b/0237 四部不同译本，
+      // 每部均单卷，不应因基础经名相同被判为多卷经书；
+      // 同一列表中的真实多卷经书（高僧传）仍应正常识别。
+      final bases = collectMultiVolumeBases([
+        Sutra('金刚般若波罗蜜经T08n0235_001', '1k'),
+        Sutra('金刚般若波罗蜜经T08n0236a_001', '1k'),
+        Sutra('金刚般若波罗蜜经T08n0236b_001', '1k'),
+        Sutra('金刚般若波罗蜜经T08n0237_001', '1k'),
+        Sutra('高僧传T50n2059_001', '1k'),
+        Sutra('高僧传T50n2059_002', '1k'),
+      ]);
+      expect(bases, {'高僧传'});
+      expect(
+        sutraDisplayTitle('金刚般若波罗蜜经T08n0235_001',
+            multiVolumeBases: bases),
+        '金刚般若波罗蜜经',
+      );
+      expect(
+        sutraDisplayTitle('高僧传T50n2059_002', multiVolumeBases: bases),
+        '高僧传卷二',
+      );
+    });
+
     test('标题无卷号时从路径补齐卷号', () {
       final bases = {'地藏菩萨本愿经'};
       expect(

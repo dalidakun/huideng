@@ -5,19 +5,26 @@ import 'record_index.dart';
 import 'sutra_underline.dart';
 
 /// 记录卡片：三种记录各用各的版式，分别对齐读经页速览面板里
-/// 「画线 / 感想 / 笔记」三个汇总页的既有样式，不做成统一卡片。
+/// 「画线 / 备注 / 笔记」三个汇总页的既有样式，不做成统一卡片。
 ///
 /// - 画线：平铺卡 + 逐行点线（对齐「画线归集」页）
-/// - 感想：经文引用 + 浅色感想气泡（对齐「感想」页）
+/// - 备注：经文引用 + 浅色备注气泡（对齐「备注」页）
 /// - 笔记：带阴影的卡 + 正文 + 底部时间/分享状态行（对齐「读经笔记」页）
 ///
-/// 与汇总页的差别：卡片只读（无 AI译 / 复制 / 删除），顶部多一行
-/// 「类型 + 经名 + 时间」用于时间线溯源。
+/// 与汇总页的差别：顶部多一行「类型 + 经名 + 时间」用于时间线溯源；
+/// 卡片本身不内嵌编辑 / 删除入口（备注、笔记的编辑由记录页在点击时打开），
+/// 但经名可点，进入该经阅读页。
 
-/// 感想正文色：三页统一使用的深绿，两种外观下保持一致。
+/// 备注正文色：三页统一使用的深绿，两种外观下保持一致。
 const Color _thoughtColor = Color(0xFF3D5C3A);
 
-/// 感想气泡底色：米黄外观沿用汇总页的暖灰，素白外观改同色系冷灰。
+/// 类型标记底色：取 App 既有色系（黑 / 红 / 绿），一律配白字，避免突兀。
+/// 黑取正文黑、红取草稿与广场删除同款、绿取素白外观主绿。
+const Color _noteMarkBg = Color(0xFF1C1C1C);
+const Color _thoughtMarkBg = Color(0xFFC0392B);
+const Color _highlightMarkBg = Color(0xFF5D7C5A);
+
+/// 备注气泡底色：米黄外观沿用汇总页的暖灰，素白外观改同色系冷灰。
 Color get _thoughtBubble {
   return AppPalette.instance.isPlain
       ? const Color(0xFFF1F4F1)
@@ -33,6 +40,7 @@ class RecordCardHead extends StatelessWidget {
     required this.timeText,
     this.footnote,
     this.showTime = true,
+    this.onTapSutraName,
   });
 
   final RecordType type;
@@ -45,28 +53,34 @@ class RecordCardHead extends StatelessWidget {
   /// 角标补充说明（如「已分享」「原文待补全」）。
   final String? footnote;
 
+  /// 点击经名：进入该经的阅读页。
+  final VoidCallback? onTapSutraName;
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
-    final accent = p.accent;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
-          _typeMark(type, accent),
+          _typeMark(type),
           const SizedBox(width: 6),
           Flexible(
-            child: Text(
-              sutraName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 17,
-                height: 1.3,
-                // 经名是纯黑标题，不随外观变灰。
-                color: Colors.black,
-                // 经名加粗，一眼看清是哪部经的记录。
-                fontWeight: FontWeight.w700,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onTapSutraName,
+              child: Text(
+                sutraName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 17,
+                  height: 1.3,
+                  // 经名是纯黑标题，不随外观变灰。
+                  color: Colors.black,
+                  // 经名加粗，一眼看清是哪部经的记录。
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ),
@@ -88,19 +102,39 @@ class RecordCardHead extends StatelessWidget {
     );
   }
 
-  Widget _typeMark(RecordType type, Color accent) {
+  Widget _typeMark(RecordType type) {
     switch (type) {
       case RecordType.highlight:
-        return markPill('画线', accent);
+        return _typeBadge('画线', _highlightMarkBg);
       case RecordType.thought:
-        return markPill('感想', accent);
+        return _typeBadge('备注', _thoughtMarkBg);
       case RecordType.note:
-        return markPill('笔记', accent);
+        return _typeBadge('笔记', _noteMarkBg);
     }
   }
 }
 
-/// 类型标记药丸：浅色底 + 深绿字。「画线 / 感想 / 笔记 / 经文」共用同一款样式。
+/// 类型标记：实心底色 + 白字。画线绿、备注红、笔记黑，同排在经名之前。
+Widget _typeBadge(String label, Color bg) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(
+      color: bg,
+      borderRadius: BorderRadius.circular(4),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(
+        fontSize: 12,
+        height: 1.3,
+        fontWeight: FontWeight.w600,
+        color: Colors.white,
+      ),
+    ),
+  );
+}
+
+/// 浅色药丸：浅色底 + 深绿字（备注卡的「经文」引用标记用）。
 Widget markPill(String label, Color accent) {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -127,6 +161,7 @@ class HighlightRecordCard extends StatelessWidget {
     required this.item,
     required this.sutraName,
     required this.timeText,
+    this.onTapSutraName,
   });
 
   final RecordItem item;
@@ -134,6 +169,9 @@ class HighlightRecordCard extends StatelessWidget {
   /// 已统一成「经名 + 卷X」的显示名（由记录页解析后传入）。
   final String sutraName;
   final String timeText;
+
+  /// 点击经名：进入该经阅读页。
+  final VoidCallback? onTapSutraName;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +192,7 @@ class HighlightRecordCard extends StatelessWidget {
             sutraName: sutraName,
             timeText: timeText,
             footnote: text.isEmpty ? '原文待补全' : null,
+            onTapSutraName: onTapSutraName,
           ),
           if (text.isEmpty)
             // 云端回填的画线没有段落原文（接口不返回），只标出位置。
@@ -182,7 +221,7 @@ class HighlightRecordCard extends StatelessWidget {
   }
 }
 
-/// 感想条：上方经文引用（长文 3 行折叠），下方浅色感想气泡（120 字折叠）。
+/// 备注条：上方经文引用（长文 3 行折叠），下方浅色备注气泡（120 字折叠）。
 class ThoughtRecordCard extends StatelessWidget {
   const ThoughtRecordCard({
     super.key,
@@ -193,6 +232,7 @@ class ThoughtRecordCard extends StatelessWidget {
     required this.noteExpanded,
     this.onTogglePara,
     this.onToggleNote,
+    this.onTapSutraName,
   });
 
   final RecordItem item;
@@ -200,15 +240,20 @@ class ThoughtRecordCard extends StatelessWidget {
   /// 已统一成「经名 + 卷X」的显示名（由记录页解析后传入）。
   final String sutraName;
   final String timeText;
+
+  /// 段落原文与备注是否展开。
   final bool paraExpanded;
   final bool noteExpanded;
   final VoidCallback? onTogglePara;
   final VoidCallback? onToggleNote;
 
-  /// 经文折叠阈值（与「感想」页一致）。
+  /// 点击经名：进入该经阅读页。
+  final VoidCallback? onTapSutraName;
+
+  /// 经文折叠阈值（与「备注」页一致）。
   static const int paraFoldThreshold = 60;
 
-  /// 感想折叠阈值（与「感想」页一致）。
+  /// 备注折叠阈值（与「备注」页一致）。
   static const int noteFoldThreshold = 120;
 
   @override
@@ -234,12 +279,12 @@ class ThoughtRecordCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            RecordCardHead(
-              type: RecordType.thought,
-              sutraName: sutraName,
-              timeText: timeText,
-              footnote: para.isEmpty ? '原文待补全' : null,
-            ),
+          RecordCardHead(
+            type: RecordType.thought,
+            sutraName: sutraName,
+            timeText: timeText,
+            onTapSutraName: onTapSutraName,
+          ),
             if (para.isNotEmpty) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -315,6 +360,7 @@ class SutraNoteRecordCard extends StatelessWidget {
     required this.timeText,
     required this.expanded,
     this.onToggleExpand,
+    this.onTapSutraName,
   });
 
   final RecordItem item;
@@ -324,6 +370,9 @@ class SutraNoteRecordCard extends StatelessWidget {
   final String timeText;
   final bool expanded;
   final VoidCallback? onToggleExpand;
+
+  /// 点击经名：进入该经阅读页。
+  final VoidCallback? onTapSutraName;
 
   /// 折叠阈值（与「读经笔记」页一致）。
   static const int foldThreshold = 120;
@@ -359,6 +408,7 @@ class SutraNoteRecordCard extends StatelessWidget {
               sutraName: sutraName.isEmpty ? '未标注经名' : sutraName,
               timeText: timeText,
               showTime: false,
+              onTapSutraName: onTapSutraName,
             ),
             Text(
               shown,
@@ -422,7 +472,7 @@ class SutraNoteRecordCard extends StatelessWidget {
   }
 }
 
-/// 展开 / 收起链接（与「感想」页一致：文字 + 箭头）。
+/// 展开 / 收起链接（与「备注」页一致：文字 + 箭头）。
 Widget _foldLink({
   required bool expanded,
   required VoidCallback? onTap,

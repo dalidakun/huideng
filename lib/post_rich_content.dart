@@ -1,10 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'dart:math' show pow;
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'auth_service.dart';
@@ -17,8 +14,10 @@ import 'post_time_link.dart';
 import 'reading_badges.dart';
 import 'reading_note_post.dart';
 import 'reading_page.dart';
+import 'sect_community_page.dart' show communityTone;
+import 'sect_switch.dart';
+import 'sutra_availability.dart';
 import 'sutra_downloader.dart';
-import 'sutra_edit_page.dart' show editedSutraFilePath;
 import 'sutra_list_page.dart';
 import 'text_input_sheet.dart';
 import 'user_avatar.dart';
@@ -44,6 +43,33 @@ double discussionHotScore(int createdAt, int engagement) {
       ((DateTime.now().millisecondsSinceEpoch - createdAt) / 3600000)
           .clamp(0, double.infinity);
   return (1 + engagement) / pow(ageHours + 2, 1.3);
+}
+
+/// 经书讨论页「画线 / 备注 / 笔记」三个标签的归类。
+enum SutraNoteKind { highlight, remark, note }
+
+/// 把一条引用本经的帖子归入唯一一类（三个标签互斥、不重复）：
+///   1. 画线分享帖（§§HS§§）            → [SutraNoteKind.highlight]
+///   2. 按段感想 / 读经备注（§§TS§§ 或 单条「读经备注」分享）→ [SutraNoteKind.remark]
+///   3. 读经笔记汇总帖（§§SN§§）        → [SutraNoteKind.note]
+///   4. 其余（普通 $经名 引用帖等）      → [SutraNoteKind.note]
+///
+/// 注意判定顺序：画线帖与读经笔记汇总帖的正文也符合单条「读经备注」的形态，
+/// 必须先按哨兵排除，否则它们会同时落进「备注」，造成三个标签串味。
+SutraNoteKind classifySutraNote(String content) {
+  if (SutraHighlightsPost.isHighlightsPost(content)) {
+    return SutraNoteKind.highlight;
+  }
+  if (SutraThoughtsPost.isThoughtsPost(content)) {
+    return SutraNoteKind.remark;
+  }
+  if (SutraNotesPost.isSutraNotesPost(content)) {
+    return SutraNoteKind.note;
+  }
+  if (ReadingNotePost.isReadingNote(content)) {
+    return SutraNoteKind.remark;
+  }
+  return SutraNoteKind.note;
 }
 
 /// `[@账号](user:用户ID)` 提及用户、`$经书名` 引用经文、`#话题名` 话题；
@@ -196,22 +222,16 @@ class SutraDiscussionPage extends StatefulWidget {
   State<SutraDiscussionPage> createState() => _SutraDiscussionPageState();
 }
 
-class _SutraDiscussionPageState extends State<SutraDiscussionPage>
-    with WidgetsBindingObserver {
-  /// 云端讨论列表（最新在前），每条为 {id, content, name, userId, account,
-  /// verified, likeCount, at} 结构，所有用户共享。
-  List<Map<String, dynamic>> _comments = [];
+class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
   bool _loading = true;
-  bool _commentsLoading = true;
   bool _downloaded = false;
   bool _downloading = false;
 
-  /// 每条讨论独立的本地点赞/收藏状态（按云端讨论 id 记录）。
-  final Set<String> _likedCommentIds = {};
-  final Set<String> _favCommentIds = {};
-
-  /// 广场上引用该经书（$经名 / @经名）的帖子：与讨论混排在统一列表里。
+  /// 广场上引用该经书（$经名 / @经名）的帖子：备注 / 笔记标签页的数据源。
   List<PlazaNote> _relatedNotes = [];
+
+  /// 相关帖子（笔记/备注）是否正在加载。
+  bool _relatedLoading = false;
 
   /// 相关帖子的本地点藏状态（按帖子 id 记录）。
   final Set<String> _relatedFavIds = {};
@@ -219,62 +239,41 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
   /// 经书目录映射：渲染相关帖子里的 $经名/@经名 链接。
   Map<String, NoteSutraLink> _sutraLibrary = const {};
 
-  /// 按卷区分的讨论键（如「高僧传卷十一」）：目录就绪后计算。
-  /// 多卷经书按卷拆分讨论；单卷经书或无法定位卷时为基础经名。null 表示未就绪。
-  String? _discussionKey;
-
-  /// 讨论键对应的卷号（0 表示未知/无卷号）。
+  /// 按卷区分相关帖子时用到的卷号（0 表示未知/无卷号）。
   int _discussionVolume = 0;
 
-  /// 新讨论提醒：后台静默统计新讨论数量，只更新「显示X帖子」提醒条与悬浮按钮，
-  /// 不自动刷新列表，点击提醒或下拉才手动刷出，避免浏览时被打断。
+  /// 相关帖子的滚动控制器。
   final ScrollController _scroll = ScrollController();
-  final GlobalKey _topSectionKey = GlobalKey();
-  double _topSectionHeight = 0;
-  bool _showNewPostPill = false;
-  Timer? _newPostTimer;
-  bool _newPostChecking = false;
-  bool _appActive = true;
-  int _newPostCount = 0;
-  static const Duration _newPostCheckInterval = Duration(seconds: 30);
-  static const int _pageSize = 50;
+
+  /// 当前选中的标签页：0=画线，1=备注，2=笔记。
+  int _currentTab = 0;
 
   @override
   void initState() {
     super.initState();
     _checkDownload();
-    _scroll.addListener(_onScroll);
-    WidgetsBinding.instance.addObserver(this);
-    _newPostTimer =
-        Timer.periodic(_newPostCheckInterval, (_) => _checkNewPosts());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopSection());
-    // 经书目录（含多卷经名集合）就绪后计算按卷区分的讨论键，再加载讨论与相关帖子：
-    // 多卷经书的讨论按卷拆分（「高僧传卷十一」与「高僧传卷一」分开显示）。
-    // 目录加载失败时也继续（退回基础经名键），不能卡住页面。
+    // 经书目录（含多卷经名集合）就绪后计算按卷区分的卷号，再加载相关帖子：
+    // 多卷经书的相关帖子按卷拆分，避免各卷混在一起。
+    // 目录加载失败时也继续（退回基础经名），不能卡住页面。
     NoteSutraCatalog.load()
         .then((_) => _onCatalogReady(), onError: (_) => _onCatalogReady());
   }
 
   void _onCatalogReady() {
     if (!mounted) return;
-    _initDiscussionKey();
+    _initVolume();
     setState(() {});
-    _loadComments();
     _loadRelatedNotes();
   }
 
-  /// 计算按卷区分的讨论键：标题或 filePath 能定位具体卷且为多卷经书时，
-  /// 用「基础经名+卷X」（如「高僧传卷十一」）作键；否则用基础经名。
-  void _initDiscussionKey() {
-    final bases = NoteSutraCatalog.cachedMultiVolumeBases;
+  /// 计算按卷区分的卷号：标题或 filePath 能定位具体卷时取其卷号，否则为 0。
+  void _initVolume() {
     var t = widget.title;
     if (sutraVolumeOf(t) <= 0 && widget.filePath.isNotEmpty) {
       final id = SutraDownloader.extractId(null, widget.filePath);
       if (id != null) t = '${widget.title}$id';
     }
     _discussionVolume = sutraVolumeOf(t);
-    _discussionKey = sutraDisplayNameWithVolume(t,
-        multiVolumeBases: bases, applyTitleOverride: false);
   }
 
   /// 经书展示名：从带卷标的链接进入时（filePath 指向具体卷）显示具体卷标；
@@ -284,162 +283,19 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 只暂停/恢复新讨论数量统计，不自动刷新列表。
-    _appActive = state == AppLifecycleState.resumed;
-  }
-
-  @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _newPostTimer?.cancel();
-    _newPostTimer = null;
     _scroll.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    _measureTopSectionOnce();
-    _updateNewPostPill();
-  }
-
-  void _measureTopSectionOnce() {
-    if (_topSectionHeight > 0) return;
-    final ctx = _topSectionKey.currentContext;
-    final box = ctx?.findRenderObject();
-    if (box is RenderBox && box.size.height > 0) {
-      _topSectionHeight = box.size.height;
-    }
-  }
-
-  void _measureTopSection() {
-    final ctx = _topSectionKey.currentContext;
-    final box = ctx?.findRenderObject();
-    if (box is RenderBox && box.size.height > 0) {
-      _topSectionHeight = box.size.height;
-    }
-  }
-
-  /// 计算悬浮「显示X帖子」按钮是否可见：有新讨论且已滚动到顶部区域被隐藏。
-  void _updateNewPostPill() {
-    final show = _newPostCount > 0 &&
-        _topSectionHeight > 0 &&
-        _scroll.hasClients &&
-        _scroll.offset >= _topSectionHeight + 60;
-    if (show != _showNewPostPill) {
-      setState(() => _showNewPostPill = show);
-    }
-  }
-
-  /// 后台静默统计本经书的新讨论数量：只更新「显示X帖子」提醒，不刷新列表。
-  Future<void> _checkNewPosts() async {
-    if (!mounted || !_appActive || _newPostChecking) return;
-    final key = _discussionKey;
-    if (key == null) return;
-    if (_comments.isEmpty || _commentsLoading) return;
-    _newPostChecking = true;
-    try {
-      final (list, _, _) = await CloudNotesService.instance
-          .getSutraDiscussions(sutraTitle: key, pageSize: _pageSize);
-      if (!mounted) return;
-      final known =
-          _comments.map((c) => c['id']?.toString()).whereType<String>().toSet();
-      final count = list
-          .where((c) =>
-              (c['id']?.toString() ?? '').isNotEmpty &&
-              !known.contains(c['id']?.toString()))
-          .length;
-      if (count > 0 && count != _newPostCount) {
-        setState(() => _newPostCount = count);
-        _updateNewPostPill();
-      }
-    } catch (_) {
-      // 静默失败，下一轮再试。
-    } finally {
-      _newPostChecking = false;
-    }
-  }
-
-  /// 点击提醒条 / 悬浮按钮：回到讨论顶部，同时刷新出新讨论。
-  Future<void> _refreshFromPill() async {
-    if (_scroll.hasClients) {
-      await _scroll.animateTo(0,
-          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-    }
-    await _loadComments();
-  }
-
-  /// 「显示X帖子」提醒条：仅一行文字，点击立即刷新出这些新讨论。
-  Widget _buildNewPostBanner() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-      child: InkWell(
-        onTap: _refreshFromPill,
-        child: Text(
-          '显示$_newPostCount帖子',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF70867A)),
-        ),
-      ),
-    );
-  }
-
-  /// 悬浮的新讨论按钮：白字 + 70867A 纯色椭圆胶囊，滚动后顶部落出屏幕时展示。
-  Widget _buildNewPostPill() {
-    return Center(
-      child: Material(
-        color: const Color(0xFF70867A),
-        borderRadius: BorderRadius.circular(999),
-        elevation: 4,
-        child: InkWell(
-          onTap: _refreshFromPill,
-          borderRadius: BorderRadius.circular(999),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.arrow_upward, size: 15, color: Colors.white),
-                const SizedBox(width: 5),
-                Text('显示$_newPostCount帖子',
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 检测经文是否已在本地可读：与阅读页加载正文的口径一致，
-  /// 依次检查「本地编辑副本」「本地下载副本」，其次按 ID 判断下载目录。
-  /// 有云端管理员排版版时阅读页只落盘编辑副本（不写下载副本），
-  /// 只查下载副本会把已经能阅读的经书误判成未下载。
+  /// 检测经文是否已下载：统一走 [isSutraDownloaded]，与经藏页/热门榜/收藏等
+  /// 所有入口共用同一口径。只要任一入口下载过，这里都会显示「已下载」，
+  /// 不再因入口不同（路径形式、是否只落盘编辑副本等）而误判成未下载。
   Future<void> _checkDownload() async {
-    var ok = false;
-    final path = widget.filePath;
-    try {
-      if (path.isNotEmpty) {
-        final edited = File(await editedSutraFilePath(path));
-        ok = await edited.exists();
-      }
-      if (!ok && path.startsWith('assets/sutras_ascii/')) {
-        final local = await SutraDownloader.localFileForAssetPath(path);
-        ok = local != null;
-      }
-      if (!ok) {
-        final id = SutraDownloader.extractId(widget.title, widget.filePath);
-        if (id != null && id.isNotEmpty) {
-          ok = await SutraDownloader.isDownloaded(id);
-        }
-      }
-    } catch (_) {}
+    final ok = await isSutraDownloaded(
+      title: widget.title,
+      filePath: widget.filePath,
+    );
     if (!mounted) return;
     setState(() {
       _downloaded = ok;
@@ -447,52 +303,24 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     });
   }
 
-  /// 未下载时点击弹出下载确认；已下载不弹出。
-  Future<void> _onTapCard() async {
-    if (_loading || _downloading || _downloaded) return;
-    final shouldDownload = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('经文尚未下载',
-            style: TextStyle(
-                color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('《$_displayTitle》的正文尚未下载，是否现在下载？下载完成即可阅读。',
-            style: TextStyle(color: _textSec)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消', style: TextStyle(color: _textSec)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _gold),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('下载'),
-          ),
-        ],
-      ),
-    );
-    if (shouldDownload == true && mounted) {
-      await _downloadSutra();
-    }
-  }
-
-  /// 下载经文，完成后仅切换为对号图标，不自动打开正文。
-  Future<void> _downloadSutra() async {
+  /// 下载经文并在按钮上转圈；[thenRead] 为真时下载完成后直接进入阅读页。
+  Future<void> _downloadSutra({bool thenRead = false}) async {
     if (_downloading) return;
     setState(() => _downloading = true);
     try {
-      final id = SutraDownloader.extractId(widget.title, widget.filePath);
+      final id = await resolveSutraId(
+          title: widget.title, filePath: widget.filePath);
       if (id == null || id.isEmpty) {
         throw Exception('无法解析经文');
       }
       await SutraDownloader.download(id);
+      await markSutraDownloaded(id);
       if (!mounted) return;
       setState(() {
         _downloading = false;
         _downloaded = true;
       });
+      if (thenRead) _openRead();
     } catch (e) {
       if (!mounted) return;
       setState(() => _downloading = false);
@@ -513,49 +341,11 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     );
   }
 
-  Future<void> _loadComments() async {
-    final key = _discussionKey;
-    if (key == null) return;
-    try {
-      final (list, _, _) = await CloudNotesService.instance
-          .getSutraDiscussions(sutraTitle: key, pageSize: _pageSize);
-      var merged = list;
-      // 卷拆分之前的历史讨论存在基础经名键下：并入卷一展示避免丢失，
-      // 其余卷只显示本卷讨论。
-      final base = sutraBaseTitle(widget.title);
-      if (_discussionVolume == 1 && base != key) {
-        try {
-          final (legacy, _, _) = await CloudNotesService.instance
-              .getSutraDiscussions(sutraTitle: base, pageSize: _pageSize);
-          final ids = merged.map((c) => c['id']?.toString()).toSet();
-          merged = [
-            ...merged,
-            ...legacy.where((c) => !ids.contains(c['id']?.toString())),
-          ];
-          merged.sort((a, b) => ((b['at'] as num?)?.toInt() ?? 0)
-              .compareTo((a['at'] as num?)?.toInt() ?? 0));
-        } catch (_) {
-          // 历史数据拉取失败不影响本卷讨论展示。
-        }
-      }
-      if (!mounted) return;
-      setState(() {
-        _comments = merged;
-        _commentsLoading = false;
-        _newPostCount = 0;
-      });
-      _updateNewPostPill();
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _commentsLoading = false);
-    }
-    _migrateLocalComments();
-  }
-
   /// 拉取广场上引用本经书的帖子（$经名 / @经名），与讨论混排在统一列表里。
   /// 能定位具体卷时只取引用本卷的帖子（卷一含只写基础经名的引用），
   /// 避免多卷经书各卷讨论页混在一起。
   Future<void> _loadRelatedNotes() async {
+    if (mounted && !_relatedLoading) setState(() => _relatedLoading = true);
     try {
       if (_sutraLibrary.isEmpty) {
         _sutraLibrary = await NoteSutraCatalog.titleMap();
@@ -571,118 +361,20 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
                 ? NoteSutraLinks.referencesSutra(n.content, base)
                 : referencesSutraVolume(n.content, base, vol))
             .toList();
+        _relatedLoading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _relatedNotes = [];
+        _relatedLoading = false;
       });
     }
   }
 
-  /// 下拉刷新：讨论与「广场相关帖子」一起刷新。
+  /// 下拉刷新：重新拉取「广场相关帖子」（备注 / 笔记数据源）。
   Future<void> _refreshAll() async {
-    await Future.wait([_loadComments(), _loadRelatedNotes()]);
-  }
-
-  /// 合并「广场相关帖子」与「讨论」为单一列表。展示顺序：
-  /// 1) 我刚发布的帖子置顶（仅本次刚发的这一条、30 分钟内有效，
-  ///    只在自己的客户端可见；历史帖一律不置顶）；
-  /// 2) 其余按热度衰减分倒序混排（与发现页同款：热帖靠前、随时间下沉给新帖让位），
-  ///    两路来源用同一把尺子打分，沿用各自的行样式。
-  List<(PlazaNote?, Map<String, dynamic>?)> _mergedRows() {
-    final rows = <(PlazaNote?, Map<String, dynamic>?)>[];
-    for (final n in _relatedNotes) {
-      rows.add((n, null));
-    }
-    for (final c in _comments) {
-      rows.add((null, c));
-    }
-    double score((PlazaNote?, Map<String, dynamic>?) row) {
-      final n = row.$1;
-      if (n != null) {
-        final engagement = n.viewCount +
-            n.likeCount * 3 +
-            n.commentCount * 5 +
-            n.repostCount * 8;
-        return discussionHotScore(n.createdAt, engagement);
-      }
-      final c = row.$2 ?? const {};
-      // 经书讨论只有点赞计数，按 赞×3 折算互动量（与广场赞的权重一致）。
-      final engagement = ((c['likeCount'] as num?)?.toInt() ?? 0) * 3;
-      return discussionHotScore((c['at'] as num?)?.toInt() ?? 0, engagement);
-    }
-
-    String rowId((PlazaNote?, Map<String, dynamic>?) row) =>
-        row.$1?.id ?? row.$2?['id']?.toString() ?? '';
-    bool fresh((PlazaNote?, Map<String, dynamic>?) row) =>
-        CloudNotesService.isRecentlyPublished(rowId(row));
-
-    int createdAt((PlazaNote?, Map<String, dynamic>?) row) =>
-        row.$1?.createdAt ?? (row.$2?['at'] as num?)?.toInt() ?? 0;
-
-    rows.sort((a, b) {
-      final byScore = score(b).compareTo(score(a));
-      if (byScore != 0) return byScore;
-      return createdAt(b).compareTo(createdAt(a));
-    });
-    // 稳定分区：刚发布的帖子整体提到最前，组内相对顺序不变。
-    final mine = rows.where(fresh).toList();
-    return mine.isEmpty ? rows : [...mine, ...rows.where((r) => !fresh(r))];
-  }
-
-  /// 一次性迁移：把旧版本存在本地的讨论上传到云端（仅自己的帖子），
-  /// 让历史发言也能被其他同修看到；全部尝试完成后清空本地并标记已迁移。
-  Future<void> _migrateLocalComments() async {
-    if (!AuthService.instance.isLoggedIn) return;
-    final prefs = await SharedPreferences.getInstance();
-    final migratedKey = 'sutra_discussion_${widget.title}_migrated';
-    if (prefs.getBool(migratedKey) ?? false) return;
-    final raw = prefs.getString('sutra_discussion_${widget.title}') ?? '[]';
-    List<Map<String, dynamic>> local;
-    try {
-      local = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
-    } catch (_) {
-      local = [];
-    }
-    if (local.isEmpty) {
-      await prefs.setBool(migratedKey, true);
-      return;
-    }
-    for (final c in local) {
-      final content = c['content']?.toString() ?? '';
-      if (content.trim().isEmpty) continue;
-      try {
-        await CloudNotesService.instance.createSutraDiscussion(
-          sutraTitle: widget.title,
-          content: content,
-        );
-      } catch (_) {
-        // 单条失败不中断，尽量多迁移；全部尝试完成后本地照常清空，避免重复上传。
-      }
-    }
-    await prefs.remove('sutra_discussion_${widget.title}');
-    await prefs.setBool(migratedKey, true);
-    if (mounted) {
-      await _loadComments();
-    }
-  }
-
-  Future<void> _postComment(String content) async {
-    if (content.isEmpty) return;
-    try {
-      await CloudNotesService.instance.createSutraDiscussion(
-        sutraTitle: _discussionKey ?? widget.title,
-        content: content,
-      );
-      if (!mounted) return;
-      await _loadComments();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('发布失败：$e')),
-      );
-    }
+    await _loadRelatedNotes();
   }
 
   void _promptLogin() {
@@ -692,417 +384,271 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
 
   @override
   Widget build(BuildContext context) {
-    final rows = _mergedRows();
+    final hottest = _hottestNote;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
         backgroundColor: _bg,
         elevation: 0,
-        title: Text('$_displayTitle · 讨论',
-            style: TextStyle(
-                color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
+        // 双击标题回到页面顶部。
+        title: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTap: _scrollToTop,
+          child: Text(_displayTitle,
+              style: TextStyle(
+                  color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
+        ),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Stack(
-              children: [
-                RefreshIndicator(
-                  onRefresh: _refreshAll,
-                  color: _gold,
-                  child: ListView(
-                    controller: _scroll,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                    children: [
-                      // 经书入口：经藏菜单样式（书名 + 下载状态 + 阅读按钮）。
-                      GestureDetector(
-                        key: _topSectionKey,
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _onTapCard,
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-                          decoration: BoxDecoration(
-                            color: _card,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: _border),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 34,
-                                    height: 34,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF70867A)
-                                          .withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(9),
-                                    ),
-                                    child: const Icon(Icons.menu_book_rounded,
-                                        size: 19, color: Color(0xFF70867A)),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(_displayTitle,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w700,
-                                            color: _text)),
-                                  ),
-                                  if (_loading)
-                                    SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: _gold),
-                                    )
-                                  else if (_downloading)
-                                    SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: _gold),
-                                    )
-                                  else
-                                    Icon(
-                                        _downloaded
-                                            ? Icons.check_circle_rounded
-                                            : Icons.download_rounded,
-                                        size: 20,
-                                        color: _downloaded
-                                            ? const Color(0xFF8FBC8F)
-                                            : const Color(0xFFB08878)),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              if (_loading)
-                                Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 10),
-                                  child: Center(
-                                    child: SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: _gold),
-                                    ),
-                                  ),
-                                )
-                              else if (!_downloaded)
-                                Row(
-                                  children: [
-                                    const Icon(
-                                        Icons.download_for_offline_outlined,
-                                        size: 15,
-                                        color: Color(0xFFB08878)),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text('经文尚未下载，点击下载后即可阅读',
-                                          style: TextStyle(
-                                              fontSize: 12, color: _textSec)),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    FilledButton.icon(
-                                      onPressed:
-                                          _downloading ? null : _onTapCard,
-                                      icon: _downloading
-                                          ? const SizedBox(
-                                              width: 15,
-                                              height: 15,
-                                              child: CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                  color: Colors.white))
-                                          : const Icon(Icons.download,
-                                              size: 16),
-                                      label: Text(
-                                          _downloading ? '下载中…' : '下载经文',
-                                          style: const TextStyle(fontSize: 13)),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor:
-                                            const Color(0xFF70867A),
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 14, vertical: 9),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(12)),
-                                      ),
-                                    ),
-                                  ],
-                                )
-                              else
-                                Row(
-                                  children: [
-                                    const Icon(Icons.check_circle_rounded,
-                                        size: 15, color: Color(0xFF8FBC8F)),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text('经文已下载',
-                                          style: TextStyle(
-                                              fontSize: 12, color: _textSec)),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    FilledButton.icon(
-                                      onPressed: _openRead,
-                                      icon: const Icon(Icons.menu_book_rounded,
-                                          size: 16),
-                                      label: const Text('阅读',
-                                          style: TextStyle(fontSize: 13)),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor:
-                                            const Color(0xFF70867A),
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 18, vertical: 9),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(12)),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      // 统一列表：广场相关帖子与讨论合并展示，按时间倒序（最新在前）。
-                      const SizedBox(height: 16),
-                      if (_newPostCount > 0) _buildNewPostBanner(),
-                      const SizedBox(height: 16),
-                      if (_commentsLoading && _comments.isEmpty)
-                        Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
-                          child: Center(
-                            child: SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: _gold),
-                            ),
-                          ),
-                        )
-                      else if (rows.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Center(
-                            child: Text('还没有讨论，来分享你的体会吧',
-                                style:
-                                    TextStyle(fontSize: 13, color: _textHint)),
-                          ),
-                        )
-                      else
-                        for (var i = 0; i < rows.length; i++) ...[
-                          if (i > 0) ...[
-                            const SizedBox(height: 8),
-                            Divider(
-                                height: 1,
-                                thickness: 0.5,
-                                color: AppPalette.p.divider),
-                            const SizedBox(height: 8),
-                          ],
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            child: rows[i].$1 != null
-                                ? _buildRelatedNote(rows[i].$1!)
-                                : _buildCommentRow(rows[i].$2!),
-                          ),
-                        ],
-                    ],
-                  ),
-                ),
-                // 滚动后顶部提醒条被隐藏时的悬浮按钮：回到顶部并刷新出新讨论。
-                Positioned(
-                  top: 8,
-                  left: 0,
-                  right: 0,
-                  child: IgnorePointer(
-                    ignoring: !_showNewPostPill,
-                    child: _showNewPostPill ? _buildNewPostPill() : null,
-                  ),
-                ),
+      // 右下角：进入本经阅读页（未下载时先下载并在按钮上转圈）。
+      floatingActionButton: _buildReadFab(),
+      // 左右滑动切换「画线 / 备注 / 笔记」。
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragEnd: _onHorizontalDragEnd,
+        child: RefreshIndicator(
+          onRefresh: _refreshAll,
+          color: _gold,
+          child: ListView(
+            controller: _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            // 底部留出悬浮按钮的高度，避免遮住最后一条。
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
+            children: [
+              // 顶部卡片：本经最热门的一条笔记（样式同宗门页顶部展示位）。
+              if (hottest != null) ...[
+                _buildHottestCard(hottest),
+                const SizedBox(height: 16),
               ],
-            ),
+              // 三个入口：画线 / 备注 / 笔记（采用宗派法门页的连体切换条样式）。
+              SegmentedSwitch(
+                index: _currentTab,
+                labels: const ['画线', '备注', '笔记'],
+                onChanged: (i) => setState(() => _currentTab = i),
+                tone: communityTone(AppPalette.instance.isPlain),
+              ),
+              // 内容区域
+              const SizedBox(height: 16),
+              if (_currentTab == 0)
+                _buildHighlightsTab()
+              else if (_currentTab == 1)
+                _buildRemarksTab()
+              else
+                _buildNotesTab(),
+            ],
           ),
-          // 讨论输入：点击打开与笔记详情页同款大输入框（500 字）。
-          Container(
-            color: _card,
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: SafeArea(
-              top: false,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _openComposeSheet,
-                child: Container(
-                  height: 42,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.circular(21),
-                  ),
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '说说你的体会…',
-                    style: TextStyle(color: _textHint, fontSize: 14),
+        ),
+      ),
+    );
+  }
+
+  /// 左右滑动切换「画线 / 备注 / 笔记」标签页（与三个按钮联动）。
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0;
+    if (v <= -200 && _currentTab < 2) {
+      setState(() => _currentTab++);
+    } else if (v >= 200 && _currentTab > 0) {
+      setState(() => _currentTab--);
+    }
+  }
+
+  /// 回到页面顶部（双击顶部经文标题触发）。
+  void _scrollToTop() {
+    if (_scroll.hasClients && _scroll.offset > 0) {
+      _scroll.animateTo(0,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+  }
+
+  /// 右下角按钮：进入本经阅读页。样式与「消息」菜单右下角的「继续阅读」按钮一致
+  /// （素白黑底 / 米黄绿底 + yt.png 图标，42 圆）；未下载时先下载并在按钮上转圈。
+  Widget _buildReadFab() {
+    final busy = _loading || _downloading;
+    final isPlain = AppPalette.instance.isPlain;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: FloatingActionButton(
+          heroTag: 'sutra_discuss_read_fab',
+          backgroundColor:
+              isPlain ? const Color(0xFF1A1A1A) : const Color(0xFF71867A),
+          elevation: 8,
+          highlightElevation: 12,
+          shape: const CircleBorder(),
+          onPressed: _onTapReadFab,
+          child: busy
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2.5, color: Colors.white),
+                )
+              : Image.asset('assets/images/yt.png', width: 21, height: 21),
+        ),
+      ),
+    );
+  }
+
+  void _onTapReadFab() {
+    if (_loading || _downloading) return;
+    if (_downloaded) {
+      _openRead();
+    } else {
+      _downloadSutra(thenRead: true);
+    }
+  }
+
+  /// 本经相关笔记里最热的一条（互动量与时间衰减口径同广场热榜）。
+  PlazaNote? get _hottestNote {
+    PlazaNote? best;
+    var bestScore = 0.0;
+    for (final n in _relatedNotes) {
+      final s = discussionHotScore(
+        n.createdAt,
+        n.viewCount + n.likeCount * 3 + n.commentCount * 5 + n.repostCount * 8,
+      );
+      if (best == null || s > bestScore) {
+        best = n;
+        bestScore = s;
+      }
+    }
+    return best;
+  }
+
+  /// 顶部卡片：把本经最热门的一条笔记做成展示位，样式同宗门页顶部展示位
+  /// （淡墨远山铺底 + 火把 + 摘要 + 互动小字 + 右下角「查看笔记」）。
+  Widget _buildHottestCard(PlazaNote n) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Material(
+        color: _card,
+        child: InkWell(
+          onTap: () => _openRelatedDetail(n),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.2,
+                  child: Image.asset(
+                    'assets/menpai/mih.png',
+                    fit: BoxFit.cover,
+                    alignment: Alignment.bottomRight,
+                    filterQuality: FilterQuality.medium,
                   ),
                 ),
               ),
-            ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.local_fire_department,
+                            size: 18, color: Color(0xFFD93B28)),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text('最热门笔记',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  color: _text,
+                                  letterSpacing: 0.8)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${_hottestAuthor(n)}：${_hottestExcerpt(n)}',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: _textSec,
+                          height: 1.55,
+                          letterSpacing: 0.2),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _hottestMeta(n),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: _textSec,
+                                height: 1.5,
+                                letterSpacing: 0.2),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        _buildViewNoteButton(),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// 卡片右下角「查看笔记 ›」按钮：底色随外观切换（素白青绿 / 米黄暖金）。
+  Widget _buildViewNoteButton() {
+    final tone = communityTone(AppPalette.instance.isPlain);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('查看笔记',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: tone,
+                  letterSpacing: 0.4)),
+          Icon(Icons.chevron_right, size: 15, color: tone),
         ],
       ),
     );
   }
 
-  /// 打开与笔记详情页同款的大输入弹层（SheetTextInput，500 字、多行）。
-  void _openComposeSheet() {
-    if (!AuthService.instance.isLoggedIn) {
-      _promptLogin();
-      return;
-    }
-    showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _card,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => const SheetTextInput(
-        title: '讨论',
-        hint: '说说你的体会…',
-        maxLength: 500,
-        minLines: 3,
-        maxLines: 10,
-        confirmText: '发表',
-      ),
-    ).then((content) {
-      if (content != null && content.isNotEmpty) _postComment(content);
-    });
+  String _hottestAuthor(PlazaNote n) {
+    final name = n.authorName.trim();
+    if (name.isNotEmpty) return name;
+    final account = n.authorAccount.trim();
+    if (account.isNotEmpty) return '@$account';
+    return '同修';
   }
 
-  /// 讨论行：与主页帖子同款（头像 + 昵称/认证/@账号，内容下方时间 + 四个指标）。
-  Widget _buildCommentRow(Map<String, dynamic> c) {
-    final userId = c['userId']?.toString() ?? '';
-    final account = c['account']?.toString() ?? '';
-    final verified = c['verified'] == true;
-    // 阅藏进度百分比：自己的讨论用本地实时统计，他人的用云端数据（与主页帖子一致）。
-    final me = AuthService.instance.currentUser.value;
-    final pct = postCanonPercent(
-      isSelf: me != null && userId.isNotEmpty && me.id == userId,
-      cloudRead: (c['canonRead'] as num?)?.toInt() ?? 0,
-      cloudTotal: (c['canonTotal'] as num?)?.toInt() ?? 0,
-    );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        UserAvatar(userId: userId.isNotEmpty ? userId : null, radius: 22),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Flexible(
-                          child: Text(c['name']?.toString() ?? '同修',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: _text)),
-                        ),
-                        if (verified) ...[
-                          const SizedBox(width: 3),
-                          const Icon(Icons.verified,
-                              size: 14, color: Color(0xFF70867A)),
-                        ],
-                        if (account.isNotEmpty) ...[
-                          const SizedBox(width: 3),
-                          Flexible(
-                            // 点击 @账号 进入该用户个人主页（青色提示可点击）。
-                            child: AccountLink(
-                              account: account,
-                              onTap: () {
-                                if (userId.isNotEmpty) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                        builder: (_) =>
-                                            UserSpacePage(userId: userId)),
-                                  );
-                                }
-                              },
-                            ),
-                          ),
-                          // 阅藏进度百分比：灰色（时间戳同色），前后各一个圆点分隔（与主页帖子同款）。
-                          const SizedBox(width: 3),
-                          Text('·',
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF8C8C8C))),
-                          const SizedBox(width: 2),
-                          Text(pct,
-                              maxLines: 1,
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF8C8C8C))),
-                        ],
-                      ],
-                    ),
-                  ),
-                  // 右侧三点菜单：与主页帖子一致（自己的讨论可删除，他人的可关注/屏蔽）。
-                  if (AuthService.instance.isLoggedIn)
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => _showCommentMenu(c),
-                      child: const Padding(
-                        padding: EdgeInsets.all(2),
-                        child: Icon(Icons.more_horiz,
-                            size: 18, color: Color(0xFF8C8C8C)),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(c['content']?.toString() ?? '',
-                  style: TextStyle(fontSize: 15, color: _text, height: 1.6)),
-              // 发布时间：放在内容和指标行之间（与主页帖子同款）。
-              const SizedBox(height: 6),
-              Text(
-                _fmtTime((c['at'] as num?)?.toInt() ?? 0),
-                style: const TextStyle(fontSize: 12, color: Color(0xFF8C8C8C)),
-              ),
-              const SizedBox(height: 10),
-              _buildCommentMetricRow(c),
-            ],
-          ),
-        ),
-      ],
-    );
+  String _hottestExcerpt(PlazaNote n) {
+    final title = n.title.trim();
+    final raw = title.isNotEmpty && title != '无标题' ? title : n.content;
+    final text =
+        NoteSutraLinks.plainText(raw).replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.isEmpty ? '（无正文）' : text;
   }
 
-  /// 讨论的四个指标：评论/转发/点赞/阅读（与笔记详情页操作行同款样式）。
-  /// 收藏与分享已移至讨论右上角三点菜单。
-  Widget _buildCommentMetricRow(Map<String, dynamic> c) {
-    final id = c['id']?.toString() ?? '';
-    final liked = id.isNotEmpty && _likedCommentIds.contains(id);
-    return buildStatsRow(
-      commentCount: 0,
-      repostCount: 0,
-      likeCount: (c['likeCount'] as num?)?.toInt() ?? 0,
-      viewCount: 0,
-      liked: liked,
-      onLike: () => setState(() {
-        final likeCount =
-            ((c['likeCount'] as num?)?.toInt() ?? 0) + (liked ? -1 : 1);
-        c['likeCount'] = likeCount < 0 ? 0 : likeCount;
-        if (id.isEmpty) return;
-        if (!_likedCommentIds.remove(id)) _likedCommentIds.add(id);
-      }),
-    );
+  String _hottestMeta(PlazaNote n) {
+    final parts = <String>[
+      if (n.createdAt > 0) _fmtTime(n.createdAt),
+      if (n.likeCount > 0) '${n.likeCount} 赞',
+      if (n.commentCount > 0) '${n.commentCount} 回复',
+      if (n.viewCount > 0) '${n.viewCount} 阅读',
+    ];
+    return parts.join(' · ');
   }
 
   /// 广场相关帖子行：与话题页帖子同款（头像 + 昵称/认证/@账号/时间 + 正文 + 指标），
@@ -1329,132 +875,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
     }
   }
 
-  /// 讨论右侧三点菜单：收藏/分享讨论 + 自己的讨论可删除，他人的可关注/屏蔽
-  /// （与笔记详情页评论三点菜单同款样式）。
-  Future<void> _showCommentMenu(Map<String, dynamic> c) async {
-    final me = AuthService.instance.currentUser.value;
-    final userId = c['userId']?.toString() ?? '';
-    final name = c['name']?.toString() ?? '同修';
-    if (me == null) {
-      _promptLogin();
-      return;
-    }
-    final id = c['id']?.toString() ?? '';
-    final favorited = id.isNotEmpty && _favCommentIds.contains(id);
-    final isOwn = userId.isNotEmpty && me.id == userId;
-    final following =
-        CloudNotesService.instance.followingUserIds.contains(userId);
-    final blocked = CloudNotesService.instance.blockedUserIds.contains(userId);
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: _card,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-              child: Text(name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
-            ),
-            Divider(height: 1, color: _border),
-            _menuItem(
-                ctx,
-                'favorite',
-                favorited
-                    ? Icons.bookmark_rounded
-                    : Icons.bookmark_border_rounded,
-                favorited ? '取消收藏' : '收藏讨论'),
-            _menuItem(ctx, 'share', Icons.share_rounded, '分享讨论'),
-            if (isOwn)
-              _menuItem(ctx, 'delete', Icons.delete_outline, '删除讨论')
-            else if (userId.isNotEmpty) ...[
-              _menuItem(ctx, following ? 'unfollow' : 'follow',
-                  Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
-              _menuItem(ctx, blocked ? 'unblock' : 'block',
-                  Icons.block_outlined, blocked ? '取消屏蔽' : '屏蔽该用户'),
-            ],
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (choice == null || !mounted) return;
-    if (choice == 'favorite') {
-      setState(() {
-        if (id.isEmpty) return;
-        if (!_favCommentIds.remove(id)) _favCommentIds.add(id);
-      });
-      return;
-    }
-    if (choice == 'share') {
-      await _shareComment(c);
-      return;
-    }
-    if (choice == 'delete') {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: _card,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('删除讨论',
-              style: TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.w600, color: _text)),
-          content: Text('删除后该讨论将从本经书的讨论区移除，无法恢复。确定删除吗？',
-              style: TextStyle(fontSize: 14, color: _textSec)),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text('取消', style: TextStyle(color: _textSec)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除',
-                  style: TextStyle(
-                      color: Color(0xFFC0392B), fontWeight: FontWeight.w600)),
-            ),
-          ],
-        ),
-      );
-      if (ok != true || !mounted) return;
-      try {
-        await CloudNotesService.instance
-            .deleteSutraDiscussion(c['id']?.toString() ?? '');
-        if (!mounted) return;
-        _showToast('已删除');
-        await _loadComments();
-      } catch (e) {
-        if (!mounted) return;
-        _showToast('删除失败：$e');
-      }
-      return;
-    }
-    try {
-      if (choice == 'follow' || choice == 'unfollow') {
-        final ok = await CloudNotesService.instance.toggleFollow(userId);
-        if (!mounted) return;
-        _showToast(ok ? '已关注' : '已取消关注');
-      } else if (choice == 'block') {
-        final ok = await CloudNotesService.instance.toggleBlockUser(userId);
-        if (!mounted) return;
-        _showToast(ok ? '已屏蔽，该用户帖子不再展示' : '已取消屏蔽');
-      } else if (choice == 'unblock') {
-        final ok = await CloudNotesService.instance.toggleBlockUser(userId);
-        if (!mounted) return;
-        _showToast(ok ? '已屏蔽' : '已取消屏蔽');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      _showToast(e.toString());
-    }
-  }
-
   /// 相关帖子右侧三点菜单：收藏/分享帖子 + 自己的帖子可编辑/删除，他人的可关注/屏蔽
   /// （与笔记详情页回复三点菜单同款样式）。
   Future<void> _showRelatedMenu(PlazaNote n) async {
@@ -1678,25 +1098,6 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       ));
   }
 
-  /// 分享一条讨论到系统分享面板（与笔记详情页 _share 同款文案模板）。
-  Future<void> _shareComment(Map<String, dynamic> c) async {
-    final content = (c['content']?.toString() ?? '').trim();
-    final name = c['name']?.toString() ?? '同修';
-    final plain = NoteSutraLinks.plainText(content);
-    final text =
-        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
-        '———来自【燃灯】App · $name 的经书讨论分享\n'
-        '燃一盏灯，看见自己，照亮别人\n'
-        '点击进入八千大藏经世界\n'
-        '下载链接：';
-    try {
-      await SharePlus.instance.share(ShareParams(text: text));
-    } catch (e) {
-      if (!mounted) return;
-      _showToast('分享失败：$e');
-    }
-  }
-
   /// 分享一条广场相关帖子到系统分享面板。
   Future<void> _shareNote(PlazaNote n) async {
     final plain = NoteSutraLinks.plainText(n.content);
@@ -1712,6 +1113,94 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage>
       if (!mounted) return;
       _showToast('分享失败：$e');
     }
+  }
+
+  /// 判断一条广场笔记是否是本经的「备注」（按段感想 / 单段笔记）：
+  /// 「备注」标签页只展示同修的备注类分享。
+  bool _isKind(PlazaNote n, SutraNoteKind kind) =>
+      classifySutraNote(n.content) == kind;
+
+  /// 相关帖子加载中的占位（备注 / 笔记标签页共用）。
+  Widget _buildRelatedLoading() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Center(
+        child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _gold)),
+      ),
+    );
+  }
+
+  /// 相关帖子空态占位。
+  Widget _buildRelatedEmpty(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Center(
+        child: Text(text,
+            style: TextStyle(fontSize: 13, color: _textHint)),
+      ),
+    );
+  }
+
+  /// 把一批相关帖子渲染为带分割线的列表。
+  Widget _buildRelatedList(List<PlazaNote> notes) {
+    return Column(
+      children: [
+        for (var i = 0; i < notes.length; i++) ...[
+          if (i > 0) ...[
+            const SizedBox(height: 8),
+            Divider(height: 1, thickness: 0.5, color: AppPalette.p.divider),
+            const SizedBox(height: 8),
+          ],
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: _buildRelatedNote(notes[i]),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 「画线」标签页：该经文所有用户分享到菩提空间的画线汇总。
+  Widget _buildHighlightsTab() {
+    if (_relatedLoading && _relatedNotes.isEmpty) {
+      return _buildRelatedLoading();
+    }
+    final lines = _relatedNotes
+        .where((n) => _isKind(n, SutraNoteKind.highlight))
+        .toList();
+    if (lines.isEmpty) {
+      return _buildRelatedEmpty('还没有同修分享画线');
+    }
+    return _buildRelatedList(lines);
+  }
+
+  /// 「备注」标签页：该经文所有用户分享到菩提空间的备注（按段感想）。
+  Widget _buildRemarksTab() {
+    if (_relatedLoading && _relatedNotes.isEmpty) {
+      return _buildRelatedLoading();
+    }
+    final remarks =
+        _relatedNotes.where((n) => _isKind(n, SutraNoteKind.remark)).toList();
+    if (remarks.isEmpty) {
+      return _buildRelatedEmpty('还没有同修分享备注');
+    }
+    return _buildRelatedList(remarks);
+  }
+
+  /// 「笔记」标签页：该经文所有用户分享到菩提空间的笔记汇总。
+  Widget _buildNotesTab() {
+    if (_relatedLoading && _relatedNotes.isEmpty) {
+      return _buildRelatedLoading();
+    }
+    final notes =
+        _relatedNotes.where((n) => _isKind(n, SutraNoteKind.note)).toList();
+    if (notes.isEmpty) {
+      return _buildRelatedEmpty('还没有同修分享笔记');
+    }
+    return _buildRelatedList(notes);
   }
 
   String _fmtTime(int ms) {

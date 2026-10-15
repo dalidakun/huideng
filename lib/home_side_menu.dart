@@ -11,13 +11,13 @@ import 'user_avatar.dart';
 ///
 /// 自上而下：头像、昵称 + 认证徽章（或「获得认证」提示）与 @账户名（右侧为阅藏进度圆环），
 /// 其下为累计读经时长（原样式），两者同步更新，
-/// 随后是菜单项：个人资料、笔记、书签、关注、设置、登录或退出登录。
+/// 随后是菜单项：个人资料、时间线、书签、关注、设置、登录或退出登录。
 /// 点击面板外的遮罩即可关闭，面板上不放关闭按钮。
 class HomeSideMenu extends StatefulWidget {
   /// 点击「个人资料」。
   final VoidCallback onOpenProfile;
 
-  /// 点击「记录」（读经画线/感想/笔记的时间线）。
+  /// 点击「时间线」（读经画线/备注/笔记按时间汇成的流水）。
   final VoidCallback onOpenRecord;
 
   /// 点击「书签」（我收藏的笔记）。
@@ -146,8 +146,8 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                     onTap: widget.onOpenProfile,
                   ),
                   _buildItem(
-                    (_) => const _RecordMenuIcon(),
-                    '笔记',
+                    (_) => const _TimelineMenuIcon(),
+                    '时间线',
                     onTap: widget.onOpenRecord,
                   ),
                   _buildItem(
@@ -437,22 +437,6 @@ class _ProfileMenuIcon extends StatelessWidget {
   }
 }
 
-/// 侧边菜单「笔记」图标：沿用原底部菜单那组资源，
-/// 两种外观统一用黑色 bcode1.png，与同排矢量图标一致。
-class _RecordMenuIcon extends StatelessWidget {
-  const _RecordMenuIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.asset(
-      'assets/images/bcode1.png',
-      width: 21,
-      height: 21,
-      fit: BoxFit.contain,
-    );
-  }
-}
-
 /// 侧边菜单「书签」图标：沿用底部菜单那组细线资源，两种外观统一用黑色 shu.png。
 /// 该图字形横向只占画布七成，纵向占满（200×200 里墨迹 139×199），
 /// 比同排 my1/gz 显得瘦高，故按 20 号绘制（略小于 21 槽，视觉上与相邻几项相称）。
@@ -486,6 +470,30 @@ class _FollowMenuIcon extends StatelessWidget {
           width: 18,
           height: 18,
           fit: BoxFit.contain,
+        ),
+      ),
+    );
+  }
+}
+
+/// 侧边菜单「时间线」图标：使用 sjx.png，22 号绘制比同排略大。
+/// 资源未打进包时（如新增图后未重新构建）回退到线性图标，避免出现破图叉号。
+class _TimelineMenuIcon extends StatelessWidget {
+  const _TimelineMenuIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 22,
+      height: 22,
+      child: Center(
+        child: Image.asset(
+          'assets/images/sjx.png',
+          width: 22,
+          height: 22,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) =>
+              const Icon(Icons.timeline, size: 22, color: Color(0xFF1C1C1C)),
         ),
       ),
     );

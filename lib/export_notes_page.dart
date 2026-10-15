@@ -10,10 +10,10 @@ import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 
 import 'auth_service.dart';
-import 'cloud_notes_service.dart';
 import 'note_sutra_links.dart';
 import 'pdf_export.dart';
-import 'reading_note_post.dart';
+import 'record_index.dart';
+import 'record_page.dart' show recordSutraDisplayName;
 import 'settings_widgets.dart';
 
 import 'app_palette.dart';
@@ -25,7 +25,8 @@ Color get _enTextHint => AppPalette.p.textHint;
 Color get _enBorder => AppPalette.p.border;
 Color get _enCard => AppPalette.p.card;
 Color get _enBg => AppPalette.p.bg;
-/// 进入时拉取全部帖子并按年份分组，可单选某一整年导出为 PDF。
+/// 进入时读取「时间线」记录（画线 / 备注 / 笔记）并按年份分组，
+/// 可单选某一整年导出为 PDF。数据源与「时间线」页一致，是本地 [RecordIndex]。
 class ExportNotesPage extends StatefulWidget {
   const ExportNotesPage({super.key});
 
@@ -37,8 +38,11 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
   bool _loading = true;
   String? _error;
 
-  /// 按年份倒序的全部帖子（仅本人发布，去掉回复类）。
-  final Map<int, List<PlazaNote>> _byYear = {};
+  /// 按年份倒序的全部时间线记录（画线 / 备注 / 笔记）。
+  final Map<int, List<RecordItem>> _byYear = {};
+
+  /// sutraKey -> 显示名（「经名 + 卷X」），避免重复解析。
+  final Map<String, String> _nameCache = {};
 
   /// 已选中的导出年份（单选，默认最近的年份）。
   int? _selectedYear;
@@ -57,40 +61,23 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
       _error = null;
     });
     try {
-      if (!AuthService.instance.isLoggedIn) {
-        setState(() {
-          _error = '请先登录后重试';
-          _loading = false;
-        });
-        return;
-      }
-      final all = <PlazaNote>[];
-      int page = 1;
-      const int pageSize = 50;
-      while (true) {
-        final (list, hasMore) =
-            await CloudNotesService.instance.getMyNotes(page: page, pageSize: pageSize);
-        all.addAll(list);
-        if (!hasMore || list.isEmpty) break;
-        page++;
-        if (page > 200) break; // 兜底保护
+      // 与「时间线」页一致：先与本地 notes 全量对账，再读索引，
+      // 这样笔记改动 / 历史笔记都会即时反映。
+      await RecordIndex.instance.syncNotesFromPrefs();
+      await RecordIndex.instance.load();
+      // 目录用于把「经名 + 卷X」这种显示名与只有编号的 key 归一到同一形态。
+      try {
+        await NoteSutraCatalog.load();
+      } catch (_) {
+        // 目录读不到时按「不加卷标」降级，不影响记录本身。
       }
 
-      // 仅保留真正“发的帖子”：剔除 reply 类型（仍保留 forward/quote）。
-      // 同时只保留当前真实账号的笔记（降级/匿名会话串号数据一律过滤）。
-      final myUid = AuthService.instance.currentUser.value?.id ??
-          AuthService.instance.cachedUserId;
-      final mine = all
-          .where((n) =>
-              n.repostKind != 'reply' &&
-              (myUid == null || myUid.isEmpty || n.ownerUserId == myUid))
-          .toList();
-
-      final map = <int, List<PlazaNote>>{};
-      for (final n in mine) {
-        if (n.createdAt <= 0) continue;
-        final y = DateTime.fromMillisecondsSinceEpoch(n.createdAt).year;
-        map.putIfAbsent(y, () => []).add(n);
+      _nameCache.clear();
+      final map = <int, List<RecordItem>>{};
+      for (final it in RecordIndex.instance.items) {
+        if (it.createdAt <= 0) continue;
+        final y = DateTime.fromMillisecondsSinceEpoch(it.createdAt).year;
+        map.putIfAbsent(y, () => []).add(it);
       }
       // 按时间正序排列，更早的在前。
       map.forEach((_, v) {
@@ -117,6 +104,21 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
         });
       }
     }
+  }
+
+  /// 一条记录的经名显示：通常只有一本经，多本时用「·」并列。
+  String _sutraNameOf(RecordItem it) {
+    if (it.sutraKeys.isEmpty) return '未标注经名';
+    return it.sutraKeys
+        .map((k) => _nameCache.putIfAbsent(
+              k,
+              () => recordSutraDisplayName(
+                k,
+                multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
+                rawTitles: NoteSutraCatalog.cachedRawTitles,
+              ),
+            ))
+        .join(' · ');
   }
 
   List<int> get _yearsDesc =>
@@ -180,11 +182,11 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
         SizedBox(height: 40),
         Icon(Icons.menu_book_outlined, size: 56, color: _enTextHint),
         SizedBox(height: 16),
-        Text('还没有发过帖子',
+        Text('还没有任何记录',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 15, color: _enTextSec)),
         SizedBox(height: 8),
-        Text('在菩提空间或学习大厅发布帖子后，可在此导出存档。',
+        Text('读经时选中文字「画线」、写下「备注」或「笔记」，都会按时间汇集到时间线，可在此导出存档。',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: _enTextHint)),
       ],
@@ -202,7 +204,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
                 child: Text(
-                  '你的笔记都已经保存在云端，账号不丢失，数据就会保存；但如果你想保存到本地，可以选择导出 pdf 文件，本地保存。',
+                  '你的画线、备注、笔记都已经保存在云端，账号不丢失，数据就会保存；但如果你想保存到本地，可以选择导出 pdf 文件，本地保存。',
                   style: TextStyle(fontSize: 12, color: _enTextHint),
                 ),
               ),
@@ -240,7 +242,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
                       color: _enText,
                       fontWeight: FontWeight.w500)),
             ),
-            Text('$count 篇',
+            Text('$count 条',
                 style:
                     TextStyle(fontSize: 13, color: _enTextSec)),
           ],
@@ -283,7 +285,7 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
               child: Text(
                 _selectedCount == 0
                     ? '请选择要导出的年份'
-                    : '$_selectedYear 年，共 $_selectedCount 篇',
+                    : '$_selectedYear 年，共 $_selectedCount 条',
                 style: TextStyle(fontSize: 13, color: _enTextSec),
               ),
             ),
@@ -324,22 +326,18 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
       _toast('请先选择要导出的年份');
       return;
     }
-    if (!AuthService.instance.isLoggedIn) {
-      _toast('请先登录');
-      return;
-    }
     setState(() => _exporting = true);
     try {
-      final List<PlazaNote> notes = [
-        ...(_byYear[year] ?? const <PlazaNote>[]),
+      final List<RecordItem> records = [
+        ...(_byYear[year] ?? const <RecordItem>[]),
       ];
       final me = AuthService.instance.currentUser.value;
       final filenameBase = '$year年笔记';
       // 用纯 Dart 直接排版 PDF（内置中文字体），不依赖系统 WebView，
       // 避免 convertHtml 在部分安卓设备上永不回调导致按钮一直转圈。
-      final pdf = await PdfExporter.buildNotesPdf(
+      final pdf = await PdfExporter.buildTimelinePdf(
         author: me?.nickname ?? '我',
-        years: _buildYears(notes),
+        years: _buildYears(records),
       );
       if (pdf.isEmpty) {
         _toast('生成失败：内容为空');
@@ -487,108 +485,64 @@ class _ExportNotesPageState extends State<ExportNotesPage> {
     timer = Timer(const Duration(seconds: 10), dismiss);
   }
 
-  /// 把选中的帖子按年份分组，交给纯 Dart PDF 排版。
-  /// 时间倒序：最近的年份在前、同年内最新发的写在前（最上面）。
-  List<PdfNotesYear> _buildYears(List<PlazaNote> notes) {
-    final sorted = [...notes]
+  /// 把选中的记录按年份分组，交给纯 Dart PDF 排版。
+  /// 时间倒序：最近的年份在前、同年内最新的记录写在前（最上面）。
+  List<PdfRecordYear> _buildYears(List<RecordItem> records) {
+    final sorted = [...records]
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final byYear = <int, List<PlazaNote>>{};
-    for (final n in sorted) {
-      if (n.createdAt <= 0) continue;
-      final y = DateTime.fromMillisecondsSinceEpoch(n.createdAt).year;
-      byYear.putIfAbsent(y, () => []).add(n);
+    final byYear = <int, List<RecordItem>>{};
+    for (final r in sorted) {
+      if (r.createdAt <= 0) continue;
+      final y = DateTime.fromMillisecondsSinceEpoch(r.createdAt).year;
+      byYear.putIfAbsent(y, () => []).add(r);
     }
     final years = byYear.keys.toList()..sort((a, b) => b.compareTo(a));
     return [
       for (final y in years)
-        PdfNotesYear(
+        PdfRecordYear(
           year: y,
-          posts: [
-            for (final n in byYear[y]!)
-              () {
-                final parts = _pdfBodyParts(n);
-                return PdfNotesPost(
-                  date: _formatFull(n.createdAt),
-                  body: parts.body,
-                  verse: parts.verse,
-                  thought: parts.thought,
-                  footer: '点赞 ${n.likeCount} · 评论 ${n.commentCount} · '
-                      '转发 ${n.repostCount} · 阅读 ${n.viewCount}',
-                );
-              }(),
-          ],
+          records: [for (final r in byYear[y]!) _toPdfRecord(r)],
         ),
     ];
   }
 
-  /// 把帖子正文拆成「常规文字 + 经文色块 + 感想色块」三部分，交给 PDF 排版。
-  ///
-  /// 阅读界面的「画线 / 感想」分享帖正文末尾带一段 base64 元数据（哨兵
-  /// `§§HS§§` / `§§TS§§` 编码的成对数组），直接导出会显示乱码。这里解析后：
-  ///   - 感想汇总页分享帖：$经名 + 留言在上，经文色块 + 感想色块（只取第一条）
-  ///   - 画线归集页分享帖：$经名 + 留言在上，第一条画线当作经文色块
-  ///   - 选择文字直接分享：感想/留言在上，段原文当作经文色块
-  ///   - 普通帖走 @经书 纯文本化
-  static ({String body, String? verse, String? thought}) _pdfBodyParts(
-      PlazaNote n) {
-    // 感想汇总页分享帖（§§TS§§）。
-    final thoughts = SutraThoughtsPost.parse(n.content);
-    if (thoughts != null) {
-      final lines = <String>[
-        if (thoughts.sutraTitle.isNotEmpty) '\$${thoughts.sutraTitle}',
-      ];
-      final msg = thoughts.message.trim();
-      if (msg.isNotEmpty) lines.add(msg);
-      // 只导出第一条「经文,感想」。
-      final verse = thoughts.pairs.isNotEmpty
-          ? thoughts.pairs.first.$1.trim()
-          : thoughts.firstParagraph.trim();
-      final thought = thoughts.pairs.isNotEmpty
-          ? thoughts.pairs.first.$2.trim()
-          : '';
-      return (
-        body: lines.join('\n\n'),
-        verse: verse.isEmpty ? null : verse,
-        thought: thought.isEmpty ? null : thought,
-      );
+  /// 时间线记录 → PDF 记录。经文（画线文字 / 备注对应段落）与用户内容
+  /// （备注 / 笔记正文）分开传入，PDF 侧用不同色块展示以便区分。
+  PdfRecord _toPdfRecord(RecordItem it) {
+    final sutraName = _sutraNameOf(it);
+    switch (it.type) {
+      case RecordType.highlight:
+        final text = it.text.trim();
+        // 画线：画线文字本身即经文；云端回填缺原文时只标出位置。
+        return PdfRecord(
+          kind: PdfRecordKind.highlight,
+          date: _formatFull(it.createdAt),
+          sutraName: sutraName,
+          sutraText: text.isEmpty ? '第 ${it.para + 1} 段的一处画线' : text,
+          footnote: (it.backfilled && text.isEmpty) ? '原文待补全' : null,
+        );
+      case RecordType.thought:
+        final para = it.paraText.trim();
+        final note = it.text.trim();
+        return PdfRecord(
+          kind: PdfRecordKind.thought,
+          date: _formatFull(it.createdAt),
+          sutraName: sutraName,
+          sutraText: para.isEmpty ? null : para,
+          userText: note.isEmpty ? null : note,
+          userLabel: '备注',
+        );
+      case RecordType.note:
+        final body = it.text.trim();
+        return PdfRecord(
+          kind: PdfRecordKind.note,
+          date: _formatFull(it.createdAt),
+          sutraName: sutraName,
+          userText: body.isEmpty ? null : body,
+          userLabel: '笔记',
+          footnote: it.shared ? '已分享' : '未分享',
+        );
     }
-    // 画线归集页分享帖（§§HS§§）。
-    final highlights = SutraHighlightsPost.parse(n.content);
-    if (highlights != null) {
-      final lines = <String>[
-        if (highlights.sutraTitle.isNotEmpty) '\$${highlights.sutraTitle}',
-      ];
-      final msg = highlights.message.trim();
-      if (msg.isNotEmpty) lines.add(msg);
-      // 只导出第一条画线，当作经文色块。
-      final verse = highlights.highlights.isNotEmpty
-          ? highlights.highlights.first.trim()
-          : highlights.firstHighlight.trim();
-      return (
-        body: lines.join('\n\n'),
-        verse: verse.isEmpty ? null : verse,
-        thought: null,
-      );
-    }
-    // 选择文字直接分享的感想（ReadingNotePost）。
-    final rn = ReadingNotePost.parse(n.content);
-    if (rn != null) {
-      final lines = <String>[
-        if (rn.sutraTitle.isNotEmpty) '\$${rn.sutraTitle}',
-      ];
-      if (rn.noteText.trim().isNotEmpty) lines.add(rn.noteText.trim());
-      return (
-        body: lines.join('\n\n'),
-        verse: rn.paragraph.trim().isEmpty ? null : rn.paragraph.trim(),
-        thought: null,
-      );
-    }
-    // 普通帖子：整段纯文本。
-    return (
-      body: NoteSutraLinks.plainText(n.content),
-      verse: null,
-      thought: null,
-    );
   }
 
   static String _formatFull(int ms) {

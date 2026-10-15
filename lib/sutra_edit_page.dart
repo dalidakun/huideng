@@ -57,15 +57,29 @@ class _SutraEditPageState extends State<SutraEditPage> {
   /// 防抖自动保存定时器：停笔片刻即落盘，避免「改完直接返回/杀进程」丢字。
   Timer? _autoSaveTimer;
 
+  /// 撤销历史：每个元素是一次操作前的正文 + 经名快照（不含当前状态）。
+  final List<_EditSnapshot> _undoStack = [];
+
+  /// 连续输入的合并：一段输入停顿后，把该输入段开始前的状态压入历史，
+  /// 这样一次「撤销」能整段退回，而不是逐字回退。正文与经名共用此机制。
+  Timer? _typingIdleTimer;
+  String _contentBeforeBurst = '';
+  String _titleBeforeBurst = '';
+
+  /// 正在用历史快照回填正文/经名，避免把回填本身记成一次新操作。
+  bool _restoringHistory = false;
+
   @override
   void initState() {
     super.initState();
     _initialText = widget.content;
     _writtenText = widget.content;
+    _contentBeforeBurst = widget.content;
     _controller = TextEditingController(text: widget.content);
     _controller.addListener(_onTextChanged);
     _focusNode = FocusNode();
     _initialTitle = (widget.initialTitle ?? widget.title).trim();
+    _titleBeforeBurst = _initialTitle;
     _titleController = TextEditingController(text: _initialTitle);
     _titleController.addListener(_onTitleChanged);
     final targetText = widget.topParagraphText;
@@ -102,6 +116,7 @@ class _SutraEditPageState extends State<SutraEditPage> {
   @override
   void dispose() {
     _autoSaveTimer?.cancel();
+    _typingIdleTimer?.cancel();
     // 兜底：还有没落盘的改动（防抖未到点就被销毁）时补写一次，
     // 保证退出编辑页后正文一定在本地编辑副本里。
     if (_controller.text != _writtenText) {
@@ -115,19 +130,80 @@ class _SutraEditPageState extends State<SutraEditPage> {
     super.dispose();
   }
 
-  /// 标题变化：仅刷新 AppBar 显示。
-  void _onTitleChanged() {
-    if (mounted) setState(() {});
-  }
-
-  /// 文本变化：重置防抖定时器，停笔片刻后自动落盘。
+  /// 文本变化：记录撤销历史，并重置防抖定时器，停笔片刻后自动落盘。
   void _onTextChanged() {
+    _trackUndoHistory();
     if (_controller.text == _writtenText) return;
     _autoSaveTimer?.cancel();
     _autoSaveTimer = Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
       unawaited(_writeToDisk());
     });
+  }
+
+  /// 经名变化：同样纳入撤销历史（只记录，不额外落盘，随正文一起保存）。
+  void _onTitleChanged() {
+    _trackUndoHistory();
+  }
+
+  /// 记录撤销历史：键入时按「输入段」合并，停顿片刻后落一个快照。
+  void _trackUndoHistory() {
+    if (_restoringHistory) return;
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = Timer(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      _commitTypingBurst();
+    });
+  }
+
+  /// 把当前「输入段」的起始状态压入历史（正文与经名都无变化则不记）。
+  void _commitTypingBurst() {
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = null;
+    final content = _controller.text;
+    final title = _titleController.text;
+    if (_contentBeforeBurst != content || _titleBeforeBurst != title) {
+      _pushUndo(_EditSnapshot(content: _contentBeforeBurst, title: _titleBeforeBurst));
+      _contentBeforeBurst = content;
+      _titleBeforeBurst = title;
+    }
+  }
+
+  void _pushUndo(_EditSnapshot snapshot) {
+    final last = _undoStack.isEmpty ? null : _undoStack.last;
+    if (last == null ||
+        last.content != snapshot.content ||
+        last.title != snapshot.title) {
+      _undoStack.add(snapshot);
+      if (_undoStack.length > 100) _undoStack.removeAt(0);
+    }
+  }
+
+  /// 撤销上一步操作：工具栏插入立即成为一个撤销点；正文/经名的普通输入
+  /// 按输入段合并。撤销可回退正文与经名中最近发生的那次修改。
+  void _undo() {
+    // 先把尚未落点的输入段定格，保证「输入到一半就点撤销」也能正确退回。
+    _commitTypingBurst();
+    if (_undoStack.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有可撤销的操作')),
+      );
+      return;
+    }
+    final previous = _undoStack.removeLast();
+    _restoringHistory = true;
+    if (_controller.text != previous.content) {
+      _controller.text = previous.content;
+      _controller.selection = TextSelection.collapsed(
+          offset: previous.content.length.clamp(0, previous.content.length));
+    }
+    if (_titleController.text != previous.title) {
+      _titleController.text = previous.title;
+    }
+    _restoringHistory = false;
+    _contentBeforeBurst = previous.content;
+    _titleBeforeBurst = previous.title;
+    _focusNode.requestFocus();
   }
 
   /// 把当前正文写入本地编辑副本，并同步一份到可上云的草稿（重装不丢）。
@@ -206,11 +282,21 @@ class _SutraEditPageState extends State<SutraEditPage> {
   }
 
   void _insertText(String text, {int cursorOffset = 0}) {
+    // 插入前先把待定输入段定格，并把当前状态作为一个独立撤销点。
+    _commitTypingBurst();
+    _pushUndo(_EditSnapshot(
+      content: _controller.text,
+      title: _titleController.text,
+    ));
     final sel = _controller.selection;
     final start = sel.start.clamp(0, _controller.text.length);
     final end = sel.end.clamp(0, _controller.text.length);
     _controller.text = '${_controller.text.substring(0, start)}$text${_controller.text.substring(end)}';
     _controller.selection = TextSelection.collapsed(offset: start + (cursorOffset == 0 ? text.length : cursorOffset));
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = null;
+    _contentBeforeBurst = _controller.text;
+    _titleBeforeBurst = _titleController.text;
     _focusNode.requestFocus();
   }
 
@@ -221,16 +307,51 @@ class _SutraEditPageState extends State<SutraEditPage> {
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        // 返回键 / 手势返回：有未保存改动先落盘，再带结果返回阅读页，
-        // 避免「编辑完直接返回（没点保存/完成排版）」导致改动丢失。
-        if (_controller.text != _writtenText) {
-          await _writeToDisk();
+        // 返回键 / 手势返回：正文或经名有改动且尚未点「保存」时，
+        // 先弹窗确认「是否保存编辑」，而不是直接返回。
+        final hasChanges = _controller.text != _initialText ||
+            _titleController.text.trim() != _initialTitle;
+        if (!hasChanges) {
+          if (_controller.text != _writtenText) {
+            await _writeToDisk();
+          }
+          if (!context.mounted) return;
+          Navigator.of(context).pop(_resultPayload());
+          return;
         }
+        final save = await _confirmSave();
         if (!context.mounted) return;
-        Navigator.of(context).pop(_resultPayload());
+        if (save) {
+          await _save();
+        } else {
+          // 取消：直接返回，不触发保存流程。
+          Navigator.of(context).pop(null);
+        }
       },
       child: _buildScaffold(p),
     );
+  }
+
+  /// 返回前确认：是否保存当前编辑。
+  Future<bool> _confirmSave() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('是否保存编辑？'),
+        content: const Text('当前编辑尚未保存，是否保存后再返回？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   Widget _buildScaffold(PaletteData p) {
@@ -241,16 +362,26 @@ class _SutraEditPageState extends State<SutraEditPage> {
         elevation: 0,
         shadowColor: Colors.transparent,
         iconTheme: IconThemeData(color: p.text),
-        title: Text(
-          _titleController.text.trim().isEmpty
-              ? widget.title
-              : _titleController.text.trim(),
+        // 经名直接在标题位置编辑，不再单独占一行输入框。
+        title: TextField(
+          controller: _titleController,
+          textInputAction: TextInputAction.done,
+          maxLines: 1,
           style: TextStyle(
             color: p.text,
             fontSize: 16,
             fontWeight: FontWeight.w500,
           ),
-          overflow: TextOverflow.ellipsis,
+          decoration: InputDecoration(
+            isDense: true,
+            border: InputBorder.none,
+            hintText: widget.title,
+            hintStyle: TextStyle(
+              color: p.textHint,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ),
         actions: [
           TextButton(
@@ -266,7 +397,6 @@ class _SutraEditPageState extends State<SutraEditPage> {
       body: SafeArea(
         child: Column(
           children: [
-            _buildTitleField(p),
             _buildToolbar(p),
             Expanded(
               child: Container(
@@ -301,48 +431,13 @@ class _SutraEditPageState extends State<SutraEditPage> {
     );
   }
 
-  /// 顶部标题编辑栏：管理员可订正经名（显示名），保存后同步到云端，
-  /// 所有用户的搜索/列表/最近阅读都会显示订正后的名称。
-  Widget _buildTitleField(PaletteData p) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 12, 8),
-      color: p.bg,
-      child: Row(
-        children: [
-          Text('标题', style: TextStyle(fontSize: 13, color: p.textSec)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: TextField(
-              controller: _titleController,
-              textInputAction: TextInputAction.done,
-              maxLines: 1,
-              style: TextStyle(
-                color: p.text,
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-              ),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: '输入经文标题',
-                hintStyle: TextStyle(color: p.textHint, fontSize: 15),
-                border: UnderlineInputBorder(
-                  borderSide: BorderSide(color: p.border, width: 0.5),
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 6),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildToolbar(PaletteData p) {
     final items = [
       _ToolbarItem(symbol: '。。。', label: '隐藏翻译', tooltip: '隐藏操作栏'),
       _ToolbarItem(symbol: '///', label: '不分段', tooltip: '与下段连排'),
       _ToolbarItem(symbol: 'bbb', label: '加粗', tooltip: '加粗显示'),
       _ToolbarItem(symbol: '@@@@', label: '备注', tooltip: '插入备注（绿色小字）', cursorOffset: 2),
+      _ToolbarItem(label: '撤销', tooltip: '撤销上一步操作', onTap: _undo),
     ];
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -354,11 +449,20 @@ class _SutraEditPageState extends State<SutraEditPage> {
       ),
       child: Row(
         children: [
-          for (var i = 0; i < items.length; i++) ...[
-            if (i > 0) const SizedBox(width: 8),
-            _buildToolButton(p, items[i]),
-          ],
-          const Spacer(),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (var i = 0; i < items.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    _buildToolButton(p, items[i]),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
           Text(
             '光标处插入',
             style: TextStyle(fontSize: 11, color: p.textHint),
@@ -372,7 +476,8 @@ class _SutraEditPageState extends State<SutraEditPage> {
     return Tooltip(
       message: item.tooltip,
       child: GestureDetector(
-        onTap: () => _insertText(item.symbol, cursorOffset: item.cursorOffset),
+        onTap: item.onTap ??
+            (() => _insertText(item.symbol!, cursorOffset: item.cursorOffset)),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
@@ -394,10 +499,24 @@ class _SutraEditPageState extends State<SutraEditPage> {
   }
 }
 
+/// 一次编辑操作前的状态快照：同时保存正文与经名，撤销时一并回退。
+class _EditSnapshot {
+  final String content;
+  final String title;
+  const _EditSnapshot({required this.content, required this.title});
+}
+
 class _ToolbarItem {
-  final String symbol;
+  final String? symbol;
   final String label;
   final String tooltip;
   final int cursorOffset;
-  const _ToolbarItem({required this.symbol, required this.label, required this.tooltip, this.cursorOffset = 0});
+  final VoidCallback? onTap;
+  const _ToolbarItem({
+    this.symbol,
+    required this.label,
+    required this.tooltip,
+    this.cursorOffset = 0,
+    this.onTap,
+  });
 }

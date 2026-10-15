@@ -347,17 +347,27 @@ List<HotDiscussionItem> mergeHotSutraItems(List<HotDiscussionItem> items,
   return byKey.values.toList();
 }
 
-/// 统计同名（基础经名）出现多次的集合，即多卷经书的基础经名。
+/// 多卷经书判定：只有「同一部作品（同一 CBETA 编号前缀）确实多卷」的基础经名
+/// 才算多卷。同名但实为不同译本/异本（如金刚经的 T08n0235/0236/0237）不误判，
+/// 避免把单卷经书显示成「卷一」并错定位到别的译本。
 Set<String> collectMultiVolumeBases(Iterable<Sutra> sutras) {
-  final counts = <String, int>{};
+  // 基础经名 -> 规范作品编号(T..n..) -> 卷号集合。
+  final byWork = <String, Map<String, Set<int>>>{};
   for (final s in sutras) {
-    final base = s.title.replaceAll(_sutraIdSuffixRe, '').trim();
+    final title = repairLegacySutraTitle(s.title);
+    final base = title.replaceAll(_sutraIdSuffixRe, '').trim();
     if (base.isEmpty) continue;
-    counts[base] = (counts[base] ?? 0) + 1;
+    final id = SutraDownloader.extractId(title, s.filePath);
+    if (id == null) continue;
+    final m = RegExp(r'^(T\d+n[0-9A-Za-z]+)_(\d+)$').firstMatch(id);
+    if (m == null) continue;
+    final work = m.group(1)!;
+    final vol = int.tryParse(m.group(2)!) ?? 0;
+    ((byWork[base] ??= {}).putIfAbsent(work, () => <int>{})).add(vol);
   }
   return {
-    for (final e in counts.entries)
-      if (e.value > 1) e.key,
+    for (final e in byWork.entries)
+      if (e.value.values.any((vols) => vols.length > 1)) e.key,
   };
 }
 

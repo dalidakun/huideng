@@ -73,6 +73,75 @@ void main() {
     expect(idx.items, isEmpty);
   });
 
+  test('enrichParagraphs：把云端缺失的备注/画线补进时间线，已有条目只回填原文',
+      () async {
+    final idx = RecordIndex.instance;
+    await idx.load(force: true);
+
+    // 本机已存在的备注（缺段落原文）。
+    await idx.syncParagraph(
+      sutraKey: '心经',
+      para: 0,
+      paraText: '',
+      thought: '照见五蕴皆空',
+      underlines: const [],
+    );
+    expect(idx.items.where((i) => i.type == RecordType.thought).length, 1);
+
+    await idx.enrichParagraphs(
+      sutraKey: '心经',
+      paragraphs: ['观自在菩萨行深般若波罗蜜多时', '舍利子色不异空'],
+      rows: [
+        // 第 0 段：时间线已有 → 只回填原文。
+        {'index': 0, 'note': '照见五蕴皆空', 'updatedAt': 1000},
+        // 第 1 段：时间线没有 → 新增备注 + 画线。
+        {
+          'index': 1,
+          'note': '色不异空',
+          'updatedAt': 2000,
+          'underlines': [
+            {'start': 0, 'end': 2},
+          ],
+        },
+      ],
+    );
+
+    final thoughts =
+        idx.items.where((i) => i.type == RecordType.thought).toList();
+    expect(thoughts.length, 2);
+    final t0 = thoughts.firstWhere((i) => i.para == 0);
+    expect(t0.text, '照见五蕴皆空');
+    expect(t0.paraText, '观自在菩萨行深般若波罗蜜多时');
+    final t1 = thoughts.firstWhere((i) => i.para == 1);
+    expect(t1.text, '色不异空');
+    expect(t1.paraText, '舍利子色不异空');
+    expect(t1.createdAt, 2000);
+
+    final lines =
+        idx.items.where((i) => i.type == RecordType.highlight).toList();
+    expect(lines.length, 1);
+    expect(lines.first.text, '舍利');
+    expect(lines.first.para, 1);
+
+    // 幂等：再跑一次不重复添加。
+    await idx.enrichParagraphs(
+      sutraKey: '心经',
+      paragraphs: ['观自在菩萨行深般若波罗蜜多时', '舍利子色不异空'],
+      rows: [
+        {'index': 0, 'note': '照见五蕴皆空', 'updatedAt': 1000},
+        {
+          'index': 1,
+          'note': '色不异空',
+          'updatedAt': 2000,
+          'underlines': [
+            {'start': 0, 'end': 2},
+          ],
+        },
+      ],
+    );
+    expect(idx.items.length, 3);
+  });
+
   test('resyncSutra：重排版后按新段号重建，不留旧段号幽灵条目', () async {
     final idx = RecordIndex.instance;
     await idx.load(force: true);

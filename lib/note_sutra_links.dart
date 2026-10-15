@@ -72,6 +72,8 @@ class NoteSutraCatalog {
 
   static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
   static final RegExp _volumeOfRe = RegExp(r'T\d+n[0-9A-Za-z]+_(\d+)$');
+  // 规范作品编号（去掉卷号后缀）：用于区分「同一部作品的多卷」与「同名异本」。
+  static final RegExp _workOfRe = RegExp(r'(T\d+n[0-9A-Za-z]+)_\d+$');
 
   /// 历史脏数据防御：早期目录曾把空的「第卷」占位写进经名。
   static final RegExp _legacyGarbageRe = RegExp(r'(第卷)+');
@@ -87,6 +89,11 @@ class NoteSutraCatalog {
     final charCounts = <String, int>{};
     final volumeCharCounts = <String, Map<int, int>>{};
     final rawCharCounts = <String, int>{};
+    // 基础经名 -> 规范作品编号(T..n..) -> (卷号 -> 路径 / 字数)。
+    // 用于区分「同一部作品的多卷」与「同名但不同译本/异本」
+    // （如金刚经的 T08n0235/T08n0236a/T08n0236b/T08n0237 实为四部不同译作）。
+    final workPaths = <String, Map<String, Map<int, String>>>{};
+    final workVolumeChars = <String, Map<String, Map<int, int>>>{};
     for (final e in decoded) {
       final m = e as Map<String, dynamic>;
       final rawTitle =
@@ -100,19 +107,20 @@ class NoteSutraCatalog {
       rawCharCounts[rawTitle] = c;
       final path = SutraAssetPath.resolve(title: rawTitle);
       if (path.startsWith('assets/')) {
+        final wm = _workOfRe.firstMatch(rawTitle);
         final vm = _volumeOfRe.firstMatch(rawTitle);
-        if (vm != null) {
-          final vol = int.tryParse(vm.group(1)!) ?? 0;
-          if (vol > 0) {
-            (volumePaths[title] ??= {})[vol] = path;
-            (volumeCharCounts[title] ??= {})[vol] = c;
-          }
-        } else if (!byTitle.containsKey(title)) {
-          // 单卷经书：无卷号时记录整卷字数，供精读卡直接取用。
+        final vol = vm == null ? 0 : (int.tryParse(vm.group(1)!) ?? 0);
+        if (wm != null && vol > 0) {
+          final work = wm.group(1)!;
+          ((workPaths[title] ??= {}).putIfAbsent(work, () => {}))[vol] = path;
+          ((workVolumeChars[title] ??= {}).putIfAbsent(work, () => {}))[vol] =
+              c;
+        } else if (wm == null && !byTitle.containsKey(title)) {
+          // 无编号的单卷经书：记录整卷字数，供精读卡直接取用。
           (volumeCharCounts[title] ??= {})[0] = c;
         }
       }
-      if (byTitle.containsKey(title)) continue; // 多卷经书只保留第一部
+      if (byTitle.containsKey(title)) continue; // 同名只保留第一部
       byTitle[title] = NoteSutraLink(
         title: title,
         size: (m['s'] as String?) ?? '',
@@ -120,16 +128,28 @@ class NoteSutraCatalog {
         filePath: path,
       );
     }
+    // 只把「同一作品确实多卷」的基础经名视为多卷经书；同名异本不误判。
+    workPaths.forEach((title, works) {
+      Map<int, String>? best;
+      Map<int, int>? bestChars;
+      works.forEach((work, vols) {
+        if (best == null || vols.length > best!.length) {
+          best = vols;
+          bestChars = workVolumeChars[title]?[work];
+        }
+      });
+      if (best != null && best!.length > 1) {
+        volumePaths[title] = best!;
+        if (bestChars != null) volumeCharCounts[title] = bestChars!;
+      }
+    });
     final list = byTitle.values.toList();
     _cache = list;
     _volumePaths = volumePaths;
     _charCounts = charCounts;
     _volumeCharCounts = volumeCharCounts;
     _rawCharCounts = rawCharCounts;
-    _multiVolumeBases = {
-      for (final e in counts.entries)
-        if (e.value > 1) e.key,
-    };
+    _multiVolumeBases = volumePaths.keys.toSet();
     return list;
   }
 
