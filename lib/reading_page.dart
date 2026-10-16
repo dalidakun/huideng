@@ -27,6 +27,7 @@ import 'sutra_list_page.dart'
         sutraDisplayTitleWithPath,
         sutraBaseTitle,
         loadLocalMultiVolumeBases;
+import 'note_sutra_links.dart' show NoteSutraCatalog;
 import 'sutra_title_overrides.dart';
 import 'reading_guide_page.dart';
 import 'reading_notes_page.dart';
@@ -217,7 +218,20 @@ class ReadingPageState extends State<ReadingPage>
   }
 
   Future<void> _loadDisplayTitle() async {
-    final mvBases = await loadLocalMultiVolumeBases();
+    // 多卷判定优先用随包目录（与时间线 / 经藏列表 / 讨论页同一份数据），
+    // 它完整覆盖全部经书；本地 sutras_list.json 可能缺失或是用户子集，
+    // 只作为随包目录不可用时的兜底，避免读经页把「卷X」卷标漏掉、
+    // 与时间线上的经名对不上。
+    Set<String> mvBases;
+    try {
+      await NoteSutraCatalog.load();
+      mvBases = NoteSutraCatalog.cachedMultiVolumeBases;
+    } catch (_) {
+      mvBases = const {};
+    }
+    if (mvBases.isEmpty) {
+      mvBases = await loadLocalMultiVolumeBases();
+    }
     if (!mounted) return;
     setState(() {
       _displayTitle = sutraDisplayTitleWithPath(widget.title,
@@ -2992,7 +3006,7 @@ class ReadingPageState extends State<ReadingPage>
         ignoring: !show,
         child: TweenAnimationBuilder<double>(
           tween: Tween<double>(begin: 0, end: show ? 1 : 0),
-          duration: const Duration(milliseconds: 900),
+          duration: const Duration(milliseconds: 480),
           curve: const _FabSpringCurve(),
           builder: (context, t, built) {
             // t=0 收在主按钮圆心；easeOutBack 会令 t 略大于 1（向外多探出一点再收回）。
@@ -3044,7 +3058,7 @@ class ReadingPageState extends State<ReadingPage>
         child: AnimatedScale(
           // 展开后主按钮略微缩小，三个动作按钮比它更大。
           scale: _showFabMenu ? 0.85 : 1.0,
-          duration: const Duration(milliseconds: 600),
+          duration: const Duration(milliseconds: 480),
           curve: Curves.easeOut,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -3072,7 +3086,7 @@ class ReadingPageState extends State<ReadingPage>
             // 用 AnimatedContainer 平滑过渡底色（FAB 无法动画背景色，会「跳闪」）；
             // 不用 InkWell，避免水波纹在透明圆上看起来像闪烁。
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 600),
+              duration: const Duration(milliseconds: 480),
               curve: Curves.easeOut,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,

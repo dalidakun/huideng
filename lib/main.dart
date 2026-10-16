@@ -158,6 +158,11 @@ class _MyAppState extends State<MyApp> {
               canPop: false,
               onPopInvokedWithResult: (didPop, _) async {
                 if (didPop) return;
+                // 下拉露出到一半还没松手/没收完：先把它收回，不再往下走
+                if (homeRevealScrub.value > 0) {
+                  homeRevealScrub.value = 0;
+                  return;
+                }
                 // 主页下拉打开的 DeepSeek 页展开时，先收起它而不是退出应用
                 if (homeReveal.value) {
                   homeReveal.value = false;
@@ -180,6 +185,12 @@ class _MyAppState extends State<MyApp> {
                 final nav = navigatorKey.currentState;
                 if (nav != null && nav.canPop()) {
                   nav.pop();
+                  return;
+                }
+                // 经藏页底部「全部经典」面板展开时，侧滑返回先收起面板，
+                // 而不是直接最小化应用。
+                if (_mainPageKey.currentState?.collapseSutraShelfIfOpen() ??
+                    false) {
                   return;
                 }
                 // 经藏页处于搜索模式时，侧滑返回先退出搜索、回到经藏页面，
@@ -716,6 +727,13 @@ class _MainPageState extends State<MainPage>
     return _sutraListKey.currentState?.exitSearchIfActive() ?? false;
   }
 
+  /// 经藏页底部「全部经典」面板展开时收起它（根路由侧滑返回调用）。
+  /// 返回是否消费了本次返回，避免侧滑直接最小化应用。
+  bool collapseSutraShelfIfOpen() {
+    if (_currentIndex != 2) return false;
+    return _sutraListKey.currentState?.collapseShelfIfOpen() ?? false;
+  }
+
   void _switchToTab(int index) {
     // 切页前重读最近阅读记录——离开期间可能已从全屏阅读页换了经书。
     unawaited(_loadRecentReading());
@@ -1150,26 +1168,17 @@ class _MainPageState extends State<MainPage>
                 ),
               ),
             ),
-          // X 风格毛玻璃悬浮菜单：向下滚动时轻微变淡（不位移、不隐藏），
-          // 向上滚动时恢复。
+          // 悬浮菜单：不再随滚动变淡（变淡会让背后文字透出菜单）。
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
-            child: AnimatedBuilder(
-              animation: _navCtrl,
-              builder: (context, child) {
-                return Opacity(
-                  // 淡出到 0.6，图标仍清晰可见。
-                  opacity: 1 - 0.4 * _navCtrl.value,
-                  child: child,
-                );
-              },
-              child: _BottomNavBar(
-                items: _bottomNavItems,
-                currentIndex: _navIndexForCurrent(),
-                onTap: _switchToTab,
-              ),
+            child: _BottomNavBar(
+              items: _bottomNavItems,
+              currentIndex: _navIndexForCurrent(),
+              onTap: _switchToTab,
+              // 仅「经藏」页（_currentIndex == 2）菜单用实底，其余保持毛玻璃。
+              opaque: _currentIndex == 2,
             ),
           ),
           // 左侧个人菜单：约 2/3 屏宽，遮罩点击关闭，覆盖在底部菜单之上。
@@ -1225,10 +1234,16 @@ class _BottomNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
 
+  /// 是否使用不透明底色（不做毛玻璃）。
+  /// 仅「经藏」页开启：该页底部有常驻「全部经典」面板，菜单透出正文会很乱；
+  /// 其他菜单页保持原来的毛玻璃悬浮效果。
+  final bool opaque;
+
   const _BottomNavBar({
     required this.items,
     required this.currentIndex,
     required this.onTap,
+    this.opaque = false,
   });
 
   /// 图标区高度（不含底部安全区）。
@@ -1242,17 +1257,16 @@ class _BottomNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final base = heightOnly(context);
 
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppPalette.p.card.withValues(alpha: 0.4),
-            border: Border(
-              top: BorderSide(color: AppPalette.p.borderSoft, width: 0.8),
-            ),
-          ),
-          child: SafeArea(
+    final Widget bar = Container(
+      decoration: BoxDecoration(
+        color: opaque
+            ? AppPalette.p.card
+            : AppPalette.p.card.withValues(alpha: 0.4),
+        border: Border(
+          top: BorderSide(color: AppPalette.p.borderSoft, width: 0.8),
+        ),
+      ),
+      child: SafeArea(
             top: false,
             child: SizedBox(
               height: base,
@@ -1298,8 +1312,17 @@ class _BottomNavBar extends StatelessWidget {
                 }),
               ),
             ),
-          ),
-        ),
+      ),
+    );
+
+    // 经藏页：实底菜单，不叠毛玻璃，避免透出正文；其他页面维持原有的毛玻璃悬浮。
+    if (opaque) {
+      return ClipRect(child: bar);
+    }
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: bar,
       ),
     );
   }
@@ -1792,6 +1815,10 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
 
+  /// 是否正被下拉手势擦洗：此时显示值直接取手指进度，
+  /// 曲线只用于开/收合的补间（避免跟手时进度被曲线二次加工）。
+  bool _scrubbing = false;
+
   @override
   void initState() {
     super.initState();
@@ -1800,24 +1827,49 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
       duration: const Duration(milliseconds: 420),
     );
     homeReveal.addListener(_onVisible);
+    homeRevealScrub.addListener(_onScrub);
+  }
+
+  /// 下拉跟手：进度 > 0 时按手指实时露出（并提前挂载 WebView，露出即可见），
+  /// 归零（反向上拖到位 / 松手未过半）时按余下距离收合。
+  void _onScrub() {
+    if (!mounted || homeReveal.value) return;
+    final v = homeRevealScrub.value;
+    if (v > 0) {
+      _scrubbing = true;
+      AssistantSession.instance.claim(AssistantSurface.home);
+      _ctrl.stop();
+      _ctrl.value = v.clamp(_ctrl.lowerBound, _ctrl.upperBound);
+    } else if (_scrubbing) {
+      _scrubbing = false;
+      _collapse();
+    }
   }
 
   void _onVisible() {
     if (!mounted) return;
     if (homeReveal.value) {
+      _scrubbing = false;
       AssistantSession.instance.claim(AssistantSurface.home);
-      _ctrl.forward();
+      _ctrl.animateTo(1.0, curve: Curves.easeInOutCubic);
     } else {
-      _ctrl.reverse().whenCompleteOrCancel(() {
-        if (!mounted || homeReveal.value) return;
-        AssistantSession.instance.release(AssistantSurface.home);
-      });
+      _scrubbing = false;
+      _collapse();
     }
+  }
+
+  /// 从当前露出量收合到 0，收完才把 WebView 让给其他入口（否则露出中途会闪没）。
+  void _collapse() {
+    _ctrl.animateBack(0.0, curve: Curves.easeInOutCubic).whenCompleteOrCancel(() {
+      if (!mounted || homeReveal.value || homeRevealScrub.value > 0) return;
+      AssistantSession.instance.release(AssistantSurface.home);
+    });
   }
 
   @override
   void dispose() {
     homeReveal.removeListener(_onVisible);
+    homeRevealScrub.removeListener(_onScrub);
     _ctrl.dispose();
     super.dispose();
   }
@@ -1827,16 +1879,14 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (context, _) {
-        final t = Curves.easeInOutCubic.transform(_ctrl.value);
+        final t = _ctrl.value;
         final height = MediaQuery.of(context).size.height;
         return Stack(
           children: [
-            Transform.translate(
-              offset: Offset(0, height * t),
-              child: IgnorePointer(
-                ignoring: t > 0.01,
-                child: widget.child,
-              ),
+            // 主页内容保持固定不动：DeepSeek 页像帘子一样从顶部盖下来。
+            IgnorePointer(
+              ignoring: t > 0.01,
+              child: widget.child,
             ),
             IgnorePointer(
               ignoring: t < 0.99,

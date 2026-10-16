@@ -13,6 +13,13 @@ final ValueNotifier<bool> assistantReveal = ValueNotifier<bool>(false);
 /// DeepSeek chat slides in from the top.
 final ValueNotifier<bool> homeReveal = ValueNotifier<bool>(false);
 
+/// DeepSeek 下拉露出的实时进度（0→1）。
+///
+/// 手指在顶边下拉时由 PullRevealTracker 跟手写入，DeepSeek 页面随之逐渐露出；
+/// 反向上拖进度回落即收回；松手后若未达展开阈值也会归零（收合动画走完后
+/// 才释放 WebView，避免露出过程中内容闪没）。
+final ValueNotifier<double> homeRevealScrub = ValueNotifier<double>(0);
+
 /// 全局夜间模式信号：跟随阅读页「夜间模式」开关。
 /// 消息中心等非阅读页面据此切换浅色/深色配色。
 final ValueNotifier<bool> appDarkMode = ValueNotifier<bool>(false);

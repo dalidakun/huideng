@@ -86,9 +86,10 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
     }
   }
 
-  String _displayTitle(String title) =>
-      widget.parent?.displayTitle(title) ??
-      sutraDisplayNameWithVolume(title,
+  String _displayTitle(String title, {String? filePath}) =>
+      widget.parent?.displayTitle(title, filePath: filePath) ??
+      sutraDisplayName(title,
+          filePath: filePath,
           multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases);
 
   static final RegExp _idSuffixRe = RegExp(r'T\d+n[0-9A-Za-z]+_\d+$');
@@ -280,7 +281,7 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _displayTitle(item.title),
+                          _displayTitle(item.title, filePath: item.filePath),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _inkBlack, height: 1.4, letterSpacing: 0.5),
@@ -335,7 +336,7 @@ class _PopularSutrasPageState extends State<PopularSutrasPage> {
                 // 经文名称
                 Expanded(
                   child: Text(
-                    _displayTitle(item.title),
+                    _displayTitle(item.title, filePath: item.filePath),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w400, color: _inkBlack, letterSpacing: 0.3),

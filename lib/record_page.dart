@@ -14,8 +14,7 @@ import 'reading_page.dart';
 import 'record_cards.dart';
 import 'record_index.dart';
 import 'sutra_asset_path.dart';
-import 'sutra_list_page.dart'
-    show chineseVolumeSuffixRe, splitHotSutraName, sutraDisplayNameWithVolume;
+import 'sutra_list_page.dart' show splitHotSutraName, sutraDisplayName;
 import 'user_avatar.dart';
 
 /// 纯 CBETA 编号（如「T13n0412_002」），即记录里只存了编号、没有经名。
@@ -34,8 +33,6 @@ String recordSutraDisplayName(
 }) {
   final t = key.trim();
   if (t.isEmpty) return '';
-  // 已经是「经名 + 中文卷标」，直接用（编号已在别处处理过）。
-  if (chineseVolumeSuffixRe.hasMatch(t)) return t;
   var full = t;
   if (_bareSutraIdRe.hasMatch(t)) {
     for (final raw in rawTitles) {
@@ -45,8 +42,10 @@ String recordSutraDisplayName(
       }
     }
   }
-  final name =
-      sutraDisplayNameWithVolume(full, multiVolumeBases: multiVolumeBases);
+  // 与经藏列表 / 读经页 / 讨论页共用同一展示口径：标题带卷号显示具体卷标，
+  // 多卷经书只有基础经名时补「卷一」（已带中文卷标的标题由核心函数原样保留）。
+  final name = sutraDisplayName(full,
+      multiVolumeBases: multiVolumeBases ?? const {});
   // 去掉编号后经名为空（未知编号 / 脏数据）：原样返回，别把内容显示没了。
   return name.isEmpty ? t : name;
 }

@@ -107,10 +107,11 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
     }
   }
 
-  String _displayTitle(String title) {
+  String _displayTitle(String title, {String? filePath}) {
     final parent = widget.parent;
-    if (parent != null) return parent.displayTitle(title);
-    return sutraDisplayTitle(title, multiVolumeBases: _multiVolumeBases);
+    if (parent != null) return parent.displayTitle(title, filePath: filePath);
+    return sutraDisplayName(title,
+        filePath: filePath, multiVolumeBases: _multiVolumeBases);
   }
 
   Future<bool> _assetExists(String path) async {
@@ -166,7 +167,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text('经文尚未下载', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        content: Text('《${_displayTitle(sutra.title)}》的正文尚未下载（约 ${sutra.size}），是否现在下载？下载完成即可阅读。', style: TextStyle(color: _textSec)),
+        content: Text('《${_displayTitle(sutra.title, filePath: sutra.filePath)}》的正文尚未下载（约 ${sutra.size}），是否现在下载？下载完成即可阅读。', style: TextStyle(color: _textSec)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('取消', style: TextStyle(color: _textSec))),
           FilledButton(
@@ -295,7 +296,7 @@ class _FavoriteSutrasPageState extends State<FavoriteSutrasPage>
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  _displayTitle(sutra.title),
+                  _displayTitle(sutra.title, filePath: sutra.filePath),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

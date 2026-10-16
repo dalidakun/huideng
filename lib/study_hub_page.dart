@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'app_state.dart';
+import 'pull_reveal.dart';
 import 'auth_service.dart';
 import 'login_page.dart';
 import 'user_avatar.dart';
@@ -63,7 +63,8 @@ class StudyHubPageState extends State<StudyHubPage>
     with TickerProviderStateMixin, RouteAware {
   static SharedPreferences? _warmPrefs;
 
-  double _pullAccum = 0;
+  /// DeepSeek 下拉露出手势：跟手擦洗，松手按进度决定展开/收回。
+  final PullRevealTracker _pullReveal = PullRevealTracker();
 
   static Future<void> warmPrefs() async {
     _warmPrefs = await SharedPreferences.getInstance();
@@ -215,8 +216,14 @@ class StudyHubPageState extends State<StudyHubPage>
     final fav = _isCurrentFavoriteFromList(title, decoded);
     final read = _isCurrentReadFromList(title, decoded);
     final readLater = _isCurrentReadLaterFromList(title, decoded);
-    final mvBases = _multiVolumeBasesFromList(decoded);
+    // 多卷集合优先用随包全量目录（与阅读页/经藏列表同一份数据），它完整覆盖
+    // 全部经书；本地 sutras_list.json 只是用户子集，仅作兜底，否则会因集合缺失
+    // 漏掉「卷X」卷标（如主页精读卡）。
     await catalogF;
+    final catalogBases = NoteSutraCatalog.cachedMultiVolumeBases;
+    final mvBases = catalogBases.isNotEmpty
+        ? catalogBases
+        : _multiVolumeBasesFromList(decoded);
 
     // 经文卡小字元信息（部类 · 字数）：编目就绪后按基础经名取部类，
     // 字数取「当前精读的这一部经文」（优先按完整经名精确命中该卷，
@@ -640,8 +647,11 @@ class StudyHubPageState extends State<StudyHubPage>
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
 
-  String _displayTitle(String title) =>
-      sutraDisplayTitle(title, multiVolumeBases: _multiVolumeBases);
+  String _displayTitle(String title, {String? filePath}) => sutraDisplayName(
+        title,
+        filePath: filePath,
+        multiVolumeBases: _multiVolumeBases,
+      );
 
   Set<String> _multiVolumeBasesFromList(List<dynamic>? decoded) {
     try {
@@ -765,7 +775,7 @@ class StudyHubPageState extends State<StudyHubPage>
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(_displayTitle(title),
+                                  Text(_displayTitle(title, filePath: fp),
                                       style: TextStyle(
                                           fontSize: 15,
                                           fontWeight: FontWeight.w500,
@@ -904,21 +914,7 @@ class StudyHubPageState extends State<StudyHubPage>
       body: Stack(
         children: [
           NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              if (n is OverscrollNotification && n.overscroll < 0) {
-                _pullAccum -= n.overscroll;
-                if (_pullAccum > 120 && !homeReveal.value) {
-                  homeReveal.value = true;
-                }
-              } else if (n is ScrollEndNotification ||
-                  n is ScrollUpdateNotification) {
-                if (n is ScrollUpdateNotification && n.metrics.pixels > 0) {
-                  _pullAccum = 0;
-                }
-                if (n is ScrollEndNotification) _pullAccum = 0;
-              }
-              return false;
-            },
+            onNotification: _pullReveal.handleScrollNotification,
             child: ListView(
               controller: _scrollController,
               physics: const AlwaysScrollableScrollPhysics(),
@@ -1080,7 +1076,9 @@ class StudyHubPageState extends State<StudyHubPage>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(_displayTitle(_currentTitle!),
+                            Text(
+                                _displayTitle(_currentTitle!,
+                                    filePath: _currentFilePath),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(

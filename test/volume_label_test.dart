@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/cloud_notes_service.dart';
 import 'package:my_flutter_app/sutra_list_page.dart';
+import 'package:my_flutter_app/sutra_title_overrides.dart';
 
 void main() {
   group('卷标显示', () {
@@ -104,6 +106,51 @@ void main() {
         sutraAggregatedDisplayName('金刚般若波罗蜜经', multiVolumeBases: bases),
         '金刚般若波罗蜜经',
       );
+    });
+
+    test('统一展示名：基础经名 + 具体卷路径 → 显示对应卷（主页精读卡场景）', () {
+      final bases = {'地藏菩萨本愿经'};
+      expect(
+        sutraDisplayName('地藏菩萨本愿经',
+            filePath: 'assets/sutras_ascii/T13/T13n0412_001.txt',
+            multiVolumeBases: bases),
+        '地藏菩萨本愿经卷一',
+      );
+      // 路径缺失时按约定补「卷一」，不再出现「无卷标但点开是卷一」的不一致。
+      expect(
+        sutraDisplayName('地藏菩萨本愿经', multiVolumeBases: bases),
+        '地藏菩萨本愿经卷一',
+      );
+      // 单卷经书不加卷标。
+      expect(
+        sutraDisplayName('金刚般若波罗蜜经',
+            filePath: 'assets/sutras_ascii/T08/T08n0236_001.txt',
+            multiVolumeBases: bases),
+        '金刚般若波罗蜜经',
+      );
+    });
+
+    test('统一展示名：目录多卷集合缺失时，标题自带中文卷标仍保留', () {
+      expect(
+        sutraDisplayName('高僧传卷十一', multiVolumeBases: const {}),
+        '高僧传卷十一',
+      );
+    });
+
+    test('统一展示名：管理员订正经名按 filePath 编号命中（标题只有基础经名）', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      SharedPreferences.setMockInitialValues({});
+      await SutraTitleOverrides.setLocal('T13n0412_001', '地藏本愿经（订正）');
+      try {
+        expect(
+          sutraDisplayName('地藏菩萨本愿经',
+              filePath: 'assets/sutras_ascii/T13/T13n0412_001.txt',
+              multiVolumeBases: {'地藏菩萨本愿经'}),
+          '地藏本愿经（订正）',
+        );
+      } finally {
+        await SutraTitleOverrides.setLocal('T13n0412_001', null);
+      }
     });
   });
 
