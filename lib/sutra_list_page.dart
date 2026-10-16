@@ -23,6 +23,7 @@ import 'note_sutra_links.dart';
 import 'sutra_title_overrides.dart';
 
 import 'app_palette.dart';
+// PullRevealLockPhysics 仍用于本页滚动视图（锁定物理量在没有 tracker 时恒为未锁定）。
 import 'pull_reveal.dart';
 import 'sutra_descriptions.dart';
 import 'my_page.dart' show slideInFromLeft;
@@ -949,7 +950,6 @@ class SutraListPageState extends State<SutraListPage>
   /// 米黄为「经典入口」右侧搜索框。进入搜索激活状态并拉起键盘。
   void activateSearch() {
     if (!mounted) return;
-    _pullReveal.reset();
     if (_drawerOpen) _closeDrawer();
     setState(() {
       _searchActive = true;
@@ -997,12 +997,7 @@ class SutraListPageState extends State<SutraListPage>
     _dismissKeyboard();
   }
 
-  /// 素白外观经藏页的下拉露出手势：右上角被搜索图标占用后，DeepSeek 改由
-  /// 主页同款「顶部下拉」打开（跟手逐渐露出，反向上拖收回）。
-  /// 米黄外观保留右上角助手入口，不启用；搜索态/抽屉展开时中止。
-  /// 素白外观经藏页的下拉露出手势追踪器。构造时需读取实例状态
-  /// （搜索态/抽屉态/列表偏移），字段初值无法引用 this，故在 [initState] 赋值。
-    _loadAssetManifest();
+  String _resolveSutraPath(Sutra sutra) {
     return SutraAssetPath.resolve(
       title: sutra.title,
       filePath: sutra.filePath,
@@ -1445,13 +1440,6 @@ class SutraListPageState extends State<SutraListPage>
     _searchController.addListener(_filterSutras);
     // 已读进度/册数变化时刷新底部面板里的部类卡片。
     _sutraDataVersion.addListener(_onSutraDataChanged);
-    _pullReveal = PullRevealTracker(
-      canStart: () =>
-          AppPalette.instance.isPlain &&
-          !_searchActive &&
-          !_drawerOpen &&
-          (!_scrollController.hasClients || _scrollController.offset <= 0),
-    );
     _drawerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 320),
@@ -4511,7 +4499,6 @@ class SutraListPageState extends State<SutraListPage>
 
   void _openDrawer() {
     exitSearchIfActive();
-    _pullReveal.reset();
     setState(() {
       _drawerOpen = true;
     });
