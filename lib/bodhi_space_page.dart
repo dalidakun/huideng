@@ -707,6 +707,24 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     }
   }
 
+  /// 下拉刷新（RefreshIndicator 的 onRefresh）：重新拉取当前栏目第一页并整体替换列表。
+  ///
+  /// 本页此前的下拉手势用于「下拉露出 DeepSeek」，该手势已移除，下拉归还给刷新。
+  /// 语义与「切走栏目再切回来」对齐：
+  /// - 回到栏目默认排序（推荐=热度序），与 _feedNewestFirst 的说明一致；
+  /// - 复用后台刷新通道：结果写进栏目缓存后回灌界面，不闪整页加载态、
+  ///   不清空已经看到的列表；失败时保留缓存里的上一次内容；
+  /// - 「X 条新帖子」提醒由该通道内部清零（刷新后内容即是最新）。
+  /// 返回的 Future 在数据到位后完成，RefreshIndicator 才会收起指示器。
+  Future<void> _onPullToRefresh() async {
+    final tab = _plazaTabs[_tabIndex];
+    if (_feedNewestFirst) {
+      // 之前点过「显示X条新帖子」切到了最新优先视图：下拉刷新恢复栏目默认排序。
+      setState(() => _feedNewestFirst = false);
+    }
+    await _refreshFeedInBackground(tab);
+  }
+
   /// 「显示X帖子」/ 双击「菩提空间」菜单图标的轻量刷新：
   /// 仅拉取当前栏目最新一页，把列表中没有的新帖一次性插入到顶部，
   /// 不清空已加载的帖、不切换排序、不闪整页加载态。这是用户期望的
@@ -1884,16 +1902,22 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
         top: true,
         child: Stack(
           children: [
-            Listener(
-              behavior: HitTestBehavior.translucent,
-              child: GestureDetector(
-                // 左右滑动切换栏目：与纵向滚动在手势竞技场按方向共存；
-                // 胶囊行等自身可横滑的区域会优先消费横向手势。
-                onHorizontalDragEnd: (d) {
-                  final v = d.primaryVelocity ?? 0;
-                  if (v <= -300) _swipeToTab(_tabIndex + 1);
-                  if (v >= 300) _swipeToTab(_tabIndex - 1);
-                },
+            GestureDetector(
+              // 左右滑动切换栏目：与纵向滚动在手势竞技场按方向共存；
+              // 胶囊行等自身可横滑的区域会优先消费横向手势。
+              onHorizontalDragEnd: (d) {
+                final v = d.primaryVelocity ?? 0;
+                if (v <= -300) _swipeToTab(_tabIndex + 1);
+                if (v >= 300) _swipeToTab(_tabIndex - 1);
+              },
+              child: RefreshIndicator(
+                // 下拉刷新帖子流：本页下拉露出 DeepSeek 的手势已移除，
+                // 下拉手势归还给「刷新」（见 _onPullToRefresh）。
+                onRefresh: _onPullToRefresh,
+                color: AppPalette.p.accent,
+                backgroundColor: AppPalette.p.card,
+                // 顶部栏约 44 高且随内容滚走，指示器落在其下方，避免压住「菩提空间」标题。
+                displacement: 52,
                 child: CustomScrollView(
                   controller: _feedScroll,
                   physics: const AlwaysScrollableScrollPhysics(),
