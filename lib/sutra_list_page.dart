@@ -23,8 +23,6 @@ import 'note_sutra_links.dart';
 import 'sutra_title_overrides.dart';
 
 import 'app_palette.dart';
-// PullRevealLockPhysics 仍用于本页滚动视图（锁定物理量在没有 tracker 时恒为未锁定）。
-import 'pull_reveal.dart';
 import 'sutra_descriptions.dart';
 import 'my_page.dart' show slideInFromLeft;
 import 'reading_stage_data.dart';
@@ -2659,7 +2657,7 @@ class SutraListPageState extends State<SutraListPage>
             children: [
               Icon(Icons.auto_stories, color: headColor, size: 18),
               const SizedBox(width: 6),
-              Text('阅读进度',
+              Text('阅藏进度',
                   style: TextStyle(
                       color: headColor,
                       fontSize: 15,
@@ -4379,8 +4377,9 @@ class SutraListPageState extends State<SutraListPage>
               ),
             ),
             actions: [
-              // 素白外观：右上角（原 DeepSeek 位置）改放搜索图标，
-              // 点击后顶部悬浮展开搜索框；DeepSeek 改走主页同款下拉手势。
+              // 素白外观：右上角（原 DeepSeek 位置）改放搜索图标，点击后顶部悬浮展开搜索框。
+              // 注意：本页的「顶部下拉露出 DeepSeek」手势已移除，素白外观下本页不再有
+              // DeepSeek 入口；米黄外观仍保留下方「助手」图标。首页下拉入口不受影响。
               if (AppPalette.instance.isPlain && !_searchActive)
                 Padding(
                   padding: const EdgeInsets.only(right: 14),
@@ -4425,9 +4424,8 @@ class SutraListPageState extends State<SutraListPage>
                           ? _buildSearchResults()
                           : SingleChildScrollView(
                               controller: _scrollController,
-                              // 顶部始终可拖动：素白外观靠顶部下拉手势打开 DeepSeek。
-                              physics: const PullRevealLockPhysics(
-                                  parent: AlwaysScrollableScrollPhysics()),
+                              // 顶部始终可拖动（下拉回弹）。
+                              physics: const AlwaysScrollableScrollPhysics(),
                               // 底部留出常驻「全部经典」入口的高度，避免内容被遮住。
                               padding: const EdgeInsets.only(bottom: 96),
                               child: Column(
