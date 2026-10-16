@@ -25,6 +25,10 @@ import 'sutra_title_overrides.dart';
 import 'app_palette.dart';
 import 'pull_reveal.dart';
 import 'sutra_descriptions.dart';
+import 'my_page.dart' show slideInFromLeft;
+import 'reading_stage_data.dart';
+import 'reading_stage_page.dart';
+import 'reading_badges.dart' show canonPercentOf;
 
 /// 用于监听路由返回（例如从阅读页 pop 回来时刷新“最近阅读”）。
 final RouteObserver<ModalRoute<void>> routeObserver =
@@ -568,7 +572,7 @@ Future<Map<String, String>> buildSutraDisplayNameMap(
   }
 }
 
-/// 「循序读经指南」从易到难的读经阶段。icon 用 assets/menpai/jd1..jd5.png（黑色线条图）。
+/// 「百册经论指南」从易到难的读经阶段。icon 用 assets/menpai/jd1..jd5.png（黑色线条图）。
 class _ReadingStage {
   /// 徽标首行，如「阶段一」。
   final String stageNo;
@@ -592,37 +596,37 @@ class _ReadingStage {
 const List<_ReadingStage> _kReadingStages = [
   _ReadingStage(
     '阶段一',
-    '入门基础',
-    '熟悉佛法，开启智慧之门',
-    '从基本概念开始，了解佛教核心',
+    '初识佛法',
+    '认识佛法，明了因果',
+    '学习基础教义，认识解脱之道',
     'assets/menpai/jd1.png',
   ),
   _ReadingStage(
     '阶段二',
-    '大乘信仰',
-    '建立大乘信仰与宏大宇宙观',
-    '了解大乘佛教思想，培养慈悲智慧',
+    '发心向道',
+    '走入大乘，发菩提心',
+    '理解菩萨愿行，体会慈悲智慧',
     'assets/menpai/jd2.png',
   ),
   _ReadingStage(
     '阶段三',
-    '智慧解构',
-    '领会空性智慧，通晓历史戒律',
-    '深入空性思想，学习戒律与次第',
+    '般若观空',
+    '深入般若，体悟空性',
+    '学习缘起无我，破除执著分别',
     'assets/menpai/jd3.png',
   ),
   _ReadingStage(
     '阶段四',
-    '核心论书',
-    '攻克印度哲学论书与中国宗派',
-    '学习核心论典，了解中国佛教宗派',
+    '深研经义',
+    '深研经论，通达宗义',
+    '探究心性唯识，理解诸宗思想',
     'assets/menpai/jd4.png',
   ),
   _ReadingStage(
     '阶段五',
-    '密教史料',
-    '了解密教教理，进行工具史料扫尾',
-    '探索密教深义，完善佛教全貌',
+    '融会贯通',
+    '融会诸部，贯通佛法',
+    '广研经律论藏，深化整体认知',
     'assets/menpai/jd5.png',
   ),
 ];
@@ -682,25 +686,85 @@ class SutraListPageState extends State<SutraListPage>
     return _allSutras[Random().nextInt(_allSutras.length)];
   }
 
-  /// 「循序读经指南」当前激活的阶段下标（顶部圆点与下方卡片联动高亮）。
+  /// 「百册经论指南」当前激活的阶段下标（顶部圆点与下方卡片联动高亮）。
   int _readingStageIdx = 0;
 
-  /// 各阶段卡片的 GlobalKey：点顶部圆点时把对应卡片滚入视野。
-  final List<GlobalKey> _stageCardKeys =
-      List.generate(_kReadingStages.length, (_) => GlobalKey());
-
-  /// 点顶部阶段圆点：激活对应阶段卡片（联动高亮）并将其滚入视野。
+  /// 点顶部阶段圆点：仅激活对应阶段卡片（联动高亮），不滚动页面。
   void _selectReadingStage(int index) {
     if (_readingStageIdx != index) {
       setState(() => _readingStageIdx = index);
     }
-    final ctx = _stageCardKeys[index].currentContext;
-    if (ctx == null) return;
-    Scrollable.ensureVisible(
-      ctx,
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
-      alignment: 0.12,
+  }
+
+  /// 各阶段对应的读经编排（与 [_kReadingStages] 同序）。五个阶段均已接入。
+  ReadingStage? _readingStageOf(int index) {
+    if (index == 0) return kReadingStageOne;
+    if (index == 1) return kReadingStageTwo;
+    if (index == 2) return kReadingStageThree;
+    if (index == 3) return kReadingStageFour;
+    if (index == 4) return kReadingStageFive;
+    return null;
+  }
+
+  /// 各阶段进度缓存（已完成册数 /总册数，与 [_kReadingStages] 同序）。
+  /// 经书列表重建或 isRead 标记变化时置空，下次构建重算。
+  List<({int done, int total})>? _stageProgressCache;
+
+  /// 计算各阶段进度：按阶段页同样的编号主干匹配规则，命中该阶段编排的
+  /// 全部册即分母，其中 isRead==true 的册数即分子（23/230 → 10.00%）。
+  List<({int done, int total})> _stageProgressOf() {
+    final cached = _stageProgressCache;
+    if (cached != null) return cached;
+
+    // 按 CBETA 编号主干（去掉卷序号）索引经藏页全量目录。
+    final byBase = <String, List<Sutra>>{};
+    for (final s in _allSutras) {
+      final id = SutraDownloader.extractId(s.title, s.filePath);
+      if (id == null) continue;
+      final i = id.lastIndexOf('_');
+      if (i <= 0) continue;
+      byBase.putIfAbsent(id.substring(0, i), () => <Sutra>[]).add(s);
+    }
+
+    final result = <({int done, int total})>[];
+    for (var index = 0; index < _kReadingStages.length; index++) {
+      final stage = _readingStageOf(index);
+      if (stage == null) {
+        result.add((done: 0, total: 0));
+        continue;
+      }
+      final matched = <Sutra>{};
+      for (final sutra in stage.sutras) {
+        for (final ed in sutra.editions) {
+          for (final base in ed.ids) {
+            for (final entry in byBase[base] ?? const <Sutra>[]) {
+              final id = SutraDownloader.extractId(entry.title, entry.filePath);
+              if (id == null) continue;
+              final vol = sutraVolumeOf(id);
+              if (ed.volFrom != null && vol < ed.volFrom!) continue;
+              if (ed.volTo != null && vol > ed.volTo!) continue;
+              matched.add(entry);
+            }
+          }
+        }
+      }
+      result.add((
+        done: matched.where((s) => s.isRead).length,
+        total: matched.length,
+      ));
+    }
+    return _stageProgressCache = result;
+  }
+
+  /// 点阶段卡片：往左侧滑出该阶段的读经页（复用经藏的下载/阅读逻辑）。
+  void _openReadingStage(int index) {
+    final stage = _readingStageOf(index);
+    if (stage == null) {
+      _showToast('${_kReadingStages[index].badgeName}整理中');
+      return;
+    }
+    Navigator.of(context).push(
+      slideInFromLeft(ReadingStagePage(stage: stage, parent: this)),
     );
   }
 
@@ -711,10 +775,17 @@ class SutraListPageState extends State<SutraListPage>
   /// 「屏幕高度 - 状态栏 - 菜单栏 - header」推算，无需二次测量。
   static const double _shelfHeaderH = 50;
 
+  /// 展开态在面板顶部额外留出的呼吸空间：随展开比例渐入，
+  /// 折叠态（open=0）为 0，原间距与布局完全不变。
+  static const double _shelfOpenTopExtra = 12;
+
+  /// 展开到顶时，面板上沿与顶部 bar 下边缘之间保留的间隔。
+  static const double _shelfTopGap = 10;
+
   /// 面板顶部左右圆角半径（阴影层需与面板保持一致的圆角）。
   /// 注意：面板折叠态高 [_shelfHeaderH]，半径超过该高度会被渲染端等比压缩成
-  /// 「整条侧边都是弧」的圆拱，所以取 32（约 2/3 高度）这类明确可见的圆角。
-  static const double _shelfTopRadius = 32;
+  /// 「整条侧边都是弧」的圆拱，所以取 16 这类明确可见又不夸张的圆角。
+  static const double _shelfTopRadius = 16;
 
   /// 顶边阴影向上扩散的距离（阴影层高度 = 该值 + 6）。
   static const double _shelfShadowReach = 14;
@@ -878,6 +949,7 @@ class SutraListPageState extends State<SutraListPage>
   /// 米黄为「经典入口」右侧搜索框。进入搜索激活状态并拉起键盘。
   void activateSearch() {
     if (!mounted) return;
+    _pullReveal.reset();
     if (_drawerOpen) _closeDrawer();
     setState(() {
       _searchActive = true;
@@ -928,15 +1000,9 @@ class SutraListPageState extends State<SutraListPage>
   /// 素白外观经藏页的下拉露出手势：右上角被搜索图标占用后，DeepSeek 改由
   /// 主页同款「顶部下拉」打开（跟手逐渐露出，反向上拖收回）。
   /// 米黄外观保留右上角助手入口，不启用；搜索态/抽屉展开时中止。
-  final PullRevealTracker _pullReveal = PullRevealTracker();
-
-  bool _onBodyScrollNotification(ScrollNotification n) {
-    if (!AppPalette.instance.isPlain || _searchActive || _drawerOpen) {
-      _pullReveal.reset();
-      return false;
-    }
-    return _pullReveal.handleScrollNotification(n);
-  }
+  /// 素白外观经藏页的下拉露出手势追踪器。构造时需读取实例状态
+  /// （搜索态/抽屉态/列表偏移），字段初值无法引用 this，故在 [initState] 赋值。
+  late final PullRevealTracker _pullReveal;
 
   String _resolveSutraPath(Sutra sutra) {
     return SutraAssetPath.resolve(
@@ -1381,6 +1447,13 @@ class SutraListPageState extends State<SutraListPage>
     _searchController.addListener(_filterSutras);
     // 已读进度/册数变化时刷新底部面板里的部类卡片。
     _sutraDataVersion.addListener(_onSutraDataChanged);
+    _pullReveal = PullRevealTracker(
+      canStart: () =>
+          AppPalette.instance.isPlain &&
+          !_searchActive &&
+          !_drawerOpen &&
+          (!_scrollController.hasClients || _scrollController.offset <= 0),
+    );
     _drawerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 320),
@@ -1418,6 +1491,7 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 已读数据变化：底部面板里的部类卡片显示已读百分比，需要同步刷新。
   void _onSutraDataChanged() {
+    _stageProgressCache = null;
     if (mounted) setState(() {});
   }
 
@@ -1619,6 +1693,7 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   void _applySutraList(List<Sutra> list) {
+    _stageProgressCache = null;
     setState(() {
       _allSutras = List.from(list);
       _multiVolumeBases = collectMultiVolumeBases(_allSutras);
@@ -1682,6 +1757,48 @@ class SutraListPageState extends State<SutraListPage>
     // 反映的还是旧的内存状态，已下载的经文被误显示为未下载。
     await _loadDownloadedIds();
     if (mounted) setState(() {});
+  }
+
+  /// 只重读 sutras_list.json 里的 isRead/readTime 标记（不联网刷新经名），
+  /// 供阶段页/宗门详情页从阅读页返回时同步「标记完成」颜色与阶段进度。
+  Future<void> reloadReadFlags() async {
+    try {
+      final file = await _sutraListFile();
+      if (!await file.exists()) return;
+      final fresh = await _parseSutraListFile(file);
+      final byTitle = {for (final s in fresh) s.title: s};
+      var changed = false;
+      final merged = <Sutra>[];
+      for (final s in _allSutras) {
+        final f = byTitle[s.title];
+        if (f != null && (f.isRead != s.isRead || f.readTime != s.readTime)) {
+          merged.add(Sutra(
+            s.title,
+            s.size,
+            charCount: s.charCount,
+            isPinned: s.isPinned,
+            isRead: f.isRead,
+            isFavorite: s.isFavorite,
+            isReadLater: s.isReadLater,
+            filePath: s.filePath,
+            folder: s.folder,
+            favoriteTime: s.favoriteTime,
+            readTime: f.readTime,
+            readLaterTime: s.readLaterTime,
+          ));
+          changed = true;
+        } else {
+          merged.add(s);
+        }
+      }
+      if (changed) {
+        _applySutraList(merged);
+        // 广播给阶段页/宗门页/收藏页等所有监听者，统一刷新完成颜色。
+        _sutraDataVersion.value++;
+      }
+    } catch (_) {
+      // 读取失败保持现有状态。
+    }
   }
 
   Future<File> _sutraListFile() async {
@@ -2000,6 +2117,7 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   Future<void> _toggleRead(int index) async {
+    _stageProgressCache = null;
     setState(() {
       _allSutras[index] = Sutra(
         _allSutras[index].title,
@@ -2019,6 +2137,8 @@ class SutraListPageState extends State<SutraListPage>
     });
     await _saveSutras();
     await SutraFavorites.syncStatePref(_allSutras[index].title);
+    // 已读标记变化：通知阶段页/宗门页等监听者刷新「完成」颜色与进度。
+    _sutraDataVersion.value++;
   }
 
   Future<void> _toggleReadLater(int index) async {
@@ -3576,7 +3696,7 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 「循序读经指南」——随缘读经下方的读经引导区：顶部是五阶段进度圆点，
+  /// 「百册经论指南」——随缘读经下方的读经引导区：顶部是五阶段进度圆点，
   /// 下面依次是每个阶段的卡片，按从易到难排列。
   /// 点击进入对应阶段内容的跳转暂未接入，这里先只做展示。
   Widget _buildWhatToReadSection() {
@@ -3608,7 +3728,7 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 「循序读经指南」栏目标题：金色竖杠 + 两行文字（标题 / 副标题）。
+  /// 「百册经论指南」栏目标题：金色竖杠 + 两行文字（标题 / 副标题）。
   Widget _buildWhatToReadHeader(Color accent) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3627,7 +3747,7 @@ class SutraListPageState extends State<SutraListPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '循序读经指南',
+                '百册经论指南',
                 style: TextStyle(
                   color: AppPalette.p.text,
                   fontSize: 21,
@@ -3741,20 +3861,25 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 单个阶段卡片：徽标 + 图标 + 标题/简介 + 难度星级；
+  /// 单个阶段卡片：徽标 + 进度圆环 + 标题/简介 + 难度星级；
   /// 高亮的是当前激活的阶段（顶部圆点点击联动）。
+  /// 进度圆环样式与侧边栏昵称右侧的阅藏进度一致：灰色扇形铺底 + 黑色进度弧 +
+  /// 圆心百分比；数值为该阶段已标记完成册数占该阶段总册数的比例。
   Widget _buildStageCard(_ReadingStage stage, int index) {
     final p = AppPalette.p;
     final accent = p.accent;
     final isCurrent = index == _readingStageIdx;
+    final progress = _stageProgressOf()[index];
+    final progressValue = progress.total > 0
+        ? (progress.done / progress.total).clamp(0.0, 1.0).toDouble()
+        : 0.0;
     return Material(
-      key: _stageCardKeys[index],
       color: isCurrent ? p.tintBg : p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        // TODO: 点击进入该阶段对应的读经内容（暂未接入）。
-        onTap: () {},
+        // 点击进入该阶段对应的读经页（阶段一已接入，其余整理中）。
+        onTap: () => _openReadingStage(index),
         child: Container(
           padding: const EdgeInsets.fromLTRB(10, 11, 8, 11),
           decoration: BoxDecoration(
@@ -3799,13 +3924,46 @@ class SutraListPageState extends State<SutraListPage>
                 ),
               ),
               const SizedBox(width: 6),
-              Image.asset(
-                stage.icon,
-                width: 30,
-                height: 30,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.medium,
-                color: p.primary,
+              // 进度圆环：比原图标位略宽，右侧标题/简介整体右移腾位。
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // 已完成进度的灰色扇形，垫在圆环与百分比之下，避免盖住文字。
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _StageProgressSectorPainter(
+                          progress: progressValue,
+                          color: const Color(0xFFE0E0E0),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: CircularProgressIndicator(
+                        value: progressValue,
+                        strokeWidth: 3,
+                        backgroundColor: const Color(0xFFE9E9E9),
+                        valueColor:
+                            const AlwaysStoppedAnimation(Colors.black),
+                      ),
+                    ),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        canonPercentOf(progress.done, progress.total),
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          height: 1.1,
+                          fontWeight: FontWeight.w600,
+                          color: p.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(width: 8),
               Container(width: 1, height: 46, color: p.divider),
@@ -4267,8 +4425,12 @@ class SutraListPageState extends State<SutraListPage>
                 ),
             ],
           ),
-          body: NotificationListener<ScrollNotification>(
-            onNotification: _onBodyScrollNotification,
+          body: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: _pullReveal.onPointerDown,
+            onPointerMove: _pullReveal.onPointerMove,
+            onPointerUp: _pullReveal.onPointerUp,
+            onPointerCancel: _pullReveal.onPointerCancel,
             child: Stack(
               children: [
                 Column(
@@ -4282,7 +4444,8 @@ class SutraListPageState extends State<SutraListPage>
                           : SingleChildScrollView(
                               controller: _scrollController,
                               // 顶部始终可拖动：素白外观靠顶部下拉手势打开 DeepSeek。
-                              physics: const AlwaysScrollableScrollPhysics(),
+                              physics: const PullRevealLockPhysics(
+                                  parent: AlwaysScrollableScrollPhysics()),
                               // 底部留出常驻「全部经典」入口的高度，避免内容被遮住。
                               padding: const EdgeInsets.only(bottom: 96),
                               child: Column(
@@ -4295,7 +4458,7 @@ class SutraListPageState extends State<SutraListPage>
                                   ] else ...[
                                     _buildQuickGrid(),
                                   ],
-                                  // 「循序读经指南」从易到难的读经阶段（随缘读经下方）。
+                                  // 「百册经论指南」从易到难的读经阶段（随缘读经下方）。
                                   _buildWhatToReadSection(),
                                 ],
                               ),
@@ -4354,6 +4517,7 @@ class SutraListPageState extends State<SutraListPage>
 
   void _openDrawer() {
     exitSearchIfActive();
+    _pullReveal.reset();
     setState(() {
       _drawerOpen = true;
     });
@@ -4379,7 +4543,9 @@ class SutraListPageState extends State<SutraListPage>
     final available = mq.size.height -
         (mq.padding.top + kToolbarHeight) -
         mq.padding.bottom;
-    return available - _shelfHeaderH;
+    // 展开态 header 会随 [_shelfOpenTopExtra] 变高一截，这里一并扣掉，
+    // 再减去 [_shelfTopGap]，保证展开到顶时面板上沿停在顶部 bar 下方并留出间隔。
+    return available - _shelfHeaderH - _shelfOpenTopExtra - _shelfTopGap;
   }
 
   /// 单击 header：折叠 ↔ 展开。
@@ -4458,17 +4624,29 @@ class SutraListPageState extends State<SutraListPage>
                   ),
                 ),
               ),
-              // 上边界阴影：只画在面板之外，不压暗面板，保持按钮底色干净。
+              // 上边界阴影：只画在面板之外，不压暗面板，保持按钮底色干净；
+              // 阴影沿顶边与左右圆角外缘扩散，因此层高要覆盖到圆角底部。
               Positioned(
                 left: 0,
                 right: 0,
                 top: -_shelfShadowReach,
-                height: _shelfShadowReach + 6,
+                height: _shelfShadowReach + _shelfTopRadius + 6,
                 child: _TopEdgeShadow(
                   radius: _shelfTopRadius,
                   reach: _shelfShadowReach,
-                  blur: 6,
-                  color: Colors.black.withValues(alpha: 0.08),
+                  blur: 2.5,
+                  color: Colors.black.withValues(alpha: 0.1),
+                ),
+              ),
+              // 上边界细线：沿左右圆角连续描边（BoxBorder/PolygonBorder 画不出圆角段）。
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: _ShelfTopBorderPainter(
+                      radius: _shelfTopRadius,
+                      color: AppPalette.p.borderSoft,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -4480,15 +4658,19 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 面板 header：固定高度，单击开合、上下拖动擦洗展开比例（本身不画底，玻璃由外层提供）。
   Widget _buildShelfHeader() {
+    // 展开时顶部多留一点呼吸空间：随展开比例渐入，
+    // 高度与上内边距同步增长，header 内文字与下方内容的位置保持不变，
+    // 因此折叠态（open=0）间距与原来完全一致。
+    final openExtra = _shelfOpenTopExtra * _shelfController.value;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _toggleShelf,
       onVerticalDragUpdate: _onShelfDragUpdate,
       onVerticalDragEnd: _onShelfDragEnd,
       child: SizedBox(
-        height: _shelfHeaderH,
+        height: _shelfHeaderH + openExtra,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          padding: EdgeInsets.fromLTRB(16, 8 + openExtra, 16, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -4915,34 +5097,56 @@ class _TopEdgeShadowPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 面板顶边位于 y = reach。
+    // 面板顶边位于 y = reach；左右圆角落在 [reach, reach + radius]，层高需覆盖到那里。
     final top = reach;
-    final panelRect = Rect.fromLTWH(0, top, size.width, size.height - top);
+    final r = radius;
+    final w = size.width;
+    if (w <= r * 2 || size.height <= top + r) return;
+
+    // 沿面板顶边描一条与轮廓完全重合的路径：直线 + 左右圆角，
+    // 这样阴影是顺着圆角边界扩散的，而不是一条与圆角无关的水平带；
+    // 不往两侧竖直延伸，避免圆角下方贴着左右出现残影。
+    final edge = Path()
+      ..moveTo(0, top + r)
+      ..arcTo(
+        Rect.fromCircle(center: Offset(r, top + r), radius: r),
+        pi,
+        pi / 2,
+        false,
+      )
+      ..lineTo(w - r, top)
+      ..arcTo(
+        Rect.fromCircle(center: Offset(w - r, top + r), radius: r),
+        3 * pi / 2,
+        pi / 2,
+        false,
+      );
+
+    // 面板本体：裁掉内侧，阴影只留在轮廓之外，不压暗按钮底色。
     final panel = Path()
       ..addRRect(RRect.fromRectAndCorners(
-        panelRect,
-        topLeft: Radius.circular(radius),
-        topRight: Radius.circular(radius),
+        Rect.fromLTWH(0, top, w, size.height - top),
+        topLeft: Radius.circular(r),
+        topRight: Radius.circular(r),
       ));
     final all = Path()
       ..addRect(Rect.fromLTWH(
-        -size.width,
+        -w,
         -size.height,
-        size.width * 3,
+        w * 3,
         size.height * 3,
       ));
     canvas.save();
+    // 只保留圆角切线以上那一带，模糊不会往下溢出到左右两侧。
+    canvas.clipRect(Rect.fromLTWH(0, 0, w, top + r));
     canvas.clipPath(Path.combine(PathOperation.difference, all, panel));
-    canvas.drawRRect(
-      // 阴影略上移：峰值落在上沿之上，贴边处更淡，不会在上沿形成生硬的分割线。
-      RRect.fromRectAndCorners(
-        panelRect.shift(const Offset(0, -6)),
-        topLeft: Radius.circular(radius),
-        topRight: Radius.circular(radius),
-      ),
+    canvas.drawPath(
+      edge,
       Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = reach / 4
         ..color = color
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur / 2),
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur),
     );
     canvas.restore();
   }
@@ -4953,4 +5157,75 @@ class _TopEdgeShadowPainter extends CustomPainter {
       oldDelegate.reach != reach ||
       oldDelegate.blur != blur ||
       oldDelegate.color != color;
+}
+
+/// 面板顶边细线：从左边往上、沿左圆角、横过顶边、再沿右圆角往下收尾，
+/// 一整条连续描边（`BoxDecoration.border` 只会画出中间那段水平线，
+/// 圆角段被 ClipRRect 裁掉），线宽走内描边，正好压在面板轮廓内侧。
+class _ShelfTopBorderPainter extends CustomPainter {
+  const _ShelfTopBorderPainter({
+    required this.radius,
+    required this.color,
+  });
+
+  final double radius;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = radius;
+    final w = size.width;
+    if (w <= r * 2 || size.height <= r) return;
+    final path = Path()
+      ..moveTo(0, r)
+      // 左圆角：从 (0, r) 顺时针扫到 (r, 0)。
+      ..arcTo(Rect.fromCircle(center: Offset(r, r), radius: r), pi, pi / 2, false)
+      ..lineTo(w - r, 0)
+      // 右圆角：从 (w - r, 0) 顺时针扫到 (w, r)。
+      ..arcTo(
+        Rect.fromCircle(center: Offset(w - r, r), radius: r),
+        3 * pi / 2,
+        pi / 2,
+        false,
+      );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ShelfTopBorderPainter oldDelegate) =>
+      oldDelegate.radius != radius || oldDelegate.color != color;
+}
+
+/// 阶段进度圆环内部的灰色扇形：从正上方（12 点）起顺时针铺出已完成的比例。
+/// 仅作圆内底色，取浅灰以免压住圆心的百分比文字（与侧边栏阅藏进度同款）。
+class _StageProgressSectorPainter extends CustomPainter {
+  const _StageProgressSectorPainter({
+    required this.progress,
+    required this.color,
+  });
+
+  final double progress;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0) return;
+    final rect = Offset.zero & size;
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    // -pi/2 为 12 点方向；drawArc 的 useCenter=true 从圆心拉出扇面。
+    canvas.drawArc(
+        rect, -pi / 2, 2 * pi * progress.clamp(0.0, 1.0), true, paint);
+  }
+
+  @override
+  bool shouldRepaint(_StageProgressSectorPainter old) =>
+      old.progress != progress || old.color != color;
 }

@@ -1798,10 +1798,13 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
 
 /// Home page pull-down reveal.
 ///
-/// Wraps the whole app content ([child]). When [homeReveal] becomes true the
-/// home content is pushed straight down while the DeepSeek chat page slides in
-/// from the top; closing reverses the motion. A close (X) button floats at the
-/// top-left of the DeepSeek page.
+/// Wraps the whole app content ([child]). DeepSeek 页固定在主页身后；下拉时主页
+/// 整体往下滑动，身后的 DeepSeek 页随之逐渐「漏出」（上下两个页面互相推拉）：
+/// - 顶部 DeepSeek 页区域先出现一个灰色圆点，随下拉逐渐「裂开」成三个并铺开
+///   到临界位置（进度 [ _crit ] 处）；主页同时逐渐变模糊。
+/// - 越过临界点后继续下拉，DeepSeek 页由朦胧转为清晰；松手时进度过半才自动
+///   展开 DeepSeek，否则主页弹回原位。
+/// 关闭时反向播放；DeepSeek 页顶部中央有一枚关闭 (X) 按钮。
 class _HomeRevealStage extends StatefulWidget {
   const _HomeRevealStage({required this.child});
 
@@ -1874,6 +1877,10 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
     super.dispose();
   }
 
+  /// 临界点：三个圆点恰好展开到位的位置。越过它松手才会自动展开 DeepSeek，
+  /// 否则弹回主页。与 [PullRevealTracker.commitProgress] 保持一致（0.5）。
+  static const double _crit = 0.5;
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -1881,51 +1888,83 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
       builder: (context, _) {
         final t = _ctrl.value;
         final height = MediaQuery.of(context).size.height;
+
+        // 圆点从主页开始下移、顶部露出 DeepSeek 区域时才出现（先是一个圆点），
+        // 展开进度到临界点正好铺成三个。
+        const double dotsStart = 0.1;
+        final dotsT =
+            ((t - dotsStart) / (_crit - dotsStart)).clamp(0.0, 1.0);
+        final dotsIn = (dotsT * 4).clamp(0.0, 1.0);
+        // 越过临界点后圆点淡出，让位给逐渐清晰的 DeepSeek 页。
+        final dotsOpacity = t <= _crit
+            ? dotsIn
+            : (1.0 - (t - _crit) / (1 - _crit)).clamp(0.0, 1.0);
+
+        // 主页跟手整体往下滑动：滑走多少，顶部的 DeepSeek 页就露出多少。
+        final homeShift = height * t;
+        // 淡出：整棵 App 子树做透明度合成已是全屏 saveLayer，成本不低。
+        final homeOpacity = (1.0 - t * 0.35).clamp(0.0, 1.0);
+
         return Stack(
           children: [
-            // 主页内容保持固定不动：DeepSeek 页像帘子一样从顶部盖下来。
-            IgnorePointer(
-              ignoring: t > 0.01,
-              child: widget.child,
-            ),
-            IgnorePointer(
-              ignoring: t < 0.99,
-              child: Transform.translate(
-                offset: Offset(0, -height * (1 - t)),
+            // DeepSeek 页：全屏浅色底上，把 DeepSeek 页硬裁剪到顶部 t·h 区域。
+            // 主页下移多少，顶部这块就露出多少，两块面积一增一减。
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: t < 0.99,
                 child: Material(
                   color: const Color(0xFFf0f3f8),
                   child: Stack(
                     children: [
-                      Positioned.fill(
-                        child: SafeArea(
-                          bottom: true,
-                          child: const DiscussionPage(
-                            surface: AssistantSurface.home,
-                          ),
-                        ),
-                      ),
+                      // 硬裁剪：DeepSeek 页只在顶部 t·h 区域露出（与主页下移量同步），
+                      // 于是主页下半块的半透明不再「透出整张 DeepSeek 页」。
+                      // 内层 SizedBox 仍按全屏高度布局，WebView 不重排，只做裁剪。
                       Positioned(
                         top: 0,
                         left: 0,
                         right: 0,
-                        child: SafeArea(
-                          bottom: false,
-                          child: Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Center(
-                              child: Material(
-                                color: Colors.white,
-                                shape: const CircleBorder(),
-                                elevation: 3,
-                                child: InkWell(
-                                  customBorder: const CircleBorder(),
-                                  onTap: () => homeReveal.value = false,
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(8),
-                                    child: Icon(
-                                      Icons.close,
-                                      size: 20,
-                                      color: AppPalette.p.primary,
+                        child: ClipRect(
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            heightFactor: t,
+                            child: SizedBox(
+                              width: double.infinity,
+                              height: height,
+                              child: SafeArea(
+                                bottom: true,
+                                child: const DiscussionPage(
+                                  surface: AssistantSurface.home,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // 关闭按钮：DeepSeek 已基本漏出时才出现，避免与圆点挤在顶部。
+                      if (t > 0.6)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: SafeArea(
+                            bottom: false,
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Center(
+                                child: Material(
+                                  color: Colors.white,
+                                  shape: const CircleBorder(),
+                                  elevation: 3,
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    onTap: () => homeReveal.value = false,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(8),
+                                      child: Icon(
+                                        Icons.close,
+                                        size: 20,
+                                        color: AppPalette.p.primary,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1933,15 +1972,85 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
                             ),
                           ),
                         ),
-                      ),
                     ],
                   ),
+                ),
+              ),
+            ),
+            // 下拉指示：位于 DeepSeek 页顶部区域，随下拉逐渐展开成三个圆点。
+            if (dotsOpacity > 0.01)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Align(
+                    alignment: const Alignment(0, -0.76),
+                    child: Opacity(
+                      opacity: dotsOpacity,
+                      child: _PullDots(t: dotsT),
+                    ),
+                  ),
+                ),
+              ),
+            // 主页内容：整体下移 + 淡出，露出顶部的 DeepSeek 页。
+            // 只做平移（Transform）与透明度，避免对整棵 App 子树做高斯模糊——
+            // 全屏模糊每帧都要 saveLayer 重新栅格化，是掉帧的主因。
+            // RepaintBoundary 缓存主页位图：露出期间主页被冻结、画面不变，
+            // 每帧只需复用缓存再叠加透明度/平移，避免整棵 App 反复重绘。
+            IgnorePointer(
+              ignoring: t > 0.01,
+              child: Opacity(
+                opacity: homeOpacity,
+                child: Transform.translate(
+                  offset: Offset(0, homeShift),
+                  child: RepaintBoundary(child: widget.child),
                 ),
               ),
             ),
           ],
         );
       },
+    );
+  }
+}
+
+/// 下拉指示：一个灰色圆点随下拉逐渐「裂开」为三个圆点，并铺开到临界位置。
+///
+/// [t] 为 0 → 1 的展开进度：0 时外侧两点缩放为 0、间距为 0（看起来就是一个
+/// 圆点）；1 时三点成型并分散到位（这一刻正是展开/回弹的临界点）。
+class _PullDots extends StatelessWidget {
+  const _PullDots({required this.t});
+
+  final double t;
+
+  static const double _dot = 10;
+  static const double _maxGap = 14;
+
+  @override
+  Widget build(BuildContext context) {
+    final gap = _maxGap * t;
+    final outer = _dot * t;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _dotBox(outer),
+        SizedBox(width: gap),
+        _dotBox(_dot),
+        SizedBox(width: gap),
+        _dotBox(outer),
+      ],
+    );
+  }
+
+  Widget _dotBox(double size) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: Color(0xFFB4BCC4),
+          shape: BoxShape.circle,
+        ),
+      ),
     );
   }
 }

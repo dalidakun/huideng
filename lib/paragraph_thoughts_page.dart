@@ -507,7 +507,6 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
   }
 
   Widget _buildThoughtCard(_Thought t) {
-    final p = AppPalette.p;
     final own = t.ownNote;
     // 旧备注（未记录选中文字）没有 quoted，回退显示整段经文，保证每段都能看到「经文」。
     final quotedText =
@@ -529,11 +528,11 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
               quotedText,
               maxLines: 4,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 14,
                 height: 1.6,
                 fontWeight: FontWeight.w600,
-                color: p.textSec,
+                color: Colors.black,
               ),
             ),
           ),
@@ -575,7 +574,7 @@ class _ParagraphThoughtsPageState extends State<ParagraphThoughtsPage> {
           text,
           maxLines: expanded ? null : 5,
           overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 15, height: 1.6, color: p.text),
+          style: TextStyle(fontSize: 15, height: 1.6, color: p.textSec),
         ),
         if (text.length > 80) ...[
           const SizedBox(height: 4),

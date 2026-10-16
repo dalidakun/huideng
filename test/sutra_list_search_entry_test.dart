@@ -138,6 +138,11 @@ void main() {
         reason: '继续下拉应继续逐渐露出');
     expect(homeReveal.value, isFalse, reason: '松手前只跟手露出，不直接展开');
 
+    // 露出期间底层页面必须「僵死」：内容滚动偏移保持为 0，不跟手滑动。
+    final scrollState = tester.state<ScrollableState>(scrollable);
+    expect(scrollState.position.pixels, 0,
+        reason: '逐渐露出期间经藏页内容应钉死不动');
+
     await gesture.moveBy(const Offset(0, -240));
     await tester.pump();
     expect(homeRevealScrub.value, 0, reason: '反向上拖应把露出量收回');

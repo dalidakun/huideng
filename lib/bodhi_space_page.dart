@@ -123,7 +123,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   }
 
   /// DeepSeek 下拉露出手势：跟手擦洗，松手按进度决定展开/收回。
-  final PullRevealTracker _pullReveal = PullRevealTracker();
+  /// 仅在帖子流已滚到最顶部时才可接管，避免还有上方内容时下拉就露出 DeepSeek。
+  late final PullRevealTracker _pullReveal;
   int _tabIndex = 0;
   List<String> _plazaTabs = ['discuss', 'hot', 'follow'];
   /// 自定义工具栏：栏目名（默认「列表」，可改名）+ 经文/话题条目（数量不限），
@@ -232,6 +233,10 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   void initState() {
     super.initState();
     NoteSutraCatalog.load(); // 预加载经书目录，让卡片 @经书 提取可用
+    _pullReveal = PullRevealTracker(
+      canStart: () =>
+          !_feedScroll.hasClients || _feedScroll.offset <= 0,
+    );
     _feedScroll.addListener(_onFeedScroll);
     final tabOrderFuture = _loadTabOrder();
     unawaited(_loadCustomTab());
@@ -1887,8 +1892,12 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
         top: true,
         child: Stack(
           children: [
-            NotificationListener<ScrollNotification>(
-              onNotification: _pullReveal.handleScrollNotification,
+            Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: _pullReveal.onPointerDown,
+              onPointerMove: _pullReveal.onPointerMove,
+              onPointerUp: _pullReveal.onPointerUp,
+              onPointerCancel: _pullReveal.onPointerCancel,
               child: GestureDetector(
                 // 左右滑动切换栏目：与纵向滚动在手势竞技场按方向共存；
                 // 胶囊行等自身可横滑的区域会优先消费横向手势。

@@ -64,7 +64,9 @@ class StudyHubPageState extends State<StudyHubPage>
   static SharedPreferences? _warmPrefs;
 
   /// DeepSeek 下拉露出手势：跟手擦洗，松手按进度决定展开/收回。
-  final PullRevealTracker _pullReveal = PullRevealTracker();
+  /// 仅在列表已滚到最顶部时才可接管：否则从中间往下拉会先把 DeepSeek 露出，
+  /// 而不是先滚回顶部（这就是「上面还有内容却出现 DeepSeek 页」的 bug）。
+  late final PullRevealTracker _pullReveal;
 
   static Future<void> warmPrefs() async {
     _warmPrefs = await SharedPreferences.getInstance();
@@ -127,6 +129,12 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void initState() {
     super.initState();
+    // 列表滚到最顶部（offset <= 0）才允许下拉露出 DeepSeek，
+    // 避免页面还有上方内容时下拉就被 DeepSeek 页接管。
+    _pullReveal = PullRevealTracker(
+      canStart: () =>
+          !_scrollController.hasClients || _scrollController.offset <= 0,
+    );
     _pulseController = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1500));
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(
@@ -913,11 +921,16 @@ class StudyHubPageState extends State<StudyHubPage>
       ),
       body: Stack(
         children: [
-          NotificationListener<ScrollNotification>(
-            onNotification: _pullReveal.handleScrollNotification,
+          Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: _pullReveal.onPointerDown,
+            onPointerMove: _pullReveal.onPointerMove,
+            onPointerUp: _pullReveal.onPointerUp,
+            onPointerCancel: _pullReveal.onPointerCancel,
             child: ListView(
               controller: _scrollController,
-              physics: const AlwaysScrollableScrollPhysics(),
+              physics: const PullRevealLockPhysics(
+                  parent: AlwaysScrollableScrollPhysics()),
               padding: EdgeInsets.fromLTRB(16, 4, 16,
                   MediaQuery.of(context).padding.bottom + 10),
               children: [
