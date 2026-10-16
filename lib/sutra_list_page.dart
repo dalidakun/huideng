@@ -1002,9 +1002,7 @@ class SutraListPageState extends State<SutraListPage>
   /// 米黄外观保留右上角助手入口，不启用；搜索态/抽屉展开时中止。
   /// 素白外观经藏页的下拉露出手势追踪器。构造时需读取实例状态
   /// （搜索态/抽屉态/列表偏移），字段初值无法引用 this，故在 [initState] 赋值。
-  late final PullRevealTracker _pullReveal;
-
-  String _resolveSutraPath(Sutra sutra) {
+    _loadAssetManifest();
     return SutraAssetPath.resolve(
       title: sutra.title,
       filePath: sutra.filePath,
@@ -4427,10 +4425,6 @@ class SutraListPageState extends State<SutraListPage>
           ),
           body: Listener(
             behavior: HitTestBehavior.translucent,
-            onPointerDown: _pullReveal.onPointerDown,
-            onPointerMove: _pullReveal.onPointerMove,
-            onPointerUp: _pullReveal.onPointerUp,
-            onPointerCancel: _pullReveal.onPointerCancel,
             child: Stack(
               children: [
                 Column(

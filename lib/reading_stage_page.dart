@@ -25,12 +25,25 @@ class ReadingStagePage extends StatefulWidget {
     super.key,
     required this.stage,
     this.parent,
+    this.headerTitle,
+    this.headerSubtitle,
+    this.headerIcon,
   });
 
   final ReadingStage stage;
 
   /// 经藏页 State，用于复用下载/阅读逻辑与已下载状态。
   final SutraListPageState? parent;
+
+  /// banner 标题覆盖：非空时显示该文案（如「廿册精选经典」），
+  /// 否则沿用「阶段X · 阶段名」。同时作为「是否自定义 banner」的开关。
+  final String? headerTitle;
+
+  /// banner 副标题覆盖：为空时沿用 [ReadingStage.title]。
+  final String? headerSubtitle;
+
+  /// banner 图标覆盖：自定义 banner 时用它（为空则不显示图标）。
+  final String? headerIcon;
 
   @override
   State<ReadingStagePage> createState() => _ReadingStagePageState();
@@ -203,10 +216,18 @@ class _ReadingStagePageState extends State<ReadingStagePage> with RouteAware {
     );
   }
 
-  /// 标题图本体：水墨背景 + 返回键 + 阶段图标 + 阶段名 + 阶段标语。
+  /// 标题图本体：水墨背景 + 返回键 + 图标 + 标题 + 标语。
   Widget _buildBanner(PaletteData p) {
     final width = MediaQuery.sizeOf(context).width;
     final height = (width * _kHeaderAspect).clamp(118.0, 190.0);
+    final custom = widget.headerTitle != null;
+    final icon = custom ? widget.headerIcon : widget.stage.icon;
+    final title = custom
+        ? widget.headerTitle!
+        : '${widget.stage.stageNo} · ${widget.stage.badgeName}';
+    final subtitle = custom
+        ? (widget.headerSubtitle ?? '')
+        : widget.stage.title;
     return SizedBox(
       height: height,
       child: Stack(
@@ -243,24 +264,26 @@ class _ReadingStagePageState extends State<ReadingStagePage> with RouteAware {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Opacity(
-                    opacity: 0.92,
-                    child: SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: Image.asset(
-                        widget.stage.icon,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
-                        color: p.primary,
+                  if (icon != null && icon.isNotEmpty) ...[
+                    Opacity(
+                      opacity: 0.92,
+                      child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Image.asset(
+                          icon,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.high,
+                          color: p.primary,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 6),
+                    const SizedBox(height: 6),
+                  ],
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
-                      '${widget.stage.stageNo} · ${widget.stage.badgeName}',
+                      title,
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
@@ -270,18 +293,20 @@ class _ReadingStagePageState extends State<ReadingStagePage> with RouteAware {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 5),
-                  Text(
-                    widget.stage.title,
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      color: Color(0xFF9E9588),
-                      letterSpacing: 2,
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      subtitle,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF9E9588),
+                        letterSpacing: 2,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
