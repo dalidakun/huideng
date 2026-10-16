@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:my_flutter_app/app_state.dart';
 import 'package:my_flutter_app/bodhi_space_page.dart';
 
 void main() {
@@ -100,5 +101,49 @@ void main() {
         reason: 'sheet should be closed after 完成');
     expect(tester.takeException(), isNull,
         reason: 'finishing with pending search threw');
+  });
+
+  testWidgets('帖子流支持下拉刷新，且下拉不再露出 DeepSeek', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const MaterialApp(home: BodhiSpacePage()));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(tester.takeException(), isNull, reason: '菩提空间首屏不应抛异常');
+
+    // 下拉刷新入口挂在帖子流的滚动视图上。
+    expect(find.byType(RefreshIndicator), findsOneWidget,
+        reason: '帖子流应包在 RefreshIndicator 里（下拉刷新）');
+
+    expect(homeReveal.value, isFalse);
+    expect(homeRevealScrub.value, 0);
+
+    final customScroll = find.descendant(
+      of: find.byType(CustomScrollView),
+      matching: find.byType(Scrollable),
+    );
+    expect(customScroll, findsWidgets, reason: '应有帖子流滚动区');
+
+    // 顶部下拉：应出现刷新指示器（跟手即出现，与网络无关）。
+    await tester.drag(customScroll.first, const Offset(0, 300));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget,
+        reason: '下拉应出现刷新指示器');
+
+    // 同一次下拉不得触发 DeepSeek 露出：本页手势已移除，下拉只用于刷新。
+    expect(homeReveal.value, isFalse, reason: '菩提空间下拉不应露出 DeepSeek');
+    expect(homeRevealScrub.value, 0, reason: '不应有 DeepSeek 露出进度');
+
+    // 无网络时走失败分支：保留原列表，不得抛异常（固定 pump，不用 pumpAndSettle，
+    // 指示器会一直转，settle 不下来）。
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.takeException(), isNull, reason: '下拉刷新流程不应抛异常');
+
+    // 收尾：清掉可能残留的全局露出状态，避免影响后续用例。
+    homeReveal.value = false;
+    homeRevealScrub.value = 0;
   });
 }

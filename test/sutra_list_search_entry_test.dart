@@ -45,13 +45,14 @@ void main() {
     // 顶部不再有常驻搜索入口行。
     expect(find.text('搜索经文'), findsNothing,
         reason: '素白顶部搜索入口行应已移到右上角图标');
-    // 右上角是搜索图标，DeepSeek 助手入口已让位。
+    // 右上角是搜索图标：素白外观下经藏页不再提供 DeepSeek 入口
+    // （原「顶部下拉露出 DeepSeek」手势与助手图标都已移除）。
     final appBarIcons = find.descendant(
         of: find.byType(AppBar), matching: find.byIcon(Icons.search));
     expect(appBarIcons, findsOneWidget, reason: 'AppBar 右上角应有搜索图标');
     expect(find.image(const AssetImage('assets/images/assistant000.png')),
         findsNothing,
-        reason: '素白下拉打开 DeepSeek，右上角不再放助手图标');
+        reason: '素白外观不在右上角放助手图标');
     expect(find.byType(TextField), findsNothing, reason: '未点搜索前不显示搜索框');
 
     await tester.tap(appBarIcons);
@@ -73,85 +74,45 @@ void main() {
         reason: '退出后搜索图标回来');
   });
 
-  testWidgets('素白：经藏页顶部下拉打开 DeepSeek（主页同款手势）', (tester) async {
+  testWidgets('素白：下拉不再露出 DeepSeek（手势已移除，回归防线）', (tester) async {
     await AppPalette.instance.load();
     expect(AppPalette.instance.isPlain, isTrue);
 
     await _pumpSutraList(tester);
     expect(tester.takeException(), isNull, reason: '经藏页首屏不应抛异常');
     expect(homeReveal.value, isFalse);
+    expect(homeRevealScrub.value, 0);
 
     final scrollable = find.descendant(
         of: find.byType(SingleChildScrollView),
         matching: find.byType(Scrollable));
     expect(scrollable, findsOneWidget, reason: '应有内容滚动区');
 
-    await tester.drag(scrollable, const Offset(0, 40));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(homeReveal.value, isFalse,
-        reason: '素白小滑动不应触发 DeepSeek');
-    expect(homeRevealScrub.value, 0, reason: '小滑动不应有露出进度');
-
+    // 大幅下拉：不应展开 DeepSeek。
     await tester.drag(scrollable, const Offset(0, 300));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(homeReveal.value, isTrue,
-        reason: '素白右上角换成搜索后，顶部下拉过半应展开 DeepSeek');
+    expect(homeReveal.value, isFalse,
+        reason: '经藏页的「下拉露出 DeepSeek」手势已移除，下拉不应打开 DeepSeek');
+    expect(homeRevealScrub.value, 0, reason: '不应有任何露出进度');
 
-    homeReveal.value = false;
-    homeRevealScrub.value = 0;
-    await tester.pump(const Duration(milliseconds: 450));
-  });
-
-  testWidgets('素白：下拉跟手逐渐露出，反向上拖再收回就不显示',
-      (tester) async {
-    await AppPalette.instance.load();
-    expect(AppPalette.instance.isPlain, isTrue);
-
-    await _pumpSutraList(tester);
-    expect(tester.takeException(), isNull, reason: '经藏页首屏不应抛异常');
-    expect(homeReveal.value, isFalse);
-    expect(homeRevealScrub.value, 0);
-
-    final scrollable = find.descendant(
-        of: find.byType(SingleChildScrollView),
-        matching: find.byType(Scrollable));
+    // 跟手手势同样不应被接管：没有露出进度，也没有内容被钉死。
     final gesture = await tester.startGesture(tester.getCenter(scrollable));
-
-    // 小滑动（未过起始阈值）：完全不露出。
-    await gesture.moveBy(const Offset(0, 40));
+    await gesture.moveBy(const Offset(0, 200));
     await tester.pump();
-    expect(homeRevealScrub.value, 0, reason: '小滑动不应触发露出');
-    expect(homeReveal.value, isFalse);
+    expect(homeRevealScrub.value, 0, reason: '跟手下拉不应产生露出进度');
+    expect(homeReveal.value, isFalse, reason: '未松手也不应展开');
 
-    // 过阈值后下拉：进度随手指增长，且未到展开阈值时不会直接弹出。
-    await gesture.moveBy(const Offset(0, 80));
+    await gesture.moveBy(const Offset(0, -200));
     await tester.pump();
-    expect(homeRevealScrub.value, greaterThan(0),
-        reason: '过阈值后下拉应按位移逐渐露出');
-    expect(homeReveal.value, isFalse, reason: '未过半不应直接展开');
-
-    // 继续下拉：露出量持续增长。
-    final growing = homeRevealScrub.value;
-    await gesture.moveBy(const Offset(0, 80));
-    await tester.pump();
-    expect(homeRevealScrub.value, greaterThan(growing),
-        reason: '继续下拉应继续逐渐露出');
-    expect(homeReveal.value, isFalse, reason: '松手前只跟手露出，不直接展开');
-
-    // 露出期间底层页面必须「僵死」：内容滚动偏移保持为 0，不跟手滑动。
-    final scrollState = tester.state<ScrollableState>(scrollable);
-    expect(scrollState.position.pixels, 0,
-        reason: '逐渐露出期间经藏页内容应钉死不动');
-
-    await gesture.moveBy(const Offset(0, -240));
-    await tester.pump();
-    expect(homeRevealScrub.value, 0, reason: '反向上拖应把露出量收回');
-    expect(homeReveal.value, isFalse);
+    expect(homeRevealScrub.value, 0, reason: '反向上拖同样不应有露出进度');
 
     await gesture.up();
     await tester.pump(const Duration(milliseconds: 450));
-    expect(homeReveal.value, isFalse, reason: '收回后再松手不应打开 DeepSeek');
+    expect(homeReveal.value, isFalse, reason: '松手后也不应打开 DeepSeek');
     expect(homeRevealScrub.value, 0);
+
+    homeReveal.value = false;
+    homeRevealScrub.value = 0;
   });
 
   testWidgets('米黄：保留右上角助手入口，搜索框仍在「经典入口」行',
