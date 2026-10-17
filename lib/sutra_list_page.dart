@@ -644,12 +644,16 @@ class SutraListPage extends StatefulWidget {
   /// 阅读记录入口点击回调。
   final VoidCallback? onOpenReadingHistory;
 
+  /// 右下角「宗门」入口点击回调：打开宗门/法门列表页。
+  final VoidCallback? onOpenSect;
+
   const SutraListPage({
     super.key,
     this.activeTab,
     this.onOpenAssistant,
     this.onOpenReadingStats,
     this.onOpenReadingHistory,
+    this.onOpenSect,
   });
 
   @override
@@ -815,12 +819,13 @@ class SutraListPageState extends State<SutraListPage>
       return;
     }
     Navigator.of(context).push(
-      slideInFromLeft(ReadingStagePage(stage: stage, parent: this)),
+      slideInFromLeft(
+          ReadingStagePage(stage: stage, parent: this, showGroupProgress: true)),
     );
   }
 
   /// 「廿册精选典籍」的「查看更多」：带全部 20 部的廿册页，
-  /// 页面结构与样式与百册任一阶段页完全一致；每部经典显示完成进度百分比。
+  /// 页面结构与样式与百册任一阶段页完全一致；每部经典显示完成进度。
   void _openTwentyClassicsAll() {
     Navigator.of(context).push(
       slideInFromLeft(ReadingStagePage(
@@ -4699,6 +4704,9 @@ class SutraListPageState extends State<SutraListPage>
             ),
           ),
         ),
+        // 右下角「宗门」入口（原底部菜单第 4 项）：浮在「全部经典」面板上方，
+        // 排在面板之前，面板展开铺满时会被其盖住。
+        if (!_searchActive) _buildSectEntryButton(),
         // 底部常驻「全部经典」上拉面板：常驻贴在菜单栏上方（不随内容滚动），
         // 折叠态就是那条按钮；单击/上拖后由下往上逐渐铺开 56 部类卡片。
         // 排在抽屉遮罩之前，抽屉展开时会被遮罩压暗。
@@ -4754,6 +4762,39 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   // ── 底部「全部经典」上拉面板 ────────────────────────────
+
+  /// 右下角「宗门」入口浮钮：位于「全部经典」面板 header 上方右侧，
+  /// 点击进入宗门/法门列表页（原底部菜单第 4 项，现作为经藏页子菜单）。
+  Widget _buildSectEntryButton() {
+    final mq = MediaQuery.of(context);
+    return Positioned(
+      right: 16,
+      bottom: mq.padding.bottom + _shelfHeaderH + 12,
+      child: Material(
+        color: AppPalette.p.card,
+        shape: const CircleBorder(),
+        elevation: 4,
+        shadowColor: Colors.black.withValues(alpha: 0.24),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => widget.onOpenSect?.call(),
+          child: SizedBox(
+            width: 46,
+            height: 46,
+            child: Center(
+              child: Image.asset(
+                AppPalette.instance.isPlain
+                    ? 'assets/images/h1.png'
+                    : 'assets/images/s1.png',
+                width: 24,
+                height: 24,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// 面板内容区（不含 header）的最大高度：
   /// 屏幕高 - 顶部栏（状态栏 + AppBar）的下边缘 - 菜单栏高 - header 高，

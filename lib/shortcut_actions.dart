@@ -19,6 +19,9 @@ class ShortcutActions {
   /// 继续阅读：直接进入最近阅读的经书阅读页。
   static const String continueReading = 'continue_reading';
 
+  /// 新建笔记：直接打开新建笔记输入框。
+  static const String newNote = 'new_note';
+
   /// 拉取并消费待处理的快捷方式动作；无动作时返回 null。
   static Future<String?> consumeLaunchAction() async {
     if (!Platform.isAndroid) return null;

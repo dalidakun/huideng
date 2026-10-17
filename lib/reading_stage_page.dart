@@ -46,8 +46,8 @@ class ReadingStagePage extends StatefulWidget {
   /// banner 图标覆盖：自定义 banner 时用它（为空则不显示图标）。
   final String? headerIcon;
 
-  /// 是否在每个经典文件夹行右侧显示该文件夹的完成进度百分比圆环
-  /// （廿册「查看更多」页开启；百册阶段页保持原样式）。
+  /// 是否在每个经典文件夹副标题追加「已完成 已读/总卷」进度
+  /// （廿册页与百册阶段页开启；宗门/法门详情页不用本页、保持原样式）。
   final bool showGroupProgress;
 
   @override

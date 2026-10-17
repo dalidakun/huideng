@@ -157,17 +157,14 @@ class SectSutraGroupCard extends StatelessWidget {
   /// 打开该卷时写入 [Sutra.folder] 的归属名（宗门名 / 阶段名）。
   final String? sutraFolder;
 
-  /// 是否在折叠行右侧显示该文件夹的完成进度圆环（廿册「查看更多」页用；
-  /// 宗门页 / 法门页 / 阶段页保持原来的简洁样式）。
+  /// 是否在文件夹副标题追加「已完成 d/t」进度
+  /// （廿册页与百册阶段页开启；宗门页 / 法门页保持原样式）。
+  /// 文件夹名本身不染色，只有其中已标记完成的分卷才显示完成色。
   final bool showProgress;
 
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
-    // 文件夹里只要有一册标记完成，经名就走全站统一的「完成」金棕色——
-    // 多卷经不必整部读完，读过一部分就能一眼看出来。
-    final stat = _readStat();
-    final anyRead = stat.done > 0;
     return Container(
       decoration: BoxDecoration(
         color: p.card,
@@ -206,28 +203,16 @@ class SectSutraGroupCard extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 16.5,
                               fontWeight: FontWeight.w700,
-                              color: anyRead ? kSectReadDone : p.text,
+                              color: p.text,
                               letterSpacing: 0.8,
                             ),
                           ),
                           const SizedBox(height: 5),
                           // 副行与经名首字同一条竖线（Column 对齐，不再靠缩进补）。
-                          Text(
-                            _groupMeta(),
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              color: p.textHint,
-                              letterSpacing: 0.2,
-                            ),
-                          ),
+                          _buildGroupMeta(),
                         ],
                       ),
                     ),
-                    if (showProgress) ...[
-                      const SizedBox(width: 6),
-                      _GroupProgressRing(done: stat.done, total: stat.total),
-                      const SizedBox(width: 4),
-                    ],
                     AnimatedRotation(
                       turns: open ? 0.5 : 0,
                       duration: const Duration(milliseconds: 180),
@@ -276,14 +261,44 @@ class SectSutraGroupCard extends StatelessWidget {
     );
   }
 
-  /// 文件夹副行：译本数 + 卷数 + 字数。多译本时提示可切换。
+  /// 文件夹副行：译本数 + 卷数 + 字数；开启进度时追加「已完成 已读/总卷」。
   String _groupMeta() {
     final parts = <String>[
       if (group.hasMultipleEditions) '${group.editions.length} 译本',
       '${group.totalVolumes} 卷',
       formatSutraWords(group.totalWords),
     ];
+    if (showProgress) {
+      final stat = _readStat();
+      parts.add('已完成 ${stat.done}/${stat.total}');
+    }
     return parts.join(' · ');
+  }
+
+  /// 文件夹副行（含进度）：开启进度且「已读卷数=总卷数」时，
+  /// 在进度文案末尾补一枚完成金棕色对勾，作为整部读完的收束。
+  Widget _buildGroupMeta() {
+    final stat = showProgress ? _readStat() : null;
+    final complete = stat != null && stat.total > 0 && stat.done >= stat.total;
+    final text = Text(
+      _groupMeta(),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 12.5,
+        color: AppPalette.p.textHint,
+        letterSpacing: 0.2,
+      ),
+    );
+    if (!complete) return text;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(child: text),
+        const SizedBox(width: 5),
+        const Icon(Icons.check_circle, size: 15, color: kSectReadDone),
+      ],
+    );
   }
 
   /// 该文件夹已标记完成的册数 / 总册数（按经藏页的实时已读状态）。
@@ -469,55 +484,6 @@ class SectSutraGroupCard extends StatelessWidget {
         charCount: volume.words,
         filePath: volume.assetPath,
         folder: sutraFolder,
-      ),
-    );
-  }
-}
-
-/// 文件夹完成进度圆环：淡色轨道 + 绿色进度弧 + 圆心百分比。
-/// 全部读完时整体转为「完成」金棕色，与已读经名同一套颜色语言。
-class _GroupProgressRing extends StatelessWidget {
-  const _GroupProgressRing({required this.done, required this.total});
-
-  final int done;
-  final int total;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.p;
-    final value =
-        total <= 0 ? 0.0 : (done / total).clamp(0.0, 1.0).toDouble();
-    final complete = total > 0 && done >= total;
-    final color = complete ? kSectReadDone : kSectGreen;
-    return SizedBox(
-      width: 32,
-      height: 32,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Positioned.fill(
-            child: CircularProgressIndicator(
-              value: value,
-              strokeWidth: 2.5,
-              backgroundColor: p.borderSoft,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-              strokeCap: StrokeCap.round,
-            ),
-          ),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              '${(value * 100).round()}%',
-              maxLines: 1,
-              style: TextStyle(
-                fontSize: 9.5,
-                height: 1.1,
-                fontWeight: FontWeight.w700,
-                color: complete ? kSectReadDone : p.textSec,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

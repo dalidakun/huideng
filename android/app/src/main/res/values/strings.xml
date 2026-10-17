@@ -4,4 +4,6 @@
     <string name="shortcut_checkin_long">一键完成今日全部功课</string>
     <string name="shortcut_reading_short">继续阅读</string>
     <string name="shortcut_reading_long">接着上次的经书继续阅读</string>
+    <string name="shortcut_note_short">新建笔记</string>
+    <string name="shortcut_note_long">写一条新笔记</string>
 </resources>

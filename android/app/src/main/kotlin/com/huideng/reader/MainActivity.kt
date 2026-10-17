@@ -16,6 +16,7 @@ class MainActivity : FlutterActivity() {
     // Flutter 侧通过 getShortcutAction 原子读取并清空，保证同一动作只被处理一次。
     private val ACTION_QUICK_CHECKIN = "com.huideng.reader.action.QUICK_CHECKIN"
     private val ACTION_CONTINUE_READING = "com.huideng.reader.action.CONTINUE_READING"
+    private val ACTION_NEW_NOTE = "com.huideng.reader.action.NEW_NOTE"
 
     private var appChannel: MethodChannel? = null
     private var pendingShortcut: String? = null
@@ -24,6 +25,7 @@ class MainActivity : FlutterActivity() {
         when (intent?.action) {
             ACTION_QUICK_CHECKIN -> "quick_checkin"
             ACTION_CONTINUE_READING -> "continue_reading"
+            ACTION_NEW_NOTE -> "new_note"
             else -> null
         }
 

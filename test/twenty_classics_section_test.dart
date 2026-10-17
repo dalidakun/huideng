@@ -207,12 +207,13 @@ void main() {
     expect(find.text('20 部经典'), findsOneWidget, reason: '廿册页应展示全部 20 部');
     // 首屏没展示的第五部，在廿册页里能看到。
     expect(find.text(kTwentyClassics.sutras[4].name), findsOneWidget);
-    // 每个文件夹带完成进度圆环（全部未读即 0%）。
+    // 每个文件夹副标题带「已完成 已读/总卷」进度（全部未读即 0/N）。
     expect(
         find.descendant(
-            of: find.byType(ReadingStagePage), matching: find.text('0%')),
+            of: find.byType(ReadingStagePage),
+            matching: find.textContaining(RegExp(r'已完成 0/\d+$'))),
         findsWidgets,
-        reason: '文件夹行应显示完成进度百分比');
+        reason: '文件夹副行应显示完成进度');
   });
 
   testWidgets('廿册首屏点某一部：直接进入阅读页', (tester) async {
@@ -239,7 +240,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
   });
 
-  testWidgets('已完成的经文与文件夹显示完成色，文件夹显示完成进度', (tester) async {
+  testWidgets('已完成的经文显示完成色，文件夹不染色但显示完成进度', (tester) async {
     _mockDocsDir(tester);
     // 云端同步下来的状态：心经（1 卷）读完、地藏经（2 卷）只读完卷一。
     await _initAndPump(tester, loadCatalog: true, prefs: {
@@ -259,19 +260,31 @@ void main() {
     expect(cardNameColor('金刚般若波罗蜜经'), isNot(_kReadDone),
         reason: '未标记完成的经文名保持正文色');
 
-    // 廿册页：文件夹名同样带完成色，并显示该文件夹的完成进度百分比。
+    // 廿册页：文件夹名不再染色（只有其中的分卷才显示完成色），
+    // 副标题追加「已完成 已读/总卷」进度。
     await tester.tap(find.byKey(_moreKey));
     await _settleAsync(tester);
 
-    expect(_folderNameColor(tester, '般若波罗蜜多心经'), _kReadDone,
-        reason: '已完成的文件夹名应显示完成色');
-    expect(_folderNameColor(tester, '地藏菩萨本愿经'), _kReadDone,
-        reason: '文件夹里只要有一卷完成就显示完成色');
+    expect(_folderNameColor(tester, '般若波罗蜜多心经'), AppPalette.p.text,
+        reason: '文件夹不再显示完成色');
+    expect(_folderNameColor(tester, '地藏菩萨本愿经'), AppPalette.p.text,
+        reason: '文件夹不再显示完成色');
     expect(_folderNameColor(tester, '金刚般若波罗蜜经'), AppPalette.p.text,
-        reason: '全部未读的文件夹名保持正文色');
-    Finder inPage(String text) => find.descendant(
-        of: find.byType(ReadingStagePage), matching: find.text(text));
-    expect(inPage('100%'), findsWidgets, reason: '读完的文件夹进度应为 100%');
-    expect(inPage('50%'), findsOneWidget, reason: '《地藏经》2 卷读了 1 卷应为 50%');
+        reason: '未读文件夹保持正文色');
+
+    Finder inPage(RegExp text) => find.descendant(
+        of: find.byType(ReadingStagePage), matching: find.textContaining(text));
+    expect(inPage(RegExp(r'已完成 1/1$')), findsOneWidget,
+        reason: '读完的文件夹（心经 1/1）进度应为 1/1');
+    expect(inPage(RegExp(r'已完成 1/2$')), findsOneWidget,
+        reason: '《地藏经》2 卷读了 1 卷，进度应为 1/2');
+    // 整部读完的文件夹（心经）在进度文案末尾带一枚完成对勾；
+    // 未读完的地藏经、未读的金刚经都不显示对勾。
+    expect(
+        find.descendant(
+            of: find.byType(ReadingStagePage),
+            matching: find.byIcon(Icons.check_circle)),
+        findsOneWidget,
+        reason: '只有整部读完的文件夹才显示完成对勾');
   });
 }

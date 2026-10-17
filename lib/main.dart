@@ -30,6 +30,7 @@ import 'update_service.dart';
 import 'reading_badges.dart';
 import 'recent_sutras_page.dart';
 import 'reading_page.dart';
+import 'note_edit_page.dart';
 import 'sect_community_page.dart';
 import 'sect_detail_page.dart';
 import 'sect_page.dart';
@@ -41,6 +42,60 @@ import 'sutra_title_overrides.dart';
 import 'shortcut_actions.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// 桌面快捷方式（「继续阅读」/「新建笔记」）专用全屏遮盖层：位于 Navigator 之上，
+/// 从冷/热启动到目标页就绪之前一直遮住主页，避免先闪一下主页。就绪后置为 false 移除遮盖。
+final ValueNotifier<bool> readingShortcutCover = ValueNotifier<bool>(false);
+
+/// 包一层目标页面（阅读页 / 新建笔记），在其首帧渲染完成后回调 [onFirstFrame]，
+/// 用于「继续阅读」「新建笔记」快捷方式在目标页真正可见后再撤掉全屏遮盖层
+/// （此前遮盖层一直挡着主页）。
+class _ShortcutLaunch extends StatefulWidget {
+  const _ShortcutLaunch({required this.child, required this.onFirstFrame});
+
+  final Widget child;
+  final VoidCallback onFirstFrame;
+
+  @override
+  State<_ShortcutLaunch> createState() => _ShortcutLaunchState();
+}
+
+class _ShortcutLaunchState extends State<_ShortcutLaunch> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onFirstFrame();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// 「继续阅读」遮盖层内容：与 [SplashImagePage] 同图同底色，覆盖整屏。
+class _ReadingShortcutCover extends StatelessWidget {
+  const _ReadingShortcutCover();
+
+  @override
+  Widget build(BuildContext context) {
+    final barColor = AppPalette.instance.isPlain
+        ? const Color(0xFFFBFBFB)
+        : const Color(0xFFededed);
+    return ColoredBox(
+      color: barColor,
+      child: SizedBox.expand(
+        child: Image.asset(
+          AppPalette.instance.isPlain
+              ? 'assets/images/splash.png'
+              : 'assets/images/splash1.png',
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.high,
+        ),
+      ),
+    );
+  }
+}
 
 /// 右下角「继续阅读」按钮几何：与菩提空间右下角「新建笔记」按钮一致
 /// （直径 42、右边距 16、圆底距菜单栏上缘 28）。
@@ -128,6 +183,13 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     AppPalette.instance.addListener(_onPaletteChanged);
+    // 冷启动「继续阅读」/「新建笔记」：立即盖上全屏遮盖层（覆盖主页首帧来源），
+    // 待 _AppEntry 打开目标页并就绪后再移除。
+    if (widget.privacyAgreed &&
+        (widget.startupAction == ShortcutActions.continueReading ||
+            widget.startupAction == ShortcutActions.newNote)) {
+      readingShortcutCover.value = true;
+    }
   }
 
   @override
@@ -151,6 +213,15 @@ class _MyAppState extends State<MyApp> {
             if (child != null) _HomeRevealStage(child: child),
             const _AssistantPanelOverlay(),
             const _AssistantRevealOverlay(),
+            // 快捷方式「继续阅读」遮盖层：置顶于 Navigator 之上，阅读页就绪前
+            // 遮住主页（含热启动复用主页的情况），杜绝「主页一闪」。
+            Positioned.fill(
+              child: ValueListenableBuilder<bool>(
+                valueListenable: readingShortcutCover,
+                builder: (_, show, __) =>
+                    show ? const _ReadingShortcutCover() : const SizedBox.shrink(),
+              ),
+            ),
           ],
         );
       },
@@ -244,22 +315,49 @@ class _AppEntry extends StatefulWidget {
 class _AppEntryState extends State<_AppEntry> {
   bool _showMain = false;
 
+  /// 桌面「继续阅读」快捷方式：跳过计时启动图，首帧后直接打开阅读页。
+  ///
+  /// 说明：静态快捷方式（shortcuts.xml）启动时系统固定附加
+  /// FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TASK，旧界面会被整个清掉、
+  /// main() 必然重跑，因此这里只需处理冷启动路径。
+  bool get _continueToReading =>
+      widget.startupAction == ShortcutActions.continueReading;
+
+  /// 桌面「新建笔记」快捷方式：跳过计时启动图，首帧后直接打开新建笔记输入框。
+  bool get _continueToNote =>
+      widget.startupAction == ShortcutActions.newNote;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_continueToReading) {
+      // 跳过 2 秒启动图：首帧渲染出静态启动图 cover 后立即解析并打开阅读页。
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openStartupReading());
+    } else if (_continueToNote) {
+      // 同理：首帧渲染出静态启动图 cover 后立即打开新建笔记输入框。
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openStartupNote());
+    }
+  }
+
   Future<void> _finishSplash() async {
     if (!mounted) return;
-    // 桌面「继续阅读」快捷方式：趁启动图还覆盖整屏，先把阅读页推到启动图之上，
-    // 随后才把主页替换到启动图下方——用户全程看不到主页，直接进入阅读页。
-    if (widget.startupAction == ShortcutActions.continueReading) {
-      await _openStartupReading();
-      if (!mounted) return;
-    }
     setState(() => _showMain = true);
-    // 启动后静默检查更新（不阻塞使用，失败静默忽略）。
+    _afterStartup();
+  }
+
+  /// 启动后静默检查更新（不阻塞使用，失败静默忽略）。
+  void _afterStartup() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       unawaited(UpdateService.checkAndPrompt(context));
     });
   }
 
-  /// 读取最近阅读记录并直接打开阅读页（无记录时不打开，随后正常进入主页）。
+  /// 读取最近阅读记录并直接打开阅读页。
+  ///
+  /// 全屏遮盖层 [readingShortcutCover] 位于 Navigator 之上，从启动到阅读页
+  /// 就绪前一直遮住主页；阅读页（不透明）压到最上层后再移除遮盖层，用户全程
+  /// 只看到「启动图 → 阅读页」，不会闪出主页。
   Future<void> _openStartupReading() async {
     final prefs = await SharedPreferences.getInstance();
     var t = prefs.getString('last_read_title');
@@ -274,18 +372,93 @@ class _AppEntryState extends State<_AppEntry> {
         }
       }
     }
-    if (t == null || t.isEmpty) return;
+    if (!mounted) return;
     final nav = navigatorKey.currentState;
-    if (nav == null) return;
-    // 不 await push：阅读页压栈后立即返回，好让主页在启动图下方就位。
-    unawaited(nav.push(MaterialPageRoute(
-      builder: (_) => ReadingPage(title: t!, filePath: fp),
+    // 无阅读记录或导航未就绪：移除遮盖层，正常进入主页。
+    if (t == null || t.isEmpty || nav == null) {
+      readingShortcutCover.value = false;
+      setState(() => _showMain = true);
+      _afterStartup();
+      return;
+    }
+    final title = t;
+    // 无入场动画，瞬时把不透明的阅读页压到最上层（遮盖层仍在其上方）。
+    // 阅读页首帧渲染完成后回调 _onReadingReady 再撤遮盖层，确保其时阅读页已
+    // 完全盖住主页。用首帧回调而非等帧，避免无动画时帧不再调度导致长时间停留。
+    unawaited(nav.push(PageRouteBuilder<void>(
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, __, ___) => _ShortcutLaunch(
+        onFirstFrame: _onReadingReady,
+        child: ReadingPage(title: title, filePath: fp),
+      ),
     )));
+  }
+
+  /// 首帧后直接打开「新建笔记」输入框（无首页闪现）。
+  Future<void> _openStartupNote() async {
+    if (!mounted) return;
+    final nav = navigatorKey.currentState;
+    // 导航未就绪：移除遮盖层，正常进入主页。
+    if (nav == null) {
+      readingShortcutCover.value = false;
+      setState(() => _showMain = true);
+      _afterStartup();
+      return;
+    }
+    // 无入场动画，瞬时把新建笔记页压到最上层（遮盖层仍在其上方）；其首帧渲染
+    // 完成后回调 _onNoteReady 再撤遮盖层，确保其时编辑器已完全盖住主页。
+    unawaited(nav.push(PageRouteBuilder<void>(
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, __, ___) => _ShortcutLaunch(
+        onFirstFrame: _onNoteReady,
+        child: const NoteEditPage(),
+      ),
+    )));
+  }
+
+  /// 阅读页首帧渲染完成：撤掉遮盖层，并把根部内容切成主页（主页在阅读页之下，
+  /// 不可见），同时执行启动后检查。
+  void _onReadingReady() {
+    if (!mounted) return;
+    if (!_showMain) setState(() => _showMain = true);
+    readingShortcutCover.value = false;
+    _afterStartup();
+  }
+
+  /// 新建笔记页首帧渲染完成：撤掉遮盖层，并把根部内容切成主页（在笔记页之下）。
+  void _onNoteReady() {
+    if (!mounted) return;
+    if (!_showMain) setState(() => _showMain = true);
+    readingShortcutCover.value = false;
+    _afterStartup();
+  }
+
+  /// 静态启动图 cover：与 [SplashImagePage] 同图同底色，但不计时、不改系统 UI，
+  /// 仅用于「继续阅读」「新建笔记」首帧遮盖，避免闪出主页或黑屏。
+  Widget _splashCover() {
+    final barColor = AppPalette.instance.isPlain
+        ? const Color(0xFFFBFBFB)
+        : const Color(0xFFededed);
+    return Scaffold(
+      backgroundColor: barColor,
+      body: SizedBox.expand(
+        child: Image.asset(
+          AppPalette.instance.isPlain
+              ? 'assets/images/splash.png'
+              : 'assets/images/splash1.png',
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.high,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     if (!_showMain) {
+      if (_continueToReading || _continueToNote) return _splashCover();
       // 启动图跟随外观：米黄（warm）用 splash1.png，素白（plain）用 splash.png。
       return SplashImagePage(
         onFinished: _finishSplash,
@@ -689,30 +862,6 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
-        // 宗门（菜单第 4 位）：图标已就位，页面见 SectPage（lib/sect_page.dart）。
-        // 素材四周留白不均（200x200 中图形约 108x132，上留白 24、下留白 44），
-        // 故放大尺寸并整体下移，使可见图形与其它菜单项对齐居中。
-        BottomNavigationBarItem(
-          icon: Transform.translate(
-            offset: const Offset(0, 2),
-            child: Image.asset(
-                AppPalette.instance.isPlain
-                    ? 'assets/images/h1.png'
-                    : 'assets/images/s1.png',
-                width: 29,
-                height: 29),
-          ),
-          activeIcon: Transform.translate(
-            offset: const Offset(0, 2),
-            child: Image.asset(
-                AppPalette.instance.isPlain
-                    ? 'assets/images/h2.png'
-                    : 'assets/images/s2.png',
-                width: 27,
-                height: 27),
-          ),
-          label: '',
-        ),
         BottomNavigationBarItem(
           icon: _NotificationTabIcon(active: false),
           activeIcon: _NotificationTabIcon(active: true),
@@ -731,10 +880,10 @@ class _MainPageState extends State<MainPage>
         return 2;
       case 3: // 助手（入口在经藏页右上角）
         return -1;
-      case 4: // 消息
-        return 4;
-      case 5: // 宗门（菜单第 4 位）
+      case 4: // 消息（菜单第 4 位）
         return 3;
+      case 5: // 宗门（入口在经藏页右下角，无底部菜单项）
+        return -1;
       case 6: // 我的（入口在左侧菜单）
         return -1;
       case 7: // 记录（入口在左侧菜单）
@@ -774,10 +923,49 @@ class _MainPageState extends State<MainPage>
   Future<void> _handleShortcutAction(String action) async {
     switch (action) {
       case ShortcutActions.continueReading:
-        // 读取最近阅读记录后直接进入阅读页；无记录时不响应。
+        // 热启动（App 已在后台，某些 ROM 的快捷方式走 onNewIntent）：先用全屏
+        // 遮盖层盖住当前主页，再把阅读页瞬时压到最上层，就绪后撤遮盖层，
+        // 避免热启动复用主页时「主页一闪」。
+        readingShortcutCover.value = true;
         await _loadRecentReading();
         if (!mounted) return;
-        _openRecentReading();
+        final title = _recentTitle;
+        if (title == null) {
+          readingShortcutCover.value = false;
+          break;
+        }
+        final nav = navigatorKey.currentState;
+        if (nav == null) {
+          readingShortcutCover.value = false;
+          break;
+        }
+        unawaited(nav.push(PageRouteBuilder<void>(
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: const Duration(milliseconds: 220),
+          pageBuilder: (_, __, ___) => _ShortcutLaunch(
+            onFirstFrame: () => readingShortcutCover.value = false,
+            child: ReadingPage(title: title, filePath: _recentFilePath),
+          ),
+        )));
+        break;
+      case ShortcutActions.newNote:
+        // 热启动：先用全屏遮盖层盖住当前页面，再把新建笔记页瞬时压到最上层，
+        // 其首帧就绪后撤遮盖层，直接进入输入框。
+        readingShortcutCover.value = true;
+        if (!mounted) return;
+        final noteNav = navigatorKey.currentState;
+        if (noteNav == null) {
+          readingShortcutCover.value = false;
+          break;
+        }
+        unawaited(noteNav.push(PageRouteBuilder<void>(
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: const Duration(milliseconds: 220),
+          pageBuilder: (_, __, ___) => _ShortcutLaunch(
+            onFirstFrame: () => readingShortcutCover.value = false,
+            child: const NoteEditPage(),
+          ),
+        )));
         break;
       case ShortcutActions.quickCheckIn:
         // 冷启动时登录会话可能仍在后台恢复，先确保完成再判定是否自动分享。
@@ -819,9 +1007,9 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    // 底部菜单索引 → 页面索引：菩提空间(1)→1、宗门(3)→5，其余索引即页面索引；
-    // 记录页不在底部，由左侧菜单进入。
-    final pageIndex = index == 3 ? 5 : index;
+    // 底部菜单索引 → 页面索引：消息(3)→4，其余索引即页面索引；
+    // 菩提空间(1)→1、经藏(2)→2、记录页不在底部，由左侧菜单进入。
+    final pageIndex = index == 3 ? 4 : index;
     // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
     if (pageIndex == 0 && _currentIndex == 0) {
       _studyHubKey.currentState?.reload();
@@ -882,6 +1070,20 @@ class _MainPageState extends State<MainPage>
     _syncAssistantTab();
     _revealNavBar();
     _myKey.currentState?.reload();
+  }
+
+  /// 经藏页右下角「宗门」入口：打开宗门/法门列表页（原底部菜单第 4 项，
+  /// 现作为经藏页子菜单）。可从前台其它页进入，先退出经藏页搜索模式。
+  void _openSectPage() {
+    if (_currentIndex == 2) {
+      _sutraListKey.currentState?.deactivateSearch();
+    }
+    _tabIndex.value = 5;
+    setState(() {
+      _currentIndex = 5;
+    });
+    _syncAssistantTab();
+    _revealNavBar();
   }
 
   /// 各页面左上角头像入口：从左侧滑出个人菜单。
@@ -1161,10 +1363,11 @@ class _MainPageState extends State<MainPage>
         onOpenAssistant: _openAssistantPage,
         onOpenReadingStats: _openReadingStats,
         onOpenReadingHistory: _openReadingHistory,
+        onOpenSect: _openSectPage,
       ),
       _AssistantTabPage(),
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
-      // 底部「宗门」菜单：宗门列表页，左上头像滑出个人菜单。
+      // 经藏页右下角「宗门」子菜单：宗门列表页，左上头像滑出个人菜单。
       // 点击宗门进本宗核心经典详情页；顶部展示位点社区进该社区页。
       SectPage(
         onOpenSideMenu: _openSideMenu,
@@ -1413,15 +1616,15 @@ class _BodhiTabIcon extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             // 新素材四周留白比同排图标多，23 号下仍显得比邻项小，
-            // 故放到 27 号，视觉大小才与其它菜单项一致。
+            // 故放到 25 号，视觉大小才与其它菜单项一致。
             Image.asset(
               AppPalette.instance.isPlain
                   ? (active ? 'assets/images/su2.png' : 'assets/images/su1.png')
                   : (active
                       ? 'assets/images/mi2.png'
                       : 'assets/images/mi1.png'),
-              width: 27,
-              height: 27,
+              width: 25,
+              height: 25,
             ),
             if (count > 0)
               Positioned(

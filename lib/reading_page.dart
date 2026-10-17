@@ -532,6 +532,16 @@ class ReadingPageState extends State<ReadingPage>
         }
       }
 
+      // 1.4 秒开：本地已有下载副本 / 打包资源时先立即展示正文（纯本地，无
+      //     网络），不再等云端「编辑版」检查（一次网络往返 1~2 秒）造成的
+      //     空白等待；随后后台拉取云端排版，若有更新再原地替换。
+      if (!hasEdited) {
+        if (await _showLocalCopyOrPackaged(filePath)) {
+          unawaited(_refreshEditedFromCloud(filePath, editedPath));
+          return;
+        }
+      }
+
       // 1.5 本地编辑副本不存在（卸载重装 / debug↔release 签名不同导致先卸载
       //     再装，应用私有目录被清空）：用云同步回来的草稿恢复，避免用户
       //     看到「排版过的经文又变回原版」。草稿比云端已发布版新才采用。
@@ -705,6 +715,84 @@ class ReadingPageState extends State<ReadingPage>
       }
     }
     return rootBundle.loadString(assetPath);
+  }
+
+  /// 「秒开」：直接把本地已下载副本 / 打包资源展示出来（纯本地，无网络），
+  /// 命中即 setState 显示并返回 true；本地与打包都没有则返回 false（不改 UI，
+  /// 交由调用方继续走草稿/云端/下载提示流程）。
+  Future<bool> _showLocalCopyOrPackaged(String filePath) async {
+    File? localCopy;
+    if (filePath.startsWith('assets/sutras_ascii/')) {
+      localCopy = await SutraDownloader.localFileForAssetPath(filePath);
+      debugPrint('[加载内容] localCopy=$localCopy');
+    }
+    // 兜底：任何形式的路径只要识别出经书 ID，就去本地下载目录找副本。
+    if (localCopy == null) {
+      final id = SutraDownloader.extractId(widget.title, filePath);
+      if (id != null &&
+          id.isNotEmpty &&
+          await SutraDownloader.isDownloaded(id)) {
+        localCopy = await SutraDownloader.localFile(id);
+      }
+    }
+    if (localCopy != null) {
+      try {
+        _applyLoadedContent(await localCopy.readAsString());
+        return true;
+      } catch (_) {
+        // 读取失败则回退打包资源
+      }
+    }
+    if (filePath.startsWith('assets/')) {
+      try {
+        _applyLoadedContent(await _loadPackagedContent(filePath));
+        return true;
+      } catch (_) {
+        // 打包资源也没有：交由调用方走云端/下载提示
+      }
+    } else {
+      try {
+        final f = File(filePath);
+        if (await f.exists()) {
+          _applyLoadedContent(await f.readAsString());
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  /// 后台检查是否有更新的「编辑版」（先本地云草稿，再云端正式版），命中且与
+  /// 当前正文不同则原地替换。全程异步，不阻塞首屏。
+  Future<void> _refreshEditedFromCloud(
+      String filePath, String editedPath) async {
+    try {
+      final draftContent = await _restoreEditedDraft(filePath, editedPath);
+      if (draftContent != null) {
+        if (mounted && _content != draftContent) {
+          _applyLoadedContent(draftContent);
+        }
+        return;
+      }
+      final id = SutraDownloader.extractId(widget.title, filePath);
+      if (id == null || id.isEmpty) return;
+      final cloudContent = await _loadCloudEditedContent(id, editedPath);
+      if (cloudContent != null && mounted && _content != cloudContent) {
+        _applyLoadedContent(cloudContent);
+      }
+    } catch (_) {}
+  }
+
+  /// 统一的正文落地：设置内容、解析段落、结束 loading 并恢复阅读位置。
+  void _applyLoadedContent(String content) {
+    if (!mounted) return;
+    setState(() {
+      _content = content;
+      _paragraphs = _parseParagraphs(content);
+      _isLoadingContent = false;
+    });
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _scheduleRestoreScroll());
   }
 
   /// 本地编辑副本缺失时，用云同步回来的草稿（SyncService 已拉回prefs，
