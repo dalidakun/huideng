@@ -12,11 +12,44 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "app_channel"
     private val FILE_PROVIDER_CHANNEL = "com.huideng.reader/file_provider"
 
+    // 静态快捷方式携带的 action。冷启动由启动 Intent 解析，热启动由 onNewIntent 设置；
+    // Flutter 侧通过 getShortcutAction 原子读取并清空，保证同一动作只被处理一次。
+    private val ACTION_QUICK_CHECKIN = "com.huideng.reader.action.QUICK_CHECKIN"
+    private val ACTION_CONTINUE_READING = "com.huideng.reader.action.CONTINUE_READING"
+
+    private var appChannel: MethodChannel? = null
+    private var pendingShortcut: String? = null
+
+    private fun shortcutFromIntent(intent: Intent?): String? =
+        when (intent?.action) {
+            ACTION_QUICK_CHECKIN -> "quick_checkin"
+            ACTION_CONTINUE_READING -> "continue_reading"
+            else -> null
+        }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val action = shortcutFromIntent(intent) ?: return
+        pendingShortcut = action
+        // 热启动：Flutter 引擎已在运行，发信号让 Dart 侧立即拉取处理。
+        appChannel?.invokeMethod("onShortcutAction", null)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        // 冷启动：从启动 Intent 解析快捷方式动作。
+        pendingShortcut = shortcutFromIntent(intent)
+
+        appChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        appChannel!!.setMethodCallHandler { call, result ->
             when (call.method) {
+                "getShortcutAction" -> {
+                    val action = pendingShortcut
+                    pendingShortcut = null
+                    result.success(action)
+                }
                 "minimizeApp" -> {
                     try {
                         // 使用更激进的方式最小化应用

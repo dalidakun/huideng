@@ -46,12 +46,18 @@ class ReadingStageSutra {
   /// 展开该文件夹时显示在顶部的介绍。
   final String intro;
 
+  /// 首屏封面图（可空）。「廿册精选典籍」在经藏页只展示前四部，
+  /// 这四部各配一张封面切图（assets/menpai/zx_*.png）；为空表示只以
+  /// 纯文字文件夹出现（阶段页与廿册页的文件夹列表都不用它）。
+  final String? icon;
+
   final List<ReadingStageEdition> editions;
 
   const ReadingStageSutra({
     required this.name,
     required this.intro,
     required this.editions,
+    this.icon,
   });
 }
 

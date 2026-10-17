@@ -1,4 +1,4 @@
-/// 「廿册精选经典」的经典编排。
+/// 「廿册精选典籍」的经典编排。
 ///
 /// 复用「百册经论指南」的 [ReadingStage] / [ReadingStageSutra] /
 /// [ReadingStageEdition] 结构，因此可以直接用 [ReadingStagePage] 渲染出
@@ -10,7 +10,11 @@ library;
 
 import 'reading_stage_data.dart';
 
-/// 廿册精选经典（佛教经典精选 20 部）。顺序即展示顺序。
+/// 经藏页「廿册精选典籍」区块首屏展示的部数：只展示前四部（各带一张封面切图），
+/// 其余在「查看更多」的廿册页（[ReadingStagePage] + [kTwentyClassics]）里展示。
+const int kTwentyClassicsShowcaseCount = 4;
+
+/// 廿册精选典籍（佛教经典精选 20 部）。顺序即展示顺序。
 const ReadingStage kTwentyClassics = ReadingStage(
   // 徽标首行留空：本区不在阶段体系内，读经页用 headerTitle 覆盖显示。
   stageNo: '',
@@ -21,6 +25,7 @@ const ReadingStage kTwentyClassics = ReadingStage(
   sutras: [
     ReadingStageSutra(
       name: '般若波罗蜜多心经',
+      icon: 'assets/menpai/zx_xinjing.png',
       intro: '简称《心经》，以精炼的篇幅阐述五蕴皆空、般若智慧与空性思想，'
           '是汉传佛教最广为人知的经典之一。',
       editions: [
@@ -34,6 +39,7 @@ const ReadingStage kTwentyClassics = ReadingStage(
     ),
     ReadingStageSutra(
       name: '金刚般若波罗蜜经',
+      icon: 'assets/menpai/zx_jingang.png',
       intro: '简称《金刚经》，阐述般若智慧、无相与无所执著的菩萨行，'
           '对禅宗及汉传佛教影响深远。',
       editions: [
@@ -47,6 +53,7 @@ const ReadingStage kTwentyClassics = ReadingStage(
     ),
     ReadingStageSutra(
       name: '地藏菩萨本愿经',
+      icon: 'assets/menpai/zx_dizang.png',
       intro: '简称《地藏经》，讲述地藏菩萨的本愿与修行，涉及孝亲报恩、因果、'
           '忏悔、布施和回向，是民间流通十分广泛的经典。',
       editions: [
@@ -60,6 +67,7 @@ const ReadingStage kTwentyClassics = ReadingStage(
     ),
     ReadingStageSutra(
       name: '佛说阿弥陀经',
+      icon: 'assets/menpai/zx_amituo.png',
       intro: '简称《阿弥陀经》，介绍西方极乐世界、阿弥陀佛及持名念佛等内容，'
           '是净土宗日常诵读的重要经典。',
       editions: [

@@ -297,6 +297,51 @@ class StudyHubPageState extends State<StudyHubPage>
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
       _checkInTypesList = _buildConfiguredCheckInTypes(prefs);
     });
+    // 把当前配置的具体功课项写入 prefs，供桌面「一键打卡」快捷方式在无 Flutter
+    // 引擎时由原生直接读取并补打卡（见 QuickCheckinActivity）。
+    await _writeQuickCheckinPayload(prefs);
+    // 原生「一键打卡」在后台写入记录后留下的待分享标记：补发一次静默分享。
+    if (prefs.getBool('shortcut_checkin_needs_share') ?? false) {
+      await prefs.setBool('shortcut_checkin_needs_share', false);
+      await _maybeAutoShareCheckin(prefs, silent: true);
+    }
+  }
+
+  /// 回到前台时调用：桌面「一键打卡」由原生在后台直写 prefs，Dart 侧缓存可能
+  /// 已过期，先 reload 再检查待分享标记，命中则刷新主页并静默分享。
+  Future<void> checkShortcutCheckin() async {
+    final prefs = _warmPrefs ?? await SharedPreferences.getInstance();
+    _warmPrefs = prefs;
+    try {
+      await prefs.reload();
+    } catch (_) {}
+    if (!(prefs.getBool('shortcut_checkin_needs_share') ?? false)) return;
+    if (!mounted) return;
+    await _loadData();
+  }
+
+  /// 把主页配置的具体功课项序列化进 prefs（仅在内容变化时写盘），
+  /// 供原生「一键打卡」无 UI 直接复用打卡规则与数量。
+  Future<void> _writeQuickCheckinPayload(SharedPreferences prefs) async {
+    try {
+      final items = _loadConfiguredItems(prefs);
+      final payload = <Map<String, dynamic>>[];
+      for (final it in items) {
+        final type = (it['type'] ?? '').toString();
+        final name = (it['name'] ?? '').toString();
+        if (type.isEmpty || name.isEmpty) continue;
+        payload.add({
+          'type': type,
+          'label': (it['category'] ?? '').toString(),
+          'name': name,
+          'amount': _checkInAmount(type, prefs),
+        });
+      }
+      final encoded = jsonEncode(payload);
+      if ((prefs.getString('quick_checkin_items') ?? '') != encoded) {
+        await prefs.setString('quick_checkin_items', encoded);
+      }
+    } catch (_) {}
   }
 
   /// 一次性读取 sutras_list.json 并解码（原子写期间的瞬时读坏视为无数据，
@@ -1980,6 +2025,64 @@ class StudyHubPageState extends State<StudyHubPage>
     await _maybeAutoShareCheckin(prefs);
   }
 
+  /// 一键完成今日全部功课：把主页配置的每个具体功课项补齐为今日已打卡
+  /// （已完成的项不会重复添加），随后按设置静默分享到菩提空间。
+  /// 供桌面「一键打卡」快捷方式调用；返回本次新补的项数。
+  Future<int> quickCheckInAll({bool autoShare = true}) async {
+    final prefs = await SharedPreferences.getInstance();
+    // 兜底同步一次自定义功课类型，避免快捷方式早于首帧 _loadData 完成时漏项。
+    try {
+      final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
+      _customTypes =
+          (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
+    } catch (_) {}
+
+    final raw = prefs.getString('checkin_records') ?? '[]';
+    final List<dynamic> allRecords = jsonDecode(raw);
+    final today = _today();
+    final items = _loadConfiguredItems(prefs);
+
+    var added = 0;
+    for (final item in items) {
+      final type = (item['type'] ?? '').toString();
+      final name = (item['name'] ?? '').toString();
+      if (type.isEmpty || name.isEmpty) continue;
+      final exists = allRecords.any((r) =>
+          r['date'] == today &&
+          r['type'] == type &&
+          (r['name'] ?? '').toString() == name);
+      if (exists) continue;
+      allRecords.add({
+        'date': today,
+        'type': type,
+        'label': (item['category'] ?? '').toString(),
+        'name': name,
+        'amount': _checkInAmount(type, prefs),
+      });
+      added++;
+    }
+    if (added > 0) {
+      await prefs.setString('checkin_records', jsonEncode(allRecords));
+    }
+    await _loadData();
+    var shared = false;
+    if (autoShare) {
+      shared = await _maybeAutoShareCheckin(prefs, silent: true);
+    }
+    if (mounted) {
+      if (items.isEmpty) {
+        _showTopToast('请先在功课设置中添加功课');
+      } else if (shared) {
+        _showTopToast('已完成今日全部功课，并分享到菩提空间');
+      } else if (added == 0) {
+        _showTopToast('今日功课已全部完成');
+      } else {
+        _showTopToast('已完成今日全部功课');
+      }
+    }
+    return added;
+  }
+
   /// 打卡类型列表：固定五项 + 自定义。若已配置具体功课，则只展示已配置的类型。
   List<Map<String, dynamic>> _checkInTypes() {
     return _checkInTypesList.isEmpty ? _allCheckInTypes() : _checkInTypesList;
@@ -2051,21 +2154,33 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 完成当日全部功课且开启「分享每日功课」时，弹窗展示当天功课并确认后发布到菩提空间（每日仅一次）。
-  Future<void> _maybeAutoShareCheckin(SharedPreferences prefs) async {
+  /// [silent] 为 true 时不弹确认框，直接发布（供桌面「一键打卡」快捷方式使用）。
+  /// 返回是否成功分享到菩提空间。
+  Future<bool> _maybeAutoShareCheckin(SharedPreferences prefs,
+      {bool silent = false}) async {
     try {
-      if (!(prefs.getBool('privacy_share_daily_checkin') ?? false)) return;
-      if (!AuthService.instance.isLoggedIn) return;
+      if (!(prefs.getBool('privacy_share_daily_checkin') ?? false)) return false;
+      if (!AuthService.instance.isLoggedIn) return false;
       final today = _today();
-      if (prefs.getString('shared_checkin_date') == today) return;
+      if (prefs.getString('shared_checkin_date') == today) return false;
       final types = _checkInTypes();
-      if (types.isEmpty) return;
+      if (types.isEmpty) return false;
       final todayKeys = {for (final r in _todayCheckIns) r['type'] ?? ''};
-      if (!types.every((t) => todayKeys.contains(t['key']))) return;
+      if (!types.every((t) => todayKeys.contains(t['key']))) return false;
 
       final lines = _buildCheckInShareLines(prefs, types);
-      if (lines.isEmpty) return;
+      if (lines.isEmpty) return false;
       final content = '今天完成功课：\n${lines.join('\n')}';
-      if (!mounted) return;
+
+      // 静默分享：不弹确认框，直接发布（供桌面「一键打卡」快捷方式使用）。
+      if (silent) {
+        await CloudNotesService.instance
+            .publishNote(title: '今日功课完成', content: content);
+        await prefs.setString('shared_checkin_date', today);
+        return true;
+      }
+
+      if (!mounted) return false;
 
       final ok = await showDialog<bool>(
         context: context,
@@ -2119,13 +2234,15 @@ class StudyHubPageState extends State<StudyHubPage>
           ],
         ),
       );
-      if (ok != true || !mounted) return;
+      if (ok != true || !mounted) return false;
       await CloudNotesService.instance
           .publishNote(title: '今日功课完成', content: content);
       await prefs.setString('shared_checkin_date', today);
       if (mounted) _showTopToast('已分享到菩提空间');
+      return true;
     } catch (_) {
       // 分享失败静默处理，不打断打卡。
+      return false;
     }
   }
 

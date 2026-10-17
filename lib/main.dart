@@ -38,6 +38,7 @@ import 'app_palette.dart';
 import 'agreements.dart';
 import 'ui_sound.dart';
 import 'sutra_title_overrides.dart';
+import 'shortcut_actions.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -60,7 +61,10 @@ void main() async {
   // 会看到《用户协议》/《隐私政策》弹窗；在同意之前不得发起任何联网采集，
   // 因此登录恢复、云同步、通知调度等服务统一延迟到 [startBackgroundServices]。
   final agreed = await PrivacyConsent.isAgreed();
-  runApp(MyApp(privacyAgreed: agreed));
+  // 桌面长按图标的快捷方式：在 runApp 之前消费冷启动动作（此时原生通道已就绪），
+  // 供 _AppEntry 在启动图阶段直接进入对应页面，避免先闪一下主页。
+  final startupAction = await ShortcutActions.consumeLaunchAction();
+  runApp(MyApp(privacyAgreed: agreed, startupAction: startupAction));
   // 预热底部菜单点击音（纯本地资源，无网络请求），保证首次点击立即发声。
   unawaited(UiSound.instance.warmup());
   if (!agreed) return;
@@ -93,7 +97,10 @@ class MyApp extends StatefulWidget {
   /// 用户是否已同意《用户协议》与《隐私政策》（启动时读自本地存储）。
   final bool privacyAgreed;
 
-  const MyApp({super.key, required this.privacyAgreed});
+  /// 冷启动时的桌面快捷方式动作（continue_reading / quick_checkin），无则为 null。
+  final String? startupAction;
+
+  const MyApp({super.key, required this.privacyAgreed, this.startupAction});
 
   @override
   State<MyApp> createState() => _MyAppState();
@@ -212,17 +219,23 @@ class _MyAppState extends State<MyApp> {
                   SystemNavigator.pop();
                 }
               },
-              child: _AppEntry(mainPageKey: _mainPageKey),
+              child: _AppEntry(
+                mainPageKey: _mainPageKey,
+                startupAction: widget.startupAction,
+              ),
             ),
     );
   }
 }
 
 class _AppEntry extends StatefulWidget {
-  const _AppEntry({required this.mainPageKey});
+  const _AppEntry({required this.mainPageKey, this.startupAction});
 
   /// 主页状态引用：供根路由侧滑返回时检查/退出经藏搜索模式。
   final GlobalKey<_MainPageState> mainPageKey;
+
+  /// 冷启动快捷方式动作：continue_reading 时启动图结束后直接进入阅读页。
+  final String? startupAction;
 
   @override
   State<_AppEntry> createState() => _AppEntryState();
@@ -231,13 +244,43 @@ class _AppEntry extends StatefulWidget {
 class _AppEntryState extends State<_AppEntry> {
   bool _showMain = false;
 
-  void _finishSplash() {
+  Future<void> _finishSplash() async {
     if (!mounted) return;
+    // 桌面「继续阅读」快捷方式：趁启动图还覆盖整屏，先把阅读页推到启动图之上，
+    // 随后才把主页替换到启动图下方——用户全程看不到主页，直接进入阅读页。
+    if (widget.startupAction == ShortcutActions.continueReading) {
+      await _openStartupReading();
+      if (!mounted) return;
+    }
     setState(() => _showMain = true);
     // 启动后静默检查更新（不阻塞使用，失败静默忽略）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(UpdateService.checkAndPrompt(context));
     });
+  }
+
+  /// 读取最近阅读记录并直接打开阅读页（无记录时不打开，随后正常进入主页）。
+  Future<void> _openStartupReading() async {
+    final prefs = await SharedPreferences.getInstance();
+    var t = prefs.getString('last_read_title');
+    var fp = prefs.getString('last_read_filePath');
+    if (t == null || t.isEmpty) {
+      final raw = prefs.getStringList('recent_sutras');
+      if (raw != null && raw.isNotEmpty) {
+        final parts = raw.first.split('|||');
+        if (parts.isNotEmpty && parts[0].isNotEmpty) {
+          t = parts[0];
+          fp = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : null;
+        }
+      }
+    }
+    if (t == null || t.isEmpty) return;
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+    // 不 await push：阅读页压栈后立即返回，好让主页在启动图下方就位。
+    unawaited(nav.push(MaterialPageRoute(
+      builder: (_) => ReadingPage(title: t!, filePath: fp),
+    )));
   }
 
   @override
@@ -326,6 +369,8 @@ class _MainPageState extends State<MainPage>
     unawaited(_cleanupAvatarBannerFiles());
     // 最近阅读记录 → 右下角「继续阅读」按钮打开阅读页。
     unawaited(_loadRecentReading());
+    // 桌面长按图标的快捷方式：注册热启动信号监听（冷启动动作已在 main() 消费）。
+    ShortcutActions.listen(_handleShortcutAction);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForResult();
       // 启动时检查是否需要显示 20:00 打卡提醒（当天 20:00 后打开 App）。
@@ -354,6 +399,7 @@ class _MainPageState extends State<MainPage>
   @override
   void dispose() {
     if (_mainPageSubscribed) routeObserver.unsubscribe(this);
+    ShortcutActions.dispose();
     _checkInReminderTimer?.cancel();
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
     AppPalette.instance.removeListener(_onPaletteChanged);
@@ -606,6 +652,9 @@ class _MainPageState extends State<MainPage>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       _checkForResult();
+      // 桌面「一键打卡」在后台由原生写入打卡记录：回到前台重读并补发静默分享。
+      unawaited(_studyHubKey.currentState?.checkShortcutCheckin() ??
+          Future<void>.value());
       // 回到前台立即同步未读数，角标保持实时。
       NotificationCenter.instance.refreshUnread();
       // 回到前台检查 20:00 打卡提醒。
@@ -719,6 +768,27 @@ class _MainPageState extends State<MainPage>
       _recentFilePath = fp;
       _recentLoaded = true;
     });
+  }
+
+  /// 处理桌面长按图标的快捷方式动作。
+  Future<void> _handleShortcutAction(String action) async {
+    switch (action) {
+      case ShortcutActions.continueReading:
+        // 读取最近阅读记录后直接进入阅读页；无记录时不响应。
+        await _loadRecentReading();
+        if (!mounted) return;
+        _openRecentReading();
+        break;
+      case ShortcutActions.quickCheckIn:
+        // 冷启动时登录会话可能仍在后台恢复，先确保完成再判定是否自动分享。
+        await AuthService.instance.restoreSession();
+        if (!mounted) return;
+        // 收起可能残留的子页面，让用户直接看到首页已完成的打卡状态。
+        navigatorKey.currentState?.popUntil((r) => r.isFirst);
+        if (_currentIndex != 0) _switchToTab(0);
+        await _studyHubKey.currentState?.quickCheckInAll();
+        break;
+    }
   }
 
   /// 经藏页处于搜索模式时退出搜索（根路由侧滑返回调用）。返回是否消费了本次返回。
@@ -1342,17 +1412,16 @@ class _BodhiTabIcon extends StatelessWidget {
         return Stack(
           clipBehavior: Clip.none,
           children: [
-            // 素材四周留白比同排图标多（200x200 中墨迹约占 80%x92%，
-            // 而 study 是 86%x88%、sutra_book 是 95%x95%），22 号下显得比邻项小，
-            // 故放到 23 号，视觉大小才与其它菜单项一致。
+            // 新素材四周留白比同排图标多，23 号下仍显得比邻项小，
+            // 故放到 27 号，视觉大小才与其它菜单项一致。
             Image.asset(
               AppPalette.instance.isPlain
                   ? (active ? 'assets/images/su2.png' : 'assets/images/su1.png')
                   : (active
                       ? 'assets/images/mi2.png'
                       : 'assets/images/mi1.png'),
-              width: 23,
-              height: 23,
+              width: 27,
+              height: 27,
             ),
             if (count > 0)
               Positioned(
@@ -1799,7 +1868,9 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
 /// Home page pull-down reveal.
 ///
 /// Wraps the whole app content ([child]). DeepSeek 页固定在主页身后；下拉时主页
-/// 整体往下滑动，身后的 DeepSeek 页随之逐渐「漏出」（上下两个页面互相推拉）：
+/// 整体往下滑动（与手指 1:1：手指拖多少，主页就下移多少，见
+/// PullRevealTracker.revealDistance），身后的 DeepSeek 页随之逐渐「漏出」
+/// （上下两个页面互相推拉）：
 /// - 顶部 DeepSeek 页区域先出现一个灰色圆点，随下拉逐渐「裂开」成三个并铺开
 ///   到临界位置（进度 [ _crit ] 处）；主页同时逐渐变模糊。
 /// - 越过临界点后继续下拉，DeepSeek 页由朦胧转为清晰；松手时进度过半才自动

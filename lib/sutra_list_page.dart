@@ -27,6 +27,7 @@ import 'sutra_descriptions.dart';
 import 'my_page.dart' show slideInFromLeft;
 import 'reading_stage_data.dart';
 import 'reading_stage_page.dart';
+import 'twenty_classics_data.dart';
 import 'reading_badges.dart' show canonPercentOf;
 
 /// 用于监听路由返回（例如从阅读页 pop 回来时刷新“最近阅读”）。
@@ -709,13 +710,21 @@ class SutraListPageState extends State<SutraListPage>
   /// 经书列表重建或 isRead 标记变化时置空，下次构建重算。
   List<({int done, int total})>? _stageProgressCache;
 
-  /// 计算各阶段进度：按阶段页同样的编号主干匹配规则，命中该阶段编排的
-  /// 全部册即分母，其中 isRead==true 的册数即分子（23/230 → 10.00%）。
-  List<({int done, int total})> _stageProgressOf() {
-    final cached = _stageProgressCache;
+  /// 按 CBETA 编号主干（去掉卷序号）索引的全量目录缓存：
+  /// 阶段进度、廿册首屏的部类/字数/已读判定都复用这一份，随数据变化置空。
+  Map<String, List<Sutra>>? _byBaseCache;
+
+  /// 目录或已读状态变化：清掉编号主干索引与阶段进度缓存，下次构建重算。
+  void _invalidateSutraIndex() {
+    _byBaseCache = null;
+    _stageProgressCache = null;
+  }
+
+  /// 按编号主干索引全量目录（编号主干匹配规则与阶段页一致）。
+  Map<String, List<Sutra>> _byBaseIndex() {
+    final cached = _byBaseCache;
     if (cached != null) return cached;
 
-    // 按 CBETA 编号主干（去掉卷序号）索引经藏页全量目录。
     final byBase = <String, List<Sutra>>{};
     for (final s in _allSutras) {
       final id = SutraDownloader.extractId(s.title, s.filePath);
@@ -724,6 +733,49 @@ class SutraListPageState extends State<SutraListPage>
       if (i <= 0) continue;
       byBase.putIfAbsent(id.substring(0, i), () => <Sutra>[]).add(s);
     }
+    return _byBaseCache = byBase;
+  }
+
+  /// 按 CBETA 编号（如 `T08n0251_001`）查该册是否已标记完成。
+  /// 供阶段页 / 廿册页的文件夹卡显示「完成」颜色与进度圆环，避免按标题线性扫全量目录。
+  bool isVolumeRead(String id) {
+    final i = id.lastIndexOf('_');
+    if (i <= 0) return false;
+    for (final s in _byBaseIndex()[id.substring(0, i)] ?? const <Sutra>[]) {
+      if (SutraDownloader.extractId(s.title, s.filePath) == id) return s.isRead;
+    }
+    return false;
+  }
+
+  /// 一部编排经典（廿册首屏展示的那四部）在目录里的全部册，按卷序排好。
+  /// 编号主干匹配与卷范围过滤规则和阶段读经页完全一致。
+  List<Sutra> _volumesOfClassic(ReadingStageSutra sutra) {
+    final byBase = _byBaseIndex();
+    final seen = <String>{};
+    final hits = <({Sutra sutra, int vol})>[];
+    for (final ed in sutra.editions) {
+      for (final base in ed.ids) {
+        for (final entry in byBase[base] ?? const <Sutra>[]) {
+          final id = SutraDownloader.extractId(entry.title, entry.filePath);
+          if (id == null || !seen.add(id)) continue;
+          final vol = sutraVolumeOf(id);
+          if (ed.volFrom != null && vol < ed.volFrom!) continue;
+          if (ed.volTo != null && vol > ed.volTo!) continue;
+          hits.add((sutra: entry, vol: vol));
+        }
+      }
+    }
+    hits.sort((a, b) => a.vol.compareTo(b.vol));
+    return [for (final h in hits) h.sutra];
+  }
+
+  /// 计算各阶段进度：按阶段页同样的编号主干匹配规则，命中该阶段编排的
+  /// 全部册即分母，其中 isRead==true 的册数即分子（23/230 → 10.00%）。
+  List<({int done, int total})> _stageProgressOf() {
+    final cached = _stageProgressCache;
+    if (cached != null) return cached;
+
+    final byBase = _byBaseIndex();
 
     final result = <({int done, int total})>[];
     for (var index = 0; index < _kReadingStages.length; index++) {
@@ -765,6 +817,31 @@ class SutraListPageState extends State<SutraListPage>
     Navigator.of(context).push(
       slideInFromLeft(ReadingStagePage(stage: stage, parent: this)),
     );
+  }
+
+  /// 「廿册精选典籍」的「查看更多」：带全部 20 部的廿册页，
+  /// 页面结构与样式与百册任一阶段页完全一致；每部经典显示完成进度百分比。
+  void _openTwentyClassicsAll() {
+    Navigator.of(context).push(
+      slideInFromLeft(ReadingStagePage(
+        stage: kTwentyClassics,
+        parent: this,
+        headerTitle: '廿册精选典籍',
+        headerSubtitle: kTwentyClassics.title,
+        showGroupProgress: true,
+      )),
+    );
+  }
+
+  /// 点廿册首屏的某一部经典：直接进入该经的阅读页（多卷经从卷一读起），
+  /// 未下载时走经藏页同一套「下载 → 阅读」流程。
+  void _openTwentyClassic(ReadingStageSutra sutra) {
+    final volumes = _volumesOfClassic(sutra);
+    if (volumes.isEmpty) {
+      _showToast('《${sutra.name}》暂未收录');
+      return;
+    }
+    _openSutra(volumes.first);
   }
 
   /// 底部「全部经典」上拉面板：常驻于经藏页底端（贴在菜单栏上方），
@@ -1475,7 +1552,7 @@ class SutraListPageState extends State<SutraListPage>
 
   /// 已读数据变化：底部面板里的部类卡片显示已读百分比，需要同步刷新。
   void _onSutraDataChanged() {
-    _stageProgressCache = null;
+    _invalidateSutraIndex();
     if (mounted) setState(() {});
   }
 
@@ -1677,7 +1754,7 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   void _applySutraList(List<Sutra> list) {
-    _stageProgressCache = null;
+    _invalidateSutraIndex();
     setState(() {
       _allSutras = List.from(list);
       _multiVolumeBases = collectMultiVolumeBases(_allSutras);
@@ -2101,7 +2178,7 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   Future<void> _toggleRead(int index) async {
-    _stageProgressCache = null;
+    _invalidateSutraIndex();
     setState(() {
       _allSutras[index] = Sutra(
         _allSutras[index].title,
@@ -2832,6 +2909,10 @@ class SutraListPageState extends State<SutraListPage>
     if (wan >= 0.01) return '${wan.toStringAsFixed(2)}万字';
     return '0万字';
   }
+
+  /// 单部经典的字数文案：不足一万按「N 字」，过万按「x.x万字」——
+  /// 短经（如《心经》二百余字）不会被折成「0.03万字」。
+  String _formatWords(int n) => n < 10000 ? '$n 字' : _formatCharCount(n);
 
   bool _completionDialogShown = false;
 
@@ -3680,6 +3761,162 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
+  /// 「廿册精选典籍」——随机读经与「百册经论指南」之间的精选经典区。
+  ///
+  /// 区块外观（卡片 + 金竖杠双行标题）与百册一致；首屏只展示前四部（各带一张
+  /// 封面切图），其余在「查看更多」的廿册页里按「经典文件夹 → 译本 → 分卷」
+  /// 展示全部 20 部。
+  Widget _buildTwentyClassicsSection() {
+    final p = AppPalette.p;
+    final accent = p.accent;
+    final sutras = kTwentyClassics.sutras;
+    final shown = sutras.length < kTwentyClassicsShowcaseCount
+        ? sutras.length
+        : kTwentyClassicsShowcaseCount;
+    return Container(
+      // 供 widget 测试稳定定位本区块（页面层级深，纯文本定位易与其它入口撞名）。
+      key: const ValueKey('twenty_classics_section'),
+      margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 14),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(16),
+        border: AppPalette.instance.isPlain
+            ? null
+            : Border.all(color: p.borderSoft, width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildSectionHeader(
+              '廿册精选典籍', '汇聚佛门经典，传承千年诵读名篇', accent),
+          const SizedBox(height: 16),
+          for (var i = 0; i < shown; i++) ...[
+            _buildTwentyClassicCard(sutras[i]),
+            if (i < shown - 1) const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 12),
+          _buildTwentyMoreEntry(accent),
+        ],
+      ),
+    );
+  }
+
+  /// 廿册首屏的单部经典卡：封面切图 + 经名 + （所属部类 · 字数）+ 右箭头。
+  /// 卡上已读过（任一卷标记完成）的经名走全站统一的「完成」金棕色。
+  /// 卡面不描边：用调色板的浅底色（[PaletteData.tintBg]）与外层区块区分。
+  Widget _buildTwentyClassicCard(ReadingStageSutra sutra) {
+    final p = AppPalette.p;
+    final cover = sutra.icon;
+    final volumes = _volumesOfClassic(sutra);
+    final folder = volumes.isEmpty ? null : volumes.first.folder;
+    final folderName =
+        folder == null ? null : (_folderDisplayNames[folder] ?? folder);
+    final words = volumes.fold<int>(0, (sum, v) => sum + v.charCount);
+    final readDone = volumes.any((v) => v.isRead);
+    final meta = [
+      if (folderName != null && folderName.isNotEmpty) folderName,
+      if (words > 0) _formatWords(words),
+    ].join(' · ');
+    return Material(
+      color: p.tintBg,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        // 点哪一部就直接进哪一部的阅读页（多卷经从卷一读起）。
+        onTap: () => _openTwentyClassic(sutra),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 9, 8, 9),
+          child: Row(
+            children: [
+              if (cover != null && cover.isNotEmpty) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: Image.asset(
+                    cover,
+                    width: 40,
+                    height: 51,
+                    fit: BoxFit.cover,
+                    // 封面原图 330×422：按显示尺寸解码，整张不进内存。
+                    cacheWidth: 120,
+                    filterQuality: FilterQuality.medium,
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      sutra.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        // 已标记完成的经名统一金棕色（与经藏列表一致）。
+                        color: readDone ? const Color(0xFFcf9e66) : p.text,
+                        height: 1.3,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        meta,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: p.textSec,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right, size: 18, color: p.textHint),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 「查看更多」：整行宽按钮（与上方经典卡同宽），文案居中。
+  Widget _buildTwentyMoreEntry(Color accent) {
+    return Material(
+      key: const ValueKey('twenty_classics_more'),
+      color: accent.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _openTwentyClassicsAll,
+        child: SizedBox(
+          height: 38,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '查看更多',
+                style: TextStyle(
+                  color: AppPalette.p.accentDeep,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Icon(Icons.chevron_right,
+                  size: 17, color: AppPalette.p.accentDeep),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 「百册经论指南」——随缘读经下方的读经引导区：顶部是五阶段进度圆点，
   /// 下面依次是每个阶段的卡片，按从易到难排列。
   /// 点击进入对应阶段内容的跳转暂未接入，这里先只做展示。
@@ -3699,7 +3936,8 @@ class SutraListPageState extends State<SutraListPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildWhatToReadHeader(accent),
+          _buildSectionHeader(
+              '百册经论指南', '从浅入深，循序渐进，步步深入佛法智慧', accent),
           const SizedBox(height: 16),
           _buildStageStepper(accent),
           const SizedBox(height: 18),
@@ -3712,8 +3950,9 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 「百册经论指南」栏目标题：金色竖杠 + 两行文字（标题 / 副标题）。
-  Widget _buildWhatToReadHeader(Color accent) {
+  /// 区块标题：金色竖杠 + 两行文字（标题 / 副标题）。
+  /// 「百册经论指南」与「廿册精选典籍」共用同一套栏目标题样式。
+  Widget _buildSectionHeader(String title, String subtitle, Color accent) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3731,7 +3970,7 @@ class SutraListPageState extends State<SutraListPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '百册经论指南',
+                title,
                 style: TextStyle(
                   color: AppPalette.p.text,
                   fontSize: 21,
@@ -3742,7 +3981,7 @@ class SutraListPageState extends State<SutraListPage>
               ),
               const SizedBox(height: 4),
               Text(
-                '从浅入深，循序渐进，步步深入佛法智慧',
+                subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -4438,6 +4677,8 @@ class SutraListPageState extends State<SutraListPage>
                                   ] else ...[
                                     _buildQuickGrid(),
                                   ],
+                                  // 「廿册精选典籍」：随机读经与百册之间的精选区。
+                                  _buildTwentyClassicsSection(),
                                   // 「百册经论指南」从易到难的读经阶段（随缘读经下方）。
                                   _buildWhatToReadSection(),
                                 ],

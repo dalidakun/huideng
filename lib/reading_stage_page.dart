@@ -28,6 +28,7 @@ class ReadingStagePage extends StatefulWidget {
     this.headerTitle,
     this.headerSubtitle,
     this.headerIcon,
+    this.showGroupProgress = false,
   });
 
   final ReadingStage stage;
@@ -35,7 +36,7 @@ class ReadingStagePage extends StatefulWidget {
   /// 经藏页 State，用于复用下载/阅读逻辑与已下载状态。
   final SutraListPageState? parent;
 
-  /// banner 标题覆盖：非空时显示该文案（如「廿册精选经典」），
+  /// banner 标题覆盖：非空时显示该文案（如「廿册精选典籍」），
   /// 否则沿用「阶段X · 阶段名」。同时作为「是否自定义 banner」的开关。
   final String? headerTitle;
 
@@ -44,6 +45,10 @@ class ReadingStagePage extends StatefulWidget {
 
   /// banner 图标覆盖：自定义 banner 时用它（为空则不显示图标）。
   final String? headerIcon;
+
+  /// 是否在每个经典文件夹行右侧显示该文件夹的完成进度百分比圆环
+  /// （廿册「查看更多」页开启；百册阶段页保持原样式）。
+  final bool showGroupProgress;
 
   @override
   State<ReadingStagePage> createState() => _ReadingStagePageState();
@@ -211,6 +216,7 @@ class _ReadingStagePageState extends State<ReadingStagePage> with RouteAware {
           onToggle: () => _toggle(group.key),
           parent: widget.parent,
           sutraFolder: widget.stage.badgeName,
+          showProgress: widget.showGroupProgress,
         ));
       },
     );

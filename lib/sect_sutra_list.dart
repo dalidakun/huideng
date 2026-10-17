@@ -144,6 +144,7 @@ class SectSutraGroupCard extends StatelessWidget {
     required this.onToggle,
     this.parent,
     this.sutraFolder,
+    this.showProgress = false,
   });
 
   final SectSutraGroup group;
@@ -156,9 +157,17 @@ class SectSutraGroupCard extends StatelessWidget {
   /// 打开该卷时写入 [Sutra.folder] 的归属名（宗门名 / 阶段名）。
   final String? sutraFolder;
 
+  /// 是否在折叠行右侧显示该文件夹的完成进度圆环（廿册「查看更多」页用；
+  /// 宗门页 / 法门页 / 阶段页保持原来的简洁样式）。
+  final bool showProgress;
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
+    // 文件夹里只要有一册标记完成，经名就走全站统一的「完成」金棕色——
+    // 多卷经不必整部读完，读过一部分就能一眼看出来。
+    final stat = _readStat();
+    final anyRead = stat.done > 0;
     return Container(
       decoration: BoxDecoration(
         color: p.card,
@@ -197,7 +206,7 @@ class SectSutraGroupCard extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 16.5,
                               fontWeight: FontWeight.w700,
-                              color: p.text,
+                              color: anyRead ? kSectReadDone : p.text,
                               letterSpacing: 0.8,
                             ),
                           ),
@@ -214,6 +223,11 @@ class SectSutraGroupCard extends StatelessWidget {
                         ],
                       ),
                     ),
+                    if (showProgress) ...[
+                      const SizedBox(width: 6),
+                      _GroupProgressRing(done: stat.done, total: stat.total),
+                      const SizedBox(width: 4),
+                    ],
                     AnimatedRotation(
                       turns: open ? 0.5 : 0,
                       duration: const Duration(milliseconds: 180),
@@ -270,6 +284,19 @@ class SectSutraGroupCard extends StatelessWidget {
       formatSutraWords(group.totalWords),
     ];
     return parts.join(' · ');
+  }
+
+  /// 该文件夹已标记完成的册数 / 总册数（按经藏页的实时已读状态）。
+  ({int done, int total}) _readStat() {
+    var done = 0;
+    var total = 0;
+    for (final ed in group.editions) {
+      for (final v in ed.volumes) {
+        total++;
+        if (parent?.isVolumeRead(v.id) ?? false) done++;
+      }
+    }
+    return (done: done, total: total);
   }
 
   /// 译本分区：单卷译本直接一行（行标题即「经名·某某译」）；
@@ -442,6 +469,55 @@ class SectSutraGroupCard extends StatelessWidget {
         charCount: volume.words,
         filePath: volume.assetPath,
         folder: sutraFolder,
+      ),
+    );
+  }
+}
+
+/// 文件夹完成进度圆环：淡色轨道 + 绿色进度弧 + 圆心百分比。
+/// 全部读完时整体转为「完成」金棕色，与已读经名同一套颜色语言。
+class _GroupProgressRing extends StatelessWidget {
+  const _GroupProgressRing({required this.done, required this.total});
+
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    final value =
+        total <= 0 ? 0.0 : (done / total).clamp(0.0, 1.0).toDouble();
+    final complete = total > 0 && done >= total;
+    final color = complete ? kSectReadDone : kSectGreen;
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned.fill(
+            child: CircularProgressIndicator(
+              value: value,
+              strokeWidth: 2.5,
+              backgroundColor: p.borderSoft,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+              strokeCap: StrokeCap.round,
+            ),
+          ),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              '${(value * 100).round()}%',
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 9.5,
+                height: 1.1,
+                fontWeight: FontWeight.w700,
+                color: complete ? kSectReadDone : p.textSec,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

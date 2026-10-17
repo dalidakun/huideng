@@ -59,7 +59,19 @@ class PullRevealTracker {
   static const double startThreshold = 48;
 
   /// 越过起始阈值后再拖满该距离即完全露出。
-  static const double revealDistance = 260;
+  ///
+  /// 取屏幕逻辑高度：主页整页下移的高度就是 [revealDistance]，于是手指拖多少
+  /// 页面就走多少（1:1 跟手），慢拖慢走、快拖快走。原先固定 260px 行程对应
+  /// 整屏位移，页面速度约为手指的 3 倍——手指还在屏上慢慢拖，页面已经飞速
+  /// 滑走/收合，手感「比手指灵敏」。
+  static double get revealDistance {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    for (final view in views) {
+      final height = view.physicalSize.height / view.devicePixelRatio;
+      if (height > 0) return height;
+    }
+    return 800;
+  }
 
   /// 松手时超过该进度才完全展开，否则收回。
   static const double commitProgress = 0.5;

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="quick_checkin"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_checkin_short"
+        android:shortcutLongLabel="@string/shortcut_checkin_long">
+        <intent
+            android:action="com.huideng.reader.action.QUICK_CHECKIN"
+            android:targetPackage="com.huideng.reader"
+            android:targetClass="com.huideng.reader.QuickCheckinActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="continue_reading"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_reading_short"
+        android:shortcutLongLabel="@string/shortcut_reading_long">
+        <intent
+            android:action="com.huideng.reader.action.CONTINUE_READING"
+            android:targetPackage="com.huideng.reader"
+            android:targetClass="com.huideng.reader.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

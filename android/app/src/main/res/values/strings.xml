@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_checkin_short">一键打卡</string>
+    <string name="shortcut_checkin_long">一键完成今日全部功课</string>
+    <string name="shortcut_reading_short">继续阅读</string>
+    <string name="shortcut_reading_long">接着上次的经书继续阅读</string>
+</resources>
