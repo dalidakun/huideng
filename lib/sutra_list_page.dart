@@ -875,6 +875,11 @@ class SutraListPageState extends State<SutraListPage>
   bool _shelfExpanded = false;
   late final AnimationController _shelfController;
 
+  /// 面板内当前展开的部类（null 表示显示 56 部类卡片总览）。
+  /// 点击某部类后在本面板内直接铺开该部经文，不再另开新页面。
+  String? _shelfFolder;
+  final ScrollController _shelfFolderScroll = ScrollController();
+
   Set<String>? _assetKeys;
   // Cache: resolved asset key -> exists?
   final Map<String, bool> _resolvedPathExistsCache = {};
@@ -1047,9 +1052,16 @@ class SutraListPageState extends State<SutraListPage>
   }
 
   /// 底部「全部经典」面板展开时收起它并返回 true（侧滑返回手势调用），
-  /// 让侧滑先收起面板而不是直接最小化应用。
+  /// 让侧滑先收起面板而不是直接最小化应用；若面板内已展开某部类，
+  /// 则先退回部类总览。
   bool collapseShelfIfOpen() {
     if (!mounted) return false;
+    if (_shelfFolder != null) {
+      setState(() {
+        _shelfFolder = null;
+      });
+      return true;
+    }
     if (!_shelfExpanded && _shelfController.value <= 0) return false;
     _shelfExpanded = false;
     _shelfController.reverse();
@@ -1575,6 +1587,7 @@ class SutraListPageState extends State<SutraListPage>
     routeObserver.unsubscribe(this);
     _drawerController.dispose();
     _shelfController.dispose();
+    _shelfFolderScroll.dispose();
     _scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -3004,8 +3017,10 @@ class SutraListPageState extends State<SutraListPage>
         children: [
           Expanded(
             child: _buildQuickAccessTile(
-              icon: Icons.people_outline,
-              title: '大家都在学',
+              icon: Icons.lock_outline,
+              title: '锁定榜',
+              iconImage: 'assets/images/lock.png',
+              iconSize: 28,
               onTap: () {
                 _dismissKeyboard();
                 Navigator.push(
@@ -3019,7 +3034,7 @@ class SutraListPageState extends State<SutraListPage>
           Expanded(
             child: _buildQuickAccessTile(
               icon: Icons.leaderboard_outlined,
-              title: '热门榜单',
+              title: '讨论榜',
               onTap: () {
                 _dismissKeyboard();
                 _openHotDiscussionList();
@@ -3027,11 +3042,26 @@ class SutraListPageState extends State<SutraListPage>
             ),
           ),
           const SizedBox(width: 8),
+          // 宗派经典（原底部菜单第 4 项，现作为经藏页子菜单入口）。
+          Expanded(
+            child: _buildQuickAccessTile(
+              icon: Icons.account_balance_outlined,
+              title: '宗派经典',
+              iconImage: 'assets/images/disc.png',
+              iconSize: 28,
+              onTap: () {
+                _dismissKeyboard();
+                widget.onOpenSect?.call();
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
           Expanded(
             child: _buildQuickAccessTile(
               icon: Icons.favorite_border,
-              title: '我的收藏',
+              title: '收藏',
               iconImage: 'assets/images/like.png',
+              iconSize: 22,
               onTap: () {
                 _dismissKeyboard();
                 Navigator.push(
@@ -3099,6 +3129,7 @@ class SutraListPageState extends State<SutraListPage>
     required String title,
     required VoidCallback? onTap,
     String? iconImage,
+    double iconSize = 24,
   }) {
     final accentColor = AppPalette.p.readingAccent;
     return Material(
@@ -3116,16 +3147,15 @@ class SutraListPageState extends State<SutraListPage>
                 borderRadius: BorderRadius.circular(12),
               ),
               child: iconImage != null
-                  ? Padding(
-                      padding: const EdgeInsets.all(10),
+                  ? Center(
                       child: Image.asset(
                         iconImage,
                         color: accentColor,
-                        width: 24,
-                        height: 24,
+                        width: iconSize,
+                        height: iconSize,
                       ),
                     )
-                  : Icon(icon, color: accentColor, size: 24),
+                  : Icon(icon, color: accentColor, size: iconSize),
             ),
             const SizedBox(height: 8),
             Text(
@@ -3186,7 +3216,7 @@ class SutraListPageState extends State<SutraListPage>
                     children: [
                       Expanded(child: _buildRecentTile()),
                       const SizedBox(height: 10),
-                      Expanded(child: _buildReadLaterTile()),
+                      Expanded(child: _buildSectTile()),
                       const SizedBox(height: 10),
                       Expanded(child: _buildFavoriteTile()),
                     ],
@@ -3264,14 +3294,19 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
-  /// 稍后阅读入口卡：与素白外观「稍后阅读」同一入口，样式跟随米黄卡片风格。
-  Widget _buildReadLaterTile() {
+  /// 宗派经典入口卡：由右下角「宗门」浮钮移入「经典入口」宫格，
+  /// 替换原「稍后阅读」卡位；点击进入宗门列表页，与素白外观同款入口，
+  /// 仅配色跟随米黄卡片风格。
+  Widget _buildSectTile() {
     return Material(
       color: AppPalette.p.card,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: widget.onOpenReadingHistory,
+        onTap: () {
+          _dismissKeyboard();
+          widget.onOpenSect?.call();
+        },
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           alignment: Alignment.center,
@@ -3290,13 +3325,18 @@ class SutraListPageState extends State<SutraListPage>
                   color: AppPalette.p.accent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(7),
                 ),
-                child: Icon(Icons.bookmark_border,
-                    size: 14, color: AppPalette.p.accent),
+                child: Center(
+                  child: Image.asset(
+                    'assets/menpai/ssd3.png',
+                    width: 15,
+                    height: 15,
+                  ),
+                ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '稍后阅读',
+                  '宗派经典',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -3613,7 +3653,7 @@ class SutraListPageState extends State<SutraListPage>
     final isPlain = AppPalette.instance.isPlain;
     final accentColor = AppPalette.p.readingAccent;
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Material(
         color: AppPalette.p.card,
         borderRadius: BorderRadius.circular(12),
@@ -3774,6 +3814,7 @@ class SutraListPageState extends State<SutraListPage>
   Widget _buildTwentyClassicsSection() {
     final p = AppPalette.p;
     final accent = p.accent;
+    final isPlain = AppPalette.instance.isPlain;
     final sutras = kTwentyClassics.sutras;
     final shown = sutras.length < kTwentyClassicsShowcaseCount
         ? sutras.length
@@ -3781,15 +3822,15 @@ class SutraListPageState extends State<SutraListPage>
     return Container(
       // 供 widget 测试稳定定位本区块（页面层级深，纯文本定位易与其它入口撞名）。
       key: const ValueKey('twenty_classics_section'),
-      margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-      padding: const EdgeInsets.fromLTRB(12, 18, 12, 14),
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(16),
-        border: AppPalette.instance.isPlain
-            ? null
-            : Border.all(color: p.borderSoft, width: 0.8),
-      ),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: EdgeInsets.fromLTRB(
+          isPlain ? 12 : 0, 18, isPlain ? 12 : 0, 14),
+      decoration: isPlain
+          ? BoxDecoration(
+              color: p.card,
+              borderRadius: BorderRadius.circular(16),
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3928,16 +3969,17 @@ class SutraListPageState extends State<SutraListPage>
   Widget _buildWhatToReadSection() {
     final p = AppPalette.p;
     final accent = p.accent;
+    final isPlain = AppPalette.instance.isPlain;
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-      padding: const EdgeInsets.fromLTRB(12, 18, 12, 14),
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(16),
-        border: AppPalette.instance.isPlain
-            ? null
-            : Border.all(color: p.borderSoft, width: 0.8),
-      ),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: EdgeInsets.fromLTRB(
+          isPlain ? 12 : 0, 18, isPlain ? 12 : 0, 14),
+      decoration: isPlain
+          ? BoxDecoration(
+              color: p.card,
+              borderRadius: BorderRadius.circular(16),
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -4286,16 +4328,15 @@ class SutraListPageState extends State<SutraListPage>
         borderRadius: BorderRadius.circular(12),
         onTap: () {
           _dismissKeyboard();
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => SutraFolderPage(
-                parent: this,
-                folderName: folder,
-                displayName: name,
-              ),
-            ),
-          );
+          setState(() {
+            _shelfFolder = folder;
+          });
+          // 列表挂载后把滚动位置归零，避免复用同一 controller 时残留上次的偏移。
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_shelfFolderScroll.hasClients) {
+              _shelfFolderScroll.jumpTo(0);
+            }
+          });
         },
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -4704,9 +4745,6 @@ class SutraListPageState extends State<SutraListPage>
             ),
           ),
         ),
-        // 右下角「宗门」入口（原底部菜单第 4 项）：浮在「全部经典」面板上方，
-        // 排在面板之前，面板展开铺满时会被其盖住。
-        if (!_searchActive) _buildSectEntryButton(),
         // 底部常驻「全部经典」上拉面板：常驻贴在菜单栏上方（不随内容滚动），
         // 折叠态就是那条按钮；单击/上拖后由下往上逐渐铺开 56 部类卡片。
         // 排在抽屉遮罩之前，抽屉展开时会被遮罩压暗。
@@ -4763,39 +4801,6 @@ class SutraListPageState extends State<SutraListPage>
 
   // ── 底部「全部经典」上拉面板 ────────────────────────────
 
-  /// 右下角「宗门」入口浮钮：位于「全部经典」面板 header 上方右侧，
-  /// 点击进入宗门/法门列表页（原底部菜单第 4 项，现作为经藏页子菜单）。
-  Widget _buildSectEntryButton() {
-    final mq = MediaQuery.of(context);
-    return Positioned(
-      right: 16,
-      bottom: mq.padding.bottom + _shelfHeaderH + 12,
-      child: Material(
-        color: AppPalette.p.card,
-        shape: const CircleBorder(),
-        elevation: 4,
-        shadowColor: Colors.black.withValues(alpha: 0.24),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: () => widget.onOpenSect?.call(),
-          child: SizedBox(
-            width: 46,
-            height: 46,
-            child: Center(
-              child: Image.asset(
-                AppPalette.instance.isPlain
-                    ? 'assets/images/h1.png'
-                    : 'assets/images/s1.png',
-                width: 24,
-                height: 24,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   /// 面板内容区（不含 header）的最大高度：
   /// 屏幕高 - 顶部栏（状态栏 + AppBar）的下边缘 - 菜单栏高 - header 高，
   /// 即展开到顶时面板上沿正好停在顶部 bar 的下边缘，不遮挡顶部 bar。
@@ -4809,11 +4814,24 @@ class SutraListPageState extends State<SutraListPage>
     return available - _shelfHeaderH - _shelfOpenTopExtra - _shelfTopGap;
   }
 
-  /// 单击 header：折叠 ↔ 展开。
+  /// 单击 header：折叠 ↔ 展开。收起时退回部类总览。
   void _toggleShelf() {
     _dismissKeyboard();
     _shelfExpanded = !_shelfExpanded;
+    if (!_shelfExpanded) {
+      setState(() {
+        _shelfFolder = null;
+      });
+    }
     _shelfExpanded ? _shelfController.forward() : _shelfController.reverse();
+  }
+
+  /// 面板内从某部类退回 56 部类总览。
+  void _closeShelfFolder() {
+    if (_shelfFolder == null) return;
+    setState(() {
+      _shelfFolder = null;
+    });
   }
 
   /// 纵向拖动 header 时按手指位移实时擦洗展开比例（向下拖收起，向上拖展开）。
@@ -4831,6 +4849,11 @@ class SutraListPageState extends State<SutraListPage>
         ? velocity < 0
         : _shelfController.value >= 0.5;
     _shelfExpanded = open;
+    if (!open) {
+      setState(() {
+        _shelfFolder = null;
+      });
+    }
     open ? _shelfController.forward() : _shelfController.reverse();
   }
 
@@ -4867,19 +4890,21 @@ class SutraListPageState extends State<SutraListPage>
                       if (contentH > 0)
                         SizedBox(
                           height: contentH,
-                          child: GridView.builder(
-                            padding: const EdgeInsets.all(12),
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2,
-                              mainAxisSpacing: 6,
-                              crossAxisSpacing: 10,
-                              childAspectRatio: 1.6,
-                            ),
-                            itemCount: _folders.length,
-                            itemBuilder: (ctx, i) =>
-                                _buildFolderCard(_folders[i]),
-                          ),
+                          child: _shelfFolder == null
+                              ? GridView.builder(
+                                  padding: const EdgeInsets.all(12),
+                                  gridDelegate:
+                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    mainAxisSpacing: 6,
+                                    crossAxisSpacing: 10,
+                                    childAspectRatio: 1.6,
+                                  ),
+                                  itemCount: _folders.length,
+                                  itemBuilder: (ctx, i) =>
+                                      _buildFolderCard(_folders[i]),
+                                )
+                              : _buildShelfFolderContent(_shelfFolder!),
                         ),
                     ],
                   ),
@@ -4917,6 +4942,94 @@ class SutraListPageState extends State<SutraListPage>
     );
   }
 
+  /// 面板内某部类的经文列表：直接铺在「全部经典」面板里，不再另开新页面。
+  /// 首条是部类简介卡（若有），其后是该部全部经文。
+  Widget _buildShelfFolderContent(String folder) {
+    final list = _getAllSutrasInFolder(folder);
+    final isPlain = AppPalette.instance.isPlain;
+    final desc = kSutraDescriptions[folder];
+    if (list.isEmpty) {
+      return const Center(
+        child: Text(
+          '暂无经文',
+          style: TextStyle(color: Color(0xFF999999), fontSize: 13),
+        ),
+      );
+    }
+    return ListView.builder(
+      controller: _shelfFolderScroll,
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 12),
+      itemCount: list.length + (desc != null ? 1 : 0),
+      itemBuilder: (ctx, i) {
+        if (desc != null && i == 0) {
+          return _buildShelfFolderDescCard(folder, desc, isPlain);
+        }
+        final sutraIndex = desc != null ? i - 1 : i;
+        return _buildSutraTile(ctx, list[sutraIndex]);
+      },
+    );
+  }
+
+  /// 面板内部类简介卡（与独立部类页同款外观）。
+  Widget _buildShelfFolderDescCard(String folder, String desc, bool isPlain) {
+    final accent = isPlain ? const Color(0xFF5d7c5a) : const Color(0xFFba8e82);
+    final bgStart = isPlain ? const Color(0xFFF0F5EC) : const Color(0xFFFAF0E0);
+    final bgEnd = isPlain ? const Color(0xFFF7FAF5) : const Color(0xFFFCF7EF);
+    final name = _folderDisplayNames[folder] ?? folder;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [bgStart, bgEnd],
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 3,
+              margin: const EdgeInsets.only(top: 2, right: 12),
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.circular(2),
+              ),
+              height: 48,
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      color: AppPalette.p.primary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    desc,
+                    style: TextStyle(
+                      color: AppPalette.p.textSec,
+                      fontSize: 13.5,
+                      height: 1.6,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 面板 header：固定高度，单击开合、上下拖动擦洗展开比例（本身不画底，玻璃由外层提供）。
   Widget _buildShelfHeader() {
     // 展开时顶部多留一点呼吸空间：随展开比例渐入，
@@ -4946,41 +5059,129 @@ class SutraListPageState extends State<SutraListPage>
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '全部经典',
-                    style: TextStyle(
-                      color: AppPalette.p.primary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
+              if (_shelfFolder == null)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '全部经典',
+                      style: TextStyle(
+                        color: AppPalette.p.primary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  const Text(
-                    '·',
-                    style: TextStyle(
-                      color: Color(0xFF9E9588),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                    const SizedBox(width: 6),
+                    const Text(
+                      '·',
+                      style: TextStyle(
+                        color: Color(0xFF9E9588),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${_folders.length}个部类',
-                    style: TextStyle(
-                      color: AppPalette.p.primary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                    const SizedBox(width: 6),
+                    Text(
+                      '${_folders.length}个部类',
+                      style: TextStyle(
+                        color: AppPalette.p.primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                )
+              else
+                _buildShelfFolderHeaderRow(_shelfFolder!),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  /// 面板内已展开某部类时的 header 行：返回箭头 + 部类名 + 已读进度。
+  /// 返回箭头点一下退回 56 部类总览。
+  Widget _buildShelfFolderHeaderRow(String folder) {
+    final list = _getAllSutrasInFolder(folder);
+    final total = list.length;
+    final read = list.where((s) => s.isRead).length;
+    final name = _folderDisplayNames[folder] ?? folder;
+    final downloading = _folderDownloadTotal[folder] != null;
+    final isPlain = AppPalette.instance.isPlain;
+    final folderAccent =
+        isPlain ? const Color(0xFF5d7c5a) : AppPalette.p.accent;
+    return Row(
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _closeShelfFolder,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.chevron_left,
+                    size: 20, color: AppPalette.p.primary),
+                Text(
+                  '部类',
+                  style: TextStyle(
+                    color: AppPalette.p.primary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppPalette.p.primary,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        if (downloading)
+          Text(
+            '${_folderDownloadDone[folder] ?? 0}/${_folderDownloadTotal[folder]}',
+            style: const TextStyle(
+              color: Color(0xFFba8e82),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        else ...[
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _downloadFolder(folder),
+            child: const Padding(
+              padding: EdgeInsets.only(right: 10),
+              child: Icon(
+                Icons.download_for_offline_outlined,
+                size: 18,
+                color: Color(0xFF71867A),
+              ),
+            ),
+          ),
+          Text(
+            '已读 $read/$total',
+            style: TextStyle(
+              color: folderAccent,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -5078,230 +5279,6 @@ class SutraListPageState extends State<SutraListPage>
                       }
                       _showMissingSutrasSheet();
                     },
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 分部详情页：展示某一部类下的全部经书与阅读进度。
-class SutraFolderPage extends StatefulWidget {
-  final SutraListPageState parent;
-  final String folderName;
-  final String displayName;
-
-  const SutraFolderPage({
-    super.key,
-    required this.parent,
-    required this.folderName,
-    required this.displayName,
-  });
-
-  @override
-  State<SutraFolderPage> createState() => _SutraFolderPageState();
-}
-
-class _SutraFolderPageState extends State<SutraFolderPage> {
-  List<Sutra> get _sutras =>
-      widget.parent._getAllSutrasInFolder(widget.folderName);
-
-  /// 本页就是「打开的经文文件夹」：经文多时上滑翻卷难回顶栏，
-  /// 复用菩提空间同款右下角「回到顶部」箭头。
-  final ScrollController _listScroll = ScrollController();
-
-  /// 箭头显隐：默认隐藏，只在本页（文件夹已打开）往下滑过一段才出现。
-  bool _showBackToTop = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.parent._sutraDataVersion.addListener(_onParentChanged);
-    _listScroll.addListener(_updateBackToTop);
-  }
-
-  @override
-  void dispose() {
-    widget.parent._sutraDataVersion.removeListener(_onParentChanged);
-    _listScroll.removeListener(_updateBackToTop);
-    _listScroll.dispose();
-    super.dispose();
-  }
-
-  void _onParentChanged() {
-    if (mounted) setState(() {});
-  }
-
-  void _updateBackToTop() {
-    final show = _listScroll.hasClients && _listScroll.offset > 60;
-    if (show != _showBackToTop) {
-      setState(() => _showBackToTop = show);
-    }
-  }
-
-  void _scrollToTop() {
-    if (_listScroll.hasClients && _listScroll.offset > 0) {
-      _listScroll.animateTo(0,
-          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-    }
-  }
-
-  /// 与菩提空间右下角那颗箭头同一套样式；底距再抬高一截，避开底部手势条。
-  Widget _buildBackToTopButton() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 40),
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: FloatingActionButton(
-          onPressed: _scrollToTop,
-          heroTag: 'sutra_folder_back_to_top',
-          backgroundColor: AppPalette.instance.isPlain
-              ? const Color(0xFF1A1A1A)
-              : const Color(0xFF71867A),
-          elevation: 8,
-          highlightElevation: 12,
-          shape: const CircleBorder(),
-          child: Image.asset(
-            'assets/images/top.png',
-            width: 21,
-            height: 21,
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final total = _sutras.length;
-    final read = _sutras.where((s) => s.isRead).length;
-    final downloading = widget.parent._folderDownloadTotal[widget.folderName] != null;
-    final isPlain = AppPalette.instance.isPlain;
-    final desc = kSutraDescriptions[widget.folderName];
-    return Scaffold(
-      backgroundColor: AppPalette.p.bg,
-      // 打开文件夹后往下滑才露出；停在顶部时整颗按钮隐藏。
-      floatingActionButton:
-          _showBackToTop ? _buildBackToTopButton() : null,
-      appBar: AppBar(
-        backgroundColor: AppPalette.p.bg,
-        elevation: 0,
-        shadowColor: Colors.transparent,
-        iconTheme: IconThemeData(color: AppPalette.p.primary),
-        actionsPadding: const EdgeInsets.only(right: 24),
-        title: Text(
-          '已读 $read/$total 册',
-          style: TextStyle(
-            color: isPlain
-                ? const Color(0xFF5d7c5a)
-                : const Color(0xFFba8e82),
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        actions: [
-          if (downloading)
-            Center(
-              child: Text(
-                '${widget.parent._folderDownloadDone[widget.folderName] ?? 0}/${widget.parent._folderDownloadTotal[widget.folderName]}',
-                style: const TextStyle(
-                  color: Color(0xFFba8e82),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            )
-          else
-            SizedBox(
-              width: 34,
-              height: 30,
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                iconSize: 17,
-                tooltip: '下载本卷全部经文',
-                icon: const Icon(Icons.download_for_offline_outlined, color: Color(0xFF71867A)),
-                onPressed: () => widget.parent._downloadFolder(widget.folderName),
-              ),
-            ),
-        ],
-      ),
-      body: total == 0
-          ? const Center(
-              child: Text('暂无经文', style: TextStyle(color: Color(0xFF999999), fontSize: 13)),
-            )
-          : ListView.builder(
-              controller: _listScroll,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: total + (desc != null ? 1 : 0),
-              itemBuilder: (ctx, i) {
-                if (desc != null && i == 0) {
-                  return _buildDescriptionCard(desc, isPlain);
-                }
-                final sutraIndex = desc != null ? i - 1 : i;
-                return widget.parent._buildSutraTile(ctx, _sutras[sutraIndex]);
-              },
-            ),
-    );
-  }
-
-  Widget _buildDescriptionCard(String desc, bool isPlain) {
-    final accent = isPlain ? const Color(0xFF5d7c5a) : const Color(0xFFba8e82);
-    final bgStart = isPlain
-        ? const Color(0xFFF0F5EC)
-        : const Color(0xFFFAF0E0);
-    final bgEnd = isPlain
-        ? const Color(0xFFF7FAF5)
-        : const Color(0xFFFCF7EF);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [bgStart, bgEnd],
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 3,
-              margin: const EdgeInsets.only(top: 2, right: 12),
-              decoration: BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.circular(2),
-              ),
-              height: 48,
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.displayName,
-                    style: TextStyle(
-                      color: AppPalette.p.primary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    desc,
-                    style: TextStyle(
-                      color: AppPalette.p.textSec,
-                      fontSize: 13.5,
-                      height: 1.6,
-                    ),
                   ),
                 ],
               ),

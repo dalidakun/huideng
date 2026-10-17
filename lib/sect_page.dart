@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
-import 'auth_service.dart';
-import 'login_page.dart';
 import 'community_daily_spot.dart';
-import 'user_avatar.dart';
 
 /// 栏目类别：八大宗派 / 十二法门。详情页据其把介绍标题写成「宗派介绍 / 法门介绍」。
 enum SectMenuKind { sect, gate }
@@ -166,7 +163,7 @@ Set<String> get kCommunityKeys => {
         if (!s.isCustom) '${s.name}社区',
     };
 
-/// 底部「宗门」菜单页：标题栏 + 昨日最热社区展示位 + 「八大宗派」两列格子 + 「十二法门」列表。
+/// 经藏页「宗派经典」子页：返回顶栏 + 昨日最热社区展示位 + 「八大宗派」两列格子 + 「十二法门」列表。
 ///
 /// 宗门与法门不分栏切换，同页自上而下依次排布；两者共用 [onOpen] 与同一个
 /// [SectDetailPage]，所以宗门与法门的详情页完全同构。
@@ -175,7 +172,6 @@ class SectPage extends StatefulWidget {
     super.key,
     this.onOpen,
     this.onOpenCommunity,
-    this.onOpenSideMenu,
   });
 
   final void Function(SectInfo sect)? onOpen;
@@ -183,8 +179,6 @@ class SectPage extends StatefulWidget {
   /// 进入某个社区（展示位点「进入社区」时用）：回传社区标记（如「禅宗社区」）。
   /// 跳转交给宿主页做，本页不引社区页、也就不会与它形成循环依赖。
   final void Function(String community)? onOpenCommunity;
-
-  final VoidCallback? onOpenSideMenu;
 
   @override
   State<SectPage> createState() => _SectPageState();
@@ -196,97 +190,90 @@ class _SectPageState extends State<SectPage> {
     final p = AppPalette.p;
     return Scaffold(
       backgroundColor: p.bg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildTopBar(p),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.only(bottom: 28),
-                children: [
-                  // 顶部展示位：八大宗派 + 十二法门里，前一天发帖最多的那一个社区。
-                  CommunityDailySpot(
-                    communities: kCommunityKeys,
-                    onOpen: widget.onOpenCommunity,
-                  ),
-                  _buildSectionTitle(p, '八大宗派'),
-                  _buildSectGrid(p),
-                  _buildSectionTitle(p, '十二法门'),
-                  for (var i = 0; i < kGateList.length; i++) ...[
-                    _buildRow(p, kGateList[i]),
-                    if (i < kGateList.length - 1)
-                      Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: p.borderSoft,
-                      ),
-                  ],
+      body: Column(
+        children: [
+          _buildHeader(p),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(bottom: 28),
+              children: [
+                // 顶部展示位：八大宗派 + 十二法门里，前一天发帖最多的那一个社区。
+                CommunityDailySpot(
+                  communities: kCommunityKeys,
+                  onOpen: widget.onOpenCommunity,
+                ),
+                _buildSectionTitle(p, '八大宗派'),
+                _buildSectGrid(p),
+                _buildSectionTitle(p, '十二法门'),
+                for (var i = 0; i < kGateList.length; i++) ...[
+                  _buildRow(p, kGateList[i]),
+                  if (i < kGateList.length - 1)
+                    Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: p.borderSoft,
+                    ),
                 ],
-              ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  /// 顶栏：左头像 + 标题 + 圆点 + 经文（与其他菜单页同款；本页为菜单页，无返回键）。
-  Widget _buildTopBar(PaletteData p) {
-    return SizedBox(
+  /// 顶栏：返回键 + 标题（与「我的收藏」「稍后阅读」同款渐变圆角头栏）。
+  /// 本页现为经藏页压栈子页，返回键直接 pop 回经藏。
+  Widget _buildHeader(PaletteData p) {
+    return Container(
       width: double.infinity,
-      height: 46,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          children: [
-            GestureDetector(
-              // 左上角头像：未登录时进入登录页面；已登录时从左侧滑出个人菜单，与首页一致。
-              onTap: () {
-                if (!AuthService.instance.isLoggedIn) {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const LoginPage()),
-                  );
-                  return;
-                }
-                widget.onOpenSideMenu?.call();
-              },
-              child: UserAvatar(
-                userId: AuthService.instance.currentUser.value?.id,
-                radius: 16,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [p.gradTop, p.gradBot],
+        ),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 10, 20, 18),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: Icon(Icons.arrow_back_ios_new, color: p.text, size: 20),
               ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              '宗门',
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                color: p.primary,
-                letterSpacing: 1.5,
-              ),
-            ),
-            const SizedBox(width: 6),
-            const Text(
-              '·',
-              style: TextStyle(
-                color: Color(0xFF9E9588),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 6),
-            const Flexible(
-              child: Text(
-                '是法平等，无有高下。',
+              const SizedBox(width: 4),
+              Text(
+                '宗门',
                 style: TextStyle(
-                  color: Color(0xFF9E9588),
-                  fontSize: 12,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w600,
+                  color: p.text,
                 ),
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-          ],
+              const SizedBox(width: 6),
+              Text(
+                '·',
+                style: TextStyle(
+                  color: p.textHint,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '是法平等，无有高下。',
+                  style: TextStyle(fontSize: 13, color: p.textSec),
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -116,6 +116,10 @@ flutter:
     - assets/images/top.png
     # 经藏页「我的收藏」快捷入口图标。
     - assets/images/like.png
+    # 经藏页「锁定榜」快捷入口图标。
+    - assets/images/lock.png
+    # 经藏页「宗派经典」快捷入口图标。
+    - assets/images/disc.png
     # 经藏页「随缘读经」卡片标题图标。
     - assets/images/leaf-sharp.png
     # 首页精读经文卡片右侧莲花装饰图。

@@ -882,11 +882,9 @@ class _MainPageState extends State<MainPage>
         return -1;
       case 4: // 消息（菜单第 4 位）
         return 3;
-      case 5: // 宗门（入口在经藏页右下角，无底部菜单项）
+      case 5: // 我的（入口在左侧菜单）
         return -1;
-      case 6: // 我的（入口在左侧菜单）
-        return -1;
-      case 7: // 记录（入口在左侧菜单）
+      case 6: // 记录（入口在左侧菜单）
         return -1;
       default:
         return -1;
@@ -1063,27 +1061,29 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    _tabIndex.value = 6;
-    setState(() {
-      _currentIndex = 6;
-    });
-    _syncAssistantTab();
-    _revealNavBar();
-    _myKey.currentState?.reload();
-  }
-
-  /// 经藏页右下角「宗门」入口：打开宗门/法门列表页（原底部菜单第 4 项，
-  /// 现作为经藏页子菜单）。可从前台其它页进入，先退出经藏页搜索模式。
-  void _openSectPage() {
-    if (_currentIndex == 2) {
-      _sutraListKey.currentState?.deactivateSearch();
-    }
     _tabIndex.value = 5;
     setState(() {
       _currentIndex = 5;
     });
     _syncAssistantTab();
     _revealNavBar();
+    _myKey.currentState?.reload();
+  }
+
+  /// 经藏页「宗派经典」入口：打开宗门/法门列表页（原底部菜单第 4 项，现作为经藏页
+  /// 压栈子页，顶栏返回键 pop 回经藏）。可从前台其它页进入，先退出经藏页搜索模式。
+  void _openSectPage() {
+    if (_currentIndex == 2) {
+      _sutraListKey.currentState?.deactivateSearch();
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SectPage(
+          onOpen: _openSectDetail,
+          onOpenCommunity: _openSectCommunityByKey,
+        ),
+      ),
+    );
   }
 
   /// 各页面左上角头像入口：从左侧滑出个人菜单。
@@ -1146,8 +1146,8 @@ class _MainPageState extends State<MainPage>
   void _openRecordPage() {
     if (!mounted) return;
     if (_currentIndex == 2) _sutraListKey.currentState?.deactivateSearch();
-    _tabIndex.value = 7;
-    setState(() => _currentIndex = 7);
+    _tabIndex.value = 6;
+    setState(() => _currentIndex = 6);
     _syncAssistantTab();
     _revealNavBar();
     unawaited(_recordKey.currentState?.reload());
@@ -1367,13 +1367,6 @@ class _MainPageState extends State<MainPage>
       ),
       _AssistantTabPage(),
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
-      // 经藏页右下角「宗门」子菜单：宗门列表页，左上头像滑出个人菜单。
-      // 点击宗门进本宗核心经典详情页；顶部展示位点社区进该社区页。
-      SectPage(
-        onOpenSideMenu: _openSideMenu,
-        onOpen: _openSectDetail,
-        onOpenCommunity: _openSectCommunityByKey,
-      ),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
     ];
@@ -1411,10 +1404,10 @@ class _MainPageState extends State<MainPage>
               ),
             ),
           ),
-          // 右下角「继续阅读」圆形按钮：仅首页(0)、消息(4)、宗门(5) 三个菜单页
+          // 右下角「继续阅读」圆形按钮：仅首页(0)、消息(4) 两个菜单页
           // 显示，点击打开最近阅读的经书；没有阅读记录时不显示。
           if (_recentTitle != null &&
-              (_currentIndex == 0 || _currentIndex == 4 || _currentIndex == 5))
+              (_currentIndex == 0 || _currentIndex == 4))
             Positioned(
               right: _readingFabRight,
               bottom: MediaQuery.of(context).padding.bottom +
