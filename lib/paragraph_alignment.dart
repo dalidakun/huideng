@@ -1,5 +1,15 @@
 import 'cloud_notes_service.dart';
 
+/// 空白字符：对齐要在整篇段落上反复去空白，统一复用同一次编译的正则。
+final RegExp _whitespaceRe = RegExp(r'\s');
+
+String _normalize(String s) => s.replaceAll(_whitespaceRe, '');
+
+/// 段落列表的去空白版本：对齐时按列表缓存一次，避免「每条备注 × 每个段落」
+/// 都把整篇经文重新 replaceAll 一遍。
+List<String> _normalized(List<String> paragraphs) =>
+    [for (final p in paragraphs) _normalize(p)];
+
 /// 排版变化后，把「按下标存储」的段落备注/画线/完成态重新对齐到新段号的结果。
 class ParagraphAlignment {
   final Map<int, List<ParaNote>> notes;
@@ -17,21 +27,31 @@ class ParagraphAlignment {
   });
 }
 
+/// 互相包含判断：等价于 `a.contains(b) || b.contains(a)`，但先按长度选方向，
+/// 省掉一次方向必然失败的整串查找。
+bool _mutuallyContains(String a, String b) =>
+    a.length >= b.length ? a.contains(b) : b.contains(a);
+
 /// 在 [paragraphs] 里定位旧段 [oldText]（旧下标 [oldIdx]）对应的新下标，找不到返回 -1。
 ///
 /// 选取规则：优先「文字完全相同」的段；其次取互相包含的段（原段被拆分 / 合并的
 /// 过渡态），同一档里取离旧下标最近的一段，避免「就近第一处命中」把备注绑到
 /// 并不相干的那段上。
-int matchParagraphIndex(List<String> paragraphs, String oldText, int oldIdx) {
-  final normalized = oldText.replaceAll(RegExp(r'\s'), '');
+///
+/// [normalizedParagraphs] 为 [paragraphs] 已去空白的版本：调用方有多条旧段
+/// 要对齐时应先算好传进来，避免每条都把整篇经文重新归一化一遍。
+int matchParagraphIndex(List<String> paragraphs, String oldText, int oldIdx,
+    {List<String>? normalizedParagraphs}) {
+  final norms = normalizedParagraphs ?? _normalized(paragraphs);
+  final normalized = _normalize(oldText);
   if (normalized.isEmpty) return -1;
   var bestIdx = -1, bestRank = 2, bestDist = 0;
-  for (var j = 0; j < paragraphs.length; j++) {
-    final cand = paragraphs[j].replaceAll(RegExp(r'\s'), '');
+  for (var j = 0; j < norms.length; j++) {
+    final cand = norms[j];
     if (cand.isEmpty) continue;
     final rank = cand == normalized
         ? 0
-        : (cand.contains(normalized) || normalized.contains(cand))
+        : _mutuallyContains(cand, normalized)
             ? 1
             : 2;
     if (rank == 2) continue;
@@ -50,12 +70,16 @@ int matchParagraphIndex(List<String> paragraphs, String oldText, int oldIdx) {
 ///
 /// 用于「原段被拆成多段」时把每条备注精确落到它针对文字所在的那一段，
 /// 而不是把所有备注都塞进离旧下标最近的那一段。
-int matchQuotedIndex(List<String> paragraphs, String quoted, int oldIdx) {
-  final q = quoted.replaceAll(RegExp(r'\s'), '');
+///
+/// [normalizedParagraphs] 同 [matchParagraphIndex]。
+int matchQuotedIndex(List<String> paragraphs, String quoted, int oldIdx,
+    {List<String>? normalizedParagraphs}) {
+  final norms = normalizedParagraphs ?? _normalized(paragraphs);
+  final q = _normalize(quoted);
   if (q.isEmpty) return -1;
   var best = -1, bestDist = 0;
-  for (var j = 0; j < paragraphs.length; j++) {
-    final cand = paragraphs[j].replaceAll(RegExp(r'\s'), '');
+  for (var j = 0; j < norms.length; j++) {
+    final cand = norms[j];
     if (cand.isEmpty || !cand.contains(q)) continue;
     final dist = (j - oldIdx).abs();
     if (best < 0 || dist < bestDist) {
@@ -90,10 +114,13 @@ ParagraphAlignment alignParagraphAnnotations({
     ...underlines.keys,
     ...done.keys,
   };
+  // 整篇新段落只归一化一次：原先每条旧段都要把全部段落重新 replaceAll。
+  final normalizedNew = _normalized(paragraphs);
   for (final oldIdx in affectedOld) {
     final oldText =
         oldIdx >= 0 && oldIdx < oldParagraphs.length ? oldParagraphs[oldIdx] : '';
-    final newIdx = matchParagraphIndex(paragraphs, oldText, oldIdx);
+    final newIdx = matchParagraphIndex(paragraphs, oldText, oldIdx,
+        normalizedParagraphs: normalizedNew);
     if (newIdx < 0) {
       // 新版找不到原文字：若原下标仍在新段范围内则保留原位置并标记，避免丢数据。
       if (oldIdx < 0 || oldIdx >= paragraphs.length) continue; // 完全越界
@@ -104,8 +131,10 @@ ParagraphAlignment alignParagraphAnnotations({
       for (final n in notes[oldIdx]!) {
         // 有选中文字的备注：优先按选中文字精确定位到新段，支持原段被拆分。
         final quote = n.quoted.trim();
-        final quoteIdx =
-            quote.isEmpty ? -1 : matchQuotedIndex(paragraphs, quote, oldIdx);
+        final quoteIdx = quote.isEmpty
+            ? -1
+            : matchQuotedIndex(paragraphs, quote, oldIdx,
+                normalizedParagraphs: normalizedNew);
         final noteTarget = quoteIdx >= 0 ? quoteIdx : target;
         migratedNotes[noteTarget] = [
           ...?migratedNotes[noteTarget],

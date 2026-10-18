@@ -6,12 +6,25 @@ import 'package:path_provider/path_provider.dart';
 
 import 'app_palette.dart';
 import 'sutra_edit_drafts.dart';
+
+/// 空白字符（与 `\s` 等价）：统一复用同一次编译的正则，避免在长经文上
+/// 逐字符 / 逐段反复构造 RegExp 对象。
+final RegExp _whitespaceRunRe = RegExp(r'\s+');
+
+/// 已解析过的编辑副本路径：每次调用都会走一次 platform channel 取文档目录
+/// 并创建目录，自动保存每 500ms 触发一次，必须缓存。
+final Map<String, String> _editedPathCache = {};
+
 Future<String> editedSutraFilePath(String keyPath) async {
+  final cached = _editedPathCache[keyPath];
+  if (cached != null) return cached;
   final dir = await getApplicationDocumentsDirectory();
   final folder = Directory('${dir.path}/edited_sutras');
   await folder.create(recursive: true);
   final sanitized = keyPath.replaceAll(RegExp(r'[\\/:*?"<>|.]'), '_');
-  return '${folder.path}/$sanitized.txt';
+  final path = '${folder.path}/$sanitized.txt';
+  _editedPathCache[keyPath] = path;
+  return path;
 }
 
 class SutraEditPage extends StatefulWidget {
@@ -50,15 +63,36 @@ class _SutraEditPageState extends State<SutraEditPage> {
   /// 进入编辑页时的原文（与之比较判断是否有未保存改动）。
   late final String _initialText;
 
-  /// 最近一次确认已与本地编辑副本一致的正文：进入时等于原文（此时磁盘上
-  /// 就是这份内容或尚无副本），每次成功写盘后更新为写入的内容。
+  /// 最近一次成功写进本地编辑副本（`edited_sutras/*.txt`）的正文。
   String? _writtenText;
+
+  /// 最近一次同步到云端草稿的正文 / 经名。草稿是整篇经文的 json，
+  /// 每次自动保存都重新编码 + 走一遍 SharedPreferences 会让打字周期性卡顿，
+  /// 因此按 [_draftSyncIntervalMs] 节流，点保存 / 退出时立即同步。
+  String? _draftText;
+  String? _draftTitle;
+  int _lastDraftSyncAt = 0;
+
+  /// 自动保存时云端草稿的最小同步间隔。
+  static const int _draftSyncIntervalMs = 15000;
+
+  /// 写盘串行链：防抖自动保存 / 点保存 / 销毁兜底可能重叠，避免并发写同一文件。
+  Future<void>? _writeChain;
 
   /// 防抖自动保存定时器：停笔片刻即落盘，避免「改完直接返回/杀进程」丢字。
   Timer? _autoSaveTimer;
 
+  /// 入页动画结束后的弹键盘兜底定时器（动画状态监听失效时保证仍能聚焦）。
+  Timer? _focusTimer;
+
   /// 撤销历史：每个元素是一次操作前的正文 + 经名快照（不含当前状态）。
   final List<_EditSnapshot> _undoStack = [];
+
+  /// 撤销历史累计字符数：每份快照都是整篇经文，不限流会长期占住几十 MB。
+  int _undoChars = 0;
+
+  /// 撤销历史上限（按累计字符计，约 8MB UTF-16），超出时丢最早的快照。
+  static const int _maxUndoChars = 4 * 1024 * 1024;
 
   /// 连续输入的合并：一段输入停顿后，把该输入段开始前的状态压入历史，
   /// 这样一次「撤销」能整段退回，而不是逐字回退。正文与经名共用此机制。
@@ -80,17 +114,27 @@ class _SutraEditPageState extends State<SutraEditPage> {
     _focusNode = FocusNode();
     _initialTitle = (widget.initialTitle ?? widget.title).trim();
     _titleBeforeBurst = _initialTitle;
+    // 进页时按「磁盘草稿就是当前这份内容/经名」处理：没改动就不必在
+    // 退出时再编码一遍整篇经文（阅读页每次加载都会把正文镜像进草稿）。
+    _draftText = widget.content;
+    _draftTitle = _initialTitle;
     _titleController = TextEditingController(text: _initialTitle);
     _titleController.addListener(_onTitleChanged);
     final targetText = widget.topParagraphText;
     int? targetOffset;
-    if (targetText != null && targetText.trim().isNotEmpty) {
-      final key = targetText.trim().replaceAll(RegExp(r'\s+'), '').substring(0, 15.clamp(0, targetText.trim().replaceAll(RegExp(r'\s+'), '').length));
-      if (key.length >= 5) {
-        final raw = _controller.text.replaceAll(RegExp(r'\s+'), '');
-        final idx = raw.indexOf(key);
-        if (idx >= 0) {
-          targetOffset = _offsetInOriginal(idx, raw.length);
+    final trimmedTop = targetText?.trim() ?? '';
+    if (trimmedTop.isNotEmpty) {
+      // 只归一化一次：原文里 top 段与整篇正文都要去空白，重复 replaceAll
+      // 会让进页第一帧多扫两遍全文。
+      final topStripped = trimmedTop.replaceAll(_whitespaceRunRe, '');
+      if (topStripped.length >= 5) {
+        final key = topStripped.substring(0, 15.clamp(0, topStripped.length));
+        if (key.length >= 5) {
+          final raw = _controller.text.replaceAll(_whitespaceRunRe, '');
+          final idx = raw.indexOf(key);
+          if (idx >= 0) {
+            targetOffset = _offsetInOriginal(idx);
+          }
         }
       }
     }
@@ -101,25 +145,53 @@ class _SutraEditPageState extends State<SutraEditPage> {
         final pos = targetOffset ??
             (_controller.text.length * progress).round().clamp(0, _controller.text.length);
         _controller.selection = TextSelection.collapsed(offset: pos);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          if (!_positioned) {
-            _positioned = true;
-            _focusNode.requestFocus();
-            _controller.selection = _controller.selection;
-          }
-        });
+        // 等入页动画结束再弹键盘：这一帧要排布整篇经文的输入框，再叠加
+        // 键盘升起动画会明显掉帧（表现为进编辑页/侧滑时卡一下）。
+        _focusAfterTransition();
       });
     }
+  }
+
+  /// 入页动画结束后才请求键盘焦点；动画迟迟不结束时用兜底定时器保证聚焦。
+  void _focusAfterTransition() {
+    if (!mounted || _positioned) return;
+    final anim = ModalRoute.of(context)?.animation;
+    if (anim == null || anim.status == AnimationStatus.completed) {
+      _requestFocusNow();
+      return;
+    }
+    void onStatus(AnimationStatus status) {
+      if (status != AnimationStatus.completed) return;
+      anim.removeStatusListener(onStatus);
+      _focusTimer?.cancel();
+      _focusTimer = null;
+      _requestFocusNow();
+    }
+
+    anim.addStatusListener(onStatus);
+    _focusTimer = Timer(const Duration(milliseconds: 600), () {
+      anim.removeStatusListener(onStatus);
+      _focusTimer = null;
+      _requestFocusNow();
+    });
+  }
+
+  void _requestFocusNow() {
+    if (!mounted || _positioned) return;
+    _positioned = true;
+    _focusNode.requestFocus();
+    _controller.selection = _controller.selection;
   }
 
   @override
   void dispose() {
     _autoSaveTimer?.cancel();
     _typingIdleTimer?.cancel();
+    _focusTimer?.cancel();
     // 兜底：还有没落盘的改动（防抖未到点就被销毁）时补写一次，
-    // 保证退出编辑页后正文一定在本地编辑副本里。
-    if (_controller.text != _writtenText) {
+    // 保证退出编辑页后正文一定在本地编辑副本里，云端草稿也一并同步。
+    if (_controller.text != _writtenText ||
+        _titleController.text.trim() != _draftTitle) {
       unawaited(_writeToDisk());
     }
     _controller.removeListener(_onTextChanged);
@@ -137,7 +209,9 @@ class _SutraEditPageState extends State<SutraEditPage> {
     _autoSaveTimer?.cancel();
     _autoSaveTimer = Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
-      unawaited(_writeToDisk());
+      // 自动保存只保证本地副本及时落盘；云端草稿按间隔节流，
+      // 避免每停笔一次就编码整篇经文。
+      unawaited(_writeToDisk(syncDraft: false));
     });
   }
 
@@ -147,8 +221,13 @@ class _SutraEditPageState extends State<SutraEditPage> {
   }
 
   /// 记录撤销历史：键入时按「输入段」合并，停顿片刻后落一个快照。
+  /// 只动了光标/选区（正文与经名都没变）时不排定时器，减少无谓的 Timer 抖动。
   void _trackUndoHistory() {
     if (_restoringHistory) return;
+    if (_controller.text == _contentBeforeBurst &&
+        _titleController.text == _titleBeforeBurst) {
+      return;
+    }
     _typingIdleTimer?.cancel();
     _typingIdleTimer = Timer(const Duration(milliseconds: 600), () {
       if (!mounted) return;
@@ -171,11 +250,18 @@ class _SutraEditPageState extends State<SutraEditPage> {
 
   void _pushUndo(_EditSnapshot snapshot) {
     final last = _undoStack.isEmpty ? null : _undoStack.last;
-    if (last == null ||
-        last.content != snapshot.content ||
-        last.title != snapshot.title) {
-      _undoStack.add(snapshot);
-      if (_undoStack.length > 100) _undoStack.removeAt(0);
+    if (last != null &&
+        last.content == snapshot.content &&
+        last.title == snapshot.title) {
+      return;
+    }
+    _undoStack.add(snapshot);
+    _undoChars += snapshot.content.length;
+    // 每份快照都是整篇经文，按条数 + 累计字符双重限流，避免撤销历史
+    // 长期占住几十 MB、GC 频繁触发反过来拖慢编辑。
+    while (_undoStack.length > 100 ||
+        (_undoStack.length > 1 && _undoChars > _maxUndoChars)) {
+      _undoChars -= _undoStack.removeAt(0).content.length;
     }
   }
 
@@ -191,6 +277,7 @@ class _SutraEditPageState extends State<SutraEditPage> {
       return;
     }
     final previous = _undoStack.removeLast();
+    _undoChars -= previous.content.length;
     _restoringHistory = true;
     if (_controller.text != previous.content) {
       _controller.text = previous.content;
@@ -206,21 +293,51 @@ class _SutraEditPageState extends State<SutraEditPage> {
     _focusNode.requestFocus();
   }
 
-  /// 把当前正文写入本地编辑副本，并同步一份到可上云的草稿（重装不丢）。
-  Future<void> _writeToDisk() async {
+  /// 把当前正文写入本地编辑副本，并按需同步一份到可上云的草稿（重装不丢）。
+  ///
+  /// 同步返回的只有「正文文件写完」这件事；云端草稿（整篇 json 编码 +
+  /// SharedPreferences 平台通道）按 [_draftSyncIntervalMs] 节流、
+  /// [syncDraft] 为 true（点保存 / 退出）时立即同步，不阻塞保存与返回动画。
+  Future<void> _writeToDisk({bool syncDraft = true}) {
+    // 在调度这一刻取快照，避免排队期间 State 被销毁后读已释放的 controller。
     final text = _controller.text;
-    try {
-      final path = await editedSutraFilePath(widget.keyPath);
-      await File(path).writeAsString(text, flush: true);
-      _writtenText = text;
-      await SutraEditDraft.save(
+    final title = _titleController.text.trim();
+    final next = (_writeChain ?? Future<void>.value())
+        .then((_) => _doWrite(text, title, syncDraft));
+    _writeChain = next.then((_) {}, onError: (_) {});
+    return next;
+  }
+
+  Future<void> _doWrite(String text, String title, bool syncDraft) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final needFile = text != _writtenText;
+    final needDraft = text != _draftText || title != _draftTitle;
+    final wantDraft = needDraft &&
+        (syncDraft || now - _lastDraftSyncAt >= _draftSyncIntervalMs);
+    if (!needFile && !wantDraft) return;
+    if (needFile) {
+      try {
+        final path = await editedSutraFilePath(widget.keyPath);
+        // 不用 flush:true：每次落盘都强制 fsync，长经文会把「保存」拖慢
+        // 上百毫秒，表现为点保存后没反应。
+        await File(path).writeAsString(text);
+        _writtenText = text;
+      } catch (_) {
+        // 写盘失败（存储权限/空间等）：保留脏标记，下次变化或退出时重试。
+        return;
+      }
+    }
+    if (wantDraft) {
+      _draftText = text;
+      _draftTitle = title;
+      _lastDraftSyncAt = now;
+      // 云端草稿只是本机副本，失败也不影响本地已保存的正文。
+      SutraEditDraft.save(
         title: widget.title,
         filePath: widget.keyPath,
         content: text,
-        displayTitle: _titleController.text.trim(),
-      );
-    } catch (_) {
-      // 写盘失败（存储权限/空间等）：保留脏标记，下次变化或退出时重试。
+        displayTitle: title,
+      ).ignore();
     }
   }
 
@@ -259,6 +376,8 @@ class _SutraEditPageState extends State<SutraEditPage> {
   Future<void> _save() async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
+    // 只等正文文件写完（草稿备份在后台），保存按钮不再被 json 编解码 /
+    // SharedPreferences / fsync 拖住。
     await _writeToDisk();
 
     if (mounted) {
@@ -271,13 +390,23 @@ class _SutraEditPageState extends State<SutraEditPage> {
     }
   }
 
-  int _offsetInOriginal(int rawIdx, int rawLength) {
+  /// 把「去掉空白后的下标」映射回原文下标。
+  ///
+  /// 一次 `allMatches` 扫描完成（只分配少量 Match），取代原先逐字符构造
+  /// RegExp 的写法——长经文（几十万字）会在进页第一帧分配几十万次正则对象，
+  /// 是进编辑页明显掉帧的主因之一。
+  int _offsetInOriginal(int rawIdx) {
     final original = _controller.text;
     var rawCount = 0;
-    for (var i = 0; i < original.length; i++) {
-      if (!RegExp(r'\s').hasMatch(original[i])) rawCount++;
-      if (rawCount > rawIdx) return i;
+    var segStart = 0;
+    for (final m in _whitespaceRunRe.allMatches(original)) {
+      final segLen = m.start - segStart;
+      if (rawCount + segLen > rawIdx) return segStart + (rawIdx - rawCount);
+      rawCount += segLen;
+      segStart = m.end;
     }
+    final segLen = original.length - segStart;
+    if (rawCount + segLen > rawIdx) return segStart + (rawIdx - rawCount);
     return original.length;
   }
 
@@ -312,8 +441,11 @@ class _SutraEditPageState extends State<SutraEditPage> {
         final hasChanges = _controller.text != _initialText ||
             _titleController.text.trim() != _initialTitle;
         if (!hasChanges) {
-          if (_controller.text != _writtenText) {
-            await _writeToDisk();
+          if (_controller.text != _writtenText ||
+              _titleController.text.trim() != _draftTitle) {
+            // 补写放到后台：返回动画期间不该等磁盘 I/O，State 销毁前
+            // _writeToDisk 已把正文/经名取成快照，写盘不受影响。
+            unawaited(_writeToDisk());
           }
           if (!context.mounted) return;
           Navigator.of(context).pop(_resultPayload());

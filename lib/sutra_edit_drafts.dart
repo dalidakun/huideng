@@ -19,6 +19,26 @@ class SutraEditDraft {
 
   static const String _prefix = 'sutra_edit_draft_';
 
+  /// 本会话内每个键最近确认过的内容/经名，用于免去重复的整篇 jsonDecode。
+  /// 每份草稿是整篇经文（几十万字），原先每次自动保存都要读回并 jsonDecode
+  /// 一遍再比较，是编辑页打字/保存时掉帧的来源之一。
+  static final Map<String, _DraftMemo> _memos = {};
+
+  /// 记忆有效期：只用来挡「短时间内重复写同一份内容」，过期后仍按原逻辑
+  /// 读盘比对，避免别的设备/云同步写过之后被记忆误判成「已保存」。
+  static const int _memoTtlMs = 15000;
+
+  /// 记忆条数上限：每条都持有一份整篇经文的引用，只留最近几条。
+  static const int _memoMaxEntries = 3;
+
+  static void _remember(String key, String content, String title, int at) {
+    _memos.remove(key);
+    _memos[key] = _DraftMemo(content, title, at);
+    while (_memos.length > _memoMaxEntries) {
+      _memos.remove(_memos.keys.first);
+    }
+  }
+
   /// 草稿键名：优先取经书 ID（跨设备、跨安装稳定）；取不到 ID 时
   /// 退回规范化路径（仅本机有效，至少保证本机重装前的读写一致）。
   static String keyFor({String? title, required String filePath}) {
@@ -37,9 +57,21 @@ class SutraEditDraft {
     String? displayTitle,
   }) async {
     if (content.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
     final key = keyFor(title: title, filePath: filePath);
     final cleanTitle = (displayTitle ?? '').trim();
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final memo = _memos[key];
+    final memoValid = memo != null && now - memo.at < _memoTtlMs;
+    if (memoValid) {
+      if (memo.content == content && memo.title == cleanTitle) return;
+      // 本会话刚写过、内容确实变了：直接覆盖，不必读回整篇经文做比较。
+      final prefs = await SharedPreferences.getInstance();
+      await _write(prefs, key, content, cleanTitle, now);
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
     final existing = prefs.getString(key);
     if (existing != null) {
       try {
@@ -47,19 +79,26 @@ class SutraEditDraft {
         if (decoded is Map &&
             decoded['content'] == content &&
             (decoded['displayTitle'] ?? '') == cleanTitle) {
+          _remember(key, content, cleanTitle, now);
           return;
         }
       } catch (_) {
         // 旧值损坏：直接覆盖。
       }
     }
+    await _write(prefs, key, content, cleanTitle, now);
+  }
+
+  static Future<void> _write(SharedPreferences prefs, String key,
+      String content, String cleanTitle, int now) async {
     await prefs.setString(
         key,
         jsonEncode({
-          'savedAt': DateTime.now().millisecondsSinceEpoch,
+          'savedAt': now,
           'content': content,
           if (cleanTitle.isNotEmpty) 'displayTitle': cleanTitle,
         }));
+    _remember(key, content, cleanTitle, now);
   }
 
   /// 读取草稿；不存在或损坏返回 null。
@@ -68,7 +107,8 @@ class SutraEditDraft {
     required String filePath,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(keyFor(title: title, filePath: filePath));
+    final key = keyFor(title: title, filePath: filePath);
+    final raw = prefs.getString(key);
     if (raw == null || raw.isEmpty) return null;
     try {
       final decoded = jsonDecode(raw);
@@ -77,10 +117,14 @@ class SutraEditDraft {
       if (content is! String || content.isEmpty) return null;
       final savedAt = decoded['savedAt'];
       final dt = decoded['displayTitle'];
+      final displayTitle = dt is String ? dt : null;
+      // 读到的就是磁盘现状，顺手记下来，随后紧跟的 save 可免一次整篇解码。
+      _remember(key, content, (displayTitle ?? '').trim(),
+          DateTime.now().millisecondsSinceEpoch);
       return SutraEditDraftData(
         content: content,
         savedAt: savedAt is num ? savedAt.toInt() : 0,
-        displayTitle: dt is String ? dt : null,
+        displayTitle: displayTitle,
       );
     } catch (_) {
       return null;
@@ -99,4 +143,15 @@ class SutraEditDraftData {
     required this.savedAt,
     this.displayTitle,
   });
+}
+
+/// 本会话内已确认过的草稿内容（用于跳过重复的整篇 jsonDecode 比对）。
+class _DraftMemo {
+  final String content;
+  final String title;
+
+  /// 确认时间（毫秒），超过 [SutraEditDraft._memoTtlMs] 后失效。
+  final int at;
+
+  const _DraftMemo(this.content, this.title, this.at);
 }

@@ -46,36 +46,36 @@ void main() {
       final store = ShanZhiShiStore.instance;
       await store.load();
       expect(store.loaded, isTrue);
-      expect(store.length, 35);
+      expect(store.length, 113);
       expect(store[0]!.name, '地藏菩萨');
 
       // 重新加载（模拟重启）：仍是预置名单，不重复添加。
       store.resetForTest();
       await store.load();
-      expect(store.length, 35);
+      expect(store.length, 113);
     });
 
     test('add 追加并持久化，返回新位次', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
-      final idx = await store.add('大势至菩萨', ['佛说观无量寿佛经']);
-      expect(idx, 35);
-      expect(store[idx]!.name, '大势至菩萨');
+      final idx = await store.add('大日如来', ['佛说卢遮那成佛经']);
+      expect(idx, 113);
+      expect(store[idx]!.name, '大日如来');
 
       store.resetForTest();
       await store.load();
-      expect(store.length, 36);
-      expect(store[35]!.name, '大势至菩萨');
-      expect(store[35]!.sutras, ['佛说观无量寿佛经']);
+      expect(store.length, 114);
+      expect(store[113]!.name, '大日如来');
+      expect(store[113]!.sutras, ['佛说卢遮那成佛经']);
     });
 
     test('同名重复录入定位到已有位次并合并经文', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
-      final first = await store.add('药王菩萨', []);
-      final again = await store.add('药王菩萨', ['妙法莲华经药王菩萨本事品']);
+      final first = await store.add('妙吉祥菩萨', []);
+      final again = await store.add('妙吉祥菩萨', ['妙法莲华经药王菩萨本事品']);
       expect(again, first);
-      expect(store.length, 36);
+      expect(store.length, 114);
       expect(store[first]!.sutras, ['妙法莲华经药王菩萨本事品']);
     });
 
@@ -96,11 +96,11 @@ void main() {
       final second = store[1]!.name;
       await store.removeAt(0);
       expect(store[0]!.name, second);
-      expect(store.length, 34);
+      expect(store.length, 112);
 
       store.resetForTest();
       await store.load();
-      expect(store.length, 34);
+      expect(store.length, 112);
       expect(store[0]!.name, second);
     });
 
@@ -139,8 +139,9 @@ void main() {
       final store = ShanZhiShiStore.instance;
       await store.load();
       final names = store.entries.map((e) => e.name).toList();
-      // 原样旧预置已清掉，新名单补进来。
-      expect(names, isNot(contains('地藏王菩萨')));
+      // 原样旧预置已清掉：地藏王菩萨经文链接归空，按新种子重补。
+      final dzw = store.entries.firstWhere((e) => e.name == '地藏王菩萨');
+      expect(dzw.sutras, isEmpty);
       expect(names, contains('地藏菩萨'));
       expect(names, contains('无边身如来'));
       // 用户自建的没被动。

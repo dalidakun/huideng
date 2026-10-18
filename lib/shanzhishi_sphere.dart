@@ -4,10 +4,14 @@ import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 
+/// 球面铺排的纬度上限（度）：名号铺到 ±84°，上下极区也基本铺满，
+/// 尽量消除球顶/球底的空带；配合同样放宽的俯仰限位，每位都能转到球心。
+const double kSphereLatitudeDeg = 84;
+
 /// 球面铺排：斐波那契螺旋把名号均匀撒满整个球面（极点附近也不挤），
 /// 相邻序号在球面上彼此相邻，横着滑就是顺着名单走。
 ///
-/// 纬度压缩到 ±68°，保证每一位都能被滑到球心（俯仰角不超限）。
+/// 纬度铺到 ±[kSphereLatitudeDeg]，保证每一位都能被滑到球心（俯仰角不超限）。
 class SphereLayout {
   final int n;
   final List<({double x, double y, double z})> points;
@@ -23,8 +27,8 @@ SphereLayout computeSphereLayout(int n) {
   if (n <= 0) return SphereLayout.empty;
   // 黄金角螺旋：均匀无极点拥挤。
   final golden = math.pi * (3 - math.sqrt(5));
-  // 纬度可达范围：|y| ≤ sin(68°)，配合俯仰限位每一位都能转到正中心。
-  final yMax = math.sin(68 * math.pi / 180);
+  // 纬度可达范围：|y| ≤ sin(84°)，配合俯仰限位每一位都能转到正中心。
+  final yMax = math.sin(kSphereLatitudeDeg * math.pi / 180);
   final points = List<({double x, double y, double z})>.filled(
     n,
     (x: 0.0, y: 0.0, z: 1.0),
@@ -72,6 +76,18 @@ SphereLayout computeSphereLayout(int n) {
 /// 相机距离（单位：球半径的倍数）。越小透视越强、越「球」。
 const double _cameraDistFactor = 2.4;
 
+/// 橄榄形椭球的横向半径（原始值，不乘 zoom）：半屏宽减 8px 边距，
+/// 尽量贴满左右两侧（允许透视前移的名号轻微外溢）。
+double ellipsoidRadiusFor(double width, double height) => width / 2 - 8;
+
+/// 纵向拉伸倍数：屏幕 y 方向把圆球拉成竖立橄榄形（旋转时外形始终竖立）。
+double ellipsoidStretchFor(double width, double height) {
+  final r = ellipsoidRadiusFor(width, height);
+  if (r <= 12) return 1.4;
+  // 1.04 是「y × 透视」的放大余量：只留一点点，其余贴满上下。
+  return ((height / 2 - 6) / (r * 1.04)).clamp(1.25, 2.6).toDouble();
+}
+
 /// 父级持有的球体控制器：把指定位次的名号转到球心、读取当前位次。
 class ShanZhiSphereController {
   _ShanZhiSphereState? _state;
@@ -99,6 +115,9 @@ class ShanZhiShiSphere extends StatefulWidget {
   /// 点按中心当前名号（触发编辑）。
   final VoidCallback? onCurrentTap;
 
+  /// 点按球面任意名号（含非中心）时回调位次，用于「点名号 → 下方显示该名号」。
+  final ValueChanged<int>? onNameTapped;
+
   /// 惯性停稳 / 转动动画落定后回调（适合播一次点击音）。
   final ValueChanged<int>? onSettled;
 
@@ -109,6 +128,7 @@ class ShanZhiShiSphere extends StatefulWidget {
     this.spinEnabled = false,
     this.onCurrentChanged,
     this.onCurrentTap,
+    this.onNameTapped,
     this.onSettled,
   });
 
@@ -124,7 +144,7 @@ class _PanSample {
 
 class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     with SingleTickerProviderStateMixin {
-  static const double _pitchLimit = 70.0 * math.pi / 180.0;
+  static const double _pitchLimit = 84.0 * math.pi / 180.0;
 
   /// 每像素滑动对应的弧度放大系数（使用时除以球半径）。
   static const double _rotPerPx = 1.35;
@@ -141,6 +161,12 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
 
   Size _size = Size.zero;
   double _radius = 0;
+
+  /// 双指缩放：<1 缩小（名号变小、同时可看清的更多、更密），>1 放大。
+  double _zoom = 1.0;
+  double _zoomStart = 1.0;
+  static const double _minZoom = 0.4;
+  static const double _maxZoom = 2.6;
 
   bool _inertia = false;
   bool _animating = false;
@@ -184,6 +210,10 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
       _tpCache.clear();
       _current = -1;
       _updateCurrent(notify: false);
+      // 名号从无到有（异步加载完成）：重新把正前方对准第一位。
+      if (oldWidget.names.isEmpty && widget.names.isNotEmpty) {
+        _aimInitial();
+      }
     }
     if (widget.spinEnabled && !oldWidget.spinEnabled) {
       _playEntrance();
@@ -239,37 +269,45 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     _ctrl.forward(from: 0);
   }
 
-  // ─────────────── 手势 ───────────────
+  // ─────────────── 手势（单指拖动旋转 / 双指捏合缩放） ───────────────
 
-  void _onPanStart(DragStartDetails d) {
+  void _onScaleStart(ScaleStartDetails d) {
     _ctrl.stop();
     _inertia = false;
     _animating = false;
     _driftUntil = null;
-    _lastFocal = d.localPosition;
+    _lastFocal = d.localFocalPoint;
+    _zoomStart = _zoom;
     _samples
       ..clear()
-      ..add(_PanSample(d.localPosition, DateTime.now()));
+      ..add(_PanSample(d.localFocalPoint, DateTime.now()));
   }
 
-  void _onPanUpdate(DragUpdateDetails d) {
+  void _onScaleUpdate(ScaleUpdateDetails d) {
     final last = _lastFocal;
-    if (last == null) return;
-    final delta = d.localPosition - last;
-    _lastFocal = d.localPosition;
-    final r = _radius > 10 ? _radius : 120.0;
+    final delta = last == null ? Offset.zero : d.localFocalPoint - last;
+    _lastFocal = d.localFocalPoint;
+    final newZoom =
+        (_zoomStart * d.scale).clamp(_minZoom, _maxZoom).toDouble();
+    // 缩放后球变大变小，转动灵敏度随之调整，手感一致。
+    final r = (_radius > 10 ? _radius : 120.0) * _zoom;
     setState(() {
-      _yaw += delta.dx * _rotPerPx / r;
-      _pitch = (_pitch + delta.dy * _rotPerPx / r)
-          .clamp(-_pitchLimit, _pitchLimit)
-          .toDouble();
+      _zoom = newZoom;
+      if (delta != Offset.zero) {
+        _yaw += delta.dx * _rotPerPx / r;
+        _pitch = (_pitch + delta.dy * _rotPerPx / r)
+            .clamp(-_pitchLimit, _pitchLimit)
+            .toDouble();
+      }
     });
-    _samples.add(_PanSample(d.localPosition, DateTime.now()));
-    if (_samples.length > 6) _samples.removeAt(0);
-    _updateCurrent();
+    if (delta != Offset.zero) {
+      _samples.add(_PanSample(d.localFocalPoint, DateTime.now()));
+      if (_samples.length > 6) _samples.removeAt(0);
+      _updateCurrent();
+    }
   }
 
-  void _onPanEnd(DragEndDetails d) {
+  void _onScaleEnd(ScaleEndDetails d) {
     double vx = 0;
     double vy = 0;
     if (_samples.length >= 2) {
@@ -281,11 +319,10 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
         vy = (b.p.dy - a.p.dy) / dt;
       }
     }
-    final r = _radius > 10 ? _radius : 120.0;
+    final r = (_radius > 10 ? _radius : 120.0) * _zoom;
     _inertiaYawV = (vx * _rotPerPx / r).clamp(-12.0, 12.0).toDouble();
     _inertiaPitchV = (vy * _rotPerPx / r).clamp(-12.0, 12.0).toDouble();
     if (_inertiaYawV.abs() < 0.2 && _inertiaPitchV.abs() < 0.2) {
-      _snapToNearest();
       return;
     }
     _inertia = true;
@@ -296,6 +333,7 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
   void _onTapUp(TapUpDetails d) {
     final hit = _hitTest(d.localPosition);
     if (hit < 0) return;
+    widget.onNameTapped?.call(hit);
     if (hit == _current) {
       widget.onCurrentTap?.call();
     } else {
@@ -308,17 +346,20 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     if (_layout.n == 0 || _radius <= 0) return -1;
     final cx = _size.width / 2;
     final cy = _size.height / 2;
-    final r = _radius;
+    final r = _radius * _zoom;
+    final stretch =
+        ellipsoidStretchFor(_size.width, _size.height);
     final d = _cameraDistFactor * r;
     var best = -1;
-    var bestD = 56.0;
+    var bestD = 56.0 * _zoom;
     for (var i = 0; i < _layout.n; i++) {
       final p = _layout.points[i];
       final q = rotateSpherePoint(p.x, p.y, p.z, _yaw, _pitch);
       if (q.z < 0.05) continue;
       final persp = d / (d - q.z * r);
-      final dist =
-          (Offset(cx + q.x * r * persp, cy - q.y * r * persp) - pos).distance;
+      final dist = (Offset(cx + q.x * r * persp, cy - q.y * r * stretch * persp) -
+              pos)
+          .distance;
       if (dist < bestD) {
         bestD = dist;
         best = i;
@@ -467,13 +508,13 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     return LayoutBuilder(
       builder: (context, constraints) {
         _size = Size(constraints.maxWidth, constraints.maxHeight);
-        _radius = math.min(_size.width, _size.height) / 2 - 14;
+        _radius = ellipsoidRadiusFor(_size.width, _size.height);
         final names = widget.names;
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onPanStart: _onPanStart,
-          onPanUpdate: _onPanUpdate,
-          onPanEnd: _onPanEnd,
+          onScaleStart: _onScaleStart,
+          onScaleUpdate: _onScaleUpdate,
+          onScaleEnd: _onScaleEnd,
           onTapUp: names.isEmpty ? null : _onTapUp,
           child: RepaintBoundary(
             child: CustomPaint(
@@ -482,6 +523,7 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
                 names: names,
                 yaw: _yaw,
                 pitch: _pitch,
+                zoom: _zoom,
                 current: _current,
                 palette: AppPalette.p,
                 tpCache: _tpCache,
@@ -591,11 +633,13 @@ SphereRenderResult computeSphereRender({
   double zoom = 1.0,
 }) {
   const empty = SphereRenderResult([]);
-  final baseR = math.min(width, height) / 2 - 14;
+  final baseR = ellipsoidRadiusFor(width, height);
   final r = baseR * zoom;
   if (r < 12 || layout.n == 0 || names.isEmpty) return empty;
   final cx = width / 2;
   final cy = height / 2;
+  // 屏幕 y 方向拉伸：圆球投影成竖立橄榄形，横向半径仍是 r。
+  final stretch = ellipsoidStretchFor(width, height);
   final cam = _cameraDistFactor * r;
 
   // 旋转 + 透视投影：全部名号（含背面）都参与，背面更小更淡。
@@ -614,7 +658,7 @@ SphereRenderResult computeSphereRender({
     pts.add(SphereRenderItem(
       index: i,
       sx: cx + q.x * r * persp,
-      sy: cy - q.y * r * persp,
+      sy: cy - q.y * r * stretch * persp,
       z: q.z,
       persp: persp,
       // 越靠边缘横向压扁（前后半球同样按 |z|），贴球面的立体感。
@@ -689,8 +733,6 @@ class _SpherePainter extends CustomPainter {
       zoom: zoom,
     );
 
-    final r = math.min(size.width, size.height) / 2 - 14;
-    final maxTextW = (r * 1.4) / math.max(0.3, zoom);
     final dotPaint = Paint();
     // items 已按从远到近排好：背面的名号先画、更淡更小，正面压在上面。
     for (final v in res.items) {
@@ -704,7 +746,7 @@ class _SpherePainter extends CustomPainter {
         continue;
       }
       final tp = _tp(names[v.index], v.f, v.isCur ? 1 : v.alpha, v.isCur,
-          maxTextW / v.persp);
+          double.infinity);
       if (v.isCur) {
         // 当前名号：背后一团柔光，标识「球心落点」。
         final glowR = v.f * v.persp * 2.0 * zoom;
@@ -723,7 +765,7 @@ class _SpherePainter extends CustomPainter {
       }
       canvas.save();
       canvas.translate(v.sx, v.sy);
-      canvas.scale(v.persp * v.squash, v.persp);
+      canvas.scale(v.persp * v.squash * zoom, v.persp * zoom);
       tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
       canvas.restore();
     }
@@ -731,8 +773,8 @@ class _SpherePainter extends CustomPainter {
 
   TextPainter _tp(String name, double f, double alpha, bool isCur,
       double maxWidth) {
-    // 透明度按 5 档量化进缓存键：既保留「由浓到淡」，又不让缓存爆掉。
-    final alphaStep = isCur ? 5 : (alpha * 4).round().clamp(0, 5);
+    // 透明度按 8 档量化进缓存键：既保留「由浓到淡」，又不让缓存爆掉。
+    final alphaStep = isCur ? 8 : (alpha * 8).round().clamp(1, 8);
     final bucket = '${f.round()}|$alphaStep|${isCur ? 1 : 0}';
     final inner = tpCache.putIfAbsent(name, () => {});
     final hit = inner[bucket];
@@ -750,7 +792,7 @@ class _SpherePainter extends CustomPainter {
         text: name,
         style: TextStyle(
           color: (isCur ? palette.primary : palette.textSec)
-              .withValues(alpha: alphaStep / 5),
+              .withValues(alpha: alphaStep / 8),
           fontSize: f.roundToDouble(),
           fontWeight: isCur ? FontWeight.w700 : FontWeight.w400,
           letterSpacing: 0.4,

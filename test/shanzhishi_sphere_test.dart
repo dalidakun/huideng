@@ -12,13 +12,13 @@ void main() {
         expect(layout.points.length, n);
         if (n == 0) return;
 
-        final yMax = math.sin(68 * math.pi / 180) + 1e-9;
+        final yMax = math.sin(kSphereLatitudeDeg * math.pi / 180) + 1e-9;
         var sumMinDist = 0.0;
         for (var i = 0; i < n; i++) {
           final p = layout.points[i];
           final len = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
           expect(len, closeTo(1.0, 1e-9));
-          // 纬度压缩在 ±68° 内：俯仰限位内每位都能转到球心。
+          // 纬度铺到 ±kSphereLatitudeDeg：俯仰限位内每位都能转到球心。
           expect(p.y.abs(), lessThan(yMax));
           if (i > 0) {
             final q = layout.points[i - 1];
@@ -68,7 +68,7 @@ void main() {
       '解脱菩萨', '普贤菩萨', '普广菩萨', '观世音菩萨', '虚空藏菩萨', '弥勒菩萨',
     ];
 
-    test('35 位名号：一屏内足够多名号放大成文字，且一个都不丢', () {
+    test('35 位名号：全部都在球面上（含背面），且一个都不丢', () {
       final layout = computeSphereLayout(names.length);
       // 取 yaw/pitch=0 时最靠前的位次当「当前」（与页面初始朝向一致）。
       var front = 0;
@@ -89,13 +89,34 @@ void main() {
         width: 360,
         height: 360,
       );
-      final shown = {...res.texts.map((e) => e.index), ...res.dots.map((e) => e.index)};
-      // 正面可见约一半，全部都要么是文字要么是星点（不丢）。
-      expect(shown.length, inInclusiveRange(15, 35));
+      // 正面背面都画：35 位一个不少。
+      expect(res.items.length, 35);
+      expect(res.items.map((e) => e.index).toSet().length, 35);
       // 放大成文字的名号不能太少（曾经只有几个）。
-      expect(res.texts.length, greaterThanOrEqualTo(10));
+      expect(res.texts.length, greaterThanOrEqualTo(15));
       // 选中的那位一定在文字里。
       expect(res.texts.any((e) => e.isCur), isTrue);
+    });
+
+    test('缩小（zoom<1）能看清更多名号 → 更密的星空', () {
+      // 用远多于 35 位的名号（300 位）来验证：zoom 大时重叠多、退化成星点多；
+      // zoom 小时字号变小、重叠变少、能保留为文字的更多。
+      final many = <String>[];
+      for (var i = 0; i < 300; i++) {
+        many.add('名号$i');
+      }
+      final layout = computeSphereLayout(many.length);
+      final wide = computeSphereRender(
+        layout: layout, names: many, yaw: 0.2, pitch: 0.1,
+        current: 0, width: 360, height: 360, zoom: 1.0,
+      );
+      final small = computeSphereRender(
+        layout: layout, names: many, yaw: 0.2, pitch: 0.1,
+        current: 0, width: 360, height: 360, zoom: 0.45,
+      );
+      expect(small.texts.length, greaterThan(wide.texts.length));
+      // 无论缩放到哪，300 位都在。
+      expect(small.items.length, 300);
     });
 
     test('长名号自动缩号，字号不超过短名号', () {
@@ -111,8 +132,8 @@ void main() {
       );
       for (final t in res.texts) {
         if (t.isCur) continue;
-        expect(t.f, lessThanOrEqualTo(9.2 + 1e-9));
-        expect(t.f, greaterThanOrEqualTo(5.5 - 1e-9));
+        expect(t.f, lessThanOrEqualTo(10.0 + 1e-9));
+        expect(t.f, greaterThanOrEqualTo(4.0 - 1e-9));
       }
     });
 

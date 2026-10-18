@@ -278,6 +278,13 @@ class _MyAppState extends State<MyApp> {
                     false) {
                   return;
                 }
+                // 善知识页底部面板展开时，侧滑返回先收起面板回到星图，
+                // 而不是直接最小化应用。
+                if (_mainPageKey.currentState
+                        ?.collapseShanZhiShiShelfIfOpen() ??
+                    false) {
+                  return;
+                }
                 // 最小化应用到后台，模拟从底部滑动的行为
                 if (Platform.isAndroid) {
                   const platform = MethodChannel('app_channel');
@@ -487,7 +494,7 @@ class _MainPageState extends State<MainPage>
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
   final _recordKey = GlobalKey<RecordPageState>();
-  final _shanZhiShiKey = GlobalKey();
+  final _shanZhiShiKey = GlobalKey<ShanZhiShiPageState>();
   String? _recentTitle;
   String? _recentFilePath;
   bool _recentLoaded = false;
@@ -495,11 +502,14 @@ class _MainPageState extends State<MainPage>
   late final ValueNotifier<int> _tabIndex;
   List<Widget> _pages = [];
   // 底部菜单自动隐藏动画：value 0=完全显示，1=完全隐藏。
-  // 惰性初始化，避免热重载后旧实例字段未赋值导致红屏。
-  late final AnimationController _navCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 200),
-  );
+  // 惰性初始化，避免热重载后旧实例字段未赋值导致红屏；
+  // 且必须用可空字段 + getter：若从未访问就被 dispose，late final 会在 dispose
+  // 里「首次初始化」，此时去查 TickerMode 祖先会抛错红屏。
+  AnimationController? _navCtrlLazy;
+  AnimationController get _navCtrl => _navCtrlLazy ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 200),
+      );
   // 上一帧滚动偏移与最近一次方向判定后的滚动方向（1=向下，-1=向上）。
   double _lastScrollPixels = 0;
   int _scrollDir = 0;
@@ -507,23 +517,27 @@ class _MainPageState extends State<MainPage>
   int _lastBodhiTabTap = 0;
   // 左侧个人菜单（个人资料/记录/关注/设置/退出登录）滑出动画。
   // value 0=完全收起，1=完全展开。
-  late final AnimationController _sideMenuCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 260),
-  );
+  AnimationController? _sideMenuCtrlLazy;
+  AnimationController get _sideMenuCtrl =>
+      _sideMenuCtrlLazy ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 260),
+      );
   // 抽屉曲线常驻字段（而非每次 build 新建）：避免监听器泄漏，并让关闭走
   // 反向专用的对称缓动——否则关闭复用 easeOutCubic，会先猛冲到只剩一点，
   // 末尾长时间慢爬，视觉上就是「先收一大半、卡住、再收完」。
-  late final CurvedAnimation _sideMenuSlide = CurvedAnimation(
-    parent: _sideMenuCtrl,
-    curve: Curves.easeOutCubic,
-    reverseCurve: Curves.easeInOutCubic,
-  );
-  late final CurvedAnimation _sideMenuFade = CurvedAnimation(
-    parent: _sideMenuCtrl,
-    curve: Curves.easeOut,
-    reverseCurve: Curves.easeInOut,
-  );
+  CurvedAnimation? _sideMenuSlideLazy;
+  CurvedAnimation get _sideMenuSlide => _sideMenuSlideLazy ??= CurvedAnimation(
+        parent: _sideMenuCtrl,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInOutCubic,
+      );
+  CurvedAnimation? _sideMenuFadeLazy;
+  CurvedAnimation get _sideMenuFade => _sideMenuFadeLazy ??= CurvedAnimation(
+        parent: _sideMenuCtrl,
+        curve: Curves.easeOut,
+        reverseCurve: Curves.easeInOut,
+      );
   bool _sideMenuOpen = false;
   // 每晚 20:00 打卡提醒定时器。
   Timer? _checkInReminderTimer;
@@ -580,10 +594,10 @@ class _MainPageState extends State<MainPage>
     AppPalette.instance.removeListener(_onPaletteChanged);
     NotificationCenter.instance.stop();
     WidgetsBinding.instance.removeObserver(this);
-    _navCtrl.dispose();
-    _sideMenuSlide.dispose();
-    _sideMenuFade.dispose();
-    _sideMenuCtrl.dispose();
+    _navCtrlLazy?.dispose();
+    _sideMenuSlideLazy?.dispose();
+    _sideMenuFadeLazy?.dispose();
+    _sideMenuCtrlLazy?.dispose();
     super.dispose();
   }
 
@@ -842,11 +856,11 @@ class _MainPageState extends State<MainPage>
   List<BottomNavigationBarItem> get _bottomNavItems => [
         BottomNavigationBarItem(
           icon: Image.asset(navIconAsset('assets/images/study.png'),
-              width: 22, height: 22),
+              width: 21, height: 21),
           activeIcon: Image.asset(
               navIconAsset('assets/images/study_selected.png'),
-              width: 22,
-              height: 22),
+              width: 21,
+              height: 21),
           label: '',
         ),
         // 菩提空间（菜单第 2 位）。
@@ -870,14 +884,16 @@ class _MainPageState extends State<MainPage>
               AppPalette.instance.isPlain
                   ? 'assets/images/ss1.png'
                   : 'assets/images/ms1.png',
-              width: 22,
-              height: 22),
+              width: 21,
+              height: 21,
+              filterQuality: FilterQuality.medium),
           activeIcon: Image.asset(
               AppPalette.instance.isPlain
                   ? 'assets/images/ss2.png'
                   : 'assets/images/ms2.png',
-              width: 22,
-              height: 22),
+              width: 21,
+              height: 21,
+              filterQuality: FilterQuality.medium),
           label: '',
         ),
         BottomNavigationBarItem(
@@ -1008,6 +1024,13 @@ class _MainPageState extends State<MainPage>
   bool collapseSutraShelfIfOpen() {
     if (_currentIndex != 2) return false;
     return _sutraListKey.currentState?.collapseShelfIfOpen() ?? false;
+  }
+
+  /// 善知识页底部面板展开时收起它（根路由侧滑返回调用）。
+  /// 返回是否消费了本次返回，避免侧滑直接最小化应用。
+  bool collapseShanZhiShiShelfIfOpen() {
+    if (_currentIndex != 7) return false;
+    return _shanZhiShiKey.currentState?.collapseShelfIfOpen() ?? false;
   }
 
   void _switchToTab(int index) {
@@ -1718,9 +1741,9 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
           navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
               : 'assets/images/chat.png'),
-          // 比同排 22 号略大一号：素材墨迹占比略小，23 号视觉才齐平。
-          width: 23,
-          height: 23,
+          width: 22,
+          height: 22,
+          filterQuality: FilterQuality.medium,
         ),
         Positioned(
           top: -6,

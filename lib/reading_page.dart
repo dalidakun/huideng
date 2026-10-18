@@ -131,7 +131,30 @@ class ReadingPageState extends State<ReadingPage>
   // 正文里被高亮的处数；备注段落（@@块）不参与搜索，不_buildParagraphSpans 一致。
   List<(int, int)> _searchMatches = [];
   int _currentMatchIndex = 0;
-  double _scrollProgress = 0.0;
+  /// 阅读进度（0~1）。
+  ///
+  /// 通过 setter 同步写进 [_scrollProgressListenable]：滚动进度只用来显示
+  /// 底部进度条/百分比，原先每帧 setState 会让整个正文（一次性整页 Column）
+  /// 重新走一遍 build + 全文重排版，滚动和「编辑页返回」都会明显掉帧。
+  set _scrollProgress(double v) {
+    _scrollProgressValue = v;
+    if (_scrollProgressListenable.value != v) {
+      _scrollProgressListenable.value = v;
+    }
+  }
+
+  double get _scrollProgress => _scrollProgressValue;
+  double _scrollProgressValue = 0.0;
+
+  /// 底部进度条/百分比单独监听这个 notifier，滚动时只重建这一小块。
+  final ValueNotifier<double> _scrollProgressListenable = ValueNotifier(0.0);
+
+  /// 滚动位置落盘的节流定时器：原先滚动每帧都打两次 SharedPreferences
+  /// 平台调用，滚动和「编辑页返回」恢复进度时都会掉帧。
+  Timer? _scrollSaveTimer;
+
+  /// 已标记「读过」的经书路径：原先滚到底后每帧都写一次同一 bool。
+  String? _markedReadKey;
 
   // ── 读经段落笔记 / 完成态（云端同步，─────────
   Map<int, List<ParaNote>> _paraNotes = {}; // index -> 该段全部备注（同一人可多条，
@@ -394,6 +417,13 @@ class ReadingPageState extends State<ReadingPage>
     WidgetsBinding.instance.removeObserver(this);
     if (_subscribed) routeObserver.unsubscribe(this);
     ReadingTimeService.instance.stopFor(this);
+    // 未及落盘的滚动进度补写一次（必须在 dispose 控制器之前读 offset）。
+    if (_scrollSaveTimer != null) {
+      _scrollSaveTimer!.cancel();
+      _scrollSaveTimer = null;
+      unawaited(_saveScrollPosition());
+    }
+    _scrollProgressListenable.dispose();
     _scrollController.dispose();
     _pageController?.dispose();
     _searchController.dispose();
@@ -432,12 +462,11 @@ class ReadingPageState extends State<ReadingPage>
 
     if (target != null) {
       _scrollController.jumpTo(target);
-      // Sync displayed progress to real position.
-      setState(() {
-        _scrollProgress = maxScroll <= 0
-            ? 0.0
-            : (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
-      });
+      // 只更新进度（走 setter 同步到进度 notifier），不再 setState：
+      // 这里 setState 会让整篇正文在返回动画刚结束时再重排一遍。
+      _scrollProgress = maxScroll <= 0
+          ? 0.0
+          : (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
     }
   }
 
@@ -445,16 +474,32 @@ class ReadingPageState extends State<ReadingPage>
     if (_scrollController.hasClients) {
       final maxScroll = _scrollController.position.maxScrollExtent;
       if (maxScroll > 0) {
-        final newProgress = _scrollController.offset / maxScroll;
-        setState(() {
-          _scrollProgress = newProgress;
-        });
-        _saveScrollPosition();
+        // 只更新字段 + 进度 notifier：不 setState，滚动时正文不再整页重建。
+        _scrollProgress = (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
+        _scheduleSaveScrollPosition();
       }
       if (_scrollController.offset >= maxScroll) {
-        _markAsRead();
+        _maybeMarkAsRead();
       }
     }
+  }
+
+  /// 每 400ms 至多落盘一次滚动位置（节流而非防抖，持续滚动也会周期保存）。
+  void _scheduleSaveScrollPosition() {
+    if (_scrollSaveTimer != null) return;
+    _scrollSaveTimer = Timer(const Duration(milliseconds: 400), () {
+      _scrollSaveTimer = null;
+      if (!mounted) return;
+      _saveScrollPosition();
+    });
+  }
+
+  /// 滚到底只需写一次「已读」：原先每帧都发一次 SharedPreferences 调用。
+  void _maybeMarkAsRead() {
+    final keyPath = _resolvedFilePath ?? widget.filePath;
+    if (keyPath == null || _markedReadKey == keyPath) return;
+    _markedReadKey = keyPath;
+    _markAsRead();
   }
 
   Future<void> _loadSettings() async {
@@ -476,9 +521,13 @@ class ReadingPageState extends State<ReadingPage>
   Future<void> _saveScrollPosition() async {
     final keyPath = _resolvedFilePath ?? widget.filePath;
     if (keyPath != null && _scrollController.hasClients) {
+      // 先取快照再 await：原实现在 await 之后才读 offset，State 销毁后
+      // 控制器已无 position 会抛错。
+      final offset = _scrollController.offset;
+      final progress = _scrollProgress;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble('scroll_$keyPath', _scrollController.offset);
-      await prefs.setDouble('progress_$keyPath', _scrollProgress);
+      await prefs.setDouble('scroll_$keyPath', offset);
+      await prefs.setDouble('progress_$keyPath', progress);
     }
   }
 
@@ -1997,41 +2046,46 @@ class ReadingPageState extends State<ReadingPage>
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(
-                                  AppPalette.instance.isPlain && !_isDarkBg
-                                      ? 2
-                                      : 3),
-                              child: LinearProgressIndicator(
-                                value: _scrollProgress,
-                                minHeight: 5,
-                                backgroundColor: _isDarkBg
-                                    ? Colors.white.withOpacity(0.15)
-                                    : AppPalette.instance.isPlain
-                                        ? AppPalette.p.border
-                                        : const Color(0xFFE8D9C4),
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                    !_isDarkBg && AppPalette.instance.isPlain
-                                        ? const Color(0xFF4A4A4A)
-                                        : AppPalette.p.accent),
+                      // 进度条单独监听 notifier：滚动只重建这一行，
+                      // 不触发整篇正文的 build + 全文重排版。
+                      child: ValueListenableBuilder<double>(
+                        valueListenable: _scrollProgressListenable,
+                        builder: (context, progress, _) => Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(
+                                    AppPalette.instance.isPlain && !_isDarkBg
+                                        ? 2
+                                        : 3),
+                                child: LinearProgressIndicator(
+                                  value: progress,
+                                  minHeight: 5,
+                                  backgroundColor: _isDarkBg
+                                      ? Colors.white.withOpacity(0.15)
+                                      : AppPalette.instance.isPlain
+                                          ? AppPalette.p.border
+                                          : const Color(0xFFE8D9C4),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      !_isDarkBg && AppPalette.instance.isPlain
+                                          ? const Color(0xFF4A4A4A)
+                                          : AppPalette.p.accent),
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${(_scrollProgress * 100).toStringAsFixed(1)}%',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: _isDarkBg
-                                  ? Colors.white.withOpacity(0.7)
-                                  : AppPalette.p.textSec,
+                            const SizedBox(width: 8),
+                            Text(
+                              '${(progress * 100).toStringAsFixed(1)}%',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _isDarkBg
+                                    ? Colors.white.withOpacity(0.7)
+                                    : AppPalette.p.textSec,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ],
