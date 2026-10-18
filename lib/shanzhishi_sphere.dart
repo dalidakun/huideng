@@ -632,8 +632,8 @@ SphereRenderResult computeSphereRender({
   final placed = <Rect>[];
   final out = <SphereRenderItem>[];
   for (final v in pts) {
-    final w = _estimateTextWidth(names[v.index], v.f) * v.persp * v.squash;
-    final h = v.f * v.persp;
+    final w = _estimateTextWidth(names[v.index], v.f) * v.persp * v.squash * zoom;
+    final h = v.f * v.persp * zoom;
     final rect = Rect.fromCenter(
       center: Offset(v.sx, v.sy),
       width: w + 4,
@@ -659,6 +659,7 @@ class _SpherePainter extends CustomPainter {
   final List<String> names;
   final double yaw;
   final double pitch;
+  final double zoom;
   final int current;
   final PaletteData palette;
   final Map<String, Map<String, TextPainter>> tpCache;
@@ -668,6 +669,7 @@ class _SpherePainter extends CustomPainter {
     required this.names,
     required this.yaw,
     required this.pitch,
+    required this.zoom,
     required this.current,
     required this.palette,
     required this.tpCache,
@@ -684,27 +686,28 @@ class _SpherePainter extends CustomPainter {
       current: current,
       width: size.width,
       height: size.height,
+      zoom: zoom,
     );
 
-    // 被挤掉的名号退成小星点（近大远小、近浓远淡），仍清晰可见。
-    final dotPaint = Paint();
-    for (final v in res.dots) {
-      dotPaint.color = palette.textSec
-          .withValues(alpha: (0.2 + 0.45 * math.pow(v.z, 1.2)).toDouble());
-      canvas.drawCircle(
-        Offset(v.sx, v.sy),
-        (1.1 + 1.5 * v.z) * v.persp,
-        dotPaint,
-      );
-    }
-
     final r = math.min(size.width, size.height) / 2 - 14;
-    for (final v in res.texts) {
-      final tp = _tp(names[v.index], v.f, v.isCur ? 1 : _alphaOfZ(v.z), v.isCur,
-          (r * 1.4) / v.persp);
+    final maxTextW = (r * 1.4) / math.max(0.3, zoom);
+    final dotPaint = Paint();
+    // items 已按从远到近排好：背面的名号先画、更淡更小，正面压在上面。
+    for (final v in res.items) {
+      if (!v.isText) {
+        dotPaint.color = palette.textSec.withValues(alpha: v.alpha * 0.9);
+        canvas.drawCircle(
+          Offset(v.sx, v.sy),
+          (0.9 + 1.4 * v.z.abs()) * v.persp * zoom,
+          dotPaint,
+        );
+        continue;
+      }
+      final tp = _tp(names[v.index], v.f, v.isCur ? 1 : v.alpha, v.isCur,
+          maxTextW / v.persp);
       if (v.isCur) {
         // 当前名号：背后一团柔光，标识「球心落点」。
-        final glowR = v.f * v.persp * 2.0;
+        final glowR = v.f * v.persp * 2.0 * zoom;
         canvas.drawCircle(
           Offset(v.sx, v.sy),
           glowR,
@@ -767,6 +770,7 @@ class _SpherePainter extends CustomPainter {
   bool shouldRepaint(covariant _SpherePainter old) =>
       old.yaw != yaw ||
       old.pitch != pitch ||
+      old.zoom != zoom ||
       old.current != current ||
       old.layout != layout ||
       old.names != names ||
