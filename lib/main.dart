@@ -15,6 +15,7 @@ import 'bodhi_space_page.dart';
 import 'my_page.dart';
 import 'message_page.dart';
 import 'record_page.dart';
+import 'shanzhishi_page.dart';
 import 'home_side_menu.dart';
 import 'certification_page.dart';
 import 'user_list_page.dart';
@@ -486,6 +487,7 @@ class _MainPageState extends State<MainPage>
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
   final _recordKey = GlobalKey<RecordPageState>();
+  final _shanZhiShiKey = GlobalKey();
   String? _recentTitle;
   String? _recentFilePath;
   bool _recentLoaded = false;
@@ -862,6 +864,22 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
+        // 善知识（菜单第 4 位，放在经藏和消息之间）。
+        BottomNavigationBarItem(
+          icon: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/ss1.png'
+                  : 'assets/images/ms1.png',
+              width: 22,
+              height: 22),
+          activeIcon: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/ss2.png'
+                  : 'assets/images/ms2.png',
+              width: 22,
+              height: 22),
+          label: '',
+        ),
         BottomNavigationBarItem(
           icon: _NotificationTabIcon(active: false),
           activeIcon: _NotificationTabIcon(active: true),
@@ -876,12 +894,14 @@ class _MainPageState extends State<MainPage>
         return 0;
       case 1: // 菩提空间（菜单第 2 位）
         return 1;
-      case 2: // 经藏
+      case 2: // 经藏（菜单第 3 位）
         return 2;
+      case 7: // 善知识（菜单第 4 位）
+        return 3;
       case 3: // 助手（入口在经藏页右上角）
         return -1;
-      case 4: // 消息（菜单第 4 位）
-        return 3;
+      case 4: // 消息（菜单第 5 位）
+        return 4;
       case 5: // 我的（入口在左侧菜单）
         return -1;
       case 6: // 记录（入口在左侧菜单）
@@ -994,6 +1014,7 @@ class _MainPageState extends State<MainPage>
     // 切页前重读最近阅读记录——离开期间可能已从全屏阅读页换了经书。
     unawaited(_loadRecentReading());
     // 已停留在经藏页再次点击经藏菜单图标：处于搜索模式则先退出搜索。
+    // 注意：经藏仍是底部菜单第 3 格（nav 2），插入「善知识」只把「消息」挤到 nav 4。
     if (index == 2 && _currentIndex == 2) {
       _sutraListKey.currentState?.exitSearchIfActive();
       _tabIndex.value = 2;
@@ -1005,9 +1026,13 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    // 底部菜单索引 → 页面索引：消息(3)→4，其余索引即页面索引；
-    // 菩提空间(1)→1、经藏(2)→2、记录页不在底部，由左侧菜单进入。
-    final pageIndex = index == 3 ? 4 : index;
+    // 底部菜单索引 → 页面索引：善知识(nav3)→7，消息(nav4)→4，其他按顺序映射
+    final pageIndex = switch (index) {
+      2 => 2, // 经藏
+      3 => 7, // 善知识
+      4 => 4, // 消息
+      _ => index,
+    };
     // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
     if (pageIndex == 0 && _currentIndex == 0) {
       _studyHubKey.currentState?.reload();
@@ -1369,6 +1394,7 @@ class _MainPageState extends State<MainPage>
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
+      ShanZhiShiPage(key: _shanZhiShiKey, activeTab: _tabIndex, tabIndex: 7),
     ];
     // 关闭键盘自适应压缩：WebView（助手/DeepSeek）在 adjustResize 下会被键盘
     // 压成小视口，页面在消息区与输入框之间露出大片空白遮挡内容。
@@ -2155,6 +2181,9 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
       builder: (context, _) {
         final t = _ctrl.value;
         final height = MediaQuery.of(context).size.height;
+        // 键盘弹出高度：输入框激活时 WebView 底部让出，输入框保持在键盘上方
+        //（与经藏页右上角 DeepSeek 展开面板同一处理，否则输入法会盖住输入框）。
+        final keyboard = MediaQuery.viewInsetsOf(context).bottom;
 
         // 圆点从主页开始下移、顶部露出 DeepSeek 区域时才出现（先是一个圆点），
         // 展开进度到临界点正好铺成三个。
@@ -2199,8 +2228,11 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
                               height: height,
                               child: SafeArea(
                                 bottom: true,
-                                child: const DiscussionPage(
-                                  surface: AssistantSurface.home,
+                                child: Padding(
+                                  padding: EdgeInsets.only(bottom: keyboard),
+                                  child: const DiscussionPage(
+                                    surface: AssistantSurface.home,
+                                  ),
                                 ),
                               ),
                             ),

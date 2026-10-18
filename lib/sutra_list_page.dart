@@ -811,13 +811,15 @@ class SutraListPageState extends State<SutraListPage>
     return _stageProgressCache = result;
   }
 
-  /// 点阶段卡片：往左侧滑出该阶段的读经页（复用经藏的下载/阅读逻辑）。
+  /// 点阶段卡片：先联动顶部圆点高亮该阶段，再往左侧滑出该阶段的读经页
+  /// （复用经藏的下载/阅读逻辑）。返回经藏页时保持该阶段选中。
   void _openReadingStage(int index) {
     final stage = _readingStageOf(index);
     if (stage == null) {
       _showToast('${_kReadingStages[index].badgeName}整理中');
       return;
     }
+    _selectReadingStage(index);
     Navigator.of(context).push(
       slideInFromLeft(
           ReadingStagePage(stage: stage, parent: this, showGroupProgress: true)),
@@ -4241,30 +4243,22 @@ class SutraListPageState extends State<SutraListPage>
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  // 只保留两行：标题（原副标题）+ 难度星级。
+                  // 两行的行高与左侧「阶段N / 阶段名」两行一致，上下能对齐。
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      stage.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: p.text,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
                     Text(
                       stage.desc,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 11.5,
-                        color: p.textSec,
-                        height: 1.35,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: p.text,
+                        height: 1.25,
                       ),
                     ),
-                    const SizedBox(height: 7),
+                    const SizedBox(height: 6),
                     Row(
                       children: [
                         Container(

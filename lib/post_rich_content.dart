@@ -1549,6 +1549,14 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
   /// 若超出分页范围不在结果集里，则不显示标签）。
   String _pinnedId = '';
 
+  /// 本话题下的帖子总数（服务端 count，含发起人帖自身）。
+  /// 发起人帖时间戳右侧展示「讨论帖子合计数」= total - 1（不含发起人帖）。
+  int _topicTotal = 0;
+
+  /// 发起人帖正文折叠/展开状态：默认折叠（最多 4 行 + 省略号），
+  /// 超出时显示「显示更多」，点开后完整展示并可「收起」。
+  bool _initiatorExpanded = false;
+
   /// 新帖提醒：后台静默统计本话题新帖数量，只更新「显示X帖子」提醒条与悬浮按钮，
   /// 不自动刷新列表，点击提醒或下拉才手动刷出，避免浏览时被打断。
   final ScrollController _scroll = ScrollController();
@@ -1708,12 +1716,13 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
   Future<void> _load() async {
     try {
       // 服务端按 #话题 精确过滤 + 热度衰减分倒序返回，并附带发起人帖 id
-      // （最早的含该话题帖子，不受分页截断影响）。
-      final (list, _, firstId, _) = await CloudNotesService.instance
+      // （最早的含该话题帖子，不受分页截断影响）与帖子总数。
+      final (list, _, firstId, total) = await CloudNotesService.instance
           .getTopicNotes(widget.topic, pageSize: _pageSize);
       if (!mounted) return;
       setState(() {
         _pinnedId = firstId;
+        _topicTotal = total;
         // 发起人帖（公告位，服务端权威查出的最早一条）。
         final initiator = _pinnedId.isEmpty
             ? const <PlazaNote>[]
@@ -1743,6 +1752,19 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
         _loading = false;
       });
     }
+  }
+
+  /// 去掉正文开头的「#当前话题 」前缀——本页顶部已是该话题标题，
+  /// 正文再显示一遍是多余的。只去掉开头与本页话题匹配的那一个标签；
+  /// 正文中间的其他 #话题 链接（跳别的话题）不受影响。
+  /// 菩提空间信息流等其它页面用各自 widget 渲染原文，仍显示 #话题（两种显示）。
+  String _stripLeadingTopic(String content) {
+    final t = widget.topic;
+    if (t.isEmpty) return content;
+    // 匹配行首（可含前置空白）的 #话题名，且话题名后须是空白/结尾/另一个 #，
+    // 避免误删更长话题名的前缀（如话题「修行」不误删「#修行心得」）。
+    final re = RegExp(r'^\s*#' + RegExp.escape(t) + r'(?=[\s#]|$)');
+    return content.replaceFirst(re, '').replaceFirst(RegExp(r'^\s+'), '');
   }
 
   @override
@@ -1840,13 +1862,19 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                     cloudTotal: n.canonTotal,
                                   );
                                   // 与主页帖子同款：头像 + 昵称/@账号/认证 + 阅藏进度 + 三点菜单 + 内容 + 时间 + 四个指标。
+                                  // 发起人帖不跳详情页（onTap 置空，本页已完整展示并支持展开），
+                                  // 内部的 @账号/#话题 等嵌套链接仍各自可点。
+                                  final isInitiator = n.id == _pinnedId;
                                   final content = InkWell(
-                                    onTap: () => Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                          builder: (_) =>
-                                              NoteDetailPage(noteId: n.id)),
-                                    ),
+                                    onTap: isInitiator
+                                        ? null
+                                        : () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) =>
+                                                      NoteDetailPage(
+                                                          noteId: n.id)),
+                                            ),
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(
                                           vertical: 10),
@@ -2083,59 +2111,188 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                                             n.authorName,
                                                       )
                                                     else
-                                                      buildPostRichText(
-                                                        n.content,
-                                                        style: TextStyle(
-                                                            fontSize: 15,
-                                                            color: _text,
-                                                            height: 1.6),
-                                                        library: const {},
-                                                        maxLines: 4,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        onUserTap: (uid) {
-                                                          if (uid.isNotEmpty) {
-                                                            Navigator.push(
-                                                              context,
-                                                              MaterialPageRoute(
-                                                                  builder: (_) =>
-                                                                      UserSpacePage(
-                                                                          userId:
-                                                                              uid)),
+                                                      // 本页渲染时去掉正文开头的 #话题 前缀（顶部标题已示，
+                                                      // 正文重复）。菩提空间信息流用各自 widget 渲染原文，仍显示 #话题。
+                                                      Builder(
+                                                        builder: (context) {
+                                                          // 发起人帖保留 #话题 前缀（它是话题的起始帖，须标明）；
+                                                          // 下面的跟帖才剥离，避免与顶部标题重复。
+                                                          final plain =
+                                                              isInitiator
+                                                                  ? n.content
+                                                                  : _stripLeadingTopic(
+                                                                      n.content);
+                                                          final bodyStyle =
+                                                              TextStyle(
+                                                                  fontSize: 15,
+                                                                  color: _text,
+                                                                  height: 1.6);
+                                                          Widget rich({
+                                                            int? maxLines,
+                                                            TextOverflow?
+                                                                overflow,
+                                                          }) =>
+                                                              buildPostRichText(
+                                                                plain,
+                                                                style:
+                                                                    bodyStyle,
+                                                                library:
+                                                                    const {},
+                                                                maxLines:
+                                                                    maxLines,
+                                                                overflow:
+                                                                    overflow,
+                                                                onUserTap:
+                                                                    (uid) {
+                                                                  if (uid
+                                                                      .isNotEmpty) {
+                                                                    Navigator
+                                                                        .push(
+                                                                      context,
+                                                                      MaterialPageRoute(
+                                                                          builder: (_) =>
+                                                                              UserSpacePage(userId: uid)),
+                                                                    );
+                                                                  }
+                                                                },
+                                                                onSutraTap:
+                                                                    (title,
+                                                                        path) {
+                                                                  Navigator
+                                                                      .push(
+                                                                    context,
+                                                                    MaterialPageRoute(
+                                                                        builder: (_) =>
+                                                                            SutraDiscussionPage(title: title, filePath: path)),
+                                                                  );
+                                                                },
+                                                                onTopicTap:
+                                                                    (topic) {
+                                                                  Navigator
+                                                                      .push(
+                                                                    context,
+                                                                    MaterialPageRoute(
+                                                                        builder: (_) =>
+                                                                            TopicPage(topic: topic)),
+                                                                  );
+                                                                },
+                                                              );
+                                                          // 发起人帖：不跳详情，长文在本页折叠/展开看全文。
+                                                          if (isInitiator) {
+                                                            return LayoutBuilder(
+                                                              builder: (context,
+                                                                  constraints) {
+                                                                final tp =
+                                                                    TextPainter(
+                                                                  text: TextSpan(
+                                                                      text:
+                                                                          plain,
+                                                                      style:
+                                                                          bodyStyle),
+                                                                  maxLines: 4,
+                                                                  ellipsis:
+                                                                      '…',
+                                                                  textDirection:
+                                                                      TextDirection
+                                                                          .ltr,
+                                                                )..layout(maxWidth:
+                                                                    constraints.maxWidth);
+                                                                final overflow =
+                                                                    tp.didExceedMaxLines;
+                                                                return Column(
+                                                                  crossAxisAlignment:
+                                                                      CrossAxisAlignment
+                                                                          .start,
+                                                                  children: [
+                                                                    rich(
+                                                                      maxLines: _initiatorExpanded
+                                                                          ? null
+                                                                          : 4,
+                                                                      overflow: _initiatorExpanded
+                                                                          ? null
+                                                                          : TextOverflow
+                                                                              .ellipsis,
+                                                                    ),
+                                                                    if (overflow &&
+                                                                        !_initiatorExpanded)
+                                                                      GestureDetector(
+                                                                        onTap: () =>
+                                                                            setState(() =>
+                                                                                _initiatorExpanded =
+                                                                                    true),
+                                                                        child:
+                                                                            const Padding(
+                                                                          padding:
+                                                                              EdgeInsets.only(top: 4),
+                                                                          child: Text(
+                                                                              '显示更多',
+                                                                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF6F877A))),
+                                                                        ),
+                                                                      ),
+                                                                    if (overflow &&
+                                                                        _initiatorExpanded)
+                                                                      GestureDetector(
+                                                                        onTap: () =>
+                                                                            setState(() =>
+                                                                                _initiatorExpanded =
+                                                                                    false),
+                                                                        child:
+                                                                            const Padding(
+                                                                          padding:
+                                                                              EdgeInsets.only(top: 4),
+                                                                          child: Text(
+                                                                              '收起',
+                                                                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF6F877A))),
+                                                                        ),
+                                                                      ),
+                                                                  ],
+                                                                );
+                                                              },
                                                             );
                                                           }
-                                                        },
-                                                        onSutraTap:
-                                                            (title, path) {
-                                                          Navigator.push(
-                                                            context,
-                                                            MaterialPageRoute(
-                                                                builder: (_) =>
-                                                                    SutraDiscussionPage(
-                                                                        title:
-                                                                            title,
-                                                                        filePath:
-                                                                            path)),
-                                                          );
-                                                        },
-                                                        onTopicTap: (topic) {
-                                                          Navigator.push(
-                                                            context,
-                                                            MaterialPageRoute(
-                                                                builder: (_) =>
-                                                                    TopicPage(
-                                                                        topic:
-                                                                            topic)),
-                                                          );
+                                                          // 普通跟帖：维持 4 行折叠（点击进详情看全文）。
+                                                          return rich(
+                                                              maxLines: 4,
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis);
                                                         },
                                                       ),
                                                     // 发布时间：放在内容和指标行之间（与主页帖子同款）。
                                                     const SizedBox(height: 6),
-                                                    Text(_fmt(n.createdAt),
-                                                        style: const TextStyle(
-                                                            fontSize: 12,
-                                                            color: Color(
-                                                                0xFF8C8C8C))),
+                                                    if (n.id == _pinnedId)
+                                                      // 发起人帖：时间戳右侧紧挨「讨论帖子合计数」（下面跟帖数，不含本帖）。
+                                                      Row(
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
+                                                        children: [
+                                                          Text(_fmt(n.createdAt),
+                                                              style: const TextStyle(
+                                                                  fontSize: 12,
+                                                                  color: Color(
+                                                                      0xFF8C8C8C))),
+                                                          const SizedBox(
+                                                              width: 10),
+                                                          Image.asset(
+                                                              'assets/images/ic_comment.png',
+                                                              width: 14,
+                                                              height: 14),
+                                                          const SizedBox(
+                                                              width: 3),
+                                                          Text(
+                                                              '${_topicTotal > 0 ? _topicTotal - 1 : 0}',
+                                                              style: const TextStyle(
+                                                                  fontSize: 12,
+                                                                  color: Color(
+                                                                      0xFF8C8C8C))),
+                                                        ],
+                                                      )
+                                                    else
+                                                      Text(_fmt(n.createdAt),
+                                                          style: const TextStyle(
+                                                              fontSize: 12,
+                                                              color: Color(
+                                                                  0xFF8C8C8C))),
                                                   ],
                                                 ),
                                               ),
@@ -2145,35 +2302,37 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                           // 与笔记详情页操作行一致：操作行在头像行下方整行通栏，
                                           // 左缩进 52 对齐内容左缘（单元格内含 2px 水平内边距，外层减掉该值），上下留 8px。
                                           // 收藏与分享已移至帖子右上角三点菜单。
-                                          Padding(
-                                            padding: const EdgeInsets.fromLTRB(
-                                                52, 8, 0, 8),
-                                            child: buildStatsRow(
-                                              commentCount: n.commentCount,
-                                              repostCount: n.repostCount,
-                                              likeCount: n.likeCount,
-                                              viewCount: n.viewCount,
-                                              liked: liked,
-                                              onComment: () => _openDetail(n),
-                                              onRepost: () => _openDetail(n),
-                                              onLike: () => _toggleLike(n),
+                                          // 发起人帖不展示这四个指标（阅读量已放在时间戳旁）。
+                                          if (n.id != _pinnedId)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                      52, 8, 0, 8),
+                                              child: buildStatsRow(
+                                                commentCount: n.commentCount,
+                                                repostCount: n.repostCount,
+                                                likeCount: n.likeCount,
+                                                viewCount: n.viewCount,
+                                                liked: liked,
+                                                onComment: () => _openDetail(n),
+                                                onRepost: () => _openDetail(n),
+                                                onLike: () => _toggleLike(n),
+                                              ),
                                             ),
-                                          ),
                                         ],
                                       ),
                                     ),
                                   );
-                                  // 发起置顶（发起人）的帖子用卡片底色包裹与下面帖子区分。
+                                  // 发起置顶（发起人）的帖子：浅色底色包裹与下面帖子区分（无边框线）。
                                   if (n.id == _pinnedId) {
                                     return Container(
                                       margin: const EdgeInsets.symmetric(
                                           vertical: 2),
                                       padding: const EdgeInsets.fromLTRB(
-                                          10, 2, 10, 4),
+                                          10, 6, 10, 6),
                                       decoration: BoxDecoration(
-                                        color: _card,
+                                        color: AppPalette.p.tintBg,
                                         borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: _border),
                                       ),
                                       child: content,
                                     );
@@ -2213,7 +2372,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                   ),
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    '发布带 #${widget.topic} 的帖子…',
+                    '发布帖子……',
                     style: TextStyle(color: _textHint, fontSize: 14),
                   ),
                 ),
