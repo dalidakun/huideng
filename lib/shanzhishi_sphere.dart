@@ -76,9 +76,9 @@ SphereLayout computeSphereLayout(int n) {
 /// 相机距离（单位：球半径的倍数）。越小透视越强、越「球」。
 const double _cameraDistFactor = 2.4;
 
-/// 橄榄形椭球的横向半径：左右各留出约 9% 页宽的边距，保证贴边的名号
+/// 橄榄形椭球的横向半径：左右各留出约 12% 页宽的边距，保证贴边的名号
 /// （透视前移 + 文字半宽）也完整落在页内，不被屏幕左右裁掉。
-double ellipsoidRadiusFor(double width, double height) => width * 0.41;
+double ellipsoidRadiusFor(double width, double height) => width * 0.38;
 
 /// 纵向拉伸倍数：屏幕 y 方向把圆球拉成竖立橄榄形（旋转时外形始终竖立）。
 double ellipsoidStretchFor(double width, double height) {
@@ -90,7 +90,8 @@ double ellipsoidStretchFor(double width, double height) {
 
 /// 橄榄形剪影的超椭圆指数：2 = 纯椭圆（上下两头尖、四角留白多），
 /// 越大上下顶点越宽、剪影越接近圆角矩形，四角越满。
-const double kSilhouetteExponent = 2.6;
+/// 取较大值：橄榄形顶部那个「点」两侧不再留出大块空白，顶头更饱满。
+const double kSilhouetteExponent = 3.2;
 
 /// 把橄榄形投影坐标 (x, y) 做超椭圆化后再乘半径/拉伸：
 /// |x|、|y| < 1 时向外鼓（两头变宽、四角变满），> 1（透视前移）时略收。
@@ -120,6 +121,9 @@ class ShanZhiShiSphere extends StatefulWidget {
   final List<String> names;
   final ShanZhiSphereController? controller;
 
+  /// 初始朝向对准的位次（上次点选的名号）；null / 越界时退回球心正前方那一位。
+  final int? initialIndex;
+
   /// 是否允许入场动画与缓速自转（仅当前 Tab 页开启，省电）。
   final bool spinEnabled;
 
@@ -139,6 +143,7 @@ class ShanZhiShiSphere extends StatefulWidget {
     super.key,
     required this.names,
     this.controller,
+    this.initialIndex,
     this.spinEnabled = false,
     this.onCurrentChanged,
     this.onCurrentTap,
@@ -161,7 +166,8 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
   static const double _pitchLimit = 84.0 * math.pi / 180.0;
 
   /// 每像素滑动对应的弧度放大系数（使用时除以球半径）。
-  static const double _rotPerPx = 1.35;
+  /// 比此前更小：同样的拖动距离球转得更少，佛号移动更从容（约放慢三分之一）。
+  static const double _rotPerPx = 0.85;
 
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
@@ -218,7 +224,7 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
       _tpCache.clear();
       _current = -1;
       _updateCurrent(notify: false);
-      // 名号从无到有（异步加载完成）：重新把正前方对准第一位。
+      // 名号从无到有（异步加载完成）：重新对准上次点选的那一位。
       if (oldWidget.names.isEmpty && widget.names.isNotEmpty) {
         _aimInitial();
       }
@@ -244,16 +250,20 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     super.dispose();
   }
 
-  /// 初始朝向：离正前方最近的那一位。
+  /// 初始朝向：上次点选的那一位（[ShanZhiShiSphere.initialIndex]）；
+  /// 没有记录或位次无效时，退回离正前方最近的那一位。
   void _aimInitial() {
     if (_layout.n == 0) return;
-    var best = 0;
-    var bestZ = double.negativeInfinity;
-    for (var i = 0; i < _layout.n; i++) {
-      final p = _layout.points[i];
-      if (p.z > bestZ) {
-        bestZ = p.z;
-        best = i;
+    var best = widget.initialIndex ?? -1;
+    if (best < 0 || best >= _layout.n) {
+      best = 0;
+      var bestZ = double.negativeInfinity;
+      for (var i = 0; i < _layout.n; i++) {
+        final p = _layout.points[i];
+        if (p.z > bestZ) {
+          bestZ = p.z;
+          best = i;
+        }
       }
     }
     final p = _layout.points[best];
@@ -720,6 +730,12 @@ class _SpherePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r = ellipsoidRadiusFor(size.width, size.height);
+    final stretch = ellipsoidStretchFor(size.width, size.height);
+    // 星云底景先画（球体尚未画任何名号时也保留一片星空，不显得空荡）。
+    _paintNebulaBackdrop(canvas, size, cx, cy, r, stretch);
     if (layout.n == 0 || names.isEmpty) return;
     final res = computeSphereRender(
       layout: layout,
@@ -735,7 +751,8 @@ class _SpherePainter extends CustomPainter {
     // items 已按从远到近排好：背面的名号先画、更淡更小，正面压在上面。
     for (final v in res.items) {
       if (!v.isText) {
-        dotPaint.color = palette.textSec.withValues(alpha: v.alpha * 0.9);
+        // 退成星点的名号：用点景色（金/绿），不再是灰点。
+        dotPaint.color = palette.accent.withValues(alpha: v.alpha * 0.85);
         canvas.drawCircle(
           Offset(v.sx, v.sy),
           (0.9 + 1.4 * v.z.abs()) * v.persp,
@@ -746,27 +763,84 @@ class _SpherePainter extends CustomPainter {
       final tp = _tp(names[v.index], v.f, v.isCur ? 1 : v.alpha, v.isCur,
           double.infinity);
       if (v.isCur) {
-        // 当前名号：背后一团柔光，标识「球心落点」。
-        final glowR = v.f * v.persp * 2.0;
-        canvas.drawCircle(
-          Offset(v.sx, v.sy),
-          glowR,
-          Paint()
-            ..shader = RadialGradient(
-              colors: [
-                palette.accent.withValues(alpha: 0.17),
-                palette.accent.withValues(alpha: 0),
-              ],
-            ).createShader(
-                Rect.fromCircle(center: Offset(v.sx, v.sy), radius: glowR)),
-        );
+        // 当前名号：两层柔光标识「球心落点」。
+        _glow(v.sx, v.sy, v.f * v.persp * 3.1, palette.accent, 0.09, canvas);
+        _glow(v.sx, v.sy, v.f * v.persp * 1.8, palette.accent, 0.16, canvas);
       }
+      // 名号本身不再垫星点（会压在字底影响阅读）。
       canvas.save();
       canvas.translate(v.sx, v.sy);
       canvas.scale(v.persp * v.squash, v.persp);
       tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
       canvas.restore();
     }
+  }
+
+  /// 一团径向渐变柔光（星云斑块 / 光晕共用）。
+  void _glow(double x, double y, double radius, Color color, double alpha,
+      Canvas canvas) {
+    if (radius <= 0) return;
+    canvas.drawCircle(
+      Offset(x, y),
+      radius,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            color.withValues(alpha: alpha),
+            color.withValues(alpha: 0),
+          ],
+        ).createShader(Rect.fromCircle(
+          center: Offset(x, y),
+          radius: radius,
+        )),
+    );
+  }
+
+  /// 星云底景（画在所有名号之下）：
+  /// - 几团错落的主色/深色柔光，晕出整幅星云的底色层次；
+  /// - 球体轮廓处一圈贴合橄榄形的椭圆光晕，把「看不见的球」托出来。
+  void _paintNebulaBackdrop(
+    Canvas canvas,
+    Size size,
+    double cx,
+    double cy,
+    double r,
+    double stretch,
+  ) {
+    final accent = palette.accent;
+    final deep = palette.accentDeep;
+    final primary = palette.primary;
+
+    // 1) 全幅底光：一大团极淡的暖色，把整个画面晕染进星云氛围。
+    _glow(cx, cy * 0.92, math.max(size.width, size.height) * 0.72, accent,
+        0.035, canvas);
+
+    // 2) 两团错落的副晕：左上偏暖深色、右下偏主色，拉开层次。
+    _glow(cx - r * 0.62, cy - r * 0.42 * stretch, r * 1.05, deep, 0.075,
+        canvas);
+    _glow(cx + r * 0.58, cy + r * 0.5 * stretch, r * 1.15, primary, 0.055,
+        canvas);
+
+    // 3) 球体椭圆光晕：沿橄榄形剪影一圈，中心略暖、向外消失，
+    //    让「虚空中的球」有一点若隐若现的体积。
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.scale(1.0, stretch);
+    final haloR = r * 1.14;
+    canvas.drawCircle(
+      Offset.zero,
+      haloR,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            accent.withValues(alpha: 0.10),
+            accent.withValues(alpha: 0.03),
+            accent.withValues(alpha: 0),
+          ],
+          stops: const [0, 0.55, 1],
+        ).createShader(Rect.fromCircle(center: Offset.zero, radius: haloR)),
+    );
+    canvas.restore();
   }
 
   TextPainter _tp(String name, double f, double alpha, bool isCur,

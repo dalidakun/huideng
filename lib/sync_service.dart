@@ -300,19 +300,14 @@ class SyncService with WidgetsBindingObserver {
         final lv = _readPref(prefs, key);
         if (_cloudAuthorityKeys.contains(key) && cv != null) {
           // 云端权威字段：只要云端有非空值就覆盖本地，修复错误的兜底写入。
-          final normalizedCv = _normalizeSutraPaths(
-              key, cv, prefs, cPrefs['current_sutra_title']?.toString());
+          final normalizedCv = _normalizeSutraPaths(key, cv, prefs, cPrefs);
           if (lv == null || lv.toString() != normalizedCv.toString()) {
             _writePref(prefs, key, normalizedCv);
             changed = true;
           }
         } else if (lv == null && cv != null) {
           // 普通字段：本地缺失才从云端补齐，避免覆盖本地用户的最新设置。
-          _writePref(
-              prefs,
-              key,
-              _normalizeSutraPaths(
-                  key, cv, prefs, cPrefs['current_sutra_title']?.toString()));
+          _writePref(prefs, key, _normalizeSutraPaths(key, cv, prefs, cPrefs));
           changed = true;
         } else if (cv is String &&
             lv is String &&
@@ -742,16 +737,33 @@ class SyncService with WidgetsBindingObserver {
   }
 
   /// 同步前（收集）与同步后（拉取写入）对含经书路径的 prefs 值做规范化，
-  /// 其他键原样返回。[title] 用于解析无 ID 的路径，优先取云端标题。
+  /// 其他键原样返回。
+  ///
+  /// [cloudPrefs] 为云端 prefs 映射；各键用**与它配对的标题**解析无 ID 的
+  /// 路径（`last_read_*` 配 `last_read_title`、`locked_*` 配
+  /// `locked_sutra_title`），绝不能拿 `current_sutra_title` 去解析别的记录，
+  /// 否则会把 A 经的路径改写成 B 经的路径，造成「卡片显示 A、点开是 B」。
   Object? _normalizeSutraPaths(
-      String key, Object? v, SharedPreferences prefs, [String? title]) {
+      String key, Object? v, SharedPreferences prefs, [Object? cloudPrefs]) {
     if (!_sutraPathKeys.contains(key)) return v;
-    final t = title ?? prefs.getString('current_sutra_title') ?? '';
+    String paired(String cloudKey, String localKey) {
+      final fromCloud = (cloudPrefs is Map)
+          ? cloudPrefs[cloudKey]?.toString()
+          : null;
+      if (fromCloud != null && fromCloud.isNotEmpty) return fromCloud;
+      return prefs.getString(localKey) ?? '';
+    }
+
     switch (key) {
       case 'current_sutra_file_path':
+        return _canonicalSutraPath(v?.toString(),
+            paired('current_sutra_title', 'current_sutra_title'));
       case 'locked_sutra_file_path':
+        return _canonicalSutraPath(v?.toString(),
+            paired('locked_sutra_title', 'locked_sutra_title'));
       case 'last_read_filePath':
-        return _canonicalSutraPath(v?.toString(), t);
+        return _canonicalSutraPath(
+            v?.toString(), paired('last_read_title', 'last_read_title'));
       case 'recent_sutras':
         if (v is List) {
           return v.map((e) => _canonicalRecentEntry(e.toString())).toList();

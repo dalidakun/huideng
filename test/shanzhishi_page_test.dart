@@ -62,6 +62,25 @@ void main() {
     expect(find.text('关联经文'), findsNothing);
   });
 
+  testWidgets('记住上次点选的名号：重进页面后球心默认对准它', (tester) async {
+    await pumpPage(tester);
+    final store = ShanZhiShiStore.instance;
+    // 选末位（离初始球心很远），记为上次点选。
+    final last = store[store.length - 1]!;
+    await store.rememberLastTapped(last.name);
+
+    // 模拟退出重进：整棵页面销毁重建，球体重新按上次点选对准。
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(const MaterialApp(home: ShanZhiShiPage()));
+    await tester.pumpAndSettle();
+
+    // 点球心：拉出的面板应是上次点的那一位，而不是默认正中间那一位。
+    await tester.tap(find.byType(ShanZhiShiSphere));
+    await tester.pumpAndSettle();
+    expect(find.text(last.name), findsOneWidget);
+    expect(find.text('关联经文'), findsOneWidget);
+  });
+
   testWidgets('面板展开高度约占屏幕九成，竖杠与内容左对齐', (tester) async {
     await pumpPage(tester);
     await tester.tap(find.byType(ShanZhiShiSphere));
@@ -153,7 +172,7 @@ void main() {
     expect(find.byKey(const ValueKey('shanzhishi-shelf-panel')), findsOneWidget);
   });
 
-  testWidgets('添加面板文案：关联经文 / 新的引用段落提示语', (tester) async {
+  testWidgets('添加面板文案：关联经文 / 人天利益提示语', (tester) async {
     await pumpPage(tester);
     await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
     await tester.pumpAndSettle();
@@ -163,8 +182,11 @@ void main() {
     // 「出现过的经文」改成「关联经文」。
     expect(find.text('关联经文'), findsOneWidget);
     expect(find.text('出现过的经文'), findsNothing);
-    // 引用段落提示语换成新句子，右边那句已经去掉。
-    expect(find.text('输入和佛菩萨关联的经文段落'), findsOneWidget);
+    // 人天利益：新标签与新提示语。
+    expect(find.text('人天利益'), findsOneWidget);
+    expect(find.text('输入佛菩萨人天利益'), findsOneWidget);
+    expect(find.text('引用段落'), findsNothing);
+    expect(find.text('输入和佛菩萨关联的经文段落'), findsNothing);
     expect(find.text('留空则展示时自动识别'), findsNothing);
   });
 
@@ -236,7 +258,7 @@ void main() {
 
     await tester.tap(find.byType(ShanZhiShiSphere));
     await tester.pumpAndSettle();
-    expect(find.text('引用段落'), findsOneWidget);
+    expect(find.text('人天利益'), findsOneWidget);
     expect(find.text('这是用户填的段落'), findsOneWidget);
   });
 
@@ -259,12 +281,12 @@ void main() {
     await tester.tap(find.byType(ShanZhiShiSphere));
     await tester.pumpAndSettle();
     // 一段一个标志，不是一整块。
-    expect(find.text('引用段落'), findsNWidgets(2));
+    expect(find.text('人天利益'), findsNWidgets(2));
     expect(find.text('第一段内容'), findsOneWidget);
     expect(find.text('第二段内容'), findsOneWidget);
   });
 
-  testWidgets('面板「恢复」：退回编辑前的版本（同一段内追加也算）', (tester) async {
+  testWidgets('面板「恢复」：编辑保存后才出现，退回编辑前的版本', (tester) async {
     await pumpPage(tester);
     final store = ShanZhiShiStore.instance;
     final layout = computeSphereLayout(store.length);
@@ -278,15 +300,40 @@ void main() {
       }
     }
     final original = List<String>.of(store[front]!.paragraphs);
-    // 两次编辑：第二次只是在同一段后面追加文字（不是新的引用段）。
-    await store.update(front, paragraphs: ['一段']);
-    await store.update(front, paragraphs: ['一段又加了一句']);
-    await tester.pumpAndSettle();
 
     await tester.tap(find.byType(ShanZhiShiSphere));
     await tester.pumpAndSettle();
+    // 初始：没有编辑保存过，不显示「恢复」。
+    expect(find.byKey(const ValueKey('shanzhishi_restore')), findsNothing);
+    expect(find.text('恢复'), findsNothing);
+    expect(find.text('编辑'), findsOneWidget);
+
+    // 只点编辑后取消：仍不显示「恢复」。
+    await tester.tap(find.text('编辑'));
+    await tester.pumpAndSettle();
+    expect(find.text('编辑善知识'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shanzhishi_restore')), findsNothing);
+
+    // 两次编辑并保存（第二次在同一段后追加文字）。
+    Future<void> editParagraphs(String text) async {
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.byKey(const ValueKey('shanzhishi_paragraphs_field')), text);
+      final saveButton = find.widgetWithText(FilledButton, '保存');
+      await tester.ensureVisible(saveButton);
+      await tester.pumpAndSettle();
+      await tester.tap(saveButton);
+      await tester.pumpAndSettle();
+    }
+
+    await editParagraphs('一段');
+    expect(store[front]!.paragraphs, ['一段']);
+    await editParagraphs('一段又加了一句');
     expect(find.text('一段又加了一句'), findsOneWidget);
-    // 恢复按钮一直在「编辑」左边。
+    // 保存之后「恢复」出现在「编辑」左边。
     expect(find.text('恢复'), findsOneWidget);
     expect(find.text('编辑'), findsOneWidget);
 
@@ -294,9 +341,46 @@ void main() {
     await tester.pumpAndSettle();
     expect(store[front]!.paragraphs, original);
     expect(find.text('一段又加了一句'), findsNothing);
-    // 快照用掉后按钮仍在，但再点没有可恢复版本。
+    // 快照用掉后按钮消失。
     expect(store.canRestore(store[front]!), isFalse);
-    expect(find.text('恢复'), findsOneWidget);
+    expect(find.byKey(const ValueKey('shanzhishi_restore')), findsNothing);
+  });
+
+  testWidgets('搜索：悬浮在本页，点结果只转球不自动开面板', (tester) async {
+    await pumpPage(tester);
+    final store = ShanZhiShiStore.instance;
+
+    // 展开右下角悬浮球 → 点「搜索」。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_search')));
+    await tester.pumpAndSettle();
+
+    // 搜索框悬浮在本页（没有跳到新页面）。
+    final field = find.byKey(const ValueKey('shanzhishi_search_field'));
+    expect(field, findsOneWidget);
+    expect(find.byKey(const ValueKey('shanzhishi_search_results')), findsNothing);
+
+    await tester.enterText(field, '观世音');
+    await tester.pumpAndSettle();
+    final results = find.byKey(const ValueKey('shanzhishi_search_results'));
+    expect(results, findsOneWidget);
+
+    final target = store.entries.indexWhere((e) => e.name.contains('观世音'));
+    expect(target, greaterThanOrEqualTo(0));
+    await tester.tap(find.text(store[target]!.name));
+    await tester.pumpAndSettle();
+
+    // 搜索浮层收起，且没有自动打开底部面板。
+    expect(find.byKey(const ValueKey('shanzhishi_search_field')), findsNothing);
+    expect(find.byKey(const ValueKey('shanzhishi-shelf-panel')), findsNothing);
+    expect(find.text('关联经文'), findsNothing);
+
+    // 点球心（已转到该名号）才展开面板。
+    await tester.tap(find.byType(ShanZhiShiSphere));
+    await tester.pumpAndSettle();
+    expect(find.text(store[target]!.name), findsOneWidget);
+    expect(find.byKey(const ValueKey('shanzhishi-shelf-panel')), findsOneWidget);
   });
 
   testWidgets('关联经文上下排列，每行右侧有进入阅读的箭头', (tester) async {

@@ -115,10 +115,12 @@ void main() {
     expect(find.byIcon(Icons.delete_outline), findsNothing);
   });
 
-  testWidgets('编辑页提示语：两句都在', (tester) async {
+  testWidgets('编辑页提示语：人天利益两句都在', (tester) async {
     await openEdit(tester, save: (_) {});
-    expect(find.text('输入和佛菩萨关联的经文段落'), findsOneWidget);
+    expect(find.text('人天利益'), findsOneWidget);
+    expect(find.text('输入佛菩萨人天利益'), findsOneWidget);
     expect(find.text('一段一条，空行分隔'), findsOneWidget);
+    expect(find.text('引用段落'), findsNothing);
   });
 
   testWidgets('编辑改名撞车：提示「保留名号 / 合并」', (tester) async {

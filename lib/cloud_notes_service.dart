@@ -1289,6 +1289,12 @@ class CloudNotesService {
       'sutraEditTitleSave',
       'upsertUserNotes',
       'upsertUserRecords',
+      'createBlessing',
+      'joinBlessing',
+      'leaveBlessing',
+      'blessToday',
+      'updateBlessing',
+      'deleteBlessing',
     };
     return writes.contains(action);
   }

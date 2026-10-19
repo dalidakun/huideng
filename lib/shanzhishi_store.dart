@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'note_sutra_links.dart';
+import 'sutra_list_page.dart';
 
 /// 善知识名号：用户自行录入到球面上的一位佛菩萨，附带它的关联经文（存展示名）
 /// 与用户手写的引用段落。
@@ -122,6 +123,9 @@ class ShanZhiShiStore extends ChangeNotifier {
   static final ShanZhiShiStore instance = ShanZhiShiStore._();
 
   static const String _prefKey = 'shanzhishi_names';
+
+  /// 用户最后点选的名号：下次打开善知识页时球心默认对准它。
+  static const String _lastTappedKey = 'shanzhishi_last_tapped';
 
   /// 编辑前快照（一步撤销）的落盘键：createdAt -> 该名号上一版。
   static const String _undoKey = 'shanzhishi_undo';
@@ -275,6 +279,9 @@ class ShanZhiShiStore extends ChangeNotifier {
 
   bool _loaded = false;
 
+  /// 上次点选的名号（按名字记，位次会随增删变化）。
+  String? _lastTappedName;
+
   bool get loaded => _loaded;
 
   int get length => _entries.length;
@@ -284,12 +291,31 @@ class ShanZhiShiStore extends ChangeNotifier {
   ShanyishiEntry? operator [](int index) =>
       (index >= 0 && index < _entries.length) ? _entries[index] : null;
 
+  /// 上次点选的名号现在所在的位次；名号被删掉/改名找不到时返回 null
+  /// （调用方退回「球心正前方那一位」）。
+  int? get lastTappedIndex {
+    final name = _lastTappedName;
+    if (name == null || name.isEmpty) return null;
+    final idx = _entries.indexWhere((e) => e.name == name);
+    return idx < 0 ? null : idx;
+  }
+
+  /// 记住用户刚点选的名号（记名字不记位次），下次进页球心默认对准它。
+  Future<void> rememberLastTapped(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    _lastTappedName = trimmed;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastTappedKey, trimmed);
+  }
+
   /// 读本地数据；没存过时写入预置种子。幂等，可重复调用。
   Future<void> load() async {
     if (_loaded) return;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefKey);
     final storedSeedVersion = prefs.getInt(_seedVersionKey) ?? 0;
+    _lastTappedName = prefs.getString(_lastTappedKey);
     _entries.clear();
     final now = DateTime.now().millisecondsSinceEpoch;
     if (raw == null || raw.isEmpty) {
@@ -664,22 +690,52 @@ class ShanZhiShiStore extends ChangeNotifier {
 
   /// 把经文展示名解析成经藏条目（拿到可跳转的正文路径）。
   ///
-  /// 目录未加载时返回 null（经文卡片退化为纯文本）；精确匹配优先，
-  /// 其次取「包含该名字的最短经名」（用户常输入简称，如「地藏经」）。
+  /// 目录未加载时返回 null（经文卡片退化为纯文本）。
+  ///
+  /// 解析顺序：
+  ///  1. 精确匹配（展示名就是目录基础经名）；
+  ///  2. 拆出「基础经名 + 卷号」→ 按卷取该卷正文路径（修掉「地藏菩萨本愿经
+  ///     卷一」这类带卷标名以前解析不到的问题）；
+  ///  3. 只有基础经名时取目录条目；
+  ///  4. 「包含该名」的兜底**仅在唯一命中时**采用；命中多个即视为同名异本/
+  ///     同名不同卷，返回 null，绝不猜测打开错译本。
   static NoteSutraLink? resolveSutra(String name) {
     final map = NoteSutraCatalog.cachedTitleMap;
     if (map == null || map.isEmpty) return null;
-    final exact = map[name.trim()];
-    if (exact != null) return exact;
     final q = name.trim();
     if (q.isEmpty) return null;
-    NoteSutraLink? best;
-    for (final e in map.values) {
-      if (e.title.contains(q)) {
-        if (best == null || e.title.length < best.title.length) best = e;
+
+    final exact = map[q];
+    if (exact != null) return exact;
+
+    var parsed = parseSutraTitleAndVolume(q);
+    if (parsed.base.isNotEmpty && parsed.volume > 0) {
+      final volPath = NoteSutraCatalog.cachedVolumePath(
+          parsed.base, parsed.volume);
+      if (volPath != null) {
+        final base = map[parsed.base];
+        return NoteSutraLink(
+          title: q,
+          filePath: volPath,
+          size: base?.size ?? '',
+          folder: base?.folder ?? '',
+        );
       }
     }
-    return best;
+    final baseLink = map[parsed.base.isEmpty ? q : parsed.base];
+    if (baseLink != null) return baseLink;
+
+    // 包含兜底：仅当全目录唯一命中时才认，多个候选一律不猜。
+    NoteSutraLink? only;
+    var hits = 0;
+    for (final e in map.values) {
+      if (e.title.contains(q)) {
+        hits++;
+        if (hits > 1) return null;
+        only = e;
+      }
+    }
+    return only;
   }
 
   /// 测试用：清空内存与标记，让下一次 load() 重新读。
@@ -687,6 +743,7 @@ class ShanZhiShiStore extends ChangeNotifier {
   void resetForTest() {
     _entries.clear();
     _undo.clear();
+    _lastTappedName = null;
     _loaded = false;
   }
 }

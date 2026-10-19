@@ -22,6 +22,8 @@ import 'sutra_downloader.dart';
 import 'note_sutra_links.dart';
 import 'dedication_page.dart';
 import 'dedication_store.dart';
+import 'blessing_page.dart';
+import 'blessing_service.dart';
 
 import 'app_palette.dart';
 Color get _primary => AppPalette.p.primary;
@@ -118,6 +120,12 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 实际配置的功课类型列表（功课打卡卡片与自动分享共用）。
   List<Map<String, dynamic>> _checkInTypesList = [];
   bool _loaded = false;
+  /// 祈福共修：主页区块展示的当前祈福（我的进行中优先，否则社区热门）。
+  BlessingItem? _blessing;
+  /// 该祈福是否为我参与的（用于决定快捷动作按钮）。
+  bool _blessingMine = false;
+  bool _blessingLoading = false;
+  bool _blessingBusy = false;
   final ScrollController _scrollController = ScrollController();
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
@@ -146,6 +154,7 @@ class StudyHubPageState extends State<StudyHubPage>
     _tryShowZhaiBanner();
     ReadingTimeService.instance.ensureLoaded();
     _loadData();
+    _loadBlessing();
   }
 
   /// 十斋日提醒：每天只提醒一次，通过 SharedPreferences 记录上次提醒日期。
@@ -174,6 +183,7 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void didPopNext() {
     _loadData();
+    _loadBlessing();
   }
 
   @override
@@ -1018,6 +1028,8 @@ class StudyHubPageState extends State<StudyHubPage>
                 _buildCheckInCard(),
                 const SizedBox(height: 14),
                 _buildHistoryStatsCard(),
+                const SizedBox(height: 14),
+                _buildBlessingBlock(),
               ],
             ),
           ),
@@ -1650,6 +1662,285 @@ class StudyHubPageState extends State<StudyHubPage>
     setState(() => _historyStatsOrder = keys);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('history_stats_order', keys);
+  }
+
+  // ---------- 祈福共修 ----------
+
+  /// 拉取祈福数据：优先展示我进行中的祈福，否则社区最新的一条。
+  Future<void> _loadBlessing() async {
+    if (mounted) setState(() => _blessingLoading = true);
+    BlessingItem? pick;
+    var mine = false;
+    try {
+      final list = await BlessingService.instance.listMine(pageSize: 20);
+      if (list.isNotEmpty) {
+        final active =
+            list.where((e) => !(e.progress?.isDone ?? false)).toList();
+        pick = active.isNotEmpty ? active.first : list.first;
+        mine = true;
+      }
+    } catch (_) {}
+    if (pick == null) {
+      try {
+        final list = await BlessingService.instance.listCommunity(pageSize: 20);
+        if (list.isNotEmpty) {
+          pick = list.first;
+          mine = false;
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _blessing = pick;
+      _blessingMine = mine;
+      _blessingLoading = false;
+    });
+  }
+
+  Future<void> _openBlessingPage() async {
+    await Navigator.push(
+        context, MaterialPageRoute(builder: (_) => const BlessingPage()));
+    if (mounted) _loadBlessing();
+  }
+
+  Future<void> _openBlessingDetail(String id) async {
+    await Navigator.push(context,
+        MaterialPageRoute(builder: (_) => BlessingDetailPage(id: id)));
+    if (mounted) _loadBlessing();
+  }
+
+  /// 主页快捷「今日祈福」。
+  Future<void> _blessCurrent() async {
+    final item = _blessing;
+    if (item == null || _blessingBusy) return;
+    setState(() => _blessingBusy = true);
+    try {
+      final res = await BlessingService.instance.blessToday(item.project.id);
+      if (mounted) {
+        _showToast(res.isDone ? '祈福圆满，随喜功德' : '今日祈福，功德已记');
+      }
+    } catch (e) {
+      if (mounted) _showToast(e.toString());
+    } finally {
+      if (mounted) setState(() => _blessingBusy = false);
+      _loadBlessing();
+    }
+  }
+
+  /// 祈福共修区块：主页最下方，展示当前祈福与进入详情页的入口。
+  Widget _buildBlessingBlock() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _cardSurface,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 14, 0),
+            child: Row(
+              children: [
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                      color: _gold.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Icon(Icons.volunteer_activism_outlined,
+                      size: 17, color: _gold),
+                ),
+                const SizedBox(width: 10),
+                Text('祈福共修',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+                const Spacer(),
+                InkWell(
+                  onTap: _openBlessingPage,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('全部',
+                            style:
+                                TextStyle(fontSize: 13, color: _textSec)),
+                        Icon(Icons.chevron_right, size: 16, color: _textSec),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
+            child: _buildBlessingBody(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBlessingBody() {
+    if (_blessingLoading && _blessing == null) {
+      return Row(
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _gold),
+          ),
+          const SizedBox(width: 10),
+          Text('加载中…', style: TextStyle(fontSize: 13, color: _textHint)),
+        ],
+      );
+    }
+    final item = _blessing;
+    if (item == null) {
+      return Row(
+        children: [
+          Expanded(
+            child: Text('尚无祈福，发起一个，把功课回向于此。',
+                style: TextStyle(fontSize: 13, color: _textSec)),
+          ),
+          const SizedBox(width: 10),
+          _blessingAction('去发起', onTap: _openBlessingPage),
+        ],
+      );
+    }
+    final proj = item.project;
+    final prog = item.progress;
+    final done = prog?.isDone == true;
+    final blessedToday = prog?.doneToday() ?? false;
+    final mineJoined = _blessingMine && (prog?.joined == true);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(proj.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: _text)),
+            ),
+            if (done) ...[
+              const SizedBox(width: 6),
+              _blessingTag('已圆满'),
+            ],
+          ],
+        ),
+        if (proj.target.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text('回向：${proj.target}',
+              style: TextStyle(fontSize: 12.5, color: _textSec)),
+        ],
+        const SizedBox(height: 10),
+        if (_blessingMine)
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: proj.totalDays <= 0
+                        ? 0
+                        : ((prog?.doneCount ?? 0) / proj.totalDays)
+                            .clamp(0.0, 1.0),
+                    minHeight: 5,
+                    backgroundColor: _border,
+                    valueColor: AlwaysStoppedAnimation<Color>(_gold),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text('${prog?.doneCount ?? 0}/${proj.totalDays}',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _gold)),
+            ],
+          )
+        else
+          Row(
+            children: [
+              Icon(Icons.groups_outlined, size: 15, color: _textSec),
+              const SizedBox(width: 5),
+              Text('已有 ${proj.joinerCount} 人共修',
+                  style: TextStyle(fontSize: 12.5, color: _textSec)),
+            ],
+          ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Text(
+                _blessingMine
+                    ? '第 ${prog?.doneCount ?? 0}/${proj.totalDays} 天'
+                    : '共修祈福',
+                style: TextStyle(fontSize: 12.5, color: _textSec)),
+            const Spacer(),
+            if (mineJoined && !done)
+              _blessingAction(
+                blessedToday ? '今日已祈福' : '今日祈福',
+                enabled: !blessedToday && !_blessingBusy,
+                filled: !blessedToday,
+                onTap: _blessCurrent,
+              )
+            else
+              _blessingAction('查看',
+                  onTap: () => _openBlessingDetail(proj.id)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _blessingAction(
+    String label, {
+    required VoidCallback onTap,
+    bool enabled = true,
+    bool filled = true,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.5,
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: filled ? _gold : Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _gold),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: filled ? Colors.white : _gold)),
+        ),
+      ),
+    );
+  }
+
+  Widget _blessingTag(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: _gold.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w600, color: _gold)),
+    );
   }
 
   /// 功课回向区块：贴在打卡卡片底部（与卡片同一背景，不另起色块），

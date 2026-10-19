@@ -515,6 +515,10 @@ exports.main = async (event, context) => {
   // readingParagraphNotes 只能按 sutraKey 查单部经，做不了「本用户全部经
   // 按时间排」的全局视图，故时间线需要独立集合承载。
   const userRecords = db.collection("userRecords");
+  // 祈福共修：blessingProjects 一条 = 一个祈福事由（可公开共修）；
+  // blessingParticipants 一条 = 某人对某祈福的参与与打卡进度（一人一项一条）。
+  const blessingProjects = db.collection("blessingProjects");
+  const blessingParticipants = db.collection("blessingParticipants");
 
   // setUserData 的两个体积阈值。
   // 单 key 上限：宽松到足以放过 notes 这类正常的大 key（迁移期它还在
@@ -580,6 +584,71 @@ exports.main = async (event, context) => {
     } catch (e) {
       // 已存在或其它错误均忽略。
     }
+  }
+
+  // 确保祈福共修的两个集合存在。
+  async function ensureBlessings() {
+    try {
+      await db.createCollection("blessingProjects");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+    try {
+      await db.createCollection("blessingParticipants");
+    } catch (e) {
+      // 已存在或其它错误均忽略。
+    }
+  }
+
+  // 服务器所在时区（东八区）的今天，格式 yyyy-MM-dd。祈福打卡默认用它，
+  // 客户端也可传本地日期覆盖，保证「今天」在同一用户视角下一致。
+  function blessingTodayStr() {
+    return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+
+  // 归一化祈福方式列表：[{category,name,count,unit}]，最多 20 条。
+  function normalizeBlessingMethods(arr) {
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const m of arr.slice(0, 20)) {
+      if (!m || typeof m !== "object") continue;
+      const category = String(m.category || "").trim().slice(0, 20);
+      const name = String(m.name || "").trim().slice(0, 50);
+      if (!category && !name) continue;
+      out.push({
+        category,
+        name,
+        count: String(m.count || "").slice(0, 20),
+        unit: String(m.unit || "").slice(0, 10),
+      });
+    }
+    return out;
+  }
+
+  // 读某个用户对某祈福的参与文档（无则 null）。文档 id 用 stableDocId 保证唯一。
+  async function findBlessingJoin(uid, projectId) {
+    const id = stableDocId(uid, "blessingJoin", projectId);
+    const { data } = await blessingParticipants.doc(id).get();
+    return data && data[0] ? data[0] : null;
+  }
+
+  // 对外返回的祈福项目：不暴露 ownerUserId（匿名共修，只给人数不给身份）。
+  function publicBlessing(p) {
+    return {
+      _id: p._id,
+      title: p.title || "",
+      target: p.target || "",
+      templateKey: p.templateKey || "",
+      dedication: p.dedication || "",
+      totalDays: p.totalDays || 0,
+      startDate: p.startDate || "",
+      methods: Array.isArray(p.methods) ? p.methods : [],
+      visibility: p.visibility || "public",
+      joinerCount: p.joinerCount || 0,
+      status: p.status || "normal",
+      createdAt: p.createdAt || 0,
+      updatedAt: p.updatedAt || 0,
+    };
   }
 
   // 稳定的文档 id：客户端 recId / noteId 形态多样（含「|」「$经名」与中文），
@@ -4776,6 +4845,334 @@ exports.main = async (event, context) => {
         } catch (e) {
           console.error("[api] deleteParagraphNote error:", e && e.message ? e.message : e);
           return fail(e && e.message ? e.message : "删除段落笔记失败");
+        }
+      }
+
+      // ==================== 祈福共修 ====================
+
+      case "createBlessing": {
+        if (!uid) return fail("unauthorized");
+        try {
+          await ensureBlessings();
+          const title = String(event.title || "").trim().slice(0, 100);
+          if (!title) return fail("empty_title");
+          const totalDays = Math.min(Math.max(Number(event.totalDays) || 7, 1), 365);
+          const methods = normalizeBlessingMethods(event.methods);
+          const visibility = event.visibility === "private" ? "private" : "public";
+          const startDate = /^\d{4}-\d{2}-\d{2}$/.test(String(event.startDate || ""))
+            ? String(event.startDate)
+            : blessingTodayStr();
+          const res = await blessingProjects.add({
+            title,
+            target: String(event.target || "").trim().slice(0, 100),
+            templateKey: String(event.templateKey || "").trim().slice(0, 50),
+            dedication: String(event.dedication || "").slice(0, 2000),
+            totalDays,
+            startDate,
+            methods,
+            visibility,
+            ownerUserId: uid,
+            joinerCount: 1,
+            status: "normal",
+            createdAt: now(),
+            updatedAt: now(),
+          });
+          const pid = res.id;
+          // 创建者自动参与并从 0 天开始计数。
+          await blessingParticipants
+            .doc(stableDocId(uid, "blessingJoin", pid))
+            .set({
+              projectId: pid,
+              userId: uid,
+              joinedAt: now(),
+              lastDate: "",
+              doneCount: 0,
+              doneDates: [],
+              status: "active",
+              completedAt: 0,
+            });
+          return ok({ id: pid });
+        } catch (e) {
+          console.error("[api] createBlessing error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "发起祈福失败");
+        }
+      }
+
+      case "getBlessings": {
+        const scope = event.scope === "mine" ? "mine" : "all";
+        const page = Math.max(1, Number(event.page) || 1);
+        const pageSize = Math.min(Number(event.pageSize) || 20, 50);
+        try {
+          await ensureBlessings();
+          if (scope === "mine") {
+            if (!uid) return ok({ items: [], hasMore: false });
+            const jr = await blessingParticipants
+              .where({ userId: uid })
+              .orderBy("joinedAt", "desc")
+              .skip((page - 1) * pageSize)
+              .limit(pageSize)
+              .get();
+            const joins = jr.data || [];
+            const ids = joins.map((j) => j.projectId);
+            const pj = ids.length
+              ? await blessingProjects.where({ _id: _.in(ids) }).get()
+              : { data: [] };
+            const byId = {};
+            for (const p of pj.data || []) byId[p._id] = p;
+            const items = [];
+            for (const j of joins) {
+              const p = byId[j.projectId];
+              if (!p) continue;
+              items.push(
+                Object.assign({}, publicBlessing(p), {
+                  isOwner: p.ownerUserId === uid,
+                  progress: {
+                    joined: true,
+                    doneCount: j.doneCount || 0,
+                    status: j.status || "active",
+                    joinedAt: j.joinedAt || 0,
+                    lastDate: j.lastDate || "",
+                    doneDates: Array.isArray(j.doneDates) ? j.doneDates : [],
+                  },
+                })
+              );
+            }
+            return ok({ items, hasMore: joins.length >= pageSize });
+          }
+          // scope=all：公开且在进行的祈福，按发起时间倒序。
+          const base = blessingProjects.where({ visibility: "public", status: "normal" });
+          const res = await base
+            .orderBy("createdAt", "desc")
+            .skip((page - 1) * pageSize)
+            .limit(pageSize)
+            .get();
+          const list = res.data || [];
+          // 一次性取出我对本页各祈福的参与状态，避免逐条 get（N+1）。
+          const joinMap = {};
+          if (uid && list.length) {
+            const jr = await blessingParticipants
+              .where({ userId: uid, projectId: _.in(list.map((p) => p._id)) })
+              .get();
+            for (const j of jr.data || []) joinMap[j.projectId] = j;
+          }
+          const items = [];
+          for (const p of list) {
+            const join = joinMap[p._id] || null;
+            items.push(
+              Object.assign({}, publicBlessing(p), {
+                isOwner: !!uid && p.ownerUserId === uid,
+                progress: join
+                  ? {
+                      joined: true,
+                      doneCount: join.doneCount || 0,
+                      status: join.status || "active",
+                      joinedAt: join.joinedAt || 0,
+                      lastDate: join.lastDate || "",
+                      doneDates: Array.isArray(join.doneDates) ? join.doneDates : [],
+                    }
+                  : null,
+              })
+            );
+          }
+          const { total } = await base.count();
+          return ok({
+            items,
+            total,
+            hasMore: (page - 1) * pageSize + list.length < total,
+          });
+        } catch (e) {
+          console.error("[api] getBlessings error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "加载祈福失败");
+        }
+      }
+
+      case "getBlessingById": {
+        const id = String(event.id || "");
+        if (!id) return fail("bad_request");
+        try {
+          await ensureBlessings();
+          const { data } = await blessingProjects.doc(id).get();
+          const p = data && data[0];
+          if (!p) return fail("not_found");
+          if (p.visibility === "private" && p.ownerUserId !== uid) return fail("forbidden");
+          const join = uid ? await findBlessingJoin(uid, id) : null;
+          return ok({
+            project: publicBlessing(p),
+            isOwner: !!uid && p.ownerUserId === uid,
+            joinerCount: p.joinerCount || 0,
+            progress: join
+              ? {
+                  joined: true,
+                  doneCount: join.doneCount || 0,
+                  status: join.status || "active",
+                  joinedAt: join.joinedAt || 0,
+                  doneDates: Array.isArray(join.doneDates) ? join.doneDates : [],
+                }
+              : null,
+          });
+        } catch (e) {
+          console.error("[api] getBlessingById error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "加载祈福失败");
+        }
+      }
+
+      case "joinBlessing": {
+        if (!uid) return fail("unauthorized");
+        const id = String(event.id || "");
+        if (!id) return fail("bad_request");
+        try {
+          await ensureBlessings();
+          const { data } = await blessingProjects.doc(id).get();
+          const p = data && data[0];
+          if (!p) return fail("not_found");
+          if (p.visibility === "private" && p.ownerUserId !== uid) return fail("forbidden");
+          const existing = await findBlessingJoin(uid, id);
+          if (existing) return ok({ joined: true, joinerCount: p.joinerCount || 0 });
+          await blessingParticipants
+            .doc(stableDocId(uid, "blessingJoin", id))
+            .set({
+              projectId: id,
+              userId: uid,
+              joinedAt: now(),
+              lastDate: "",
+              doneCount: 0,
+              doneDates: [],
+              status: "active",
+              completedAt: 0,
+            });
+          const next = (p.joinerCount || 0) + 1;
+          await blessingProjects.doc(id).update({ joinerCount: next, updatedAt: now() });
+          return ok({ joined: true, joinerCount: next });
+        } catch (e) {
+          console.error("[api] joinBlessing error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "参与祈福失败");
+        }
+      }
+
+      case "leaveBlessing": {
+        if (!uid) return fail("unauthorized");
+        const id = String(event.id || "");
+        if (!id) return fail("bad_request");
+        try {
+          await ensureBlessings();
+          const existing = await findBlessingJoin(uid, id);
+          if (!existing) return ok({ joined: false });
+          await blessingParticipants.doc(existing._id).remove();
+          const { data } = await blessingProjects.doc(id).get();
+          const p = data && data[0];
+          const next = Math.max(0, ((p && p.joinerCount) || 1) - 1);
+          if (p) await blessingProjects.doc(id).update({ joinerCount: next, updatedAt: now() });
+          return ok({ joined: false, joinerCount: next });
+        } catch (e) {
+          console.error("[api] leaveBlessing error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "退出祈福失败");
+        }
+      }
+
+      case "blessToday": {
+        if (!uid) return fail("unauthorized");
+        const id = String(event.id || "");
+        if (!id) return fail("bad_request");
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(event.date || ""))
+          ? String(event.date)
+          : blessingTodayStr();
+        try {
+          await ensureBlessings();
+          const { data } = await blessingProjects.doc(id).get();
+          const p = data && data[0];
+          if (!p) return fail("not_found");
+          const join = await findBlessingJoin(uid, id);
+          if (!join) return fail("not_joined");
+          const dates = Array.isArray(join.doneDates) ? join.doneDates.slice() : [];
+          if (dates.indexOf(date) >= 0) {
+            return ok({
+              already: true,
+              doneCount: join.doneCount || dates.length,
+              status: join.status || "active",
+            });
+          }
+          dates.push(date);
+          const doneCount = dates.length;
+          const totalDays = Number(p.totalDays) || 0;
+          const finished = totalDays > 0 && doneCount >= totalDays;
+          await blessingParticipants.doc(join._id).update({
+            doneDates: dates,
+            doneCount,
+            lastDate: date,
+            status: finished ? "done" : "active",
+            completedAt: finished ? now() : 0,
+          });
+          return ok({
+            already: false,
+            doneCount,
+            status: finished ? "done" : "active",
+            finished,
+          });
+        } catch (e) {
+          console.error("[api] blessToday error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "祈福打卡失败");
+        }
+      }
+
+      case "updateBlessing": {
+        if (!uid) return fail("unauthorized");
+        const id = String(event.id || "");
+        if (!id) return fail("bad_request");
+        try {
+          await ensureBlessings();
+          const { data } = await blessingProjects.doc(id).get();
+          const p = data && data[0];
+          if (!p) return fail("not_found");
+          if (p.ownerUserId !== uid) return fail("forbidden");
+          const patch = { updatedAt: now() };
+          if (event.title != null) {
+            const t = String(event.title).trim().slice(0, 100);
+            if (!t) return fail("empty_title");
+            patch.title = t;
+          }
+          if (event.target != null) patch.target = String(event.target).trim().slice(0, 100);
+          if (event.templateKey != null) patch.templateKey = String(event.templateKey).trim().slice(0, 50);
+          if (event.dedication != null) patch.dedication = String(event.dedication).slice(0, 2000);
+          if (event.totalDays != null) {
+            patch.totalDays = Math.min(
+              Math.max(Number(event.totalDays) || p.totalDays || 7, 1),
+              365
+            );
+          }
+          if (event.startDate != null && /^\d{4}-\d{2}-\d{2}$/.test(String(event.startDate))) {
+            patch.startDate = String(event.startDate);
+          }
+          if (event.methods != null) patch.methods = normalizeBlessingMethods(event.methods);
+          if (event.visibility != null) {
+            patch.visibility = event.visibility === "private" ? "private" : "public";
+          }
+          await blessingProjects.doc(id).update(patch);
+          return ok({ updated: true });
+        } catch (e) {
+          console.error("[api] updateBlessing error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "更新祈福失败");
+        }
+      }
+
+      case "deleteBlessing": {
+        if (!uid) return fail("unauthorized");
+        const id = String(event.id || "");
+        if (!id) return fail("bad_request");
+        try {
+          await ensureBlessings();
+          const { data } = await blessingProjects.doc(id).get();
+          const p = data && data[0];
+          if (!p) return ok({ deleted: true });
+          if (p.ownerUserId !== uid) return fail("forbidden");
+          await blessingProjects.doc(id).remove();
+          const jr = await blessingParticipants.where({ projectId: id }).limit(1000).get();
+          for (const j of jr.data || []) {
+            await blessingParticipants.doc(j._id).remove();
+          }
+          return ok({ deleted: true });
+        } catch (e) {
+          console.error("[api] deleteBlessing error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "删除祈福失败");
         }
       }
 

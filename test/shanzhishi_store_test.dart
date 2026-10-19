@@ -388,5 +388,24 @@ void main() {
       expect(link, isNotNull);
       expect(link!.filePath, isNotEmpty);
     });
+
+    test('带卷标的经名也能解析（以前精确匹配失败、兜底又会取错译本）', () async {
+      await NoteSutraCatalog.load();
+      final l1 = ShanZhiShiStore.resolveSutra('地藏菩萨本愿经卷一');
+      expect(l1, isNotNull);
+      expect(l1!.filePath, contains('T13n0412_001'));
+      final l2 = ShanZhiShiStore.resolveSutra('地藏菩萨本愿经卷二');
+      expect(l2!.filePath, contains('T13n0412_002'));
+    });
+
+    test('同名异本命中多个时返回 null，绝不猜错译本', () async {
+      await NoteSutraCatalog.load();
+      expect(ShanZhiShiStore.resolveSutra('金刚'), isNull);
+    });
+
+    test('完全查不到的经名返回 null', () async {
+      await NoteSutraCatalog.load();
+      expect(ShanZhiShiStore.resolveSutra('查无此经之名'), isNull);
+    });
   });
 }

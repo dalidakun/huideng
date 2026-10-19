@@ -8,7 +8,6 @@ import 'app_palette.dart';
 import 'note_sutra_links.dart';
 import 'reading_page.dart';
 import 'shanzhishi_edit_sheet.dart';
-import 'shanzhishi_search_page.dart';
 import 'shanzhishi_sphere.dart';
 import 'shanzhishi_store.dart';
 import 'ui_sound.dart';
@@ -17,11 +16,12 @@ import 'ui_sound.dart';
 ///
 /// 整页是一颗立体的名号星球（竖立橄榄形椭球、正背面全点、连续字号）；
 /// 点名号后从底部拉出与经藏页「全部经典」同款的上拉面板（占屏高 3/4），
-/// 显示该名号与关联经文，点经文展开关联段落；右下角「编辑」可改名号、
-/// 关联经文与引用段落。
+/// 显示该名号与关联经文，点经文进入阅读页；右下角「编辑」可改名号、
+/// 关联经文与人天利益。
 ///
 /// 右下角是一颗与阅读页右下角同款的悬浮球：点开后沿弧线弹出「添加 / 搜索 /
-/// 切换」三个子按钮（原右上角的添加、搜索已移入其中）。
+/// 切换」三个子按钮；「搜索」在本页悬浮出搜索框与结果，点结果只把球转到
+/// 该名号，不自动展开底部面板。
 ///
 /// 名号由用户自己录入（悬浮球的「添加」），本地持久化，越聚越多。
 class ShanZhiShiPage extends StatefulWidget {
@@ -44,6 +44,14 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 当前选中的名号位次；null = 底部面板不显示（点名号后才出现）。
   int? _selected;
+
+  /// 本 session 内通过「编辑 → 保存」动过的名号（createdAt）：
+  /// 「恢复」按钮只对这些出现，其余时候一律不显示。
+  final Set<int> _editedInSession = {};
+
+  // ── 搜索（悬浮在本页，不跳新页面） ──
+  bool _searchOpen = false;
+  final TextEditingController _searchCtrl = TextEditingController();
 
   // ── 底部上拉面板（与经藏页「全部经典」同款） ──
   static const double _shelfHeaderH = 50;
@@ -85,6 +93,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     _store.removeListener(_onStoreChanged);
     widget.activeTab?.removeListener(_onTabChanged);
     _shelfController.dispose();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -106,26 +115,53 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   void _onTabChanged() {
     if (!mounted) return;
-    // 切走时顺手收起悬浮菜单，回来看到的是干净的星图。
+    // 切走时顺手收起悬浮菜单与搜索浮层，回来看到的是干净的星图。
     if (!_isActive && _showFabMenu) _showFabMenu = false;
+    if (!_isActive && _searchOpen) _searchOpen = false;
     setState(() {});
   }
 
   // ─────────────── 动作 ───────────────
 
-  Future<void> _openSearch() async {
+  /// 打开搜索浮层：搜索框与结果都悬浮在本页上方，不跳转新页面。
+  void _openSearch() {
     unawaited(UiSound.instance.playClick());
-    final idx = await Navigator.of(context).push<int>(
-      MaterialPageRoute(
-        builder: (_) => ShanZhiShiSearchPage(entries: _store.entries),
-      ),
-    );
-    if (idx == null || !mounted) return;
     setState(() {
-      _selected = idx;
+      _searchOpen = true;
+      _searchCtrl.clear();
     });
+  }
+
+  void _closeSearch() {
+    if (!_searchOpen) return;
+    _searchCtrl.clear();
+    setState(() => _searchOpen = false);
+  }
+
+  /// 前缀匹配优先、包含匹配其次（与经藏检索口径一致）。
+  List<int> get _searchHits {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    final prefix = <int>[];
+    final contains = <int>[];
+    for (var i = 0; i < _store.length; i++) {
+      final t = _store[i]!.name.toLowerCase();
+      if (t.startsWith(q)) {
+        prefix.add(i);
+      } else if (t.contains(q)) {
+        contains.add(i);
+      }
+    }
+    return [...prefix, ...contains];
+  }
+
+  /// 点搜索结果：只把球转到该名号（球心显示它），
+  /// 不自动展开底部面板——面板由用户自己点球面名号时才出现。
+  void _onSearchHit(int idx) {
+    unawaited(UiSound.instance.playClick());
+    _closeSearch();
+    _rememberLastTapped(idx);
     _sphereCtrl.animateToIndex(idx);
-    _openShelf();
   }
 
   Future<void> _openAdd() async {
@@ -135,6 +171,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     setState(() {
       _selected = saved;
     });
+    _rememberLastTapped(saved);
     _openShelf();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _sphereCtrl.animateToIndex(saved);
@@ -146,10 +183,17 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     setState(() {
       _selected = idx;
     });
+    _rememberLastTapped(idx);
     _openShelf();
   }
 
-  /// 面板右下角「编辑」：改名号、增删关联经文、维护经文里的引用段落。
+  /// 记住用户刚点的名号：下次进本页球心默认对准它（不再固定正中间）。
+  void _rememberLastTapped(int idx) {
+    final name = _store[idx]?.name;
+    if (name != null) unawaited(_store.rememberLastTapped(name));
+  }
+
+  /// 面板右下角「编辑」：改名号、增删关联经文、维护人天利益。
   Future<void> _editEntry(ShanyishiEntry entry) async {
     final index = _selected;
     if (index == null) return;
@@ -161,9 +205,13 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
     if (!mounted) return;
     if (saved == null) return;
+    // 编辑并保存过：这一位才有「恢复」（取消保存不出现）。
+    final createdAt = _store[saved]?.createdAt;
+    if (createdAt != null) _editedInSession.add(createdAt);
     setState(() {
       _selected = saved;
     });
+    _rememberLastTapped(saved);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _sphereCtrl.animateToIndex(saved);
     });
@@ -209,11 +257,12 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 面板右下角「恢复」：把这一位退回最近一次编辑前的版本（一步撤销）。
   ///
-  /// 名号、关联经文、引用段落一起还原，防止误删；没有可恢复版本时按钮置灰。
+  /// 名号、关联经文、人天利益一起还原，防止误删；只在编辑保存过之后出现。
   Future<void> _restoreEntry() async {
     final index = _selected;
     if (index == null) return;
     unawaited(UiSound.instance.playClick());
+    final createdAt = _store[index]?.createdAt;
     final ok = await _store.restoreLast(index);
     if (!mounted) return;
     if (!ok) {
@@ -225,6 +274,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       );
       return;
     }
+    // 快照已消费：撤掉「可恢复」标记，按钮随之消失。
+    if (createdAt != null) _editedInSession.remove(createdAt);
+    setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('已恢复到编辑前的版本', style: TextStyle(fontSize: 13)),
@@ -268,9 +320,13 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     });
   }
 
-  /// 根路由侧滑返回：悬浮球展开时先收起它、面板展开时先收起面板（回到星图）。
+  /// 根路由侧滑返回：搜索浮层 → 悬浮球展开 → 面板展开，依次先收起（回到星图）。
   /// 返回是否消费了本次返回，避免系统直接最小化应用。
   bool collapseShelfIfOpen() {
+    if (_searchOpen) {
+      _closeSearch();
+      return true;
+    }
     if (_showFabMenu) {
       _closeFabMenu();
       return true;
@@ -602,13 +658,15 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
         final mq = MediaQuery.of(context);
         return Stack(
           children: [
-            // 球体铺满整页（顶部让出两倍状态栏高度，佛号离系统栏更远）。
+            // 球体铺满整页：顶部只让出状态栏本身，球的上边界到状态栏下沿，
+            // 与底部（球顶点探进底部菜单栏之下）留出一致的观感。
             Positioned.fill(
               child: Padding(
-                padding: EdgeInsets.only(top: mq.padding.top * 2),
+                padding: EdgeInsets.only(top: mq.padding.top),
                 child: ShanZhiShiSphere(
                   names: names,
                   controller: _sphereCtrl,
+                  initialIndex: _store.lastTappedIndex,
                   spinEnabled: _isActive,
                   onNameTapped: _onNameTapped,
                   onSettled: (_) => unawaited(UiSound.instance.playClick()),
@@ -630,6 +688,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             // 右下角悬浮球（与阅读页右下角那颗同款）：底部面板展开时让位，
             // 避免压住面板右下角的「编辑」。
             if (_selected == null && !_shelfExpanded) _buildFabLayer(mq),
+            // 搜索浮层：压在最上层，搜索框与结果都悬浮在本页。
+            if (_searchOpen) _buildSearchOverlay(p, mq),
           ],
         );
       }),
@@ -799,8 +859,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   }
 
   /// 面板内容：关联经文（竖向一行一部，右侧箭头，点进阅读页）
-  /// + 引用段落（一段一块，每段顶部带「引用段落」标志）。
-  /// 右下角固定「恢复 / 编辑」两个按钮。
+  /// + 人天利益（一段一块，每段顶部带「人天利益」标志）。
+  /// 右下角固定「编辑」按钮；「恢复」只在编辑保存过且还有快照时出现。
   Widget _buildShelfContent(PaletteData p, ShanyishiEntry entry) {
     return Stack(
       children: [
@@ -827,17 +887,17 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
               const SizedBox(height: 6),
               Container(height: 1, color: p.divider),
               const SizedBox(height: 12),
-              // 引用段落：段与段之间不加分割线。
+              // 人天利益：段与段之间不加分割线。
               for (final t in entry.paragraphs) ...[
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: _labelChip(p, '引用段落'),
+                  child: _labelChip(p, '人天利益'),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   t,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     color: p.text,
                     height: 1.8,
                   ),
@@ -853,16 +913,19 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 恢复：退回编辑前的版本（没有快照时点了会提示）。
-              _PanelActionButton(
-                key: const ValueKey('shanzhishi_restore'),
-                palette: p,
-                icon: Icons.restore,
-                label: '恢复',
-                primary: false,
-                onTap: _restoreEntry,
-              ),
-              const SizedBox(width: 8),
+              // 恢复：仅在本 session 内「编辑 → 保存」过、且还有快照时出现。
+              if (_store.canRestore(entry) &&
+                  _editedInSession.contains(entry.createdAt)) ...[
+                _PanelActionButton(
+                  key: const ValueKey('shanzhishi_restore'),
+                  palette: p,
+                  icon: Icons.restore,
+                  label: '恢复',
+                  primary: false,
+                  onTap: _restoreEntry,
+                ),
+                const SizedBox(width: 8),
+              ],
               _PanelActionButton(
                 palette: p,
                 icon: Icons.edit_outlined,
@@ -892,7 +955,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 13.5,
+                  fontSize: 14,
                   color: p.text,
                   height: 1.5,
                 ),

@@ -258,10 +258,10 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
         content: Text(
           editing
               ? '已存在「$existing」。\n\n'
-                  '合并：把这一位的经文与引用段落并进「$existing」，并删掉当前这一位。\n'
+                  '合并：把这一位的经文与人天利益并进「$existing」，并删掉当前这一位。\n'
                   '保留名号：仍然用这个名号，会留下两条相近的记录。'
               : '已存在「$existing」。\n\n'
-                  '合并：把这次填写的经文与引用段落并到「$existing」下面，'
+                  '合并：把这次填写的经文与人天利益并到「$existing」下面，'
                   '名号沿用已有的那一位。\n'
                   '添加新的：另起一位名号。',
           style: TextStyle(fontSize: 13.5, color: p.textSec, height: 1.7),
@@ -490,10 +490,10 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                   const SizedBox(height: 20),
                   Container(height: 0.8, color: p.borderSoft),
                   const SizedBox(height: 14),
-                  _sectionLabel(p, '引用段落'),
+                  _sectionLabel(p, '人天利益'),
                   const SizedBox(height: 3),
                   Text(
-                    '输入和佛菩萨关联的经文段落',
+                    '输入佛菩萨人天利益',
                     style: TextStyle(fontSize: 11, color: p.textHint),
                   ),
                   const SizedBox(height: 2),

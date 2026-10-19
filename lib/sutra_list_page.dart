@@ -307,6 +307,66 @@ String? resolveHotSutraName(String name, Set<String> catalogNames) =>
   return (base, path);
 }
 
+/// 全量自愈：归一 SharedPreferences 中所有「经名 + 正文路径」错配记录。
+///
+/// 与逐卡读取时的自愈（[reconcileSutraTitleAndPath]）配合：读取时修的是
+/// 用户当场点到的那条，这里在启动时一次性把 last_read / current / locked /
+/// recent 四处记录全部修好，避免未被点到的卡片仍显示错的经名、打开却是
+/// 另一部经的正文。目录未加载时直接放弃（[NoteSutraCatalog.load] 自身带缓存）。
+Future<void> reconcileAllSutraRecords(SharedPreferences prefs) async {
+  try {
+    await NoteSutraCatalog.load();
+  } catch (_) {
+    return;
+  }
+
+  Future<void> fixOne(String titleKey, String pathKey) async {
+    final t = prefs.getString(titleKey);
+    if (t == null || t.isEmpty) return;
+    final fp = prefs.getString(pathKey);
+    final rec = reconcileSutraTitleAndPath(t, fp);
+    if (rec.title == t && rec.filePath == (fp ?? '')) return;
+    await prefs.setString(titleKey, rec.title);
+    if (rec.filePath.isEmpty) {
+      await prefs.remove(pathKey);
+    } else {
+      await prefs.setString(pathKey, rec.filePath);
+    }
+  }
+
+  await fixOne('last_read_title', 'last_read_filePath');
+  await fixOne('current_sutra_title', 'current_sutra_file_path');
+  await fixOne('locked_sutra_title', 'locked_sutra_file_path');
+
+  // 最近阅读列表：每项形如「经名|||路径[|||时间…]」，只修前两段。
+  final recent = prefs.getStringList('recent_sutras');
+  if (recent != null && recent.isNotEmpty) {
+    var changed = false;
+    final fixed = recent.map((e) {
+      final i = e.indexOf('|||');
+      if (i <= 0) return e;
+      final rest = e.substring(i + 3);
+      final j = rest.indexOf('|||');
+      final path = j < 0 ? rest : rest.substring(0, j);
+      final tail = j < 0 ? '' : rest.substring(j);
+      final title = e.substring(0, i);
+      final rec = reconcileSutraTitleAndPath(
+          title, path.isEmpty ? null : path);
+      if (rec.title == title && rec.filePath == path) return e;
+      changed = true;
+      final newPath = rec.filePath;
+      if (newPath.isEmpty) {
+        // 路径段为空：保留空路径分隔，避免把后面的时间段顶到路径位。
+        return tail.isEmpty ? rec.title : '${rec.title}|||$tail';
+      }
+      return '${rec.title}|||$newPath$tail';
+    }).toList();
+    if (changed) {
+      await prefs.setStringList('recent_sutras', fixed);
+    }
+  }
+}
+
 /// 归一读经记录里「经名 + 正文路径」的错配（卡片显示 A、点开是 B 的根因）。
 ///
 /// 读经页曾出现「只写新经名、保留旧路径」（解析不到正文路径时不动
@@ -1677,8 +1737,10 @@ class SutraListPageState extends State<SutraListPage>
           final repaired = repairLegacySutraList(loaded);
           if (!identical(repaired, loaded)) {
             await _writeSutraListFile(repaired);
-            await _repairLegacyTitlePrefs();
           }
+          // 每次启动都跑：同步可能把不一致的经名/路径写回 prefs，只靠
+          // 「读到才自愈」要等逐卡点开，这里启动时一次性修好全部记录。
+          await _repairLegacyTitlePrefs();
           _applySutraList(repaired);
           await _enrichCharCounts();
           await _maybeRestoreDefaultsAfterApkUpdate();
@@ -1729,6 +1791,9 @@ class SutraListPageState extends State<SutraListPage>
           await prefs.setString(key, repairLegacySutraTitle(v));
         }
       }
+      // 历史错配自愈：经名与路径指向两部不同的经时（卡片显示 A、点开是 B），
+      // 启动时一次性归一并回写，根治未被点到的卡片仍错配的问题。
+      await reconcileAllSutraRecords(prefs);
       final recent = prefs.getStringList('recent_sutras');
       if (recent != null && recent.any((e) => e.contains('第卷'))) {
         await prefs.setStringList(
