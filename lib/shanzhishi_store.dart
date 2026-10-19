@@ -6,21 +6,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'note_sutra_links.dart';
 
-/// 善知识名号：用户自行录入到球面上的一位佛菩萨，附带它出现过的经文（存展示名）。
+/// 善知识名号：用户自行录入到球面上的一位佛菩萨，附带它的关联经文（存展示名）
+/// 与用户手写的引用段落。
 class ShanyishiEntry {
   final String name;
   final List<String> sutras;
+
+  /// 引用段落：与这位佛菩萨关联的经文段落（用户手写，一段一条）。
+  /// 为空时展示层退回「按名号在各部经文里自动识别」。
+  final List<String> paragraphs;
+
+  /// 旧版按经书存的引用段落（经名 -> 段落）。新版统一收进 [paragraphs]，
+  /// 读旧档时自动拍平迁移，展示层仍认这个字段兜底。
+  final Map<String, List<String>> quotes;
+
   final int createdAt;
 
   const ShanyishiEntry({
     required this.name,
     required this.sutras,
+    this.paragraphs = const [],
+    this.quotes = const {},
     required this.createdAt,
   });
 
   Map<String, dynamic> toJson() => {
         'name': name,
         'sutras': sutras,
+        'paragraphs': paragraphs,
+        'quotes': quotes,
         'createdAt': createdAt,
       };
 
@@ -35,20 +49,65 @@ class ShanyishiEntry {
         if (t.isNotEmpty && !sutras.contains(t)) sutras.add(t);
       }
     }
+    final quotes = <String, List<String>>{};
+    final rawQuotes = e['quotes'];
+    if (rawQuotes is Map) {
+      rawQuotes.forEach((key, value) {
+        final sutra = key.toString().trim();
+        if (sutra.isEmpty || value is! List) return;
+        final texts = <String>[];
+        for (final t in value) {
+          final s = t.toString().trim();
+          if (s.isNotEmpty && !texts.contains(s)) texts.add(s);
+        }
+        if (texts.isNotEmpty) quotes[sutra] = texts;
+      });
+    }
+    final paragraphs = <String>[];
+    final rawParagraphs = e['paragraphs'];
+    if (rawParagraphs is List) {
+      for (final t in rawParagraphs) {
+        final s = t.toString().trim();
+        if (s.isNotEmpty && !paragraphs.contains(s)) paragraphs.add(s);
+      }
+    }
+    // 旧数据迁移：以前段落是按经书存的，读的时候拍平进段落池，避免丢内容。
+    if (paragraphs.isEmpty && quotes.isNotEmpty) {
+      for (final sutra in sutras) {
+        for (final t in quotes[sutra] ?? const <String>[]) {
+          if (!paragraphs.contains(t)) paragraphs.add(t);
+        }
+      }
+      for (final list in quotes.values) {
+        for (final t in list) {
+          if (!paragraphs.contains(t)) paragraphs.add(t);
+        }
+      }
+      quotes.clear();
+    }
     final createdAt = e['createdAt'];
     return ShanyishiEntry(
       name: name,
       sutras: sutras,
+      paragraphs: paragraphs,
+      quotes: quotes,
       createdAt: createdAt is int
           ? createdAt
           : int.tryParse('$createdAt') ?? 0,
     );
   }
 
-  ShanyishiEntry copyWith({String? name, List<String>? sutras}) =>
+  ShanyishiEntry copyWith({
+    String? name,
+    List<String>? sutras,
+    List<String>? paragraphs,
+    Map<String, List<String>>? quotes,
+  }) =>
       ShanyishiEntry(
         name: name ?? this.name,
         sutras: sutras ?? this.sutras,
+        paragraphs: paragraphs ?? this.paragraphs,
+        quotes: quotes ?? this.quotes,
         createdAt: createdAt,
       );
 }
@@ -63,6 +122,12 @@ class ShanZhiShiStore extends ChangeNotifier {
   static final ShanZhiShiStore instance = ShanZhiShiStore._();
 
   static const String _prefKey = 'shanzhishi_names';
+
+  /// 编辑前快照（一步撤销）的落盘键：createdAt -> 该名号上一版。
+  static const String _undoKey = 'shanzhishi_undo';
+
+  /// createdAt -> 编辑前的一份快照，供面板上的「恢复」使用。
+  final Map<int, ShanyishiEntry> _undo = {};
 
   /// 预置种子的版本：版本升级时把「还没出现过的种子名号」补进现有名单，
   /// 不覆盖用户已录入的数据，也不会让用户删掉的名号复活。
@@ -272,6 +337,22 @@ class ShanZhiShiStore extends ChangeNotifier {
     _loaded = true;
     await _persist();
     await prefs.setInt(_seedVersionKey, _seedVersion);
+    // 读回编辑前快照（一步撤销），跨重启也能恢复。
+    _undo.clear();
+    final rawUndo = prefs.getString(_undoKey);
+    if (rawUndo != null && rawUndo.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawUndo) as List<dynamic>;
+        for (final e in decoded) {
+          if (e is! Map) continue;
+          final entry =
+              ShanyishiEntry.fromJson(Map<String, dynamic>.from(e));
+          if (entry != null) _undo[entry.createdAt] = entry;
+        }
+      } catch (_) {
+        // 快照坏了就当作没有，不影响主数据。
+      }
+    }
     notifyListeners();
   }
 
@@ -283,55 +364,224 @@ class ShanZhiShiStore extends ChangeNotifier {
     );
   }
 
+  /// 记录一份编辑前的快照，供「恢复」一步撤销。
+  ///
+  /// 同一名号只保留**最早**那份（也就是这次连续编辑开始前的版本），
+  /// 这样连改几次再点恢复，能整体退回到动手之前，而不是只退一步。
+  void _rememberUndo(ShanyishiEntry old) {
+    _undo.putIfAbsent(old.createdAt, () => old);
+  }
+
+  Future<void> _persistUndo() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _undoKey,
+      jsonEncode([for (final e in _undo.values) e.toJson()]),
+    );
+  }
+
+  /// 这一位有没有可恢复的「编辑前版本」。
+  bool canRestore(ShanyishiEntry entry) => _undo.containsKey(entry.createdAt);
+
+  /// 恢复到这一位最近一次编辑前的状态（一步撤销）。
+  ///
+  /// 恢复后快照即被消费，返回是否真的恢复了（没有快照返回 false）。
+  Future<bool> restoreLast(int index) async {
+    if (index < 0 || index >= _entries.length) return false;
+    final current = _entries[index];
+    final backup = _undo.remove(current.createdAt);
+    if (backup == null) return false;
+    _entries[index] = backup;
+    await _persist();
+    await _persistUndo();
+    notifyListeners();
+    return true;
+  }
+
   /// 新增一位名号，返回它的位次（追加到末尾，球面转到它）。
-  Future<int> add(String name, List<String> sutras) async {
+  ///
+  /// 默认同名不重复录入：定位到已有的那一位，把经文与引用段落并进去。
+  /// [allowDuplicate] 为 true 时即使同名也另起一位（用户明确选了「添加新的」）。
+  Future<int> add(
+    String name,
+    List<String> sutras, {
+    Map<String, List<String>> quotes = const {},
+    List<String> paragraphs = const [],
+    bool allowDuplicate = false,
+  }) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return -1;
-    final entry = ShanyishiEntry(
-      name: trimmed,
-      sutras: _cleanSutras(sutras),
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    // 同名不重复录入：定位到已有的那一位。
-    final existing = _entries.indexWhere((e) => e.name == trimmed);
+    // 同名不重复录入：定位到已有的那一位，把经文与引用段落并进去。
+    final existing = allowDuplicate
+        ? -1
+        : _entries.indexWhere((e) => e.name == trimmed);
     if (existing >= 0) {
-      if (entry.sutras.isNotEmpty) {
-        final merged = _cleanSutras([..._entries[existing].sutras, ...entry.sutras]);
-        _entries[existing] = _entries[existing].copyWith(sutras: merged);
-        await _persist();
-        notifyListeners();
-      }
-      return existing;
+      return mergeInto(
+        existing,
+        sutras: sutras,
+        quotes: quotes,
+        paragraphs: paragraphs,
+      );
     }
-    _entries.add(entry);
+    final cleanedSutras = _cleanSutras(sutras);
+    final cleanedQuotes = _cleanQuotes(quotes);
+    _entries.add(ShanyishiEntry(
+      name: trimmed,
+      sutras: cleanedSutras,
+      paragraphs: _cleanTexts(paragraphs),
+      quotes: _pruneQuotes(cleanedQuotes, cleanedSutras),
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    ));
     await _persist();
     notifyListeners();
     return _entries.length - 1;
   }
 
-  /// 改名 / 增删经文。
+  /// 把 [sutras] / [quotes] / [paragraphs] 并进已有的第 [index] 位
+  /// （名号保持原样），返回该位次。
+  ///
+  /// 用户选择「合并」时调用：经文取并集、引用段落去重合并，
+  /// 已有数据一处不丢。
+  Future<int> mergeInto(
+    int index, {
+    List<String> sutras = const [],
+    Map<String, List<String>> quotes = const {},
+    List<String> paragraphs = const [],
+  }) async {
+    if (index < 0 || index >= _entries.length) return -1;
+    final old = _entries[index];
+    final mergedSutras = _cleanSutras([...old.sutras, ...sutras]);
+    final mergedQuotes = <String, List<String>>{
+      for (final e in old.quotes.entries) e.key: List.of(e.value),
+    };
+    _cleanQuotes(quotes).forEach((sutra, texts) {
+      mergedQuotes[sutra] = _cleanTexts([...?mergedQuotes[sutra], ...texts]);
+    });
+    final pruned = _pruneQuotes(mergedQuotes, mergedSutras);
+    final mergedParagraphs = _cleanTexts([...old.paragraphs, ...paragraphs]);
+    if (mergedSutras.length != old.sutras.length ||
+        !_sameQuotes(pruned, old.quotes) ||
+        mergedParagraphs.length != old.paragraphs.length) {
+      _rememberUndo(old);
+      _entries[index] = old.copyWith(
+        sutras: mergedSutras,
+        quotes: pruned,
+        paragraphs: mergedParagraphs,
+      );
+      await _persist();
+      await _persistUndo();
+      notifyListeners();
+    }
+    return index;
+  }
+
+  /// 名号相似度：字符重合比例（重复字按出现次数计），分母取较长的一边。
+  /// 例：「地藏菩萨」vs「地藏王菩萨」= 4 / 5 = 0.8。
+  static double nameSimilarity(String a, String b) {
+    final x = a.trim();
+    final y = b.trim();
+    if (x.isEmpty || y.isEmpty) return 0;
+    if (x == y) return 1;
+    final counts = <int, int>{};
+    for (final r in x.runes) {
+      counts[r] = (counts[r] ?? 0) + 1;
+    }
+    var common = 0;
+    for (final r in y.runes) {
+      final n = counts[r] ?? 0;
+      if (n <= 0) continue;
+      counts[r] = n - 1;
+      common++;
+    }
+    final len = math.max(x.runes.length, y.runes.length);
+    return len == 0 ? 0 : common / len;
+  }
+
+  /// 找出与 [name] 相同、或字符重合 ≥ [threshold]（默认 80%）的已有名号位次；
+  /// 没有相似项时返回 -1。多条命中时取相似度最高的那一位。
+  /// [skip] 用于编辑场景：跳过自己那一位。
+  int findSimilarIndex(
+    String name, {
+    double threshold = 0.8,
+    int? skip,
+  }) {
+    final target = name.trim();
+    if (target.isEmpty) return -1;
+    var best = -1;
+    var bestScore = 0.0;
+    for (var i = 0; i < _entries.length; i++) {
+      if (i == skip) continue;
+      final score = nameSimilarity(target, _entries[i].name);
+      if (score < threshold || score <= bestScore) continue;
+      bestScore = score;
+      best = i;
+    }
+    return best;
+  }
+
+  /// 把第 [from] 位整体并进第 [into] 位，然后删掉 [from]（编辑改名撞车时用）。
+  ///
+  /// 返回合并后目标的新位次（from < into 时会前移一位）；失败返回 -1。
+  Future<int> mergeAndRemove(int from, int into) async {
+    if (from == into) return into;
+    if (from < 0 || from >= _entries.length) return -1;
+    if (into < 0 || into >= _entries.length) return -1;
+    final src = _entries[from];
+    await mergeInto(
+      into,
+      sutras: src.sutras,
+      paragraphs: src.paragraphs,
+      quotes: src.quotes,
+    );
+    _entries.removeAt(from);
+    _undo.remove(src.createdAt);
+    final result = from < into ? into - 1 : into;
+    await _persist();
+    await _persistUndo();
+    notifyListeners();
+    return result;
+  }
+
+  /// 改名 / 增删经文 / 维护引用段落。
+  ///
+  /// [quotes] / [paragraphs] 传值即整体覆盖，传 null 表示保持原样。
+  /// 已不在关联经文列表里的旧版按经书段落会被一并清掉。
   Future<void> update(
     int index, {
     String? name,
     List<String>? sutras,
+    Map<String, List<String>>? quotes,
+    List<String>? paragraphs,
   }) async {
     if (index < 0 || index >= _entries.length) return;
     final old = _entries[index];
     final newName = (name ?? old.name).trim();
     if (newName.isEmpty) return;
+    final newSutras = sutras != null ? _cleanSutras(sutras) : old.sutras;
+    final newQuotes = quotes != null
+        ? _pruneQuotes(_cleanQuotes(quotes), newSutras)
+        : _pruneQuotes(old.quotes, newSutras);
+    final newParagraphs =
+        paragraphs != null ? _cleanTexts(paragraphs) : old.paragraphs;
+    _rememberUndo(old);
     _entries[index] = ShanyishiEntry(
       name: newName,
-      sutras: sutras != null ? _cleanSutras(sutras) : old.sutras,
+      sutras: newSutras,
+      paragraphs: newParagraphs,
+      quotes: newQuotes,
       createdAt: old.createdAt,
     );
     await _persist();
+    await _persistUndo();
     notifyListeners();
   }
 
   Future<void> removeAt(int index) async {
     if (index < 0 || index >= _entries.length) return;
-    _entries.removeAt(index);
+    final removed = _entries.removeAt(index);
+    _undo.remove(removed.createdAt);
     await _persist();
+    await _persistUndo();
     notifyListeners();
   }
 
@@ -353,6 +603,59 @@ class ShanZhiShiStore extends ChangeNotifier {
       if (t.isNotEmpty && !out.contains(t)) out.add(t);
     }
     return out;
+  }
+
+  /// 段落文本去空、去重（保持原有顺序）。
+  static List<String> _cleanTexts(Iterable<String> raw) {
+    final out = <String>[];
+    for (final s in raw) {
+      final t = s.trim();
+      if (t.isNotEmpty && !out.contains(t)) out.add(t);
+    }
+    return out;
+  }
+
+  /// 规范化引用段落：经名去空、段落去空去重，空列表不落库。
+  static Map<String, List<String>> _cleanQuotes(
+    Map<String, List<String>> raw,
+  ) {
+    final out = <String, List<String>>{};
+    raw.forEach((sutra, texts) {
+      final key = sutra.trim();
+      if (key.isEmpty) return;
+      final list = _cleanTexts(texts);
+      if (list.isNotEmpty) out[key] = list;
+    });
+    return out;
+  }
+
+  /// 只保留仍挂在 [sutras] 里的经文段落（删经书时一并清掉它的引用）。
+  static Map<String, List<String>> _pruneQuotes(
+    Map<String, List<String>> quotes,
+    List<String> sutras,
+  ) {
+    if (quotes.isEmpty) return const <String, List<String>>{};
+    final keep = sutras.toSet();
+    final out = <String, List<String>>{};
+    quotes.forEach((sutra, texts) {
+      if (keep.contains(sutra)) out[sutra] = texts;
+    });
+    return out;
+  }
+
+  static bool _sameQuotes(
+    Map<String, List<String>> a,
+    Map<String, List<String>> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      final other = b[e.key];
+      if (other == null || other.length != e.value.length) return false;
+      for (var i = 0; i < e.value.length; i++) {
+        if (other[i] != e.value[i]) return false;
+      }
+    }
+    return true;
   }
 
   /// 种子比对键：名号 + 经文，用于判断某条预置有没有被用户改过。
@@ -383,6 +686,7 @@ class ShanZhiShiStore extends ChangeNotifier {
   @visibleForTesting
   void resetForTest() {
     _entries.clear();
+    _undo.clear();
     _loaded = false;
   }
 }

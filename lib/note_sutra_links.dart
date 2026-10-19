@@ -223,6 +223,25 @@ class NoteSutraCatalog {
   static List<String> get cachedRawTitles =>
       _rawCharCounts?.keys.toList() ?? const [];
 
+  /// CBETA 编号 -> 含编号完整经名，按需构建、与目录同生命周期缓存。
+  static Map<String, String>? _rawTitleById;
+
+  /// 目录已加载时，返回「CBETA 编号 → 含编号完整经名」的同步映射；
+  /// 未加载时返回 null。供读经记录按正文路径里的编号反查经名，
+  /// 自愈「经名与路径指向两部不同经」的错配记录（显示 A、点开是 B）。
+  static Map<String, String>? get cachedRawTitleById {
+    final cached = _rawTitleById;
+    if (cached != null) return cached;
+    final raw = _rawCharCounts;
+    if (raw == null) return null;
+    final map = <String, String>{};
+    for (final title in raw.keys) {
+      final m = _idSuffixRe.firstMatch(title);
+      if (m != null) map[m.group(0)!] = title;
+    }
+    return _rawTitleById = map;
+  }
+
   /// 目录已加载时，返回基础经名 [base] 第 [volume] 卷的正文路径；
   /// 未加载或无对应卷时返回 null（调用方回退到第一部路径）。
   static String? cachedVolumePath(String base, int volume) {

@@ -122,7 +122,7 @@ class ReadingPageState extends State<ReadingPage>
   // 收起设置面板的同一次点击顺带弹出「画线感想/笔记」速览面板。
   bool _stylePanelDismissAtDown = false;
   bool _hasTextSelection = false;
-  bool _actionRowTapped = false; // 点击段落操作栏（AI读笔记/方框）时置true，阻止外层Listener触发面板
+  bool _actionRowTapped = false; // 点击段落操作栏（AI译/笔记/方框）时置true，阻止外层Listener触发面板
   final GlobalKey _moreMenuKey = GlobalKey();
   final GlobalKey _stylePanelKey = GlobalKey();
 
@@ -188,7 +188,7 @@ class ReadingPageState extends State<ReadingPage>
   Set<int> _paraHasAnyThought = {}; // 有任意用户感想的段落下标集合（操作栏「所有备注」变绿）
   // 更新排版后未能按原文重新定位到新段的原始 index 集合（保留数据并标记提示）。
   Set<int> _unalignedIndices = {};
-  // 从`。。。` 前缀标记、阅读时隐藏操作栏（AI读感想/待办）的段落 index 集合。
+  // 从`。。。` 前缀标记、阅读时隐藏操作栏（AI译/感想/待办）的段落 index 集合。
   Set<int> _hiddenActionParagraphs = {};
   // 从`。。。//` 标记、该段与下一段之间不留间隔（不分段）的段落index 集合。
   Set<int> _tightParagraphs = {};
@@ -542,13 +542,17 @@ class ReadingPageState extends State<ReadingPage>
 
   Future<void> _loadContent() async {
     final prefs = await SharedPreferences.getInstance();
+    // 经名与路径必须成对写入：解析不到正文路径时清掉旧路径，
+    // 绝不留下「新经名 + 旧经路径」的错配记录（否则卡片会显示 A、
+    // 点开却是 B 的正文）。卡片打开前会按经名把路径补回来。
+    final recordPath = _resolvedFilePath ?? widget.filePath;
     await prefs.setString('last_read_title', widget.title);
-    if (_resolvedFilePath != null) {
-      await prefs.setString('last_read_filePath', _resolvedFilePath!);
-    } else if (widget.filePath != null) {
-      await prefs.setString('last_read_filePath', widget.filePath!);
+    if (recordPath != null) {
+      await prefs.setString('last_read_filePath', recordPath);
+    } else {
+      await prefs.remove('last_read_filePath');
     }
-    final filePath = _resolvedFilePath ?? widget.filePath;
+    final filePath = recordPath;
     debugPrint('[加载内容] filePath=$filePath');
     if (filePath != null) {
       // 1. 优先加载已编辑的副本（如果存在）
@@ -1931,7 +1935,7 @@ class ReadingPageState extends State<ReadingPage>
                           _actionRowTapped = false;
                         },
                         onPointerUp: (event) {
-                          // 段落操作栏（AI读笔记/方框）拦截：阻止触发面板。
+                          // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
                           if (_actionRowTapped) {
                             _actionRowTapped = false;
                             // 同步清理按下状态，避免残留影响 300ms 长按计时器。
@@ -3547,7 +3551,7 @@ class ReadingPageState extends State<ReadingPage>
   List<List<int>> _allClusterGroups() =>
       _clusterGroups([for (var i = 0; i < _paragraphs.length; i++) i]);
 
-  /// 段落右侧的操作栏（同一水平位）：待办圆在| AI读| 笔记。
+  /// 段落右侧的操作栏（同一水平位）：待办圆在| AI译| 笔记。
   /// [group] 为操作栏所属的渲染簇（`///` 合并段可能含多段）；变绿与打开都按整簇判定，
   /// 因为簇内选区的备注按约定存到簇首段（见[_openIdeaFromRangeCluster]）。
   Widget _buildParagraphActions(int index, {List<int> group = const []}) {
@@ -3608,7 +3612,7 @@ class ReadingPageState extends State<ReadingPage>
               ),
             ),
             const SizedBox(width: 6),
-            // AI读
+            // AI译
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () => _openAiTranslate(index),
@@ -3622,7 +3626,7 @@ class ReadingPageState extends State<ReadingPage>
                   ),
                   const SizedBox(width: 2),
                   Text(
-                    'AI读',
+                    'AI译',
                     style: TextStyle(
                       fontSize: 13,
                       color: fg,

@@ -14,7 +14,11 @@ Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _border => AppPalette.p.border;
 class CheckInGoalsPage extends StatefulWidget {
-  const CheckInGoalsPage({super.key});
+  /// 为 true 时只渲染目标内容主体（不套 Scaffold/AppBar），
+  /// 供「功课设置」合并页作为 Tab 内嵌使用。
+  final bool embedded;
+
+  const CheckInGoalsPage({super.key, this.embedded = false});
 
   @override
   State<CheckInGoalsPage> createState() => _CheckInGoalsPageState();
@@ -178,18 +182,7 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        elevation: 0,
-        title: Text('打卡目标', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: _text),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: ListView(
+    final body = ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
           Container(
@@ -229,7 +222,23 @@ class _CheckInGoalsPageState extends State<CheckInGoalsPage> {
           for (final t in _types) _buildTypeCard(t),
           const SizedBox(height: 40),
         ],
+      );
+
+    // 内嵌模式只给合并页提供内容主体，AppBar 由合并页统一提供。
+    if (widget.embedded) return body;
+
+    return Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: _bg,
+        elevation: 0,
+        title: Text('打卡目标', style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, color: _text),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
+      body: body,
     );
   }
 

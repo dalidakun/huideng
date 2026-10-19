@@ -307,6 +307,69 @@ String? resolveHotSutraName(String name, Set<String> catalogNames) =>
   return (base, path);
 }
 
+/// 归一读经记录里「经名 + 正文路径」的错配（卡片显示 A、点开是 B 的根因）。
+///
+/// 读经页曾出现「只写新经名、保留旧路径」（解析不到正文路径时不动
+/// `last_read_filePath` / `current_sutra_file_path`），路径也可能被同步按别的
+/// 标题规范化，于是经名与路径指向两部不同的经：卡片按经名显示，点开却按
+/// 旧路径加载了另一部经的正文。这里把两者归一到同一部经：
+///  - 路径为空 → 经名能定位到正文时补上该经路径；
+///  - 两侧 CBETA 编号都明确且不同 → 按经名重算路径（经名是最后一次真正打开的经）；
+///  - 经名只有基础经名（无编号/卷标）→ 按基础经名比对：确属另一部经才改，
+///    同名不同卷/译本（路径更具体、经名无卷号信息）保持原路径；
+///  - 经名既无编号、目录里也查不到 → 按路径里的编号订正经名，保证显示与正文一致。
+/// 目录未加载且无法判定时原样返回，不改任何值（安全兜底）。
+({String title, String filePath}) reconcileSutraTitleAndPath(
+    String title, String? filePath) {
+  final path = (filePath ?? '').trim();
+  final titleId = SutraDownloader.extractId(title);
+  final pathId = SutraDownloader.extractId(null, path);
+
+  String? titlePath;
+  var titleBase = '';
+  if (titleId != null) {
+    titlePath = SutraAssetPath.resolve(title: title);
+    titleBase = parseSutraTitleAndVolume(title).base;
+  } else {
+    final parsed = parseSutraTitleAndVolume(title);
+    titleBase = parsed.base;
+    final entry = NoteSutraCatalog.cachedTitleMap?[parsed.base];
+    if (entry != null) {
+      titlePath = (parsed.volume > 0
+              ? NoteSutraCatalog.cachedVolumePath(parsed.base, parsed.volume)
+              : null) ??
+          entry.filePath;
+    }
+  }
+
+  // 路径里没有 CBETA 编号（未解析到正文 / 用户自选本地文件）：无法证伪，
+  // 只在路径为空时用经名补上正文路径。
+  if (pathId == null) {
+    if (path.isEmpty && titlePath != null) {
+      return (title: title, filePath: titlePath);
+    }
+    return (title: title, filePath: path);
+  }
+
+  // 两侧编号都明确：编号不同即错配，以经名为准。
+  if (titleId != null) {
+    return titleId == pathId
+        ? (title: title, filePath: path)
+        : (title: title, filePath: titlePath ?? path);
+  }
+
+  // 经名只有基础经名：按基础经名比对，避免误伤「同名不同卷/译本」的合法记录。
+  final pathRaw = NoteSutraCatalog.cachedRawTitleById?[pathId];
+  if (pathRaw == null) return (title: title, filePath: path);
+  final pathBase = parseSutraTitleAndVolume(pathRaw).base;
+  if (titleBase.isNotEmpty && titleBase == pathBase) {
+    return (title: title, filePath: path);
+  }
+  if (titlePath != null) return (title: title, filePath: titlePath);
+  // 经名无从校验（不在目录中）：以路径为准订正经名，保证显示与正文一致。
+  return (title: pathRaw, filePath: path);
+}
+
 /// 归并热门经文条目。
 ///
 /// 默认（不传 [multiVolumeBases]）按基础经名归并：「XX经卷一」与「XX经」合并为
@@ -2304,8 +2367,29 @@ class SutraListPageState extends State<SutraListPage>
 
   Future<void> _loadLastRead() async {
     final prefs = await SharedPreferences.getInstance();
-    final t = prefs.getString('last_read_title');
-    final fp = prefs.getString('last_read_filePath');
+    var t = prefs.getString('last_read_title');
+    var fp = prefs.getString('last_read_filePath');
+    // 历史错配自愈：经名与路径指向两部不同的经时以经名为准归一，
+    // 并把修好的值写回 prefs，根治「卡片显示 A、点开是 B」。
+    if (t != null && t.isNotEmpty) {
+      try {
+        await NoteSutraCatalog.load();
+      } catch (_) {
+        // 目录加载失败时 reconcile 原样返回，不影响记录展示。
+      }
+      final rec = reconcileSutraTitleAndPath(t, fp);
+      if (rec.title != t || rec.filePath != (fp ?? '')) {
+        t = rec.title;
+        await prefs.setString('last_read_title', t);
+        if (rec.filePath.isEmpty) {
+          await prefs.remove('last_read_filePath');
+          fp = null;
+        } else {
+          fp = rec.filePath;
+          await prefs.setString('last_read_filePath', fp);
+        }
+      }
+    }
     var progress = 0.0;
     if (fp != null) {
       // 兼容旧版本用本机绝对路径命名的 progress_ 键，取所有形式的最大值。
@@ -2603,18 +2687,22 @@ class SutraListPageState extends State<SutraListPage>
     ReadingRouteBuilder? routeBuilder,
   }) {
     _dismissKeyboard();
-    final sutra = _findSutra(title);
+    // 先归一「经名 + 路径」错配（历史记录里可能显示 A、路径却指向 B 的正文），
+    // 再按归一后的值定位经书，保证点开的正文与卡片显示一致。
+    final rec = reconcileSutraTitleAndPath(title, filePath);
+    final recPath = rec.filePath.isEmpty ? null : rec.filePath;
+    final sutra = _resolveSutraByTitleOrPath(rec.title, recPath);
     if (sutra != null) {
       _openSutra(sutra, routeBuilder: routeBuilder);
     } else {
       Navigator.push(
         context,
         routeBuilder?.call(
-              (context) => ReadingPage(title: title, filePath: filePath),
+              (context) => ReadingPage(title: rec.title, filePath: recPath),
             ) ??
             MaterialPageRoute(
               builder: (context) =>
-                  ReadingPage(title: title, filePath: filePath),
+                  ReadingPage(title: rec.title, filePath: recPath),
             ),
       );
     }

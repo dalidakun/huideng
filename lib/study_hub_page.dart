@@ -9,8 +9,7 @@ import 'auth_service.dart';
 import 'login_page.dart';
 import 'user_avatar.dart';
 import 'reading_page.dart';
-import 'checkin_settings_page.dart';
-import 'checkin_goals_page.dart';
+import 'checkin_hub_page.dart';
 import 'sutra_list_page.dart';
 import 'sutra_favorites.dart';
 import 'sutra_read_later.dart';
@@ -21,6 +20,8 @@ import 'sync_service.dart';
 import 'reading_time_service.dart';
 import 'sutra_downloader.dart';
 import 'note_sutra_links.dart';
+import 'dedication_page.dart';
+import 'dedication_store.dart';
 
 import 'app_palette.dart';
 Color get _primary => AppPalette.p.primary;
@@ -216,7 +217,7 @@ class StudyHubPageState extends State<StudyHubPage>
     // 稍后读/多卷集合共用），编目与阅读进度各自异步加载。
     final sutraListF = _readSutraListOnce();
     final catalogF = NoteSutraCatalog.load();
-    final progressF = path != null
+    var progressF = path != null
         ? SutraDownloader.latestProgressForPath(prefs, path, title: title)
         : Future.value(SutraDownloader.progressFromDailyHistory(prefs, title));
 
@@ -228,6 +229,37 @@ class StudyHubPageState extends State<StudyHubPage>
     // 全部经书；本地 sutras_list.json 只是用户子集，仅作兜底，否则会因集合缺失
     // 漏掉「卷X」卷标（如主页精读卡）。
     await catalogF;
+    // 历史错配自愈：经名与路径指向两部不同的经时（卡片显示 A、点开却是 B 的
+    // 正文），以经名为准归一，并把修好的值写回 prefs，保证主页精读卡显示与
+    // 点开的正文一致。
+    if (title != null && title.isNotEmpty) {
+      final rec = reconcileSutraTitleAndPath(title, path);
+      if (rec.title != title || rec.filePath != (path ?? '')) {
+        title = rec.title;
+        path = rec.filePath.isEmpty ? null : rec.filePath;
+        if (lockT != null) {
+          lockT = title;
+          lockP = path;
+          await prefs.setString('locked_sutra_title', title);
+          if (path == null) {
+            await prefs.remove('locked_sutra_file_path');
+          } else {
+            await prefs.setString('locked_sutra_file_path', path);
+          }
+        } else {
+          await prefs.setString('current_sutra_title', title);
+          if (path == null) {
+            await prefs.remove('current_sutra_file_path');
+          } else {
+            await prefs.setString('current_sutra_file_path', path);
+          }
+        }
+        progressF = path != null
+            ? SutraDownloader.latestProgressForPath(prefs, path, title: title)
+            : Future.value(
+                SutraDownloader.progressFromDailyHistory(prefs, title));
+      }
+    }
     final catalogBases = NoteSutraCatalog.cachedMultiVolumeBases;
     final mvBases = catalogBases.isNotEmpty
         ? catalogBases
@@ -291,7 +323,7 @@ class StudyHubPageState extends State<StudyHubPage>
       _todayCheckIns = _loadTodayCheckIns(prefs);
       _checkinTotalDays = _calcTotalDays(prefs);
       _historyStatsOrder = prefs.getStringList('history_stats_order') ?? [];
-      _dedication = prefs.getString('checkin_dedication') ?? '';
+      _dedication = DedicationStore.effective(prefs);
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes =
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
@@ -977,15 +1009,15 @@ class StudyHubPageState extends State<StudyHubPage>
               physics: const PullRevealLockPhysics(
                   parent: AlwaysScrollableScrollPhysics()),
               padding: EdgeInsets.fromLTRB(16, 4, 16,
-                  MediaQuery.of(context).padding.bottom + 10),
+                  // 底部额外留白：让出右下角「继续阅读」悬浮按钮的高度
+                  // （按钮高 42 + 距菜单 28），否则会遮住历史统计的数据。
+                  MediaQuery.of(context).padding.bottom + 78),
               children: [
                 _buildCurrentSutraCard(),
                 const SizedBox(height: 14),
                 _buildCheckInCard(),
                 const SizedBox(height: 14),
                 _buildHistoryStatsCard(),
-                const SizedBox(height: 14),
-                _buildDedicationBlock(),
               ],
             ),
           ),
@@ -1479,6 +1511,10 @@ class StudyHubPageState extends State<StudyHubPage>
               child: Text('请先设置每日功课',
                   style: TextStyle(fontSize: 14, color: _textHint)),
             ),
+            Divider(
+                height: 1, thickness: 0.5, indent: 20, endIndent: 20, color: _border),
+            _buildDedicationBlock(),
+            const SizedBox(height: 6),
           ],
         ),
       );
@@ -1528,12 +1564,12 @@ class StudyHubPageState extends State<StudyHubPage>
                   ],
                 ),
                 const SizedBox(width: 14),
-                // 设置每日功课入口
+                // 功课设置入口：打开合并页（每日功课设置 + 打卡目标设置）
                 InkWell(
                   onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => const CheckInSettingsPage())),
+                          builder: (_) => const CheckInHubPage())),
                   borderRadius: BorderRadius.circular(10),
                   child: Container(
                     padding: const EdgeInsets.all(7),
@@ -1585,44 +1621,11 @@ class StudyHubPageState extends State<StudyHubPage>
                   endIndent: 20,
                   color: _border),
           ],
-          // 底部按钮
-          Container(
-            margin: const EdgeInsets.fromLTRB(14, 4, 14, 10),
-            decoration: BoxDecoration(
-              color: AppPalette.instance.isPlain
-                  ? const Color(0xFFF5F5F5)
-                  : _overlay,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: InkWell(
-              onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const CheckInGoalsPage())),
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.settings_outlined,
-                        size: 18, color: _textSec),
-                    const SizedBox(width: 10),
-                    Text('打卡目标',
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: _textSec)),
-                    const Spacer(),
-                    Text('依据功课，制定目标',
-                        style: TextStyle(fontSize: 13, color: _textHint)),
-                    const SizedBox(width: 4),
-                    Icon(Icons.chevron_right, size: 18, color: _textSec),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          // 功课回向：贴在打卡卡片底部，用分割线与功课列表区分。
+          Divider(
+              height: 1, thickness: 0.5, indent: 20, endIndent: 20, color: _border),
+          _buildDedicationBlock(),
+          const SizedBox(height: 6),
         ],
       ),
     );
@@ -1649,47 +1652,38 @@ class StudyHubPageState extends State<StudyHubPage>
     await prefs.setStringList('history_stats_order', keys);
   }
 
-  /// 功课回向区块：样式与打卡卡底部的「打卡目标」区块一致，
-  /// 点击弹出输入框填写/编辑回向内容，内容保存在下方给予预览。
+  /// 功课回向区块：贴在打卡卡片底部（与卡片同一背景，不另起色块），
+  /// 上方以分割线区分；点击弹出抽屉填写/编辑回向内容。
   Widget _buildDedicationBlock() {
     final text = _dedication.trim();
-    return Container(
-      decoration: BoxDecoration(
-        color: _checkinCardBg,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: InkWell(
-        onTap: _openDedicationEditor,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(
-            children: [
-              Icon(Icons.volunteer_activism_outlined,
-                  size: 18, color: _textSec),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('愿我的功课回向',
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: _textSec)),
-                    const SizedBox(height: 2),
-                    Text(text.isEmpty ? '写下回向，点击编辑' : text,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style:
-                            TextStyle(fontSize: 12, color: _textHint)),
-                  ],
-                ),
+    return InkWell(
+      onTap: _openDedicationEditor,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+        child: Row(
+          children: [
+            Icon(Icons.volunteer_activism_outlined, size: 18, color: _textSec),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('愿我的功课回向',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _textSec)),
+                  const SizedBox(height: 2),
+                  Text(text.isEmpty ? '写下回向，点击编辑' : text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: _textHint)),
+                ],
               ),
-              const SizedBox(width: 8),
-              Icon(Icons.chevron_right, size: 18, color: _textSec),
-            ],
-          ),
+            ),
+            const SizedBox(width: 8),
+            Icon(Icons.chevron_right, size: 18, color: _textSec),
+          ],
         ),
       ),
     );
@@ -1797,23 +1791,14 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 弹出回向输入框：可新增、也可再次点击修改编辑后保存。
-  /// 返回 null 表示取消；否则为回向文本（空输入时采用默认回向文）。
+  /// 打开「功德回向」抽屉：顶部为输入框，下方为可选用的回向模板，
+  /// 并支持设置「定时自动更换」的回向方案。文本由抽屉内部持久化。
   Future<void> _openDedicationEditor() async {
-    final text = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _card,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => _DedicationEditSheet(
-        initial: _dedication,
-        defaultText: _kDefaultDedication,
-      ),
+    final text = await showDedicationSheet(
+      context,
+      defaultText: _kDefaultDedication,
     );
     if (text == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('checkin_dedication', text);
     if (mounted) setState(() => _dedication = text);
   }
 
@@ -2744,119 +2729,4 @@ class _SplashCircleState extends State<_SplashCircle>
   }
 }
 
-/// 回向输入弹层：由 State 持有输入控制器，随弹层生命周期安全销毁，
-/// 避免在底部弹层收起动画期间访问已释放的控制器导致崩溃。
-class _DedicationEditSheet extends StatefulWidget {
-  final String initial;
-  final String defaultText;
 
-  const _DedicationEditSheet({required this.initial, required this.defaultText});
-
-  @override
-  State<_DedicationEditSheet> createState() => _DedicationEditSheetState();
-}
-
-class _DedicationEditSheetState extends State<_DedicationEditSheet> {
-  late final TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _pop(String? value) => Navigator.pop(context, value);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('愿我的功课回向',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
-              const SizedBox(height: 2),
-              Text('写下你想把功课功德回向给谁、回向的内容',
-                  style: TextStyle(fontSize: 12, color: _textHint)),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                minLines: 3,
-                maxLines: 6,
-                style: TextStyle(fontSize: 14, color: _text),
-                decoration: InputDecoration(
-                  hintText: widget.defaultText,
-                  hintStyle: TextStyle(fontSize: 13, color: _textHint),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _border)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _border)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _gold, width: 1.4)),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      style: TextButton.styleFrom(
-                        foregroundColor: _textSec,
-                        backgroundColor: AppPalette.instance.isPlain
-                            ? const Color(0xFFF5F5F5)
-                            : _overlay,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      onPressed: () => _pop(null),
-                      child: const Text('取消'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _primary,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      // 未输入内容时保存，采用默认回向文。
-                      onPressed: () {
-                        final t = _controller.text.trim();
-                        _pop(t.isEmpty ? widget.defaultText : t);
-                      },
-                      child: const Text('保存'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

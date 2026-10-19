@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -41,6 +42,7 @@ import 'agreements.dart';
 import 'ui_sound.dart';
 import 'sutra_title_overrides.dart';
 import 'shortcut_actions.dart';
+import 'note_sutra_links.dart' show NoteSutraCatalog;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -204,6 +206,14 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       title: '佛经阅读器',
       debugShowCheckedModeBanner: false,
+      // 中文本地化：日期选择器等 Material 组件按中文展示。
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: AppTheme.lightTheme,
       navigatorKey: navigatorKey,
       navigatorObservers: [routeObserver],
@@ -379,6 +389,18 @@ class _AppEntryState extends State<_AppEntry> {
           fp = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : null;
         }
       }
+    }
+    // 归一「经名/路径」错配（历史记录：显示 A、点开是 B），保证冷启动
+    // 「继续阅读」打开的经书与记录一致。
+    if (t != null && t.isNotEmpty) {
+      try {
+        await NoteSutraCatalog.load();
+      } catch (_) {
+        // 目录加载失败时 reconcile 原样返回，不影响打开。
+      }
+      final rec = reconcileSutraTitleAndPath(t, fp);
+      t = rec.title;
+      fp = rec.filePath.isEmpty ? null : rec.filePath;
     }
     if (!mounted) return;
     final nav = navigatorKey.currentState;
@@ -944,6 +966,18 @@ class _MainPageState extends State<MainPage>
       }
     }
     if (t != null && t.isEmpty) t = null;
+    // 归一「经名 + 路径」错配（根治主页精读卡显示 A、点开是 B）。
+    // 修好的值由经藏页 _loadLastRead 写回 prefs，这里只做展示口径归一。
+    if (t != null) {
+      try {
+        await NoteSutraCatalog.load();
+      } catch (_) {
+        // 目录加载失败时 reconcile 原样返回，不影响卡片展示。
+      }
+      final rec = reconcileSutraTitleAndPath(t, fp);
+      t = rec.title;
+      fp = rec.filePath.isEmpty ? null : rec.filePath;
+    }
     if (!mounted) return;
     if (_recentLoaded && t == _recentTitle && fp == _recentFilePath) return;
     setState(() {
@@ -1026,7 +1060,8 @@ class _MainPageState extends State<MainPage>
     return _sutraListKey.currentState?.collapseShelfIfOpen() ?? false;
   }
 
-  /// 善知识页底部面板展开时收起它（根路由侧滑返回调用）。
+  /// 善知识页的浮层展开时收起它（根路由侧滑返回调用）：
+  /// 先收右下角悬浮球菜单，再收底部面板。
   /// 返回是否消费了本次返回，避免侧滑直接最小化应用。
   bool collapseShanZhiShiShelfIfOpen() {
     if (_currentIndex != 7) return false;
@@ -1741,8 +1776,8 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
           navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
               : 'assets/images/chat.png'),
-          width: 22,
-          height: 22,
+          width: 21,
+          height: 21,
           filterQuality: FilterQuality.medium,
         ),
         Positioned(

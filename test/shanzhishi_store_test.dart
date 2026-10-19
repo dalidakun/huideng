@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:my_flutter_app/note_sutra_links.dart';
 import 'package:my_flutter_app/shanzhishi_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -153,9 +154,239 @@ void main() {
     });
   });
 
+  group('引用段落', () {
+    test('段落随条目序列化往返', () {
+      const e = ShanyishiEntry(
+        name: '地藏菩萨',
+        sutras: ['地藏菩萨本愿经'],
+        paragraphs: ['若有善男子善女人闻是菩萨名字', '第二段'],
+        createdAt: 1,
+      );
+      final back = ShanyishiEntry.fromJson(e.toJson());
+      expect(back, isNotNull);
+      expect(back!.paragraphs, ['若有善男子善女人闻是菩萨名字', '第二段']);
+      expect(back.quotes, isEmpty);
+    });
+
+    test('旧档里按经书存的段落，读入时拍平进段落池', () {
+      final back = ShanyishiEntry.fromJson(const {
+        'name': '地藏菩萨',
+        'sutras': ['地藏菩萨本愿经', '占察善恶业报经'],
+        'quotes': {
+          '地藏菩萨本愿经': ['段落A'],
+          '占察善恶业报经': ['段落B'],
+        },
+        'createdAt': 1,
+      });
+      expect(back!.paragraphs, ['段落A', '段落B']);
+      // 迁移后不再按经书存，避免展示时重复。
+      expect(back.quotes, isEmpty);
+    });
+
+    test('update 保存段落池：去空去重，落盘后可重读', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      await store.update(0, paragraphs: [' 段落一 ', '段落一', '', '段落二']);
+      expect(store[0]!.paragraphs, ['段落一', '段落二']);
+
+      store.resetForTest();
+      await store.load();
+      expect(store[0]!.paragraphs, ['段落一', '段落二']);
+    });
+
+    test('add 可带段落池', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final idx = await store.add(
+        '测试菩萨',
+        ['地藏菩萨本愿经'],
+        paragraphs: ['故事段落'],
+      );
+      expect(idx, greaterThanOrEqualTo(0));
+      expect(store[idx]!.paragraphs, ['故事段落']);
+    });
+
+    test('mergeInto 合并段落池并去重', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      await store.update(0, paragraphs: ['旧段落']);
+      await store.mergeInto(0, paragraphs: ['旧段落', '新段落']);
+      expect(store[0]!.paragraphs, ['旧段落', '新段落']);
+    });
+
+    test('旧版按经书存的 quotes 仍可写入（兼容旧调用）', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final sutra = store[0]!.sutras.first;
+      await store.update(0, quotes: {
+        sutra: ['段落一'],
+      });
+      expect(store[0]!.quotes, {sutra: ['段落一']});
+      // 落盘重读时拍平进段落池。
+      store.resetForTest();
+      await store.load();
+      expect(store[0]!.paragraphs, ['段落一']);
+      expect(store[0]!.quotes, isEmpty);
+    });
+  });
+
+  group('相似名号与合并', () {
+    test('nameSimilarity 按字符重合比例算', () {
+      expect(ShanZhiShiStore.nameSimilarity('地藏菩萨', '地藏菩萨'), 1.0);
+      expect(ShanZhiShiStore.nameSimilarity('地藏菩萨', '地藏王菩萨'),
+          closeTo(0.8, 1e-9));
+      expect(ShanZhiShiStore.nameSimilarity('地藏菩萨', '文殊菩萨'),
+          closeTo(0.5, 1e-9));
+      expect(ShanZhiShiStore.nameSimilarity('', '地藏菩萨'), 0);
+      expect(ShanZhiShiStore.nameSimilarity(' 地藏菩萨 ', '地藏菩萨'), 1.0);
+    });
+
+    test('findSimilarIndex 命中同名与 ≥80% 近似的名号', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      expect(store[store.findSimilarIndex('地藏菩萨')]!.name, '地藏菩萨');
+      // 4/5 = 80%：算相似。
+      expect(store[store.findSimilarIndex('地藏菩萨摩')]!.name, '地藏菩萨');
+      // 完全不搭的名字不命中。
+      expect(store.findSimilarIndex('绝无此名的菩萨'), -1);
+      expect(store.findSimilarIndex('   '), -1);
+    });
+
+    test('findSimilarIndex 编辑时可以跳过自己', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      // 第 0 位就是「地藏菩萨」；跳过它以后不会再命中它自己。
+      final hit = store.findSimilarIndex('地藏菩萨', skip: 0);
+      expect(hit, isNot(0));
+    });
+
+    test('mergeAndRemove 并进目标并删掉来源，返回目标新位次', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final target = store.entries.indexWhere((e) => e.name == '地藏王菩萨');
+      expect(target, greaterThan(0));
+      await store.update(0, paragraphs: ['来自地藏菩萨的段落']);
+      final before = store.length;
+
+      final idx = await store.mergeAndRemove(0, target);
+
+      expect(store.length, before - 1);
+      expect(idx, target - 1);
+      expect(store[idx]!.name, '地藏王菩萨');
+      expect(store[idx]!.paragraphs, contains('来自地藏菩萨的段落'));
+      // 来源那一位已经没了。
+      expect(store.entries.any((e) => e.name == '地藏菩萨'), isFalse);
+    });
+
+    test('mergeInto 合并经文与段落，不新增条目、不改名号', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      await store.update(0, sutras: ['地藏菩萨本愿经'], paragraphs: ['旧段落']);
+      final before = store.length;
+
+      final idx = await store.mergeInto(
+        0,
+        sutras: ['占察善恶业报经'],
+        paragraphs: ['旧段落', '新段落'],
+      );
+
+      expect(idx, 0);
+      expect(store.length, before);
+      expect(store[0]!.name, '地藏菩萨');
+      expect(store[0]!.sutras, ['地藏菩萨本愿经', '占察善恶业报经']);
+      expect(store[0]!.paragraphs, ['旧段落', '新段落']);
+
+      // 落盘后重读仍在。
+      store.resetForTest();
+      await store.load();
+      expect(store[0]!.sutras, ['地藏菩萨本愿经', '占察善恶业报经']);
+      expect(store[0]!.paragraphs, ['旧段落', '新段落']);
+    });
+
+    test('mergeInto 越界位次返回 -1', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      expect(await store.mergeInto(999, sutras: const []), -1);
+    });
+
+    test('allowDuplicate 同名也另起一位', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final before = store.length;
+      final idx = await store.add('地藏菩萨', ['新经'], allowDuplicate: true);
+      expect(idx, before);
+      expect(store.length, before + 1);
+      expect(store[idx]!.name, '地藏菩萨');
+      expect(store[idx]!.sutras, ['新经']);
+      // 原有那一位没被并。
+      expect(store[0]!.name, '地藏菩萨');
+      expect(store[0]!.sutras, ['地藏菩萨本愿经']);
+    });
+  });
+
+  group('恢复（退回到编辑前）', () {
+    test('restoreLast 退回这一位动手之前的版本（连改几次也只退到最早）', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final originalSutras = List<String>.of(store[0]!.sutras);
+      final originalParagraphs = List<String>.of(store[0]!.paragraphs);
+
+      await store.update(0, sutras: ['经一'], paragraphs: ['旧段落']);
+      // 在同一段后面追加一句（不是新的引用段）。
+      await store.update(0, sutras: ['经一'], paragraphs: ['旧段落又加了一句']);
+      expect(store.canRestore(store[0]!), isTrue);
+
+      expect(await store.restoreLast(0), isTrue);
+      expect(store[0]!.sutras, originalSutras);
+      expect(store[0]!.paragraphs, originalParagraphs);
+      // 用完即清：再点没有快照。
+      expect(store.canRestore(store[0]!), isFalse);
+      expect(await store.restoreLast(0), isFalse);
+    });
+
+    test('快照跨重启保留', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final original = List<String>.of(store[0]!.paragraphs);
+      await store.update(0, paragraphs: ['旧段落']);
+      await store.update(0, paragraphs: ['新段落']);
+
+      store.resetForTest();
+      await store.load();
+      expect(store[0]!.paragraphs, ['新段落']);
+      expect(store.canRestore(store[0]!), isTrue);
+
+      expect(await store.restoreLast(0), isTrue);
+      expect(store[0]!.paragraphs, original);
+    });
+
+    test('没编辑过时没有快照', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      expect(store.canRestore(store[0]!), isFalse);
+      expect(await store.restoreLast(0), isFalse);
+    });
+
+    test('删除名号后不会把快照错套到别人身上', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      await store.update(0, paragraphs: ['旧段落']);
+      await store.removeAt(0);
+      expect(store.canRestore(store[0]!), isFalse);
+      expect(await store.restoreLast(0), isFalse);
+    });
+  });
+
   group('resolveSutra', () {
     test('目录未加载时返回 null 不抛异常', () {
       expect(ShanZhiShiStore.resolveSutra('地藏菩萨本愿经'), isNull);
+    });
+
+    test('目录加载后能解析出正文路径（阅读页不会显示「暂无实际文件」）', () async {
+      await NoteSutraCatalog.load();
+      final link = ShanZhiShiStore.resolveSutra('地藏菩萨本愿经');
+      expect(link, isNotNull);
+      expect(link!.filePath, isNotEmpty);
     });
   });
 }

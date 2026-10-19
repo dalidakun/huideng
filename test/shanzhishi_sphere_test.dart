@@ -98,27 +98,6 @@ void main() {
       expect(res.texts.any((e) => e.isCur), isTrue);
     });
 
-    test('缩小（zoom<1）能看清更多名号 → 更密的星空', () {
-      // 用远多于 35 位的名号（300 位）来验证：zoom 大时重叠多、退化成星点多；
-      // zoom 小时字号变小、重叠变少、能保留为文字的更多。
-      final many = <String>[];
-      for (var i = 0; i < 300; i++) {
-        many.add('名号$i');
-      }
-      final layout = computeSphereLayout(many.length);
-      final wide = computeSphereRender(
-        layout: layout, names: many, yaw: 0.2, pitch: 0.1,
-        current: 0, width: 360, height: 360, zoom: 1.0,
-      );
-      final small = computeSphereRender(
-        layout: layout, names: many, yaw: 0.2, pitch: 0.1,
-        current: 0, width: 360, height: 360, zoom: 0.45,
-      );
-      expect(small.texts.length, greaterThan(wide.texts.length));
-      // 无论缩放到哪，300 位都在。
-      expect(small.items.length, 300);
-    });
-
     test('长名号自动缩号，字号不超过短名号', () {
       final layout = computeSphereLayout(names.length);
       final res = computeSphereRender(

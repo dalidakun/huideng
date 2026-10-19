@@ -13,13 +13,17 @@ Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _border => AppPalette.p.border;
 class CheckInSettingsPage extends StatefulWidget {
-  const CheckInSettingsPage({super.key});
+  /// 为 true 时只渲染设置内容主体（不套 Scaffold/AppBar/FAB），
+  /// 供「功课设置」合并页作为 Tab 内嵌使用。
+  final bool embedded;
+
+  const CheckInSettingsPage({super.key, this.embedded = false});
 
   @override
-  State<CheckInSettingsPage> createState() => _CheckInSettingsPageState();
+  State<CheckInSettingsPage> createState() => CheckInSettingsPageState();
 }
 
-class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
+class CheckInSettingsPageState extends State<CheckInSettingsPage> {
   List<_Item> _meditationItems = [];
   List<_NamedCountItem> _readingItems = [];
   List<_NamedCountItem> _nianfoItems = [];
@@ -112,7 +116,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     }
   }
 
-  Future<void> _save() async {
+  Future<void> save() async {
     final lines = <String>[];
     for (final e in _meditationItems) {
       final v = e.text.trim();
@@ -296,7 +300,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
     });
   }
 
-  Future<void> _addCustomType() async {
+  Future<void> addCustomType() async {
     final result = await showDialog<Map<String, String>>(
       context: context,
       builder: (ctx) => const _AddTypeDialog(),
@@ -621,6 +625,116 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final body = ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: _card,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: SwitchListTile(
+            value: _allowShareDailyCheckin,
+            activeTrackColor: const Color(0xFF71867A),
+            activeThumbColor: Colors.white,
+            inactiveTrackColor: AppPalette.p.borderSoft,
+            inactiveThumbColor: AppPalette.p.muted,
+            trackOutlineColor:
+                WidgetStateProperty.resolveWith((_) => Colors.transparent),
+            onChanged: (v) async {
+              setState(() => _allowShareDailyCheckin = v);
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('privacy_share_daily_checkin', v);
+              await SyncService.instance.push();
+              if (mounted) _showShareToast(v);
+            },
+            title: Text('分享每日功课到菩提空间',
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+            subtitle: Text(
+              '开启后，完成当日全部功课时自动以笔记形式分享到菩提空间',
+              style: TextStyle(fontSize: 12, color: _textSec),
+            ),
+          ),
+        ),
+        _buildSection(Icons.chrome_reader_mode_outlined, '诵经', [
+          ..._readingItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _readingItems)),
+        ]),
+        _buildSection(Icons.local_florist_outlined, '念佛', [
+          ..._nianfoItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _nianfoItems, suffix: '声')),
+        ]),
+        _buildSection(Icons.spa_outlined, '称名', [
+          ..._buddhaItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _buddhaItems)),
+        ]),
+        _buildSection(Icons.notifications_none_outlined, '持咒', [
+          ..._mantraItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _mantraItems)),
+        ]),
+        _buildSection(Icons.edit_outlined, '抄经', [
+          ..._copyingItems.asMap().entries.map((e) => _buildItemRow(e.key, _copyingItems, '经书名')),
+        ]),
+        _buildSection(Icons.self_improvement_outlined, '静坐', [
+          ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '0', suffix: '分钟', keyboardType: TextInputType.number)),
+        ]),
+        if (_customTypes.isNotEmpty) ...[
+          ..._customTypes.asMap().entries.map((e) {
+            final idx = e.key;
+            final t = e.value;
+            return _buildSection(Icons.menu, '自定义', [
+              // 类别行
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _bg,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        child: TextField(
+                          controller: t.categoryCtrl,
+                          style: TextStyle(fontSize: 14, color: _text),
+                          decoration: InputDecoration(
+                            hintText: '类别（如：读经）',
+                            hintStyle: TextStyle(color: _textHint, fontSize: 14),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                            isDense: true,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () => _removeCustomType(idx),
+                      child: Container(
+                        width: 32, height: 32,
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(Icons.delete_outline, size: 18, color: Colors.red.withValues(alpha: 0.7)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 该类别的各名称行
+              ...t.items.asMap().entries
+                  .map((it) => _buildCustomItemRow(t, it.key, t.unit)),
+            ]);
+          }),
+        ],
+        const SizedBox(height: 40),
+      ],
+    );
+
+    // 内嵌模式只给合并页提供内容主体，AppBar 与 FAB 由合并页统一提供。
+    if (widget.embedded) return body;
+
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -635,7 +749,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
           Padding(
             padding: const EdgeInsets.only(right: 26),
             child: GestureDetector(
-              onTap: _save,
+              onTap: save,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
                 decoration: BoxDecoration(
@@ -653,7 +767,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
         child: SizedBox(
           width: 42, height: 42,
           child: FloatingActionButton(
-            onPressed: _addCustomType,
+            onPressed: addCustomType,
             heroTag: 'settings_fab',
             backgroundColor: _card,
             elevation: 8,
@@ -663,112 +777,7 @@ class _CheckInSettingsPageState extends State<CheckInSettingsPage> {
           ),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-        children: [
-          Container(
-            margin: const EdgeInsets.only(bottom: 14),
-            decoration: BoxDecoration(
-              color: _card,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: SwitchListTile(
-              value: _allowShareDailyCheckin,
-              activeTrackColor: const Color(0xFF71867A),
-              activeThumbColor: Colors.white,
-              inactiveTrackColor: AppPalette.p.borderSoft,
-              inactiveThumbColor: AppPalette.p.muted,
-              trackOutlineColor:
-                  WidgetStateProperty.resolveWith((_) => Colors.transparent),
-              onChanged: (v) async {
-                setState(() => _allowShareDailyCheckin = v);
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool('privacy_share_daily_checkin', v);
-                await SyncService.instance.push();
-                if (mounted) _showShareToast(v);
-              },
-              title: Text('分享每日功课到菩提空间',
-                  style: TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
-              subtitle: Text(
-                '开启后，完成当日全部功课时自动以笔记形式分享到菩提空间',
-                style: TextStyle(fontSize: 12, color: _textSec),
-              ),
-            ),
-          ),
-          _buildSection(Icons.chrome_reader_mode_outlined, '诵经', [
-            ..._readingItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _readingItems)),
-          ]),
-          _buildSection(Icons.local_florist_outlined, '念佛', [
-            ..._nianfoItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _nianfoItems, suffix: '声')),
-          ]),
-          _buildSection(Icons.spa_outlined, '称名', [
-            ..._buddhaItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _buddhaItems)),
-          ]),
-          _buildSection(Icons.notifications_none_outlined, '持咒', [
-            ..._mantraItems.asMap().entries.map((e) => _buildNamedCountRow(e.key, _mantraItems)),
-          ]),
-          _buildSection(Icons.edit_outlined, '抄经', [
-            ..._copyingItems.asMap().entries.map((e) => _buildItemRow(e.key, _copyingItems, '经书名')),
-          ]),
-          _buildSection(Icons.self_improvement_outlined, '静坐', [
-            ..._meditationItems.asMap().entries.map((e) => _buildItemRow(e.key, _meditationItems, '0', suffix: '分钟', keyboardType: TextInputType.number)),
-          ]),
-          if (_customTypes.isNotEmpty) ...[
-            ..._customTypes.asMap().entries.map((e) {
-              final idx = e.key;
-              final t = e.value;
-              return _buildSection(Icons.menu, '自定义', [
-                // 类别行
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: _bg,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: TextField(
-                            controller: t.categoryCtrl,
-                            style: TextStyle(fontSize: 14, color: _text),
-                            decoration: InputDecoration(
-                              hintText: '类别（如：读经）',
-                              hintStyle: TextStyle(color: _textHint, fontSize: 14),
-                              border: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                              isDense: true,
-                            ),
-                            onChanged: (_) => setState(() {}),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () => _removeCustomType(idx),
-                        child: Container(
-                          width: 32, height: 32,
-                          decoration: BoxDecoration(
-                            color: Colors.red.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(Icons.delete_outline, size: 18, color: Colors.red.withValues(alpha: 0.7)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // 该类别的各名称行
-                ...t.items.asMap().entries
-                    .map((it) => _buildCustomItemRow(t, it.key, t.unit)),
-              ]);
-            }),
-          ],
-          const SizedBox(height: 40),
-        ],
-      ),
+      body: body,
     );
   }
 }

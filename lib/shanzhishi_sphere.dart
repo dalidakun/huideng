@@ -76,9 +76,9 @@ SphereLayout computeSphereLayout(int n) {
 /// 相机距离（单位：球半径的倍数）。越小透视越强、越「球」。
 const double _cameraDistFactor = 2.4;
 
-/// 橄榄形椭球的横向半径（原始值，不乘 zoom）：半屏宽减 8px 边距，
-/// 尽量贴满左右两侧（允许透视前移的名号轻微外溢）。
-double ellipsoidRadiusFor(double width, double height) => width / 2 - 8;
+/// 橄榄形椭球的横向半径：左右各留出约 9% 页宽的边距，保证贴边的名号
+/// （透视前移 + 文字半宽）也完整落在页内，不被屏幕左右裁掉。
+double ellipsoidRadiusFor(double width, double height) => width * 0.41;
 
 /// 纵向拉伸倍数：屏幕 y 方向把圆球拉成竖立橄榄形（旋转时外形始终竖立）。
 double ellipsoidStretchFor(double width, double height) {
@@ -86,6 +86,20 @@ double ellipsoidStretchFor(double width, double height) {
   if (r <= 12) return 1.4;
   // 1.04 是「y × 透视」的放大余量：只留一点点，其余贴满上下。
   return ((height / 2 - 6) / (r * 1.04)).clamp(1.25, 2.6).toDouble();
+}
+
+/// 橄榄形剪影的超椭圆指数：2 = 纯椭圆（上下两头尖、四角留白多），
+/// 越大上下顶点越宽、剪影越接近圆角矩形，四角越满。
+const double kSilhouetteExponent = 2.6;
+
+/// 把橄榄形投影坐标 (x, y) 做超椭圆化后再乘半径/拉伸：
+/// |x|、|y| < 1 时向外鼓（两头变宽、四角变满），> 1（透视前移）时略收。
+({double x, double y}) superellipseWarp(double x, double y) {
+  const p = 2.0 / kSilhouetteExponent;
+  return (
+    x: x == 0 ? 0 : x.sign * math.pow(x.abs(), p).toDouble(),
+    y: y == 0 ? 0 : y.sign * math.pow(y.abs(), p).toDouble(),
+  );
 }
 
 /// 父级持有的球体控制器：把指定位次的名号转到球心、读取当前位次。
@@ -161,12 +175,6 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
 
   Size _size = Size.zero;
   double _radius = 0;
-
-  /// 双指缩放：<1 缩小（名号变小、同时可看清的更多、更密），>1 放大。
-  double _zoom = 1.0;
-  double _zoomStart = 1.0;
-  static const double _minZoom = 0.4;
-  static const double _maxZoom = 2.6;
 
   bool _inertia = false;
   bool _animating = false;
@@ -269,7 +277,7 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     _ctrl.forward(from: 0);
   }
 
-  // ─────────────── 手势（单指拖动旋转 / 双指捏合缩放） ───────────────
+  // ─────────────── 手势（拖动旋转，不缩放） ───────────────
 
   void _onScaleStart(ScaleStartDetails d) {
     _ctrl.stop();
@@ -277,7 +285,6 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     _animating = false;
     _driftUntil = null;
     _lastFocal = d.localFocalPoint;
-    _zoomStart = _zoom;
     _samples
       ..clear()
       ..add(_PanSample(d.localFocalPoint, DateTime.now()));
@@ -287,12 +294,8 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     final last = _lastFocal;
     final delta = last == null ? Offset.zero : d.localFocalPoint - last;
     _lastFocal = d.localFocalPoint;
-    final newZoom =
-        (_zoomStart * d.scale).clamp(_minZoom, _maxZoom).toDouble();
-    // 缩放后球变大变小，转动灵敏度随之调整，手感一致。
-    final r = (_radius > 10 ? _radius : 120.0) * _zoom;
+    final r = _radius > 10 ? _radius : 120.0;
     setState(() {
-      _zoom = newZoom;
       if (delta != Offset.zero) {
         _yaw += delta.dx * _rotPerPx / r;
         _pitch = (_pitch + delta.dy * _rotPerPx / r)
@@ -319,7 +322,7 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
         vy = (b.p.dy - a.p.dy) / dt;
       }
     }
-    final r = (_radius > 10 ? _radius : 120.0) * _zoom;
+    final r = _radius > 10 ? _radius : 120.0;
     _inertiaYawV = (vx * _rotPerPx / r).clamp(-12.0, 12.0).toDouble();
     _inertiaPitchV = (vy * _rotPerPx / r).clamp(-12.0, 12.0).toDouble();
     if (_inertiaYawV.abs() < 0.2 && _inertiaPitchV.abs() < 0.2) {
@@ -346,20 +349,20 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     if (_layout.n == 0 || _radius <= 0) return -1;
     final cx = _size.width / 2;
     final cy = _size.height / 2;
-    final r = _radius * _zoom;
+    final r = _radius;
     final stretch =
         ellipsoidStretchFor(_size.width, _size.height);
     final d = _cameraDistFactor * r;
     var best = -1;
-    var bestD = 56.0 * _zoom;
+    var bestD = 56.0;
     for (var i = 0; i < _layout.n; i++) {
       final p = _layout.points[i];
       final q = rotateSpherePoint(p.x, p.y, p.z, _yaw, _pitch);
       if (q.z < 0.05) continue;
       final persp = d / (d - q.z * r);
-      final dist = (Offset(cx + q.x * r * persp, cy - q.y * r * stretch * persp) -
-              pos)
-          .distance;
+      final w = superellipseWarp(q.x * persp, q.y * persp);
+      final dist =
+          (Offset(cx + w.x * r, cy - w.y * r * stretch) - pos).distance;
       if (dist < bestD) {
         bestD = dist;
         best = i;
@@ -523,7 +526,6 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
                 names: names,
                 yaw: _yaw,
                 pitch: _pitch,
-                zoom: _zoom,
                 current: _current,
                 palette: AppPalette.p,
                 tpCache: _tpCache,
@@ -591,7 +593,7 @@ class SphereRenderResult {
 }
 
 /// 名号字号随深度连续变化：远处小字，越靠球心越大（但不夸张）。
-/// 注意它只是「世界字号」，最终还要乘透视与缩放。
+/// 注意它只是「世界字号」，最终还要乘透视。
 double _fontSizeOf(double z) {
   final zn = ((z + 1) / 2).clamp(0.0, 1.0).toDouble();
   return (6.5 + 3.5 * zn).toDouble();
@@ -617,10 +619,9 @@ double _overlapAreaOf(Rect a, Rect b) {
   return i.width * i.height;
 }
 
-/// 计算某一朝向 / 缩放下的球面名号布局（纯函数，便于单测）：
+/// 计算某一朝向下的球面名号布局（纯函数，便于单测）：
 /// - 正面背面都画，背面更淡更小，形成「立体星空」；
 /// - 字号随深度连续变化，长名号自动缩号；
-/// - 缩得越小（zoom 小）名号越小、能同时看清的越多，越密；
 /// - 与更近的名号重叠过多的才退成星点。
 SphereRenderResult computeSphereRender({
   required SphereLayout layout,
@@ -630,11 +631,9 @@ SphereRenderResult computeSphereRender({
   required int current,
   required double width,
   required double height,
-  double zoom = 1.0,
 }) {
   const empty = SphereRenderResult([]);
-  final baseR = ellipsoidRadiusFor(width, height);
-  final r = baseR * zoom;
+  final r = ellipsoidRadiusFor(width, height);
   if (r < 12 || layout.n == 0 || names.isEmpty) return empty;
   final cx = width / 2;
   final cy = height / 2;
@@ -655,10 +654,12 @@ SphereRenderResult computeSphereRender({
     final maxLayoutW = (r * 0.5) / persp;
     final fitF = name.length <= 1 ? baseF : maxLayoutW / name.length;
     final f = math.min(baseF, fitF).clamp(isCur ? 8.0 : 4.0, baseF).toDouble();
+    // 超椭圆化：橄榄形上下两头加宽，四角留白更少。
+    final w = superellipseWarp(q.x * persp, q.y * persp);
     pts.add(SphereRenderItem(
       index: i,
-      sx: cx + q.x * r * persp,
-      sy: cy - q.y * r * stretch * persp,
+      sx: cx + w.x * r,
+      sy: cy - w.y * r * stretch,
       z: q.z,
       persp: persp,
       // 越靠边缘横向压扁（前后半球同样按 |z|），贴球面的立体感。
@@ -676,8 +677,8 @@ SphereRenderResult computeSphereRender({
   final placed = <Rect>[];
   final out = <SphereRenderItem>[];
   for (final v in pts) {
-    final w = _estimateTextWidth(names[v.index], v.f) * v.persp * v.squash * zoom;
-    final h = v.f * v.persp * zoom;
+    final w = _estimateTextWidth(names[v.index], v.f) * v.persp * v.squash;
+    final h = v.f * v.persp;
     final rect = Rect.fromCenter(
       center: Offset(v.sx, v.sy),
       width: w + 4,
@@ -703,7 +704,6 @@ class _SpherePainter extends CustomPainter {
   final List<String> names;
   final double yaw;
   final double pitch;
-  final double zoom;
   final int current;
   final PaletteData palette;
   final Map<String, Map<String, TextPainter>> tpCache;
@@ -713,7 +713,6 @@ class _SpherePainter extends CustomPainter {
     required this.names,
     required this.yaw,
     required this.pitch,
-    required this.zoom,
     required this.current,
     required this.palette,
     required this.tpCache,
@@ -730,7 +729,6 @@ class _SpherePainter extends CustomPainter {
       current: current,
       width: size.width,
       height: size.height,
-      zoom: zoom,
     );
 
     final dotPaint = Paint();
@@ -740,7 +738,7 @@ class _SpherePainter extends CustomPainter {
         dotPaint.color = palette.textSec.withValues(alpha: v.alpha * 0.9);
         canvas.drawCircle(
           Offset(v.sx, v.sy),
-          (0.9 + 1.4 * v.z.abs()) * v.persp * zoom,
+          (0.9 + 1.4 * v.z.abs()) * v.persp,
           dotPaint,
         );
         continue;
@@ -749,7 +747,7 @@ class _SpherePainter extends CustomPainter {
           double.infinity);
       if (v.isCur) {
         // 当前名号：背后一团柔光，标识「球心落点」。
-        final glowR = v.f * v.persp * 2.0 * zoom;
+        final glowR = v.f * v.persp * 2.0;
         canvas.drawCircle(
           Offset(v.sx, v.sy),
           glowR,
@@ -765,7 +763,7 @@ class _SpherePainter extends CustomPainter {
       }
       canvas.save();
       canvas.translate(v.sx, v.sy);
-      canvas.scale(v.persp * v.squash * zoom, v.persp * zoom);
+      canvas.scale(v.persp * v.squash, v.persp);
       tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
       canvas.restore();
     }
@@ -812,7 +810,6 @@ class _SpherePainter extends CustomPainter {
   bool shouldRepaint(covariant _SpherePainter old) =>
       old.yaw != yaw ||
       old.pitch != pitch ||
-      old.zoom != zoom ||
       old.current != current ||
       old.layout != layout ||
       old.names != names ||
