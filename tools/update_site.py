@@ -80,22 +80,31 @@ def deploy() -> tuple[int, str]:
         print("         安装：npm install -g @cloudbase/cli   然后 tcb login")
         return 2, "无 tcb"
 
-    args = [tcb, "hosting", "deploy", str(DIST), cloud_path, "-e", env_id]
-    # npm 装出来的 tcb 是 .cmd 包装器，CreateProcess 不能直接跑它
-    # （会 WinError 2，而 shutil.which 又会放行），必须交给 cmd.exe。
-    if tcb.lower().endswith((".cmd", ".bat")):
-        args = ["cmd", "/c", *args]
+    # 两处都要更新：根目录 = aibuilder.top 首页（官网）；
+    # cloud_path 子目录 = App 内硬编码引用的路径（update_service / community_invite）。
+    # 根目录的 __auth/ 等系统文件不在 dist 里，deploy 不会动它们。
+    targets = [""] + ([cloud_path] if cloud_path else [])
+    for target in targets:
+        args = [tcb, "hosting", "deploy", str(DIST)]
+        if target:
+            args.append(target)
+        args += ["-e", env_id]
+        # npm 装出来的 tcb 是 .cmd 包装器，CreateProcess 不能直接跑它
+        # （会 WinError 2，而 shutil.which 又会放行），必须交给 cmd.exe。
+        if tcb.lower().endswith((".cmd", ".bat")):
+            args = ["cmd", "/c", *args]
 
-    print(f"[部署]   tcb hosting deploy {DIST.relative_to(ROOT)} {cloud_path} -e {env_id}")
-    sys.stdout.flush()
-    proc = subprocess.run(args, cwd=str(ROOT))
-    if proc.returncode != 0:
-        print()
-        print("[部署]   上传失败。常见原因：")
-        print("           未登录 → 先执行 tcb login")
-        print("           环境到期 → tcb env list 查看到期时间")
-        return 1, "上传失败"
-    print("[部署]   上传完成。")
+        label = f"/{target}" if target else "/（根目录）"
+        print(f"[部署]   tcb hosting deploy {DIST.relative_to(ROOT)} {target} -e {env_id}")
+        sys.stdout.flush()
+        proc = subprocess.run(args, cwd=str(ROOT))
+        if proc.returncode != 0:
+            print()
+            print(f"[部署]   {label} 上传失败。常见原因：")
+            print("           未登录 → 先执行 tcb login")
+            print("           环境到期 → tcb env list 查看到期时间")
+            return 1, "上传失败"
+        print(f"[部署]   上传完成：{label}")
     return 0, "已上传"
 
 

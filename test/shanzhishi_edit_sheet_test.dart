@@ -11,10 +11,17 @@ void main() {
     ShanZhiShiStore.instance.resetForTest();
   });
 
-  Future<void> openEdit(WidgetTester tester, {required void Function(int?) save}) async {
+  Future<void> openEdit(WidgetTester tester,
+      {required void Function(int?) save, int? index}) async {
     final store = ShanZhiShiStore.instance;
     await store.load();
-    final entry = store[0]!;
+    // 默认挑一条没有任何 80% 近似兄弟的名号，避免「不改名保存」被查重框挡住。
+    index ??= store.entries
+        .indexWhere((e) =>
+            store.findSimilarIndex(e.name,
+                skip: store.entries.indexOf(e)) ==
+            -1);
+    final entry = store[index]!;
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: Builder(
@@ -23,7 +30,7 @@ void main() {
               onPressed: () async {
                 save(await ShanZhiShiEditSheet.show(
                   context,
-                  index: 0,
+                  index: index!,
                   entry: entry,
                 ));
               },
@@ -40,7 +47,7 @@ void main() {
 
   testWidgets('引用段落是一片输入区：改名号 + 填段落后保存', (tester) async {
     int? saved;
-    await openEdit(tester, save: (v) => saved = v);
+    await openEdit(tester, save: (v) => saved = v, index: 0);
     final store = ShanZhiShiStore.instance;
 
     // 改名号。
@@ -53,12 +60,14 @@ void main() {
     await tester.enterText(paraField, '测试段落一\n\n测试段落二\n');
     await tester.pump();
 
-    // 保存。
+    // 保存：「测试菩萨」摘掉通用尊称「菩萨」后是「测试」，与既有名号没有相同
+    // 字样，不再弹合并提示，直接存下。
     final saveButton = find.widgetWithText(FilledButton, '保存');
     await tester.ensureVisible(saveButton);
     await tester.pumpAndSettle();
     await tester.tap(saveButton);
     await tester.pumpAndSettle();
+    expect(find.text('已有相似的善知识'), findsNothing);
 
     expect(saved, 0);
     expect(store[0]!.name, '测试菩萨');
@@ -70,20 +79,28 @@ void main() {
   testWidgets('编辑面板打开时回填已有段落（旧数据也能回填）', (tester) async {
     final store = ShanZhiShiStore.instance;
     await store.load();
-    await store.update(0, paragraphs: ['第一段', '第二段']);
+    // 挑一条没有任何 80% 近似兄弟的名号，不改名保存不会被查重框拦住。
+    final iSafe = store.entries.indexWhere(
+            (e) => store.findSimilarIndex(e.name,
+                    skip: store.entries.indexOf(e)) ==
+                -1);
+    expect(iSafe, greaterThanOrEqualTo(0));
+    await store.update(iSafe, paragraphs: ['第一段', '第二段']);
     // 重新打开面板：段落应回填到输入区。
     int? saved;
-    await openEdit(tester, save: (v) => saved = v);
+    await openEdit(tester, save: (v) => saved = v, index: iSafe);
     final controller = tester
         .widget<TextField>(
             find.byKey(const ValueKey('shanzhishi_paragraphs_field')))
         .controller!;
     expect(controller.text, '第一段\n\n第二段');
-    // 不改内容直接保存：段落保持。
+    // 不改内容直接保存：通用尊称（如来 / 佛 / 菩萨 / 咒）不计入相同字符，
+    // 不会再被查重框挡住。
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
-    expect(saved, 0);
-    expect(store[0]!.paragraphs, ['第一段', '第二段']);
+    expect(find.text('已有相似的善知识'), findsNothing);
+    expect(saved, iSafe);
+    expect(store[iSafe]!.paragraphs, ['第一段', '第二段']);
   });
 
   testWidgets('待选经文浮在经名输入框下方，不被引用段落区遮住', (tester) async {
@@ -125,7 +142,7 @@ void main() {
 
   testWidgets('编辑改名撞车：提示「保留名号 / 合并」', (tester) async {
     int? saved;
-    await openEdit(tester, save: (v) => saved = v);
+    await openEdit(tester, save: (v) => saved = v, index: 0);
     final store = ShanZhiShiStore.instance;
     final before = store.length;
 
@@ -150,7 +167,7 @@ void main() {
     await store.update(0, paragraphs: ['来自地藏菩萨的段落']);
     final before = store.length;
     int? saved;
-    await openEdit(tester, save: (v) => saved = v);
+    await openEdit(tester, save: (v) => saved = v, index: 0);
 
     await tester.enterText(find.byType(TextField).first, '地藏王菩萨');
     await tester.pump();
@@ -165,6 +182,32 @@ void main() {
     expect(merged.paragraphs, contains('来自地藏菩萨的段落'));
     expect(saved, isNotNull);
     expect(store[saved!]!.name, '地藏王菩萨');
+  });
+
+  testWidgets('编辑不改名也查重：与现存近似名号提示合并', (tester) async {
+    final store = ShanZhiShiStore.instance;
+    await store.load();
+    // 种子里同时有「地藏菩萨」(index 0) 与「地藏王菩萨」：4/5 = 80%，算重复。
+    expect(store[0]!.name, '地藏菩萨');
+    final iWangzang = store.entries.indexWhere((e) => e.name == '地藏王菩萨');
+    expect(iWangzang, greaterThan(0));
+    final before = store.length;
+
+    int? saved;
+    await openEdit(tester, save: (v) => saved = v, index: 0);
+
+    // 名号一个字都没改，直接保存：也要查出「地藏王菩萨」这条近似名号。
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('已有相似的善知识'), findsOneWidget);
+
+    // 选合并：本条删掉，并入「地藏王菩萨」。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_merge_existing')));
+    await tester.pumpAndSettle();
+    expect(store.length, before - 1);
+    expect(store.entries.any((e) => e.name == '地藏菩萨'), isFalse);
+    expect(store.entries.any((e) => e.name == '地藏王菩萨'), isTrue);
+    expect(saved, isNotNull);
   });
 
   testWidgets('编辑同名重复项：保存时提示合并', (tester) async {

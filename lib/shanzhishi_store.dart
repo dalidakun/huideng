@@ -545,6 +545,82 @@ class ShanZhiShiStore extends ChangeNotifier {
     return best;
   }
 
+  /// 通用尊称：名号里人人都有的字样，查重时不算「相同字符」。
+  /// 「菩萨」这类通用称一旦计入，任何一位菩萨都会跟所有菩萨判成重复，故先摘掉。
+  static const List<String> genericNameTerms = [
+    '摩诃萨',
+    '菩萨',
+    '大士',
+    '如来',
+    '金刚',
+    '明王',
+    '上师',
+    '大师',
+    '尊者',
+    '真言',
+    '神咒',
+    '心咒',
+    '佛母',
+    '佛',
+    '咒',
+    '母',
+  ];
+
+  /// 名号里真正有辨识度的部分：摘掉通用尊称后的字样。
+  static String distinctName(String name) {
+    var s = name.trim();
+    for (final t in genericNameTerms) {
+      s = s.replaceAll(t, '');
+    }
+    return s;
+  }
+
+  /// 两个名号之间有多少个相同字符（重复字按出现次数计）。
+  /// 例：「地藏菩萨」vs「地藏王菩萨」= 4。
+  static int nameCommonChars(String a, String b) {
+    final x = a.trim();
+    final y = b.trim();
+    if (x.isEmpty || y.isEmpty) return 0;
+    final counts = <int, int>{};
+    for (final r in x.runes) {
+      counts[r] = (counts[r] ?? 0) + 1;
+    }
+    var common = 0;
+    for (final r in y.runes) {
+      final n = counts[r] ?? 0;
+      if (n <= 0) continue;
+      counts[r] = n - 1;
+      common++;
+    }
+    return common;
+  }
+
+  /// 保存前的查重名单：与 [name] 摘掉通用尊称（「菩萨 / 如来 / 佛 / 咒」等，
+  /// 见 [genericNameTerms]）后还有 ≥ [minCommon] 个相同字符（默认 2 个）的
+  /// 所有已有名号；完全同名必然命中。
+  /// 按相同字符数从多到少排（同数按位次先后），[skip] 跳过自己那一位。
+  List<(int, String)> findSimilarEntries(
+    String name, {
+    int minCommon = 2,
+    int? skip,
+  }) {
+    final target = name.trim();
+    if (target.isEmpty) return const [];
+    final targetDistinct = distinctName(target);
+    final hits = <(int, int)>[];
+    for (var i = 0; i < _entries.length; i++) {
+      if (i == skip) continue;
+      final other = _entries[i].name;
+      final n = other == target
+          // 完全同名：不问长短，直接算命中（排最前）。
+          ? target.runes.length + 1
+          : nameCommonChars(targetDistinct, distinctName(other));
+      if (n >= minCommon) hits.add((i, n));
+    }
+    hits.sort((a, b) => b.$2 != a.$2 ? b.$2 - a.$2 : a.$1 - b.$1);
+    return [for (final h in hits) (h.$1, _entries[h.$1].name)];
+  }
+
   /// 把第 [from] 位整体并进第 [into] 位，然后删掉 [from]（编辑改名撞车时用）。
   ///
   /// 返回合并后目标的新位次（from < into 时会前移一位）；失败返回 -1。

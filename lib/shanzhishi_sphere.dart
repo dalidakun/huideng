@@ -103,6 +103,16 @@ const double kSilhouetteExponent = 3.2;
   );
 }
 
+/// 星图上的名号显示文案：把结尾的「摩诃萨」尊称尾缀去掉（数据层保留全称）。
+/// 「观自在菩萨摩诃萨」在球面上只写「观自在菩萨」，避免长名号重复尊称占地方。
+String sphereDisplayName(String name) {
+  var n = name.trim();
+  while (n.length > 3 && n.endsWith('摩诃萨')) {
+    n = n.substring(0, n.length - 3);
+  }
+  return n;
+}
+
 /// 父级持有的球体控制器：把指定位次的名号转到球心、读取当前位次。
 class ShanZhiSphereController {
   _ShanZhiSphereState? _state;
@@ -127,6 +137,10 @@ class ShanZhiShiSphere extends StatefulWidget {
   /// 是否允许入场动画与缓速自转（仅当前 Tab 页开启，省电）。
   final bool spinEnabled;
 
+  /// 只认竖向拖动（ pitch / 纵向后退），横向手势不参与（本页整页不做左右切页）。
+  /// 默认 false = 平时两轴都跟手。
+  final bool verticalOnly;
+
   /// 中心名号变化时回调（拖动/自转过程中实时触发）。
   final ValueChanged<int>? onCurrentChanged;
 
@@ -145,6 +159,7 @@ class ShanZhiShiSphere extends StatefulWidget {
     this.controller,
     this.initialIndex,
     this.spinEnabled = false,
+    this.verticalOnly = false,
     this.onCurrentChanged,
     this.onCurrentTap,
     this.onNameTapped,
@@ -354,6 +369,27 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
     }
   }
 
+  // verticalOnly 时的竖向拖动适配：把手势折算进同一套旋转/惯性逻辑，
+  // 只取 y 分量——横向位移一律忽略（本页整页不做左右切页）。
+  void _onVerticalDragStart(DragStartDetails d) {
+    _onScaleStart(ScaleStartDetails(localFocalPoint: d.localPosition));
+  }
+
+  void _onVerticalDragUpdate(DragUpdateDetails d) {
+    _onScaleUpdate(ScaleUpdateDetails(
+      localFocalPoint: d.localPosition,
+      pointerCount: 1,
+    ));
+  }
+
+  void _onVerticalDragEnd(DragEndDetails d) {
+    _onScaleEnd(ScaleEndDetails(
+      velocity: d.velocity,
+      scaleVelocity: 0,
+      pointerCount: 1,
+    ));
+  }
+
   /// 触点最近且足够近的正面名号位次；没有则 -1。
   int _hitTest(Offset pos) {
     if (_layout.n == 0 || _radius <= 0) return -1;
@@ -522,12 +558,20 @@ class _ShanZhiSphereState extends State<ShanZhiShiSphere>
       builder: (context, constraints) {
         _size = Size(constraints.maxWidth, constraints.maxHeight);
         _radius = ellipsoidRadiusFor(_size.width, _size.height);
-        final names = widget.names;
+        final names = [for (final n in widget.names) sphereDisplayName(n)];
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onScaleStart: _onScaleStart,
-          onScaleUpdate: _onScaleUpdate,
-          onScaleEnd: _onScaleEnd,
+          // 普通模式：两轴都跟手（scale 手势）；verticalOnly：只认竖向拖动，
+          // 横向手势不进竞技场（本页整页不做左右切页）。
+          onScaleStart: widget.verticalOnly ? null : _onScaleStart,
+          onScaleUpdate: widget.verticalOnly ? null : _onScaleUpdate,
+          onScaleEnd: widget.verticalOnly ? null : _onScaleEnd,
+          onVerticalDragStart:
+              widget.verticalOnly ? _onVerticalDragStart : null,
+          onVerticalDragUpdate:
+              widget.verticalOnly ? _onVerticalDragUpdate : null,
+          onVerticalDragEnd:
+              widget.verticalOnly ? _onVerticalDragEnd : null,
           onTapUp: names.isEmpty ? null : _onTapUp,
           child: RepaintBoundary(
             child: CustomPaint(
@@ -622,6 +666,17 @@ double _depthAlpha(double z) {
 /// 按字符数估算单行文字宽度（CJK 约一字等于一个字号宽）。
 double _estimateTextWidth(String name, double f) => name.length * (f + 0.4);
 
+/// 星图上的展示名：去掉结尾的「摩诃萨」（如「文殊师利菩萨摩诃萨」
+/// 在球面上显示为「文殊师利菩萨」）；名录与点选仍用全名，仅显示时缩短。
+String shanZhiShortName(String name) {
+  final s = name.trim();
+  const suffix = '摩诃萨';
+  if (s.length > suffix.length && s.endsWith(suffix)) {
+    return s.substring(0, s.length - suffix.length);
+  }
+  return s;
+}
+
 /// 两个矩形的交叠面积。
 double _overlapAreaOf(Rect a, Rect b) {
   final i = a.intersect(b);
@@ -653,12 +708,14 @@ SphereRenderResult computeSphereRender({
 
   // 旋转 + 透视投影：全部名号（含背面）都参与，背面更小更淡。
   final pts = <SphereRenderItem>[];
+  // 球面上的文案用去掉「摩诃萨」的短名（名录、点选、面板仍是全名）。
+  final labels = [for (final n in names) shanZhiShortName(n)];
   for (var i = 0; i < layout.n && i < names.length; i++) {
     final p = layout.points[i];
     final q = rotateSpherePoint(p.x, p.y, p.z, yaw, pitch);
     final persp = cam / (cam - q.z * r);
     final isCur = i == current;
-    final name = names[i];
+    final name = labels[i];
     final baseF = isCur ? 12.0 : _fontSizeOf(q.z);
     // 单个名号最宽不超过球面宽的 0.5（长名如「师子奋迅俱足万行如来」自动缩小）。
     final maxLayoutW = (r * 0.5) / persp;
@@ -687,7 +744,7 @@ SphereRenderResult computeSphereRender({
   final placed = <Rect>[];
   final out = <SphereRenderItem>[];
   for (final v in pts) {
-    final w = _estimateTextWidth(names[v.index], v.f) * v.persp * v.squash;
+    final w = _estimateTextWidth(labels[v.index], v.f) * v.persp * v.squash;
     final h = v.f * v.persp;
     final rect = Rect.fromCenter(
       center: Offset(v.sx, v.sy),
@@ -760,8 +817,8 @@ class _SpherePainter extends CustomPainter {
         );
         continue;
       }
-      final tp = _tp(names[v.index], v.f, v.isCur ? 1 : v.alpha, v.isCur,
-          double.infinity);
+      final tp = _tp(shanZhiShortName(names[v.index]), v.f,
+          v.isCur ? 1 : v.alpha, v.isCur, double.infinity);
       if (v.isCur) {
         // 当前名号：两层柔光标识「球心落点」。
         _glow(v.sx, v.sy, v.f * v.persp * 3.1, palette.accent, 0.09, canvas);

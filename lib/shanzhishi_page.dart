@@ -8,6 +8,9 @@ import 'app_palette.dart';
 import 'note_sutra_links.dart';
 import 'reading_page.dart';
 import 'shanzhishi_edit_sheet.dart';
+import 'shanzhishi_mantra_edit_sheet.dart';
+import 'shanzhishi_mantra_store.dart';
+import 'shanzhishi_mantra_view.dart';
 import 'shanzhishi_sphere.dart';
 import 'shanzhishi_store.dart';
 import 'ui_sound.dart';
@@ -41,6 +44,20 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     with SingleTickerProviderStateMixin {
   final ShanZhiShiStore _store = ShanZhiShiStore.instance;
   final ShanZhiSphereController _sphereCtrl = ShanZhiSphereController();
+
+  // ── 密咒展示面（第 2 页）同套交互 ──
+  final ShanZhiShiMantraStore _mxStore = ShanZhiShiMantraStore.instance;
+  bool _mxSearchOpen = false;
+  final TextEditingController _mxSearchCtrl = TextEditingController();
+
+  /// 密咒展示面（引用其 State：搜索命中后滚动定位到那条密咒）。
+  /// 两屏常驻同一棵树，State 一直保留（滚动位置不重置）。
+  final GlobalKey<ShanZhiShiMantraViewState> _mxPageKey = GlobalKey();
+
+  /// 当前停在的那一屏（0 = 佛号星图，1 = 密咒竖排）。两屏不做左右滑动切换，
+  /// 只由悬浮球的「切换」子按钮点选互换，所以这里就是一个状态位。
+  /// 右下角悬浮球两页共用一颗、固定不随切页移动，仅按当前屏换键位与子按钮动作。
+  int _pageIdx = 0;
 
   /// 当前选中的名号位次；null = 底部面板不显示（点名号后才出现）。
   int? _selected;
@@ -83,18 +100,28 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       duration: const Duration(milliseconds: 300),
     );
     _store.addListener(_onStoreChanged);
+    _mxStore.addListener(_onMxStoreChanged);
     widget.activeTab?.addListener(_onTabChanged);
     unawaited(_store.load());
+    unawaited(_mxStore.load());
     unawaited(NoteSutraCatalog.load());
   }
 
   @override
   void dispose() {
     _store.removeListener(_onStoreChanged);
+    _mxStore.removeListener(_onMxStoreChanged);
     widget.activeTab?.removeListener(_onTabChanged);
     _shelfController.dispose();
     _searchCtrl.dispose();
+    _mxSearchCtrl.dispose();
     super.dispose();
+  }
+
+  /// 密咒库变化（添加/载入完成）：刷新密咒页。
+  void _onMxStoreChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   void _onStoreChanged() {
@@ -115,9 +142,10 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   void _onTabChanged() {
     if (!mounted) return;
-    // 切走时顺手收起悬浮菜单与搜索浮层，回来看到的是干净的星图。
+    // 切走时顺手收起悬浮菜单与两页的搜索浮层，回来看到的是干净页面。
     if (!_isActive && _showFabMenu) _showFabMenu = false;
     if (!_isActive && _searchOpen) _searchOpen = false;
+    if (!_isActive && _mxSearchOpen) _mxSearchOpen = false;
     setState(() {});
   }
 
@@ -136,6 +164,65 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     if (!_searchOpen) return;
     _searchCtrl.clear();
     setState(() => _searchOpen = false);
+  }
+
+  /// 右下角悬浮球的「切换」：直接换到另一屏（不做左右滑动的过场效果）。
+  /// 两屏各自常驻，球面朝向与密咒滚动位置都留着，切回来还是原样。
+  void _openSwitch() {
+    final logical = _pageIdx == 0 ? 1 : 0;
+    setState(() {
+      _pageIdx = logical;
+      // 另一屏的搜索浮层若还开着就先收起：树里同时留两个输入框会抢焦点，
+      // 键盘可能一直弹不出来。
+      if (logical != 0 && _searchOpen) _closeSearch();
+      if (logical != 1 && _mxSearchOpen) _closeMxSearch();
+    });
+  }
+
+  // ─────────────── 密咒页的动作 ───────────────
+
+  /// 打开密咒搜索浮层（搜的是密咒名，不搜佛号）。
+  void _openMxSearch() {
+    unawaited(UiSound.instance.playClick());
+    setState(() {
+      _mxSearchOpen = true;
+      _mxSearchCtrl.clear();
+    });
+  }
+
+  void _closeMxSearch() {
+    if (!_mxSearchOpen) return;
+    _mxSearchCtrl.clear();
+    setState(() => _mxSearchOpen = false);
+  }
+
+  /// 密咒搜索命中：前缀匹配优先、包含匹配其次。
+  List<String> get _mxSearchHits {
+    final q = _mxSearchCtrl.text.trim();
+    if (q.isEmpty) return const [];
+    final prefix = <String>[];
+    final contains = <String>[];
+    for (final m in _mxStore.mantras) {
+      if (m.startsWith(q)) {
+        prefix.add(m);
+      } else if (m.contains(q)) {
+        contains.add(m);
+      }
+    }
+    return [...prefix, ...contains];
+  }
+
+  /// 点密咒搜索结果：收起浮层，并把名单滚到那条密咒（否则看不出它在哪）。
+  void _onMxSearchHit(String mantra) {
+    unawaited(UiSound.instance.playClick());
+    _closeMxSearch();
+    _mxPageKey.currentState?.revealMantra(mantra);
+  }
+
+  /// 新建密咒：上拉面板取名，保存进密咒库（重名面板内提示）。
+  Future<void> _openMantraAdd() async {
+    unawaited(UiSound.instance.playClick());
+    await ShanZhiShiMantraEditSheet.show(context);
   }
 
   /// 前缀匹配优先、包含匹配其次（与经藏检索口径一致）。
@@ -331,6 +418,15 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       _closeFabMenu();
       return true;
     }
+    if (_mxSearchOpen) {
+      _closeMxSearch();
+      return true;
+    }
+    // 密咒展示面还在：侧滑返回先切回佛号球面。
+    if (_pageIdx == 1) {
+      _openSwitch();
+      return true;
+    }
     if (_selected == null) return false;
     _collapseShelf();
     return true;
@@ -368,14 +464,21 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   Color get _fabDeepBg => const Color(0xFF4A4A4A).withValues(alpha: 0.85);
 
   /// 右下角悬浮球层：铺满整页，按球心摆放主球与沿四分之一圆弧排开的子按钮。
+  /// 两页共用这一颗（固定不随翻页滑动，观感如同一层恒定的操作球），
+  /// 键位前缀与子按钮动作按当前屏切换：佛号屏「添加」开名号面板、搜索搜佛号；
+  /// 密咒屏「添加」开密咒面板、搜索搜密咒。
   ///
   /// 子按钮方向为 0°（正前）/ 45° / 90°（正上）：球在右半屏就朝左展开、
   /// 在下半屏就朝上展开（靠近边缘时自动反向，弧线始终落在屏内）。
+  String get _fabPrefix => _pageIdx == 0 ? 'shanzhishi_fab' : 'shanzhishi_mx_fab';
+
   Widget _buildFabLayer(MediaQueryData mq) {
     const double box =
         _fabRadius + _fabItemSize / 2 + _fabToggleSize / 2 + 4;
+    final prefix = _fabPrefix;
+    final bool onMantra = _pageIdx != 0;
     return Positioned.fill(
-      key: const ValueKey('shanzhishi_fab_layer'),
+      key: ValueKey('${prefix}_layer'),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final Size area = Size(constraints.maxWidth, constraints.maxHeight);
@@ -401,14 +504,14 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
               // 展开时点空白处收起（吞掉点击，避免顺带点到球面上的名号）。
               if (_showFabMenu)
                 Positioned.fill(
-                  key: const ValueKey('shanzhishi_fab_overlay'),
+                  key: ValueKey('${prefix}_overlay'),
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: _closeFabMenu,
                   ),
                 ),
               Positioned(
-                key: const ValueKey('shanzhishi_fab_menu'),
+                key: ValueKey('${prefix}_menu'),
                 left: boxTopLeft.dx,
                 top: boxTopLeft.dy,
                 child: SizedBox(
@@ -417,38 +520,45 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      // 添加：原右上角「＋」，录入一位佛菩萨（只用一个加号，不再套圈）。
+                      // 添加：佛号屏录入一位佛菩萨（只用一个加号，不再套圈）；
+                      // 密咒屏新建一条密咒。
                       _buildFabItem(
-                        key: const ValueKey('shanzhishi_fab_add'),
+                        key: ValueKey('${prefix}_add'),
+                        open: _showFabMenu,
                         dirX: dirX(0),
                         dirY: dirY(0),
                         ballInBox: ballInBox,
                         tooltip: '添加',
-                        heroTag: 'shanzhishi_add',
-                        onTap: () => _runFabAction(_openAdd),
+                        heroTag: '${prefix}_add',
+                        onTap: () => _runFabAction(
+                            onMantra ? _openMantraAdd : _openAdd),
                         child: const Icon(Icons.add, size: 22),
                       ),
-                      // 搜索：原右上角放大镜。
+                      // 搜索：佛号屏搜名号，密咒屏搜密咒。
                       _buildFabItem(
-                        key: const ValueKey('shanzhishi_fab_search'),
+                        key: ValueKey('${prefix}_search'),
+                        open: _showFabMenu,
                         dirX: dirX(45),
                         dirY: dirY(45),
                         ballInBox: ballInBox,
                         tooltip: '搜索',
-                        heroTag: 'shanzhishi_search',
-                        onTap: () => _runFabAction(_openSearch),
+                        heroTag: '${prefix}_search',
+                        onTap: () =>
+                            _runFabAction(onMantra ? _openMxSearch : _openSearch),
                         child: const Icon(Icons.search, size: 20),
                       ),
-                      // 切换：功能待补（先只收起菜单，后续接入具体切换动作）。
+                      // 切换：直接换到另一屏（两页同一个入口；当前屏与目标跟随 _pageIdx）。
                       _buildFabItem(
-                        key: const ValueKey('shanzhishi_fab_switch'),
+                        key: ValueKey('${prefix}_switch'),
+                        open: _showFabMenu,
                         dirX: dirX(90),
                         dirY: dirY(90),
                         ballInBox: ballInBox,
                         tooltip: '切换',
-                        heroTag: 'shanzhishi_switch',
+                        heroTag: '${prefix}_switch',
                         onTap: () => _runFabAction(() {
-                          // TODO: 切换功能（待定义）。
+                          unawaited(UiSound.instance.playClick());
+                          _openSwitch();
                         }),
                         // 用左右双向箭头表示「切换」，与另外两个图标风格一致。
                         child: const Icon(Icons.swap_horiz, size: 22),
@@ -456,7 +566,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                       Positioned(
                         left: ballInBox.dx - _fabToggleSize / 2,
                         top: ballInBox.dy - _fabToggleSize / 2,
-                        child: _buildFabToggle(),
+                        child: _buildFabToggle(prefix: prefix),
                       ),
                     ],
                   ),
@@ -470,8 +580,10 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   }
 
   /// 弧线上的单个子按钮：展开时沿弧线方向从主球向外滑出并淡入，收起反向缩回。
+  /// [open] 控制是哪一页的悬浮球展开态（佛号页 / 密咒页各自持有开关）。
   Widget _buildFabItem({
     required Key key,
+    required bool open,
     required double dirX,
     required double dirY,
     required Offset ballInBox,
@@ -487,9 +599,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       left: ballInBox.dx + _fabRadius * dirX - _fabItemSize / 2,
       top: ballInBox.dy + _fabRadius * dirY - _fabItemSize / 2,
       child: IgnorePointer(
-        ignoring: !_showFabMenu,
+        ignoring: !open,
         child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(begin: 0, end: _showFabMenu ? 1 : 0),
+          tween: Tween<double>(begin: 0, end: open ? 1 : 0),
           duration: const Duration(milliseconds: 480),
           curve: const _FabSpringCurve(),
           builder: (context, t, built) {
@@ -548,7 +660,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 主球：收起态是半透明灰底 + 白圈（类 iPhone 悬浮球），
   /// 展开后略微缩小，变成深灰底 + 白叉。
-  Widget _buildFabToggle() {
+  /// [prefix] 键位前缀：佛号屏 = shanzhishi_fab，密咒屏 = shanzhishi_mx_fab。
+  Widget _buildFabToggle({required String prefix}) {
     // 半透明灰底：透过它能看到球面上的佛号，不显突兀。
     final Color collapsedBg = const Color(0xFF9E9E9E).withValues(alpha: 0.30);
     final Color expandedBg = _fabDeepBg;
@@ -586,14 +699,14 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                     child: FadeTransition(opacity: anim, child: child),
                   ),
                   child: _showFabMenu
-                      ? const Icon(
+                      ? Icon(
                           Icons.close,
-                          key: ValueKey('shanzhishi_fab_close'),
+                          key: ValueKey('${prefix}_close'),
                           size: 18,
                           color: Colors.white,
                         )
                       : Container(
-                          key: const ValueKey('shanzhishi_fab_ring'),
+                          key: ValueKey('${prefix}_ring'),
                           width: 26,
                           height: 26,
                           decoration: BoxDecoration(
@@ -640,6 +753,126 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     action();
   }
 
+  /// 密咒搜索浮层：搜索框与结果悬浮在密咒页上方（与佛号页同款外观）。
+  Widget _buildMxSearchOverlay(PaletteData p, MediaQueryData mq) {
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _closeMxSearch,
+            ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            top: mq.padding.top + 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Material(
+                  key: const ValueKey('shanzhishi_mx_search_box'),
+                  color: p.card,
+                  elevation: 6,
+                  shadowColor: Colors.black.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                  clipBehavior: Clip.antiAlias,
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 12),
+                      Icon(Icons.search, size: 18, color: p.textHint),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          key: const ValueKey('shanzhishi_mx_search_field'),
+                          controller: _mxSearchCtrl,
+                          autofocus: true,
+                          style: TextStyle(fontSize: 15, color: p.text),
+                          decoration: InputDecoration(
+                            hintText: '搜索密咒',
+                            hintStyle:
+                                TextStyle(fontSize: 14, color: p.textHint),
+                            border: InputBorder.none,
+                            isCollapsed: true,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        key: const ValueKey('shanzhishi_mx_search_close'),
+                        icon: Icon(Icons.close, size: 18, color: p.textSec),
+                        onPressed: _closeMxSearch,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // 结果浮层同佛号搜索：只随查询文本重建，不整页 setState。
+                ListenableBuilder(
+                  listenable: _mxSearchCtrl,
+                  builder: (context, _) {
+                    final query = _mxSearchCtrl.text.trim();
+                    if (query.isEmpty) return const SizedBox.shrink();
+                    return Material(
+                      key: const ValueKey('shanzhishi_mx_search_results'),
+                      color: p.card,
+                      elevation: 6,
+                      shadowColor: Colors.black.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(12),
+                      clipBehavior: Clip.antiAlias,
+                      child: ConstrainedBox(
+                        constraints:
+                            BoxConstraints(maxHeight: mq.size.height * 0.4),
+                        child: _mxSearchHits.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 14),
+                                child: Text(
+                                  '没有找到「$query」',
+                                  style: TextStyle(
+                                      fontSize: 13.5, color: p.textSec),
+                                ),
+                              )
+                            : Builder(builder: (context) {
+                                final hits = _mxSearchHits;
+                                return ListView.builder(
+                                  shrinkWrap: true,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 4),
+                                  itemCount: hits.length,
+                                  itemBuilder: (_, i) {
+                                    final mantra = hits[i];
+                                    return InkWell(
+                                      onTap: () => _onMxSearchHit(mantra),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 16, vertical: 13),
+                                        child: Text(
+                                          mantra,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            color: p.text,
+                                            letterSpacing: 0.8,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                );
+                              }),
+                        ),
+                      );
+                }),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─────────────── 视图 ───────────────
 
   @override
@@ -648,6 +881,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     final names = [for (final e in _store.entries) e.name];
     return Scaffold(
       backgroundColor: p.bg,
+      // 键盘悬浮在页面之上：弹输入法时整页布局不动，搜索框与球面不被顶起。
+      resizeToAvoidBottomInset: false,
       // 不设 AppBar：球面名号铺到页面最顶端，顶部不再有一条被切割的感觉。
       body: Builder(builder: (context) {
         final entry = () {
@@ -656,40 +891,63 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
           return (idx >= 0 && idx < _store.length) ? _store[idx] : null;
         }();
         final mq = MediaQuery.of(context);
+        // 两屏（第 1 页佛号星图、第 2 页密咒竖排）常驻同一棵树，不做左右滑动切换，
+        // 只由悬浮球的「切换」子按钮点选互换；切页没有过场动画。
+        // 右下角悬浮球两页共用一颗、固定在屏幕上不随切页移动，
+        // 搜索浮层也提到两屏之外（搜索开着时悬浮球必须压在它下面）。
+        final bool showFab = _selected == null && !_shelfExpanded;
         return Stack(
           children: [
-            // 球体铺满整页：顶部只让出状态栏本身，球的上边界到状态栏下沿，
-            // 与底部（球顶点探进底部菜单栏之下）留出一致的观感。
-            Positioned.fill(
-              child: Padding(
-                padding: EdgeInsets.only(top: mq.padding.top),
-                child: ShanZhiShiSphere(
-                  names: names,
-                  controller: _sphereCtrl,
-                  initialIndex: _store.lastTappedIndex,
-                  spinEnabled: _isActive,
-                  onNameTapped: _onNameTapped,
-                  onSettled: (_) => unawaited(UiSound.instance.playClick()),
+            IndexedStack(
+              index: _pageIdx,
+              sizing: StackFit.expand,
+              children: [
+                Stack(
+                  children: [
+                    // 球体铺满整页：顶部只让出状态栏本身，球的上边界到状态栏下沿，
+                    // 与底部（球顶点探进底部菜单栏之下）留出一致的观感。
+                    Positioned.fill(
+                      child: Padding(
+                        padding: EdgeInsets.only(top: mq.padding.top),
+                        child: ShanZhiShiSphere(
+                          names: names,
+                          controller: _sphereCtrl,
+                          initialIndex: _store.lastTappedIndex,
+                          spinEnabled: _isActive,
+                          verticalOnly: true,
+                          onNameTapped: _onNameTapped,
+                          // 转动落定不再配音：随球自转/磁吸落定会不定期冒
+                          // 声，像气泡音；点选等主动操作的提示音保留。
+
+                        ),
+                      ),
+                    ),
+                    // 原右上角的「添加 / 搜索」已移入右下角悬浮球的子按钮。
+                    if (!_store.loaded)
+                      Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 1.4, color: p.textHint),
+                        ),
+                      )
+                    else if (names.isEmpty) _buildEmptySphere(p),
+                    if (entry != null) _buildShelf(p, entry),
+                  ],
                 ),
-              ),
+                // 密咒竖排展示面（含星云底光）；本页没有自己的悬浮球——
+                // 悬浮球两页共用，固定在两屏之上。
+                ShanZhiShiMantraView(key: _mxPageKey),
+              ],
             ),
-            // 原右上角的「添加 / 搜索」已移入右下角悬浮球的子按钮。
-            if (!_store.loaded)
-              Center(
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 1.4, color: p.textHint),
-                ),
-              )
-            else if (names.isEmpty) _buildEmptySphere(p),
-            if (entry != null) _buildShelf(p, entry),
             // 右下角悬浮球（与阅读页右下角那颗同款）：底部面板展开时让位，
             // 避免压住面板右下角的「编辑」。
-            if (_selected == null && !_shelfExpanded) _buildFabLayer(mq),
-            // 搜索浮层：压在最上层，搜索框与结果都悬浮在本页。
+            if (showFab) _buildFabLayer(mq),
+            // 佛号搜索浮层：压在悬浮球之上，搜索框与结果悬浮在本页。
             if (_searchOpen) _buildSearchOverlay(p, mq),
+            // 密咒搜索浮层：同上，压在最上层。
+            if (_mxSearchOpen) _buildMxSearchOverlay(p, mq),
           ],
         );
       }),
@@ -714,6 +972,141 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 搜索浮层：搜索框与结果都悬浮在本页上方（不跳新页面、不挤动星图）。
+  Widget _buildSearchOverlay(PaletteData p, MediaQueryData mq) {
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          // 点空白处收起（吞掉点击，避免顺带点到球面名号）。
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _closeSearch,
+            ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            top: mq.padding.top + 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 搜索框。
+                Material(
+                  key: const ValueKey('shanzhishi_search_box'),
+                  color: p.card,
+                  elevation: 6,
+                  shadowColor: Colors.black.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                  clipBehavior: Clip.antiAlias,
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 12),
+                      Icon(Icons.search, size: 18, color: p.textHint),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          key: const ValueKey('shanzhishi_search_field'),
+                          controller: _searchCtrl,
+                          autofocus: true,
+                          style: TextStyle(fontSize: 15, color: p.text),
+                          decoration: InputDecoration(
+                            hintText: '搜索名号',
+                            hintStyle:
+                                TextStyle(fontSize: 14, color: p.textHint),
+                            border: InputBorder.none,
+                            isCollapsed: true,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        key: const ValueKey('shanzhishi_search_close'),
+                        icon: Icon(Icons.close, size: 18, color: p.textSec),
+                        onPressed: _closeSearch,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // 结果浮层：输入关键字后才出现。只随查询文本变化重建，
+                // 不整页 setState —— 球面不动，键盘也不因重负载弹不出来。
+                ListenableBuilder(
+                  listenable: _searchCtrl,
+                  builder: (context, _) {
+                    final query = _searchCtrl.text.trim();
+                    if (query.isEmpty) return const SizedBox.shrink();
+                    return Material(
+                      key: const ValueKey('shanzhishi_search_results'),
+                      color: p.card,
+                      elevation: 6,
+                      shadowColor: Colors.black.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(12),
+                      clipBehavior: Clip.antiAlias,
+                      child: ConstrainedBox(
+                        constraints:
+                            BoxConstraints(maxHeight: mq.size.height * 0.4),
+                        child: _searchHits.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 14),
+                                child: Text(
+                                  '没有找到「$query」',
+                                  style: TextStyle(
+                                      fontSize: 13.5, color: p.textSec),
+                                ),
+                              )
+                            : ListView.builder(
+                                shrinkWrap: true,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                itemCount: _searchHits.length,
+                                itemBuilder: (_, i) {
+                                  final idx = _searchHits[i];
+                                  final e = _store[idx]!;
+                                  return InkWell(
+                                    onTap: () => _onSearchHit(idx),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 13),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              e.name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                color: p.text,
+                                                letterSpacing: 0.8,
+                                              ),
+                                            ),
+                                          ),
+                                          if (e.sutras.isNotEmpty)
+                                            Text(
+                                              '${e.sutras.length} 部经文',
+                                              style: TextStyle(
+                                                  fontSize: 11.5,
+                                                  color: p.textHint),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -237,15 +237,17 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
     return out;
   }
 
-  /// 已录入过同名 / 高度相似（≥80% 字符重合）的名号时，让用户选择怎么处理：
-  /// 新增时是「添加新的 / 合并到已有的」，编辑时是「保留名号 / 合并并删掉这一位」。
+  /// 已录入过有相同字符的名号时（≥2 个相同字符就算，通用尊称不计），列出全部候选项：
+  /// 共同字符用颜色高亮，点某一位即选择合并进它；
+  /// 新增时也可「添加新的」另起一位，编辑时也可「保留名号」不并。
   /// 返回 null 表示取消（留在面板上继续编辑）。
-  Future<_SimilarChoice?> _chooseForSimilar(
-    String existing, {
+  Future<_SimilarPick?> _chooseSimilarTargets(
+    List<(int, String)> candidates, {
     required bool editing,
   }) {
     final p = AppPalette.p;
-    return showDialog<_SimilarChoice>(
+    final query = _nameCtrl.text.trim();
+    return showDialog<_SimilarPick>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: p.card,
@@ -255,16 +257,33 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
           style: TextStyle(
               fontSize: 17, fontWeight: FontWeight.w600, color: p.text),
         ),
-        content: Text(
-          editing
-              ? '已存在「$existing」。\n\n'
-                  '合并：把这一位的经文与人天利益并进「$existing」，并删掉当前这一位。\n'
-                  '保留名号：仍然用这个名号，会留下两条相近的记录。'
-              : '已存在「$existing」。\n\n'
-                  '合并：把这次填写的经文与人天利益并到「$existing」下面，'
-                  '名号沿用已有的那一位。\n'
-                  '添加新的：另起一位名号。',
-          style: TextStyle(fontSize: 13.5, color: p.textSec, height: 1.7),
+        content: SizedBox(
+          width: 280,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '下面这些名号与「$query」有相同字符'
+                '（「菩萨 / 如来 / 佛 / 咒」等通用尊称不算），'
+                '点选一位即${editing ? '并进它并删掉当前这一位' : '把经文与人天利益并到它下面'}。',
+                style: TextStyle(fontSize: 13, color: p.textSec, height: 1.6),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < candidates.length; i++)
+                        _similarTargetRow(i, candidates[i], p),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -273,22 +292,74 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
           ),
           TextButton(
             key: const ValueKey('shanzhishi_add_new'),
-            onPressed: () => Navigator.pop(ctx, _SimilarChoice.keep),
+            onPressed: () => Navigator.pop(ctx, _SimilarPick(-1)),
             child: Text(editing ? '保留名号' : '添加新的',
                 style: TextStyle(color: p.accentDeep)),
           ),
-          FilledButton(
-            key: const ValueKey('shanzhishi_merge_existing'),
-            onPressed: () => Navigator.pop(ctx, _SimilarChoice.merge),
-            style: FilledButton.styleFrom(
-              backgroundColor: p.primary,
-              foregroundColor: p.card,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-              textStyle: const TextStyle(fontSize: 13.5),
-            ),
-            child: const Text('合并'),
-          ),
         ],
+      ),
+    );
+  }
+
+  /// 一条候选项：色字排列的已有名号（共同字符高亮），点选即合并进它。
+  /// 第一条沿用旧的 key，便于既有测试与外部语义对齐。
+  Widget _similarTargetRow(int i, (int, String) cand, PaletteData p) {
+    final key = i == 0
+        ? const ValueKey('shanzhishi_merge_existing')
+        : ValueKey('shanzhishi_merge_existing_${cand.$1}');
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: key,
+        onTap: () => Navigator.of(context).pop(_SimilarPick(cand.$1)),
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
+          child: Row(
+            children: [
+              Expanded(
+                child: _similarNameText(cand.$2, _nameCtrl.text.trim(), p),
+              ),
+              Icon(Icons.chevron_right, size: 18, color: p.textHint),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 名号竖向着色：出现在查询名里的共同字符用强调色加粗，其余用普通色。
+  /// 「菩萨 / 如来 / 佛 / 咒」等通用尊称不算共同字符，不标色（与查重口径一致）。
+  Widget _similarNameText(String candidate, String query, PaletteData p) {
+    final counts = <int, int>{};
+    for (final r in ShanZhiShiStore.distinctName(query).runes) {
+      counts[r] = (counts[r] ?? 0) + 1;
+    }
+    final spans = <TextSpan>[
+      for (final r in candidate.runes)
+        _charSpan(r, counts, p),
+    ];
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(fontSize: 14.5, color: p.text, letterSpacing: 1),
+        children: spans,
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  TextSpan _charSpan(int rune, Map<int, int> counts, PaletteData p) {
+    final n = counts[rune] ?? 0;
+    if (n <= 0) {
+      return TextSpan(text: String.fromCharCode(rune));
+    }
+    counts[rune] = n - 1;
+    return TextSpan(
+      text: String.fromCharCode(rune),
+      style: TextStyle(
+        color: p.accentDeep,
+        fontWeight: FontWeight.w700,
       ),
     );
   }
@@ -304,29 +375,20 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
 
     setState(() => _saving = true);
 
-    // 编辑：保存前查重（跳过自己）。
-    // 改了名号：按 80% 近似判定；没改名号：只查是否还有完全同名的另一位
-    // （例如之前选「保留名号」留下的重复），这样不会因为种子里的近似名号被反复打扰。
+    // 编辑：保存前查重，与新增完全一致——摘掉通用尊称后仍有 ≥2 个相同字符
+    // （如「地藏菩萨」与「地藏王菩萨」剩「地藏」+「王」）才提示，候选项可能不止一条。
     if (_isEdit) {
       final index = widget.index!;
       var mergeTarget = -1;
-      final renamed = name != (widget.entry?.name ?? '');
-      final similar = store.findSimilarIndex(
-        name,
-        skip: index,
-        threshold: renamed ? 0.8 : 1.0,
-      );
-      if (similar >= 0) {
-        final choice = await _chooseForSimilar(
-          store[similar]?.name ?? '',
-          editing: true,
-        );
+      final similar = store.findSimilarEntries(name, skip: index);
+      if (similar.isNotEmpty) {
+        final pick = await _chooseSimilarTargets(similar, editing: true);
         if (!mounted) return;
-        if (choice == null) {
+        if (pick == null) {
           setState(() => _saving = false);
           return;
         }
-        if (choice == _SimilarChoice.merge) mergeTarget = similar;
+        mergeTarget = pick.targetIndex;
       }
       int result;
       try {
@@ -349,19 +411,18 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
       return;
     }
 
-    // 新增：先查有没有同名 / 高度相似（≥80% 字符重合）的名号，
-    // 让用户自己决定「添加新的」还是把经文与段落合并到已有的名号下面。
-    final similar = store.findSimilarIndex(name);
+    // 新增：同样按「摘掉通用尊称后 ≥2 个相同字符」查重，列出全部候选名号
+    // （色字标出共同字符），用户点选合并目标，或选「添加新的」另起一位。
+    final similar = store.findSimilarEntries(name);
     var mergeTarget = -1;
-    if (similar >= 0) {
-      final choice =
-          await _chooseForSimilar(store[similar]?.name ?? '', editing: false);
+    if (similar.isNotEmpty) {
+      final pick = await _chooseSimilarTargets(similar, editing: false);
       if (!mounted) return;
-      if (choice == null) {
+      if (pick == null) {
         setState(() => _saving = false);
         return;
       }
-      if (choice == _SimilarChoice.merge) mergeTarget = similar;
+      mergeTarget = pick.targetIndex;
     }
 
     int result;
@@ -377,7 +438,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
               _sutras,
               paragraphs: paragraphs,
               // 用户已明确选「添加新的」：同名也另起一位，不再默默合并。
-              allowDuplicate: similar >= 0,
+              allowDuplicate: similar.isNotEmpty,
             );
     } catch (_) {
       if (mounted) setState(() => _saving = false);
@@ -589,4 +650,8 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
 
 /// 新增/编辑时遇到同名 / 高度相似名号，用户的选择：
 /// 保留当前名号（新增即另起一位），或者合并到已有的那一位。
-enum _SimilarChoice { keep, merge }
+/// 合并提示的处理结果：[targetIndex] ≥ 0 表示合并进该位；< 0 表示不合并。
+class _SimilarPick {
+  const _SimilarPick(this.targetIndex);
+  final int targetIndex;
+}

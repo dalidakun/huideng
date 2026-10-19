@@ -126,19 +126,107 @@ void main() {
     expect(find.byIcon(Icons.search), findsOneWidget);
     expect(find.byIcon(Icons.swap_horiz), findsOneWidget);
 
-    // 子按钮点一下先收起菜单（切换暂为占位动作，不跳页）。
+    // 子按钮「切换」：整页滑到第 2 页密咒展示面，换成该页的悬浮球。
     await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_switch')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shanzhishi_mantra_view')), findsOneWidget);
+    expect(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')), findsOneWidget);
+    expect(find.byKey(const ValueKey('shanzhishi_fab_close')), findsNothing);
+    // 密咒页的「切换」再滑回佛号球面（先点开悬浮球，再点子按钮）。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_switch')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shanzhishi_mantra_view')), findsNothing);
     expect(find.byKey(const ValueKey('shanzhishi_fab_ring')), findsOneWidget);
     expect(find.byKey(const ValueKey('shanzhishi_fab_close')), findsNothing);
+  });
 
-    // 再展开后点空白处也收起。
+  testWidgets('密咒页悬浮球：搜索/添加/切换回佛号', (tester) async {
+    await pumpPage(tester);
+    // 切到密咒页。
     await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
     await tester.pumpAndSettle();
-    await tester.tapAt(const Offset(40, 40));
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_switch')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shanzhishi_mantra_view')), findsOneWidget);
+
+    // 密咒页悬浮球：收起态白圈在，展开后三个子按钮。
+    expect(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shanzhishi_mx_fab_close')), findsOneWidget);
+
+    // 搜索：搜的是密咒。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_search')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('shanzhishi_mx_search_field')), '六字');
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const ValueKey('shanzhishi_mx_search_results')),
+        findsOneWidget);
+    expect(find.text('六字大明咒'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_search_close')));
+    await tester.pumpAndSettle();
+
+    // 添加：新建一条密咒，新条目排在最前。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_add')));
+    await tester.pumpAndSettle();
+    expect(find.text('添加密咒'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '药师灌顶真言');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '添加'));
+    await tester.pumpAndSettle();
+    // 面板已收起，新密咒排在名单最前（竖排第一条）。
+    expect(find.text('添加密咒'), findsNothing);
+    expect(find.text('药\n师\n灌\n顶\n真\n言'), findsOneWidget);
+
+    // 搜索命中要「显示出对应密咒」：点结果后名单滚到位，该条出现在视口上部。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_search')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('shanzhishi_mx_search_field')), '楞严');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('楞严咒'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shanzhishi_mx_search_results')),
+        findsNothing);
+    // 「药师灌顶真言」新增后排在最前，楞严咒因此是第 11 条（下标 10）。
+    final revealed = tester.getRect(
+        find.byKey(const ValueKey('shanzhishi_mantra_10')));
+    // 点结果后该条落在视口内（内容装得下就不必滚动，装不下会滚到上部）。
+    expect(revealed.top, greaterThan(0));
+    expect(revealed.top, lessThan(520));
+    expect(revealed.bottom, lessThan(800));
+    // 命中那条要有高亮（强调色描边），而且要一直亮着、不自动消失。
+    double hitBorderAlpha() {
+      final box = tester.widget<AnimatedContainer>(
+          find.byKey(const ValueKey('shanzhishi_mantra_10')));
+      final border = (box.decoration as BoxDecoration).border as Border;
+      return border.top.color.a;
+    }
+
+    expect(hitBorderAlpha(), greaterThan(0.5));
+    await tester.pump(const Duration(seconds: 3));
+    expect(hitBorderAlpha(), greaterThan(0.5));
+    // 点一下页面任意位置，高亮才去掉。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_view')));
+    await tester.pumpAndSettle();
+    expect(hitBorderAlpha(), 0);
+
+    // 切换子按钮：整页滑回佛号球面（密咒页不在视口了，悬浮球收起态在）。
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mx_fab_switch')));
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const ValueKey('shanzhishi_mantra_view')), findsNothing);
     expect(find.byKey(const ValueKey('shanzhishi_fab_ring')), findsOneWidget);
-    expect(find.byKey(const ValueKey('shanzhishi_fab_close')), findsNothing);
   });
 
   testWidgets('底部面板展开时右下角悬浮球让位', (tester) async {
@@ -159,8 +247,10 @@ void main() {
     await tester.tap(find.byIcon(Icons.edit_outlined));
     await tester.pumpAndSettle();
     expect(find.text('编辑善知识'), findsOneWidget);
-    // 编辑面板里有「引用段落」维护区。
-    expect(find.text('引用段落'), findsOneWidget);
+    // 编辑面板里有「引用段落」维护区：一段一条的大输入区。
+    expect(
+        find.byKey(const ValueKey('shanzhishi_paragraphs_field')),
+        findsOneWidget);
 
     final cancel = find.text('取消');
     await tester.ensureVisible(cancel);
@@ -327,6 +417,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(saveButton);
       await tester.pumpAndSettle();
+      // 相同字符 ≥2 的已有名号会触发合并提示：这里选「保留名号」继续。
+      if (find.text('已有相似的善知识').evaluate().isNotEmpty) {
+        await tester.tap(find.byKey(const ValueKey('shanzhishi_add_new')));
+        await tester.pumpAndSettle();
+      }
     }
 
     await editParagraphs('一段');

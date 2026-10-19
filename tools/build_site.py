@@ -387,6 +387,32 @@ def write_qr(target: pathlib.Path, url: str) -> str:
 # --------------------------------------------------------------------------
 
 
+def beian_html(config: dict) -> str:
+    """页脚备案号片段：ICP 备案号链工信部，公安备案号链公安部查询页。
+
+    两个来源都是 site.config.json 的可选字段；谁没填就不渲染，
+    保证备案下来之前（之后）站点都能随时构建。
+    """
+    parts: list[str] = []
+    icp = (config.get("icpNumber") or "").strip()
+    if icp:
+        parts.append(
+            f'<a href="https://beian.miit.gov.cn/" target="_blank" '
+            f'rel="noopener noreferrer">{html.escape(icp)}</a>'
+        )
+    police = (config.get("policeRecordNumber") or "").strip()
+    if police:
+        # 公安备案号如「豫公网安备 41010202026XXX号」；
+        # 记录码取备案号尾部数字（公安查询系统的 recordcode）。
+        m = re.search(r"(\d{6,})", police.replace(" ", ""))
+        code = m.group(1) if m else ""
+        parts.append(
+            f'<a href="https://beian.mps.gov.cn/#/query/webSearch?code={code}" '
+            f'target="_blank" rel="noopener noreferrer">{html.escape(police)}</a>'
+        )
+    return "&nbsp;·&nbsp;".join(parts)
+
+
 def render_log(releases: list[dict], latest: str) -> str:
     items = []
     for i, r in enumerate(releases):
@@ -639,6 +665,7 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         "RELEASE_COUNT": str(len(releases)),
         "CHANGELOG_PREVIEW": render_log(releases[:3], version),
         "CHANGELOG_ALL": render_log(releases, version),
+        "BEIAN_HTML": beian_html(config),
     }
 
     DIST.mkdir(parents=True, exist_ok=True)

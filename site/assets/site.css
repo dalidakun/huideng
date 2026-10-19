@@ -1124,6 +1124,16 @@ a:hover {
   justify-content: space-between;
 }
 
+/* 页脚备案号（ICP / 公安）：保持小字灰色，仅悬停时提亮，别和正文链接抢眼。 */
+.footer__beian a {
+  color: inherit;
+  text-decoration: none;
+}
+.footer__beian a:hover {
+  color: var(--text-main);
+  text-decoration: underline;
+}
+
 /* ============================ 响应式 ============================ */
 
 /* 双列布局下 44px 标题单行需 528px，901~1040px 区间列宽不足会折行，

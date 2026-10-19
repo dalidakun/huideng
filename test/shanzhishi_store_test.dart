@@ -241,6 +241,23 @@ void main() {
       expect(ShanZhiShiStore.nameSimilarity(' 地藏菩萨 ', '地藏菩萨'), 1.0);
     });
 
+    test('查重摘掉通用尊称：菩萨 / 如来 / 佛 / 咒 不算相同字符', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      expect(ShanZhiShiStore.distinctName('观世音菩萨'), '观世音');
+      expect(ShanZhiShiStore.distinctName('宝性如来'), '宝性');
+      expect(ShanZhiShiStore.distinctName('药师心咒'), '药师');
+      // 「虚空藏菩萨」与既有诸位菩萨只共有通用称「菩萨」，不算重复。
+      final hits = [for (final e in store.findSimilarEntries('虚空藏菩萨')) e.$2];
+      expect(hits, isNot(contains('观世音菩萨')));
+      expect(hits, isNot(contains('地藏菩萨')));
+      // 摘掉尊称后仍有 ≥2 个相同字样，仍要提示。
+      expect([for (final e in store.findSimilarEntries('文殊菩萨')) e.$2],
+          contains('文殊师利菩萨'));
+      // 完全同名始终命中，且排在最前。
+      expect(store.findSimilarEntries('地藏菩萨').first.$2, '地藏菩萨');
+    });
+
     test('findSimilarIndex 命中同名与 ≥80% 近似的名号', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
