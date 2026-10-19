@@ -2842,7 +2842,19 @@ class ReadingPageState extends State<ReadingPage>
     final id = SutraDownloader.extractId(widget.title, keyPath);
     if (id != null && id.isNotEmpty) {
       try {
-        await CloudNotesService.instance.saveSutraEdit(id, _content);
+        // 规范显示名（含卷数）一并上传：云端会在 GitHub 同步写一份
+        // `<经名><编号>.txt` 可读文件，仓库里一眼能看出是哪部经的哪一卷。
+        var name = NoteSutraCatalog.cachedDisplayTitleById(id);
+        if (name == null || name.isEmpty) {
+          name = widget.title
+              .replaceAll(RegExp(r'T\d+n[0-9A-Za-z]+_\d+'), '')
+              .trim();
+        }
+        await CloudNotesService.instance.saveSutraEdit(
+          id,
+          _content,
+          displayName: name.isEmpty ? null : name,
+        );
       } catch (_) {}
     }
     _toast('已完成排版');

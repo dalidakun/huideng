@@ -252,6 +252,26 @@ class NoteSutraCatalog {
   /// 目录已加载时，返回基础经名 [base] 的总卷数；未加载或无记录返回 0。
   static int cachedVolumeCount(String base) => _volumePaths?[base]?.length ?? 0;
 
+  /// 目录已加载时，按 CBETA 编号返回规范显示名：多卷经书带卷标
+  /// （`T13n0412_001` -> 「地藏菩萨本愿经卷一」），单卷经书不带卷标；
+  /// 未加载或编号未知返回 null。
+  ///
+  /// 用于给 GitHub 排版版生成可读文件名 `<经名><编号>.txt`，保证与列表、
+  /// 阅读页显示的经名完全一致（含卷数）。
+  static String? cachedDisplayTitleById(String id) {
+    final raw = cachedRawTitleById?[id];
+    if (raw == null) return null;
+    final base = raw.replaceAll(_idSuffixRe, '');
+    if (base.isEmpty) return null;
+    final volumes = _volumePaths?[base];
+    if (volumes == null || volumes.length <= 1) return base;
+    // 仅当该编号确实属于这部多卷经书的某一卷时才补卷标，避免同名异本被误标。
+    for (final e in volumes.entries) {
+      if (e.value.endsWith('/$id.txt')) return '$base${sutraVolumeLabel(e.key)}';
+    }
+    return base;
+  }
+
   /// 目录已加载时，返回基础经名 [base] 的总字数（多卷经书为各卷之和）；
   /// 未加载或无记录返回 0。
   static int cachedCharCount(String base) => _charCounts?[base] ?? 0;

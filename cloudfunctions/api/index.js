@@ -376,6 +376,69 @@ function githubWriteFile({ repo, path, content, message }) {
   });
 }
 
+// GitHub 上可读的排版副本文件名：`<经名（含卷数）><编号>.txt`。
+// 去掉编号本身（避免「经名+编号+编号」重复）、路径分隔符与控制字符，
+// 并限长，保证生成的文件名安全且与 App 内显示的经名一致。
+function sutraReadableName(displayName, id) {
+  let name = String(displayName || "").trim();
+  name = name.replace(/T\d{2}n\d{4}[A-Za-z]?_\d{3}/g, "");
+  name = name.replace(/[\\/:*?"<>|\r\n\t]/g, "").trim();
+  name = name.slice(0, 40);
+  if (name && id && name.indexOf(id) >= 0) return ""; // 含编号则只写主文件，避免异常名
+  return name;
+}
+
+// GitHub 读目录：列出 assets/sutras_edited/<卷>/ 下的文件条目（type/name/sha）。
+// 目录不存在返回 []。
+function githubListDir({ repo, path }) {
+  const token = process.env.GITHUB_TOKEN || "";
+  if (!token) {
+    return Promise.reject(new Error("GitHub 未配置（缺少 GITHUB_TOKEN）"));
+  }
+  const urlPath = `/repos/${repo}/contents/${encodeURIComponent(path).replace(
+    /%2F/g,
+    "/"
+  )}`;
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      {
+        hostname: "api.github.com",
+        path: urlPath,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "huideng-sutra/1.0",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+      (r) => {
+        let body = "";
+        r.on("data", (c) => (body += c));
+        r.on("end", () => {
+          if (r.statusCode === 404) return resolve([]);
+          if (r.statusCode !== 200) {
+            return reject(new Error("GitHub 读取目录失败：HTTP " + r.statusCode));
+          }
+          try {
+            const arr = JSON.parse(body);
+            resolve(
+              Array.isArray(arr)
+                ? arr.filter((e) => e && e.type === "file" && e.name)
+                : []
+            );
+          } catch (e) {
+            reject(new Error("GitHub 读取目录失败：解析错误"));
+          }
+        });
+      }
+    );
+    req.on("error", (e) =>
+      reject(new Error("GitHub 读取目录失败：" + (e.code || e.message)))
+    );
+  });
+}
+
 // GitHub 删除：管理员「撤销完成排版」时删除仓库 assets/sutras_edited/<卷>/<ID>.txt。
 function githubDeleteFile({ repo, path, message }) {
   const token = process.env.GITHUB_TOKEN || "";
@@ -3301,7 +3364,8 @@ exports.main = async (event, context) => {
       // ==================== 管理员编辑经文 / 用户更新排版 ====================
 
       // 管理员保存「编辑经文」的最新排版。
-      // 1. 写入 GitHub 仓库 assets/sutras_edited/<卷>/<ID>.txt（原始版 sutras_ascii 不动）
+      // 1. 写入 GitHub 仓库 assets/sutras_edited/<卷>/<ID>.txt（原始版 sutras_ascii 不动），
+      //    并同步写一份 `<经名><编号>.txt` 可读副本，便于在仓库里直接看出是哪部经（含卷数）；
       // 2. 在云端 sutraEdits 记录版本时间戳与内容，供「更新排版」实时判断是否有新版。
       case "sutraEditSave": {
         if (!uid) return fail("unauthorized");
@@ -3318,6 +3382,16 @@ exports.main = async (event, context) => {
         const vol = id.substring(0, 3);
         const gitPath = `assets/sutras_edited/${vol}/${id}.txt`;
         const gitMsg = `编辑经文 ${id}：更新排版`;
+        await ensureSutraEdits();
+        const existing = await sutraEdits.where({ id }).limit(1).get();
+        const hasExisting = existing.data && existing.data.length > 0;
+        // 可读副本文件名：<经名（含卷数）><编号>.txt。
+        // 优先取客户端这次带的显示名；老客户端不带时沿用已存的名字，
+        // 保证同一部经的两份文件始终同一批内容，不出现新旧不一致。
+        const storedName = hasExisting ? String(existing.data[0].name || "").trim() : "";
+        // 客户端这次带的显示名（App 传 name 字段）。
+        const clientName = String(event.name ?? "").trim();
+        const readableName = sutraReadableName(clientName || storedName, id);
         try {
           await githubWriteFile({
             repo: "dalidakun/huideng",
@@ -3325,25 +3399,29 @@ exports.main = async (event, context) => {
             content,
             message: gitMsg,
           });
+          if (readableName) {
+            await githubWriteFile({
+              repo: "dalidakun/huideng",
+              path: `assets/sutras_edited/${vol}/${readableName}${id}.txt`,
+              content,
+              message: gitMsg,
+            });
+          }
         } catch (e) {
           return fail("github_write_failed:" + (e && e.message ? e.message : ""));
         }
         // 正文全文只存 GitHub（sutras_edited），与现有下载模式一致。
         // 云端 sutraEdits 仅记录每部经的轻量版本时间戳（几十字节），
         // 供「更新排版」实时判断是否有新版，避免 GitHub CDN 缓存导致判断滞后。
-        await ensureSutraEdits();
         const updatedAt = now();
-        const existing = await sutraEdits.where({ id }).limit(1).get();
-        if (existing.data && existing.data.length > 0) {
-          await sutraEdits.doc(existing.data[0]._id).update({
-            updatedAt,
-            updatedBy: uid,
-          });
+        const docFields = { updatedAt, updatedBy: uid };
+        if (readableName) docFields.name = readableName;
+        if (hasExisting) {
+          await sutraEdits.doc(existing.data[0]._id).update(docFields);
         } else {
           await sutraEdits.add({
             id,
-            updatedAt,
-            updatedBy: uid,
+            ...docFields,
             createdAt: updatedAt,
           });
         }
@@ -3405,14 +3483,36 @@ exports.main = async (event, context) => {
         if (!/^T\d{2}n\d{4}[A-Za-z]?_\d{3}$/.test(id)) return fail("bad_request");
         const vol = id.substring(0, 3);
         const gitPath = `assets/sutras_edited/${vol}/${id}.txt`;
+        // 该卷目录下所有含此编号的文件都删掉：<ID>.txt 与可读副本
+        // `<经名><ID>.txt`（含历史命名），避免撤销排版后留下过期副本。
+        const targets = [gitPath];
         try {
-          await githubDeleteFile({
+          const entries = await githubListDir({
             repo: "dalidakun/huideng",
-            path: gitPath,
-            message: `撤销经文排版 ${id}`,
+            path: `assets/sutras_edited/${vol}`,
           });
+          for (const e of entries) {
+            if (e.name && e.name.indexOf(id) >= 0 && targets.indexOf(`assets/sutras_edited/${vol}/${e.name}`) < 0) {
+              targets.push(`assets/sutras_edited/${vol}/${e.name}`);
+            }
+          }
         } catch (e) {
-          return fail("github_delete_failed:" + (e && e.message ? e.message : ""));
+          // 目录读不到时至少还能删主文件，下面的失败会正常上报。
+        }
+        for (const p of targets) {
+          try {
+            await githubDeleteFile({
+              repo: "dalidakun/huideng",
+              path: p,
+              message: `撤销经文排版 ${id}`,
+            });
+          } catch (e) {
+            if (p === gitPath) {
+              return fail("github_delete_failed:" + (e && e.message ? e.message : ""));
+            }
+            // 可读副本删除失败只记录，不影响撤销排版。
+            console.log("[sutraEditDelete] readable copy delete failed:", p, e && e.message);
+          }
         }
         await ensureSutraEdits();
         const existing = await sutraEdits.where({ id }).limit(1).get();

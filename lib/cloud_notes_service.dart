@@ -2282,12 +2282,16 @@ class CloudNotesService {
     }
   }
 
-  /// 管理员保存「编辑经文」的最新排版。[title] 为可选的经名订正覆盖。
-  Future<void> saveSutraEdit(String id, String content, {String? title}) async {
+  /// 管理员保存「编辑经文」的最新排版。[title] 为可选的经名订正覆盖；
+  /// [displayName] 为规范显示名（含卷数），云端据此在 GitHub 同步写一份
+  /// `<经名><编号>.txt` 可读文件，便于在仓库里直接看出是哪部经（含卷数）。
+  Future<void> saveSutraEdit(String id, String content,
+      {String? title, String? displayName}) async {
     await _call('sutraEditSave', params: {
       'id': id,
       'content': content,
       if (title != null) 'title': title,
+      if (displayName != null) 'name': displayName,
     });
   }
 
