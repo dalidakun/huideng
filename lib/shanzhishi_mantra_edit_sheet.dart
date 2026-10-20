@@ -31,6 +31,169 @@ class _AnnotationResult {
   final bool delete;
 }
 
+/// 注音 / 备注输入框。自己持有输入控制器，随对话框一起释放。
+class _AnnotationDialog extends StatefulWidget {
+  const _AnnotationDialog({
+    required this.quoted,
+    required this.initialRuby,
+    required this.initialNote,
+    required this.focusRuby,
+    required this.canDelete,
+  });
+
+  final String quoted;
+  final String initialRuby;
+  final String initialNote;
+  final bool focusRuby;
+  final bool canDelete;
+
+  @override
+  State<_AnnotationDialog> createState() => _AnnotationDialogState();
+}
+
+class _AnnotationDialogState extends State<_AnnotationDialog> {
+  late final TextEditingController _rubyCtrl =
+      TextEditingController(text: widget.initialRuby);
+  late final TextEditingController _noteCtrl =
+      TextEditingController(text: widget.initialNote);
+
+  @override
+  void dispose() {
+    _rubyCtrl.dispose();
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return AlertDialog(
+      backgroundColor: p.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        widget.focusRuby ? '注音' : '备注',
+        style:
+            TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: p.text),
+      ),
+      content: SizedBox(
+        width: 320,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: p.tintBg,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '「${widget.quoted}」',
+                  style: TextStyle(fontSize: 14, color: p.text, height: 1.5),
+                ),
+              ),
+              const SizedBox(height: 14),
+              _annotationField(
+                key: const ValueKey('shanzhishi_mantra_ruby_input'),
+                controller: _rubyCtrl,
+                p: p,
+                label: '注音',
+                hint: '如：ōng ma ṇi pad me hūṃ',
+                autofocus: widget.focusRuby,
+                maxLines: 1,
+              ),
+              const SizedBox(height: 12),
+              _annotationField(
+                key: const ValueKey('shanzhishi_mantra_note_input'),
+                controller: _noteCtrl,
+                p: p,
+                label: '备注',
+                hint: '写下这段文字的备注（可多行）',
+                autofocus: !widget.focusRuby,
+                maxLines: 5,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (widget.canDelete)
+          TextButton(
+            key: const ValueKey('shanzhishi_mantra_annotation_delete'),
+            onPressed: () => Navigator.pop(
+              context,
+              const _AnnotationResult(ruby: '', note: '', delete: true),
+            ),
+            child: Text('删除', style: TextStyle(color: p.accentDeep)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('取消', style: TextStyle(color: p.textSec)),
+        ),
+        TextButton(
+          key: const ValueKey('shanzhishi_mantra_annotation_save'),
+          onPressed: () => Navigator.pop(
+            context,
+            _AnnotationResult(
+              ruby: _rubyCtrl.text.trim(),
+              note: _noteCtrl.text.trim(),
+            ),
+          ),
+          child: Text('保存', style: TextStyle(color: p.accentDeep)),
+        ),
+      ],
+    );
+  }
+
+  static Widget _annotationField({
+    required Key key,
+    required TextEditingController controller,
+    required PaletteData p,
+    required String label,
+    required String hint,
+    required bool autofocus,
+    required int maxLines,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style:
+              TextStyle(fontSize: 12, color: p.textSec, letterSpacing: 0.5),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          key: key,
+          controller: controller,
+          autofocus: autofocus,
+          maxLines: maxLines,
+          minLines: maxLines > 1 ? 2 : 1,
+          maxLength: maxLines > 1 ? 500 : 60,
+          style: TextStyle(fontSize: 14, color: p.text, height: 1.5),
+          decoration: InputDecoration(
+            counterText: '',
+            hintText: hint,
+            hintStyle: TextStyle(fontSize: 13, color: p.textHint),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: p.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: p.accent),
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// 添加/编辑密咒面板：神咒名称、经文出处、神咒原文、人天利益四项
 /// + 取消/添加（保存）。
 /// 与【添加善知识】同款底部上拉面板：固定占屏幕九成高，标题与底部按钮钉住，
@@ -137,10 +300,17 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       final store = ShanZhiShiMantraStore.instance;
       final key = _editingKey;
       _nameCtrl.text = editing;
-      _sourceCtrl.text = store.sourceOfKey(key);
-      _textCtrl.text = store.textOfKey(key);
-      _annotations = List.of(store.annotationsOfKey(key));
-      _benefitCtrl.text = store.benefitOfKey(key).join('\n\n');
+      // 没带内部键时按名字找（同名条目仍由 key 精确定位）。
+      _sourceCtrl.text =
+          key == null ? store.sourceOf(editing) : store.sourceOfKey(key);
+      _textCtrl.text =
+          key == null ? store.textOf(editing) : store.textOfKey(key);
+      _annotations = key == null
+          ? List.of(store.annotationsOf(editing))
+          : List.of(store.annotationsOfKey(key));
+      final benefit =
+          key == null ? store.benefitOf(editing) : store.benefitOfKey(key);
+      _benefitCtrl.text = benefit.join('\n\n');
     } else {
       final initialSource = widget.initialSource?.trim();
       if (initialSource != null && initialSource.isNotEmpty) {
@@ -347,93 +517,16 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       }
     }
     final quoted = _textCtrl.text.substring(start, end);
-    final rubyCtrl = TextEditingController(text: existing?.ruby ?? '');
-    final noteCtrl = TextEditingController(text: existing?.note ?? '');
-    final p = AppPalette.p;
     final result = await showDialog<_AnnotationResult>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: p.card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          ruby ? '注音' : '备注',
-          style: TextStyle(
-              fontSize: 17, fontWeight: FontWeight.w600, color: p.text),
-        ),
-        content: SizedBox(
-          width: 320,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: p.tintBg,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '「$quoted」',
-                    style: TextStyle(
-                        fontSize: 14, color: p.text, height: 1.5),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _annotationField(
-                  key: const ValueKey('shanzhishi_mantra_ruby_input'),
-                  controller: rubyCtrl,
-                  p: p,
-                  label: '注音',
-                  hint: '如：ōng ma ṇi pad me hūṃ',
-                  autofocus: ruby,
-                  maxLines: 1,
-                ),
-                const SizedBox(height: 12),
-                _annotationField(
-                  key: const ValueKey('shanzhishi_mantra_note_input'),
-                  controller: noteCtrl,
-                  p: p,
-                  label: '备注',
-                  hint: '写下这段文字的备注（可多行）',
-                  autofocus: !ruby,
-                  maxLines: 5,
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          if (existing != null)
-            TextButton(
-              key: const ValueKey('shanzhishi_mantra_annotation_delete'),
-              onPressed: () => Navigator.pop(
-                ctx,
-                const _AnnotationResult(ruby: '', note: '', delete: true),
-              ),
-              child: Text('删除', style: TextStyle(color: p.accentDeep)),
-            ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('取消', style: TextStyle(color: p.textSec)),
-          ),
-          TextButton(
-            key: const ValueKey('shanzhishi_mantra_annotation_save'),
-            onPressed: () => Navigator.pop(
-              ctx,
-              _AnnotationResult(
-                ruby: rubyCtrl.text.trim(),
-                note: noteCtrl.text.trim(),
-              ),
-            ),
-            child: Text('保存', style: TextStyle(color: p.accentDeep)),
-          ),
-        ],
+      builder: (_) => _AnnotationDialog(
+        quoted: quoted,
+        initialRuby: existing?.ruby ?? '',
+        initialNote: existing?.note ?? '',
+        focusRuby: ruby,
+        canDelete: existing != null,
       ),
     );
-    rubyCtrl.dispose();
-    noteCtrl.dispose();
     if (result == null || !mounted) return;
     setState(() {
       final i = index ??
@@ -458,48 +551,6 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
           ? a.start - b.start
           : a.end - b.end);
     });
-  }
-
-  Widget _annotationField({
-    required Key key,
-    required TextEditingController controller,
-    required PaletteData p,
-    required String label,
-    required String hint,
-    required bool autofocus,
-    required int maxLines,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _label(p, label),
-        const SizedBox(height: 6),
-        TextField(
-          key: key,
-          controller: controller,
-          autofocus: autofocus,
-          maxLines: maxLines,
-          minLines: maxLines > 1 ? 2 : 1,
-          maxLength: maxLines > 1 ? 500 : 60,
-          style: TextStyle(fontSize: 14, color: p.text, height: 1.5),
-          decoration: InputDecoration(
-            counterText: '',
-            hintText: hint,
-            hintStyle: TextStyle(fontSize: 13, color: p.textHint),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: p.border),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: p.accent),
-            ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-          ),
-        ),
-      ],
-    );
   }
 
   /// 已加批注的清单：点行可再次编辑，右侧可直接删除。

@@ -286,8 +286,38 @@ void main() {
     expect(find.text('嗡嘛呢叭咪吽'), findsNothing);
   });
 
-  testWidgets('密咒面板右下角编辑按钮：回填内容，改完保存即生效', (tester) async {
+  testWidgets('神咒详情：注音在上、备注在下，经文出处夹在咒文与人天利益之间',
+      (tester) async {
     await pumpPage(tester);
+    await ShanZhiShiMantraStore.instance.add(
+      '批注咒',
+      source: '《药师经》',
+      text: '嗡嘛呢叭咪吽',
+      benefit: ['闻此咒者得安乐'],
+      annotations: const [
+        MantraAnnotation(start: 0, end: 1, ruby: 'ōng', note: '归命'),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_switch')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_0')));
+    await tester.pumpAndSettle();
+
+    final ruby = find.textContaining('ōng', findRichText: true);
+    expect(ruby, findsOneWidget);
+    expect(find.textContaining('归命', findRichText: true), findsOneWidget);
+    final textY = tester.getTopLeft(ruby).dy;
+    final sourceY = tester.getTopLeft(find.text('《药师经》')).dy;
+    final benefitY = tester.getTopLeft(find.text('人天利益')).dy;
+    expect(textY, lessThan(sourceY));
+    expect(sourceY, lessThan(benefitY));
+  });
+
+  testWidgets('密咒面板右下角编辑按钮：回填内容，改完保存即生效', (tester) async {    await pumpPage(tester);
     await ShanZhiShiMantraStore.instance.add(
       '测试神咒',
       source: '《药师经》',

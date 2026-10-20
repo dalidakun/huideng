@@ -281,4 +281,106 @@ void main() {
       expect(store.mantras, contains('我的新咒'));
     });
   });
+
+  group('神咒原文批注', () {
+    test('存下的批注随原文一起保存、合并时整体后移', () async {
+      final store = await loadedStore();
+      await store.add(
+        '批注咒',
+        text: '嗡嘛呢',
+        annotations: const [
+          MantraAnnotation(start: 0, end: 1, ruby: 'ōng', note: '归命'),
+        ],
+      );
+      final saved = store.annotationsOf('批注咒');
+      expect(saved.length, 1);
+      expect(saved.single.start, 0);
+      expect(saved.single.end, 1);
+      expect(saved.single.ruby, 'ōng');
+      expect(saved.single.note, '归命');
+
+      await store.mergeInto(
+        '批注咒',
+        text: '叭咪吽',
+        annotations: const [
+          MantraAnnotation(start: 0, end: 1, note: '莲花'),
+        ],
+      );
+      expect(store.textOf('批注咒'), '嗡嘛呢\n\n叭咪吽');
+      final merged = store.annotationsOf('批注咒');
+      expect(merged.length, 2);
+      // 「嗡嘛呢」长 3，空行 2，新内容从第 5 个字符开始。
+      expect(merged[1].start, 5);
+      expect(merged[1].end, 6);
+      expect(merged[1].note, '莲花');
+    });
+
+    testWidgets('选中文字后点「注音」：保存并在清单里可删除', (tester) async {
+      final store = await loadedStore();
+      await openSheet(tester);
+      final field = find.byKey(const ValueKey('shanzhishi_mantra_text_field'));
+      await tester.enterText(field, '嗡嘛呢叭咪吽');
+      await tester.pump();
+
+      final ctrl = tester.widget<TextField>(field).controller!;
+      ctrl.selection = const TextSelection(baseOffset: 0, extentOffset: 1);
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_ruby_tool')));
+      await tester.pumpAndSettle();
+      expect(find.text('「嗡」'), findsOneWidget);
+      await tester.enterText(
+          find.byKey(const ValueKey('shanzhishi_mantra_ruby_input')), 'ōng');
+      await tester.enterText(
+          find.byKey(const ValueKey('shanzhishi_mantra_note_input')), '归命');
+      await tester.tap(
+          find.byKey(const ValueKey('shanzhishi_mantra_annotation_save')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_annotation_0')),
+          findsOneWidget);
+      expect(find.textContaining('注音：ōng'), findsOneWidget);
+      expect(find.textContaining('备注：归命'), findsOneWidget);
+
+      await tester.enterText(
+          find.byKey(const ValueKey('shanzhishi_mantra_name_field')), '批注测试咒');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('或有重名神咒'), findsNothing);
+      expect(store.mantras, contains('批注测试咒'));
+      final anns = store.annotationsOf('批注测试咒');
+      expect(anns.length, 1);
+      expect(anns.single.start, 0);
+      expect(anns.single.end, 1);
+      expect(anns.single.ruby, 'ōng');
+      expect(anns.single.note, '归命');
+    });
+
+    testWidgets('未选中文字时工具栏不可用，删掉文字后批注随之消失', (tester) async {
+      final store = await loadedStore();
+      await store.add(
+        '批注咒',
+        text: '嗡嘛呢',
+        annotations: const [
+          MantraAnnotation(start: 0, end: 1, ruby: 'ōng'),
+        ],
+      );
+      await openSheet(tester, editing: '批注咒');
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_annotation_0')),
+          findsOneWidget);
+
+      final field = find.byKey(const ValueKey('shanzhishi_mantra_text_field'));
+      await tester.enterText(field, '嘛呢');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_annotation_0')),
+          findsNothing);
+
+      expect(store.annotationsOf('批注咒').single.ruby, 'ōng');
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      expect(store.annotationsOf('批注咒'), isEmpty);
+    });
+  });
 }
