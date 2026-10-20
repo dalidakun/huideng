@@ -1825,7 +1825,7 @@ class StudyHubPageState extends State<StudyHubPage>
           children: [
             Expanded(
               child: Text(proj.title,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       fontSize: 15,

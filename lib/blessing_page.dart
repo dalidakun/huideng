@@ -23,33 +23,6 @@ Widget _dragHandle(PaletteData p) {
   );
 }
 
-Widget _sheetHeader(PaletteData p, String title, VoidCallback onClose) {
-  return Padding(
-    padding: const EdgeInsets.fromLTRB(20, 10, 10, 4),
-    child: Row(
-      children: [
-        Icon(Icons.volunteer_activism_outlined, size: 20, color: p.accent),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            title,
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-              color: p.text,
-              letterSpacing: 0.5,
-            ),
-          ),
-        ),
-        IconButton(
-          onPressed: onClose,
-          icon: Icon(Icons.close, size: 20, color: p.textSec),
-        ),
-      ],
-    ),
-  );
-}
-
 Widget _sectionLabel(PaletteData p, String text) {
   return Text(
     text,
@@ -70,18 +43,19 @@ Widget _hint(PaletteData p, String text) {
 }
 
 InputDecoration _fieldDecoration(PaletteData p, String hint) {
-  OutlineInputBorder border(Color c, [double w = 1]) => OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: c, width: w),
-      );
+  final border = OutlineInputBorder(
+    borderRadius: BorderRadius.circular(12),
+    borderSide: BorderSide.none,
+  );
   return InputDecoration(
     hintText: hint,
     hintStyle: TextStyle(fontSize: 13, color: p.textHint),
     filled: true,
     fillColor: AppPalette.instance.isPlain ? const Color(0xFFF5F5F5) : p.tintBg,
-    border: border(p.border),
-    enabledBorder: border(p.border),
-    focusedBorder: border(p.accent, 1.4),
+    border: border,
+    enabledBorder: border,
+    focusedBorder: border,
+    disabledBorder: border,
     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
   );
 }
@@ -151,12 +125,122 @@ class _BlessingEditor extends StatefulWidget {
 }
 
 class _MethodRow {
-  final BlessingMethodOption option;
+  final BlessingMethodOption? option;
+  final String name;
+  final String unit;
   bool on;
   final TextEditingController count;
 
-  _MethodRow(this.option, {this.on = false, String? count})
-      : count = TextEditingController(text: count ?? option.defaultCount);
+  _MethodRow(this.option,
+      {this.on = false, String? name, String? unit, String? count})
+      : name = name ?? option?.category ?? '',
+        unit = unit ?? option?.unit ?? '',
+        count = TextEditingController(text: count ?? option?.defaultCount ?? '1');
+
+  bool get isCustom => option == null;
+}
+
+class _CustomMethodResult {
+  final String name;
+  final String unit;
+  final String count;
+
+  const _CustomMethodResult(this.name, this.unit, this.count);
+}
+
+class _CustomMethodDialog extends StatefulWidget {
+  const _CustomMethodDialog();
+
+  @override
+  State<_CustomMethodDialog> createState() => _CustomMethodDialogState();
+}
+
+class _CustomMethodDialogState extends State<_CustomMethodDialog> {
+  final _nameCtrl = TextEditingController();
+  final _unitCtrl = TextEditingController(text: '遍');
+  final _countCtrl = TextEditingController(text: '1');
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _unitCtrl.dispose();
+    _countCtrl.dispose();
+    super.dispose();
+  }
+
+  void _done() {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      _toast(context, '请填写方式名称');
+      return;
+    }
+    Navigator.pop(
+      context,
+      _CustomMethodResult(
+        name,
+        _unitCtrl.text.trim(),
+        _countCtrl.text.trim().isEmpty ? '1' : _countCtrl.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return AlertDialog(
+      backgroundColor: p.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text('自定义祈福方式',
+          style: TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w700, color: p.text)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
+              style: TextStyle(fontSize: 14, color: p.text),
+              decoration: _fieldDecoration(p, '名称，如：拜忏'),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _unitCtrl,
+                    style: TextStyle(fontSize: 14, color: p.text),
+                    decoration: _fieldDecoration(p, '单位，如：遍'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _countCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: TextStyle(fontSize: 14, color: p.text),
+                    decoration: _fieldDecoration(p, '数量'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('取消', style: TextStyle(color: p.textSec)),
+        ),
+        FilledButton(
+          onPressed: _done,
+          style: FilledButton.styleFrom(backgroundColor: p.primary),
+          child: const Text('添加'),
+        ),
+      ],
+    );
+  }
 }
 
 class _BlessingEditorState extends State<_BlessingEditor> {
@@ -165,11 +249,15 @@ class _BlessingEditorState extends State<_BlessingEditor> {
   late final TextEditingController _dedicationCtrl;
   late final TextEditingController _daysCtrl;
   late final List<_MethodRow> _methods;
+  final List<_MethodRow> _dropped = [];
   late String _startDate;
-  late bool _isPrivate;
   late int _groupIndex;
   String _templateKey = '';
   bool _saving = false;
+  bool _secTemplate = true;
+  bool _secDays = false;
+  bool _secMethods = false;
+  bool _secDedication = false;
 
   @override
   void initState() {
@@ -182,29 +270,53 @@ class _BlessingEditorState extends State<_BlessingEditor> {
     _startDate = (it != null && it.startDate.isNotEmpty)
         ? it.startDate
         : BlessingService.today();
-    _isPrivate = it?.isPrivate ?? false;
     _templateKey = it?.templateKey ?? '';
     _groupIndex = 0;
-    _methods = [
-      for (final o in kBlessingMethodOptions)
-        _MethodRow(
-          o,
-          on: it?.methods.any((m) => m.category == o.category) ?? false,
-          count: it?.methods
-              .where((m) => m.category == o.category)
-              .map((m) => m.count)
-              .firstWhere((c) => c.isNotEmpty, orElse: () => o.defaultCount),
-        ),
-    ];
+    _methods = [];
+    final existing = it?.methods ?? const <BlessingMethod>[];
+    for (final o in kBlessingMethodOptions) {
+      BlessingMethod? hit;
+      for (final m in existing) {
+        final nm = m.name.isNotEmpty ? m.name : m.category;
+        if (m.category == o.category || nm == o.category) {
+          hit = m;
+          break;
+        }
+      }
+      _methods.add(_MethodRow(o,
+          on: hit != null, count: hit?.count ?? o.defaultCount));
+    }
+    for (final m in existing) {
+      final nm = m.name.isNotEmpty ? m.name : m.category;
+      final isDefault = kBlessingMethodOptions
+          .any((o) => o.category == m.category || o.category == nm);
+      if (isDefault || nm.isEmpty) continue;
+      _methods.add(_MethodRow(null,
+          on: true, name: nm, unit: m.unit, count: m.count));
+    }
+    // 手动改事由时，同步刷新模板 chip 的选中态与折叠区的摘要。
+    _titleCtrl.addListener(_onTitleChanged);
+    _targetCtrl.addListener(_onTitleChanged);
+    _dedicationCtrl.addListener(_onTitleChanged);
+  }
+
+  void _onTitleChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _titleCtrl.removeListener(_onTitleChanged);
+    _targetCtrl.removeListener(_onTitleChanged);
+    _dedicationCtrl.removeListener(_onTitleChanged);
     _titleCtrl.dispose();
     _targetCtrl.dispose();
     _dedicationCtrl.dispose();
     _daysCtrl.dispose();
     for (final m in _methods) {
+      m.count.dispose();
+    }
+    for (final m in _dropped) {
       m.count.dispose();
     }
     super.dispose();
@@ -243,14 +355,35 @@ class _BlessingEditorState extends State<_BlessingEditor> {
   List<BlessingMethod> _collectMethods() {
     final out = <BlessingMethod>[];
     for (final m in _methods) {
-      if (!m.on) continue;
+      if (!m.on || m.name.trim().isEmpty) continue;
       out.add(BlessingMethod(
-        category: m.option.category,
+        category: m.isCustom ? '' : m.name.trim(),
+        name: m.isCustom ? m.name.trim() : '',
         count: m.count.text.trim(),
-        unit: m.option.unit,
+        unit: m.unit,
       ));
     }
     return out;
+  }
+
+  Future<void> _addCustomMethod() async {
+    final r = await showDialog<_CustomMethodResult>(
+      context: context,
+      builder: (_) => const _CustomMethodDialog(),
+    );
+    if (r == null || !mounted) return;
+    setState(() {
+      _methods.add(_MethodRow(null,
+          on: true, name: r.name, unit: r.unit, count: r.count));
+      _secMethods = true;
+    });
+  }
+
+  void _removeMethod(_MethodRow m) {
+    setState(() {
+      _methods.remove(m);
+      _dropped.add(m);
+    });
   }
 
   Future<void> _submit() async {
@@ -274,7 +407,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           totalDays: days,
           startDate: _startDate,
           methods: methods,
-          isPrivate: _isPrivate,
+          isPrivate: false,
         );
       } else {
         await BlessingService.instance.update(
@@ -286,7 +419,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           totalDays: days,
           startDate: _startDate,
           methods: methods,
-          isPrivate: _isPrivate,
+          isPrivate: false,
         );
       }
       if (!mounted) return;
@@ -302,165 +435,430 @@ class _BlessingEditorState extends State<_BlessingEditor> {
   Widget build(BuildContext context) {
     final p = AppPalette.p;
     final viewInsets = MediaQuery.of(context).viewInsets.bottom;
-    final editing = widget.initial != null;
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsets),
       child: Column(
         children: [
           _dragHandle(p),
-          _sheetHeader(p, editing ? '编辑祈福' : '发起祈福', () => Navigator.pop(context)),
+          _editorHeader(p),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),
+              padding: EdgeInsets.fromLTRB(
+                  20, 14, 20, 24 + MediaQuery.of(context).padding.bottom),
               children: [
+                _fold(
+                  p,
+                  title: '模板选择',
+                  summary: _templateKey.isEmpty ? '选择分组与模板' : _templateKey,
+                  open: _secTemplate,
+                  onToggle: () => setState(() => _secTemplate = !_secTemplate),
+                  child: _templateContent(p),
+                ),
+                _fold(
+                  p,
+                  title: '祈福天数',
+                  summary: '${_daysCtrl.text.trim()} 天 · 起于 $_startDate',
+                  open: _secDays,
+                  onToggle: () => setState(() => _secDays = !_secDays),
+                  child: _daysContent(p),
+                ),
+                _fold(
+                  p,
+                  title: '祈福方式',
+                  summary: _methodsSummary(),
+                  open: _secMethods,
+                  onToggle: () => setState(() => _secMethods = !_secMethods),
+                  child: _methodsContent(p),
+                ),
+                _fold(
+                  p,
+                  title: '回向文',
+                  summary:
+                      _dedicationCtrl.text.trim().isEmpty ? '未填写' : '已填写',
+                  open: _secDedication,
+                  onToggle: () =>
+                      setState(() => _secDedication = !_secDedication),
+                  child: TextField(
+                    controller: _dedicationCtrl,
+                    minLines: 3,
+                    maxLines: 8,
+                    style: TextStyle(fontSize: 14, color: p.text, height: 1.6),
+                    decoration: _fieldDecoration(p, '愿以此功课功德，回向……'),
+                  ),
+                ),
+                const SizedBox(height: 18),
                 _sectionLabel(p, '祈福事由'),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _titleCtrl,
-                  style: TextStyle(fontSize: 14, color: p.text),
-                  decoration: _fieldDecoration(p, '如：为地震灾区众生祈愿'),
-                ),
-                const SizedBox(height: 6),
-                _hint(p, '点击下方模板可自动填入事由、对象与回向文。'),
-                const SizedBox(height: 16),
-                _buildTemplatePicker(p),
-                const SizedBox(height: 20),
-                _sectionLabel(p, '回向对象'),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _targetCtrl,
-                  style: TextStyle(fontSize: 14, color: p.text),
-                  decoration: _fieldDecoration(p, '如：我的父母 / 灾区同胞 / 法界众生'),
-                ),
-                const SizedBox(height: 20),
-                _sectionLabel(p, '祈福天数'),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final d in const [7, 21, 49, 100])
-                      ChoiceChip(
-                        label: Text('$d天'),
-                        selected: _daysCtrl.text.trim() == '$d',
-                        onSelected: (_) => setState(() => _daysCtrl.text = '$d'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _daysCtrl,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                        onChanged: (_) => setState(() {}),
-                        style: TextStyle(fontSize: 14, color: p.text),
-                        decoration: _fieldDecoration(p, '自定义天数').copyWith(
-                          suffixText: '天',
-                          suffixStyle: TextStyle(fontSize: 13, color: p.textSec),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: InkWell(
-                        onTap: _pickStartDate,
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 15),
-                          decoration: BoxDecoration(
-                            color: AppPalette.instance.isPlain
-                                ? const Color(0xFFF5F5F5)
-                                : p.tintBg,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: p.border),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.event_outlined, size: 16, color: p.accent),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(_startDate,
-                                    style: TextStyle(fontSize: 13, color: p.text)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                _sectionLabel(p, '祈福方式'),
-                const SizedBox(height: 4),
-                _hint(p, '勾选每日要做的功课，如念佛、称名。'),
-                const SizedBox(height: 6),
-                _buildMethodRows(p),
-                const SizedBox(height: 20),
-                _sectionLabel(p, '回向文'),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _dedicationCtrl,
-                  minLines: 3,
-                  maxLines: 8,
+                  minLines: 6,
+                  maxLines: 14,
+                  maxLength: 5000,
+                  buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
+                  keyboardType: TextInputType.multiline,
+                  textAlignVertical: TextAlignVertical.top,
+                  cursorColor: p.primary,
                   style: TextStyle(fontSize: 14, color: p.text, height: 1.6),
-                  decoration: _fieldDecoration(p, '愿以此功课功德，回向……'),
-                ),
-                const SizedBox(height: 20),
-                _sectionLabel(p, '可见范围'),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    _visibilityChip(p, '公开共修', !_isPrivate, () {
-                      setState(() => _isPrivate = false);
-                    }),
-                    const SizedBox(width: 10),
-                    _visibilityChip(p, '仅自己', _isPrivate, () {
-                      setState(() => _isPrivate = true);
-                    }),
-                  ],
+                  decoration: InputDecoration(
+                    isCollapsed: true,
+                    border: InputBorder.none,
+                    hintText: '写下这次祈福的事由，可详细描述所缘的人或事……',
+                    hintStyle: TextStyle(fontSize: 13, color: p.textHint),
+                  ),
                 ),
               ],
             ),
           ),
-          _footer(p, onCancel: () => Navigator.pop(context), onSave: _submit, saving: _saving),
         ],
       ),
     );
   }
 
-  Widget _buildTemplatePicker(PaletteData p) {
-    final group = kBlessingGroups[_groupIndex];
+  Widget _editorHeader(PaletteData p) {
+    final editing = widget.initial != null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 12, 2),
+      child: Row(
+        children: [
+          Icon(Icons.volunteer_activism_outlined, size: 20, color: p.accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              editing ? '编辑祈福' : '发起祈福',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: p.text,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.pop(context),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 30),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              foregroundColor: p.textSec,
+            ),
+            child: const Text('取消', style: TextStyle(fontSize: 13)),
+          ),
+          const SizedBox(width: 4),
+          FilledButton(
+            onPressed: _saving ? null : _submit,
+            style: FilledButton.styleFrom(
+              backgroundColor: p.primary,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: p.border,
+              elevation: 0,
+              minimumSize: const Size(0, 30),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            child: _saving
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Text('保存', style: TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fold(
+    PaletteData p, {
+    required String title,
+    required String summary,
+    required bool open,
+    required VoidCallback onToggle,
+    required Widget child,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionLabel(p, '从模板选择'),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          children: [
-            for (int i = 0; i < kBlessingGroups.length; i++)
-              ChoiceChip(
-                label: Text(kBlessingGroups[i].name),
-                selected: _groupIndex == i,
-                onSelected: (_) => setState(() => _groupIndex = i),
-              ),
-          ],
+        InkWell(
+          onTap: onToggle,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Row(
+              children: [
+                Text(title,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: p.text)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 12, color: p.textHint),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                AnimatedRotation(
+                  turns: open ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: Icon(Icons.expand_more, size: 20, color: p.textSec),
+                ),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: 10),
+        if (open)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: child,
+          ),
+      ],
+    );
+  }
+
+  String _methodsSummary() {
+    final n = _methods.where((m) => m.on && m.name.trim().isNotEmpty).length;
+    return n == 0 ? '未选择' : '已选 $n 项';
+  }
+
+  Widget _daysContent(PaletteData p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final t in group.templates)
-              ActionChip(
-                label: Text(t.title),
-                onPressed: () => _applyTemplate(t),
+            for (final d in const [7, 21, 49, 100])
+              _pill(p, '$d天', _daysCtrl.text.trim() == '$d',
+                  () => setState(() => _daysCtrl.text = '$d')),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _daysCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => setState(() {}),
+                style: TextStyle(fontSize: 14, color: p.text),
+                decoration: _fieldDecoration(p, '自定义天数').copyWith(
+                  suffixText: '天',
+                  suffixStyle: TextStyle(fontSize: 13, color: p.textSec),
+                ),
               ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: InkWell(
+                onTap: _pickStartDate,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 15),
+                  decoration: BoxDecoration(
+                    color: AppPalette.instance.isPlain
+                        ? const Color(0xFFF5F5F5)
+                        : p.tintBg,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.event_outlined, size: 16, color: p.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(_startDate,
+                            style: TextStyle(fontSize: 13, color: p.text)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ],
+    );
+  }
+
+  Widget _methodsContent(PaletteData p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _hint(p, '勾选每日要做的功课，也可自定义添加。'),
+        const SizedBox(height: 6),
+        _buildMethodRows(p),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: _addCustomMethod,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppPalette.instance.isPlain
+                  ? const Color(0xFFF3F3F3)
+                  : p.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add, size: 16, color: p.primary),
+                const SizedBox(width: 4),
+                Text('自定义方式',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: p.primary)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _pill(
+      PaletteData p, String label, bool selected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? p.primary.withValues(alpha: 0.12)
+              : (AppPalette.instance.isPlain
+                  ? const Color(0xFFF3F3F3)
+                  : p.tintBg),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            color: selected ? p.primary : p.text,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _templateContent(PaletteData p) {
+    final group = kBlessingGroups[_groupIndex];
+    final currentTitle = _titleCtrl.text.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 分组用「文字 + 下划线」样式，行距加大，避免下划线被挤在中间。
+        Wrap(
+          spacing: 18,
+          runSpacing: 12,
+          children: [
+            for (int i = 0; i < kBlessingGroups.length; i++)
+              _groupTab(p, kBlessingGroups[i].name, _groupIndex == i,
+                  () => setState(() => _groupIndex = i)),
+          ],
+        ),
+        const SizedBox(height: 18),
+        // 模板用「无边框的浅色块」。
+        Wrap(
+          spacing: 8,
+          runSpacing: 10,
+          children: [
+            for (final t in group.templates)
+              _templateChip(p, t, currentTitle == t.title.trim()),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Text('回向对象',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: p.textHint)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _targetCtrl,
+          style: TextStyle(fontSize: 14, color: p.text),
+          decoration: _fieldDecoration(p, '如：我的父母 / 灾区同胞 / 法界众生'),
+        ),
+      ],
+    );
+  }
+
+  Widget _groupTab(PaletteData p, String name, bool selected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: IntrinsicWidth(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              name,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? p.primary : p.textSec,
+              ),
+            ),
+            const SizedBox(height: 6),
+            // 选中时横杠铺满分组文字宽度，更醒目。
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              height: 2,
+              decoration: BoxDecoration(
+                color: selected ? p.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _templateChip(PaletteData p, BlessingTemplate t, bool selected) {
+    final bg = selected
+        ? p.primary.withValues(alpha: 0.12)
+        : (AppPalette.instance.isPlain ? const Color(0xFFF3F3F3) : p.tintBg);
+    return GestureDetector(
+      onTap: () => _applyTemplate(t),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected) ...[
+              Icon(Icons.check, size: 14, color: p.primary),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              t.title,
+              style: TextStyle(
+                fontSize: 13,
+                color: selected ? p.primary : p.text,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -472,16 +870,36 @@ class _BlessingEditorState extends State<_BlessingEditor> {
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: Row(
               children: [
-                Checkbox(
-                  value: m.on,
-                  onChanged: (v) => setState(() => m.on = v ?? false),
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: Transform.scale(
+                    scale: 0.82,
+                    child: Checkbox(
+                      value: m.on,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      side: const BorderSide(width: 1.4),
+                      onChanged: (v) => setState(() => m.on = v ?? false),
+                    ),
+                  ),
                 ),
                 Expanded(
-                  child: Text('${m.option.category}（${m.option.unit}）',
+                  child: Text('${m.name}（${m.unit}）',
                       style: TextStyle(fontSize: 14, color: p.text)),
                 ),
+                if (m.isCustom)
+                  GestureDetector(
+                    onTap: () => _removeMethod(m),
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Icon(Icons.close, size: 15, color: p.textHint),
+                    ),
+                  ),
+                const SizedBox(width: 6),
                 SizedBox(
-                  width: 96,
+                  width: 88,
                   child: TextField(
                     controller: m.count,
                     enabled: m.on,
@@ -500,89 +918,6 @@ class _BlessingEditorState extends State<_BlessingEditor> {
             ),
           ),
       ],
-    );
-  }
-
-  Widget _visibilityChip(PaletteData p, String label, bool selected, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        decoration: BoxDecoration(
-          color: selected ? p.primary.withValues(alpha: 0.1) : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? p.primary : p.border),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: selected ? p.primary : p.textSec,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _footer(
-    PaletteData p, {
-    required VoidCallback onCancel,
-    required VoidCallback onSave,
-    bool saving = false,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: p.card,
-        border: Border(top: BorderSide(color: p.divider)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: saving ? null : onCancel,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: p.textSec,
-                    side: BorderSide(color: p.border),
-                    minimumSize: const Size(0, 46),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: const Text('取消'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: saving ? null : onSave,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: p.primary,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: p.border,
-                    disabledForegroundColor: p.textHint,
-                    elevation: 0,
-                    minimumSize: const Size(0, 46),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('保存'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -897,12 +1232,13 @@ class _BlessingPageState extends State<BlessingPage>
             children: [
               Expanded(
                 child: Text(proj.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color: p.text)),
               ),
-              if (proj.isPrivate) _tag(p, '仅自己', color: p.textSec),
               if (done) ...[
                 const SizedBox(width: 6),
                 _tag(p, '已圆满'),
@@ -950,6 +1286,8 @@ class _BlessingPageState extends State<BlessingPage>
             children: [
               Expanded(
                 child: Text(proj.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
@@ -1219,7 +1557,6 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
               _kv(p, Icons.groups_outlined, '共修', '已有 ${d.joinerCount} 人共修'),
               _kv(p, Icons.event_outlined, '天数',
                   '${proj.totalDays} 天 · 起于 ${proj.startDate}'),
-              if (proj.isPrivate) _kv(p, Icons.lock_outline, '可见', '仅自己'),
             ],
           ),
         ),

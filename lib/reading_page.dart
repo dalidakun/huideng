@@ -10,6 +10,9 @@ import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'reader_selection_controls.dart';
+import 'shanzhishi_edit_sheet.dart';
+import 'shanzhishi_mantra_edit_sheet.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart' show editedSutraFilePath, SutraEditPage;
@@ -3458,15 +3461,6 @@ class ReadingPageState extends State<ReadingPage>
     _showNoteDialog(k, displayText: display);
   }
 
-  /// 「本段全选」作用于整簇：合并文本整段选中。
-  void _selectFullCluster(List<int> cluster) {
-    final state = _selectionTextState;
-    if (state != null) {
-      state.selectAll(SelectionChangedCause.tap);
-      _selectionRange = (0, _clusterText(cluster).length);
-    }
-  }
-
   /// 渲染簇的完整 TextSpan：每段各自带基础样式（含完成态置灰），段间`\n`。
   List<TextSpan> _buildClusterSpans(List<int> cluster) {
     final spans = <TextSpan>[];
@@ -3496,8 +3490,8 @@ class ReadingPageState extends State<ReadingPage>
         ),
       );
 
-  /// 一个渲染簇（≥1 连续紧密段落）的正文块：合并成一不SelectableText 作
-  /// 「本段全选/ 拖动选择」都能跨段作用；单段时保留原段落行为与操作栏。
+  /// 一个渲染簇（≥1 连续紧密段落）的正文块：合并成一个 SelectableText，
+  /// 拖动选择可跨段作用；单段时保留原段落行为与操作栏。
   /// 备注段落单独渲染为浅色背景色块，破出正文 16px 内边距，通到屏幕左右边缘。
   Widget _buildClusterParagraph(
     List<int> group, {
@@ -3517,6 +3511,7 @@ class ReadingPageState extends State<ReadingPage>
           child: SelectableText.rich(
             TextSpan(children: _buildClusterSpans(group)),
             key: _paraTapKey(group.first),
+            selectionControls: readerSelectionControls,
             onSelectionChanged: (sel, cause) {
               _hasTextSelection = !sel.isCollapsed;
               _onSelectionChanged(sel);
@@ -3544,6 +3539,7 @@ class ReadingPageState extends State<ReadingPage>
                 _hasTextSelection = !sel.isCollapsed;
                 _onSelectionChanged(sel);
               },
+              selectionControls: readerSelectionControls,
               contextMenuBuilder: (context, editableTextState) =>
                   _buildSelectionToolbar(context, editableTextState, group),
             ),
@@ -5003,9 +4999,9 @@ class ReadingPageState extends State<ReadingPage>
     return spans;
   }
 
-  /// 统一的菜单卡片：横向的复制 / 画线(擦除) / 本段全选/ 感想（每项图标上文字下）。
-  /// 单击画线（Overlay）与长按选中（contextMenuBuilder）共用，保证两而UI 一致。
-  /// [close] 在需要关闭弹窗时调用（复到/ 感想）；画线与全选不关闭，可继续操作。
+  /// 统一的菜单卡片：复制 / 画线(擦除) / 添加至 / 备注 / 搜索（每项图标上文字下）。
+  /// 单击画线（Overlay）与长按选中（contextMenuBuilder）共用，保证两处 UI 一致。
+  /// [close] 在需要关闭弹窗时调用（复制/备注/搜索）；画线不关闭，可继续操作。
   /// [onResolveRange] 为空时用 [start,end]（单击画线）；否则用它实时取当前选区（长按选中）。
   /// [cluster] 非空时选区为「紧密连段簇」合并文本的坐标：画线感想会按段逐个作用。
   Widget _buildMenuCard({
@@ -5014,7 +5010,6 @@ class ReadingPageState extends State<ReadingPage>
     required int end,
     required VoidCallback close,
     (int, int)? Function()? onResolveRange,
-    VoidCallback? onSelectFull,
     List<int>? cluster,
     void Function(int start, int end)? drawUnderline,
   }) {
@@ -5031,6 +5026,7 @@ class ReadingPageState extends State<ReadingPage>
           .any((seg) => (_paraNotes[seg.$1] ?? const []).isNotEmpty);
 
       return _IdeaMenuCard(
+        sutraTitle: _titleShown,
         para: para,
         paragraph: text,
         initialStart: s,
@@ -5039,7 +5035,6 @@ class ReadingPageState extends State<ReadingPage>
         initialHasIdea: hasIdea,
         isDarkBg: _isDarkBg,
         close: close,
-        onSelectFull: onSelectFull,
         onResolveRange: onResolveRange,
         // 有显开drawUnderline（如单击画线的「擦除整簇」）时优先使用；
         // 长按选中路径未传，回退到逐段画线/擦除开关。
@@ -5060,6 +5055,7 @@ class ReadingPageState extends State<ReadingPage>
         .any((u) => s < (u['end'] ?? 0) && e > (u['start'] ?? 0));
 
     return _IdeaMenuCard(
+      sutraTitle: _titleShown,
       para: para,
       paragraph: p,
       initialStart: s,
@@ -5068,7 +5064,6 @@ class ReadingPageState extends State<ReadingPage>
       initialHasIdea: (_paraNotes[para] ?? const []).isNotEmpty,
       isDarkBg: _isDarkBg,
       close: close,
-      onSelectFull: onSelectFull,
       onResolveRange: onResolveRange,
       onDrawUnderline:
           drawUnderline ?? (ss, ee) => _toggleUnderline(para, ss, ee),
@@ -5112,7 +5107,7 @@ class ReadingPageState extends State<ReadingPage>
     _showNoteDialog(para, displayText: display);
   }
 
-  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 本段全选/ 感想）。
+  /// 浮层菜单：在 [anchor] 处弹出统一的卡片（复制 / 画线(擦除) / 添加至 / 备注 / 搜索）。
   /// 会测量卡片实际尺寸并夹在屏幕安全区内，优先显示在选中处上方、居中；
   /// 空间不足则自动转下方。
   /// [showBarrier]：为 true 时点击菜单外关闭（单击画线场景）；为 false 时不遮罩。
@@ -5124,10 +5119,10 @@ class ReadingPageState extends State<ReadingPage>
     required int start,
     required int end,
     required Offset anchor,
+    Offset? secondaryAnchor,
     VoidCallback? onDismiss,
     bool showBarrier = true,
     (int, int)? Function()? onResolveRange,
-    VoidCallback? onSelectFull,
     List<int>? cluster,
     void Function(int start, int end)? drawUnderline,
   }) {
@@ -5155,6 +5150,7 @@ class ReadingPageState extends State<ReadingPage>
             child: CustomSingleChildLayout(
               delegate: _MenuLayoutDelegate(
                 anchor: anchor,
+                secondaryAnchor: secondaryAnchor,
                 overlaySize: size,
                 safeArea: safe,
               ),
@@ -5167,7 +5163,6 @@ class ReadingPageState extends State<ReadingPage>
                   onDismiss?.call();
                 },
                 onResolveRange: onResolveRange,
-                onSelectFull: onSelectFull,
                 cluster: cluster,
                 drawUnderline: drawUnderline,
               ),
@@ -5441,21 +5436,8 @@ class ReadingPageState extends State<ReadingPage>
     _selectionRange = (sel.start, sel.end);
   }
 
-  /// 「本段全选」：把当前选中文字所在整个段落的蓝色高亮扩展到整段，
-  /// 并更新[_selectionRange] 供后续画线感想作用于整段。
-  void _selectFullParagraph(int i) {
-    if (i < 0 || i >= _paragraphs.length) return;
-    final p = _paragraphs[i];
-    final state = _selectionTextState;
-    if (state != null) {
-      state.selectAll(SelectionChangedCause.tap);
-      // selectAll 会把选区整段选中，同步记录供 onResolveRange 读取。
-      _selectionRange = (0, p.length);
-    }
-  }
-
   /// 长按选中文字后的菜单：与「单击画线」共用同一个卡版UI
-  /// （复到/ 画线(擦除) / 本段全选/ 感想，每项图标上文字下）。
+  /// （复制 / 画线(擦除) / 添加至 / 备注 / 搜索，每项图标上文字下）。
   /// 不直接把卡片返回给框架（那样会铺满整屏变白屏），而是返回空组件，
   /// 画[Overlay] 在选中处上方独立弹出同一张卡片，经文保持可见。
   /// 不使用全屏遮罩，句柄仍可拖动调整选区；点 画线/感想 时读取实时选区，
@@ -5472,7 +5454,9 @@ class ReadingPageState extends State<ReadingPage>
     final sel = editableTextState.textEditingValue.selection;
     final start = sel.isValid ? sel.start.clamp(0, len) : 0;
     final end = sel.isValid ? sel.end.clamp(0, len) : 0;
-    final anchor = editableTextState.contextMenuAnchors.primaryAnchor;
+    final anchors = editableTextState.contextMenuAnchors;
+    final anchor = anchors.primaryAnchor;
+    final secondaryAnchor = anchors.secondaryAnchor;
     _selectionTextState = editableTextState;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -5484,6 +5468,7 @@ class ReadingPageState extends State<ReadingPage>
         start: start,
         end: end,
         anchor: anchor,
+        secondaryAnchor: secondaryAnchor,
         showBarrier: false,
         cluster: cluster,
         // 读取当前最新选区（随句柄拖动即时更新），保证画线/感想作用于用户当前高亮的整段。
@@ -5501,10 +5486,6 @@ class ReadingPageState extends State<ReadingPage>
           if (ce2 <= cs2) return null;
           return (cs2, ce2);
         },
-        // 「本段全选」：把视觉高亮扩大到整段（真实选中整段文字），并置后续画线/感想作用整段。
-        onSelectFull: () => cluster.length > 1
-            ? _selectFullCluster(cluster)
-            : _selectFullParagraph(cluster.first),
         onDismiss: () {
           _selectionMenuEntry = null;
           _selectionTextState = null;
@@ -5603,7 +5584,7 @@ class ReadingPageState extends State<ReadingPage>
   }
 
   /// 翻页模式的某一页：按渲染簇分组渲染。簇内紧密段落合并成一个可选文本块，
-  /// 跨段拖动选择 / 本段全选不再被段边界卡住；操作栏仍按每段各自显示。
+  /// 跨段拖动选择不再被段边界卡住；操作栏仍按每段各自显示。
   Widget _buildFlipPage(List<int> paras, int pageIndex) {
     return SingleChildScrollView(
       child: Column(
@@ -5618,9 +5599,13 @@ class ReadingPageState extends State<ReadingPage>
   }
 }
 
-/// 长按选中 / 单击画线的统一菜单卡片：横后复制 / 画线(擦除) / 全选/ 感想。
-/// 画线与全选时不关闭弹窗，可继续点击感想（针对当前选中的文字）。
+enum _AddToTarget { buddha, mantra }
+
+/// 长按选中 / 单击画线的统一菜单卡片：复制 / 画线(擦除) / 添加至 / 备注 / 搜索。
+/// 画线时不关闭弹窗，可继续点击其它操作（针对当前选中的文字）。
 class _IdeaMenuCard extends StatefulWidget {
+  /// 当前经名（含卷），打开「添加至」时预填到新增面板的经文项。
+  final String sutraTitle;
   final int para;
   final String paragraph;
   final int initialStart;
@@ -5633,13 +5618,11 @@ class _IdeaMenuCard extends StatefulWidget {
   final void Function(int start, int end) onOpenNote;
   final (int, int)? Function()? onResolveRange;
 
-  /// 「本段全选」时回调外层：把屏幕上的选中高亮扩展到整段（长按选中场景）。
-  final VoidCallback? onSelectFull;
-
   /// 「搜索」回调：传入选中的文字，由外层打开 AI 助手。
   final void Function(String text)? onSearch;
 
   const _IdeaMenuCard({
+    required this.sutraTitle,
     required this.para,
     required this.paragraph,
     required this.initialStart,
@@ -5651,7 +5634,6 @@ class _IdeaMenuCard extends StatefulWidget {
     required this.onDrawUnderline,
     required this.onOpenNote,
     this.onResolveRange,
-    this.onSelectFull,
     this.onSearch,
   });
 
@@ -5663,8 +5645,6 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
   late int _start;
   late int _end;
   late bool _underlined;
-  // 点击「本段全选」后置真：之后画线感想作用于整段，不再依赖实时选区。
-  bool _overrideFull = false;
 
   @override
   void initState() {
@@ -5674,9 +5654,8 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
     _underlined = widget.initialUnderlined;
   }
 
-  /// 当前应作用的目标区间：优先「本段全选」；其次实时选区；最后初始区间。
+  /// 当前应作用的目标区间：优先实时选区；否则初始区间。
   (int, int) get _activeRange {
-    if (_overrideFull) return (0, widget.paragraph.length);
     final live = widget.onResolveRange?.call();
     if (live != null) return live;
     return (_start, _end);
@@ -5702,6 +5681,76 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             Icon(icon, size: 22, color: fg),
             const SizedBox(height: 6),
             Text(label, style: TextStyle(fontSize: 12, color: fg)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAddTo() async {
+    final navContext = Navigator.of(context, rootNavigator: true).context;
+    final selectedText = _selectedText.trim();
+    final p = AppPalette.p;
+    final target = await showModalBottomSheet<_AddToTarget>(
+      context: context,
+      backgroundColor: p.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: Text(
+                '添加至',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: p.text),
+              ),
+            ),
+            Divider(height: 1, color: p.divider),
+            _addToItem(ctx, _AddToTarget.buddha, Icons.self_improvement,
+                '添加到诸佛菩萨星图'),
+            _addToItem(ctx, _AddToTarget.mantra, Icons.graphic_eq, '添加到神咒长河'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (target == null) return;
+    widget.close();
+    if (!navContext.mounted) return;
+    if (target == _AddToTarget.buddha) {
+      await ShanZhiShiEditSheet.show(
+        navContext,
+        initialSutra: widget.sutraTitle,
+        initialParagraphs:
+            selectedText.isEmpty ? null : <String>[selectedText],
+      );
+    } else {
+      await ShanZhiShiMantraEditSheet.show(
+        navContext,
+        initialSource: widget.sutraTitle,
+        initialText: selectedText.isEmpty ? null : selectedText,
+      );
+    }
+  }
+
+  Widget _addToItem(
+      BuildContext ctx, _AddToTarget value, IconData icon, String title) {
+    final p = AppPalette.p;
+    return InkWell(
+      onTap: () => Navigator.pop(ctx, value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: p.accentDeep),
+            const SizedBox(width: 14),
+            Text(title, style: TextStyle(fontSize: 15, color: p.text)),
           ],
         ),
       ),
@@ -5734,16 +5783,7 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             setState(() => _underlined = !_underlined);
             widget.onDrawUnderline(s, e);
           }),
-          _item(Icons.select_all, '本段全选', () {
-            setState(() {
-              _overrideFull = true;
-              _start = 0;
-              _end = widget.paragraph.length;
-              _underlined = false;
-            });
-            // 同步把屏幕上的选中高亮扩展到整段（长按选中场景）。
-            widget.onSelectFull?.call();
-          }),
+          _item(Icons.playlist_add, '添加至', _openAddTo),
           _item(Icons.edit_note, '备注', () {
             final (s, e) = _activeRange;
             widget.close();
@@ -5763,14 +5803,18 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
 /// 浮层卡片的自适应布局：以上边/下边锚点为基准，把卡片居中并夹在屏幕安全区内。
 class _MenuLayoutDelegate extends SingleChildLayoutDelegate {
   final Offset anchor;
+  final Offset? secondaryAnchor;
   final Size overlaySize;
   final EdgeInsets safeArea;
 
   _MenuLayoutDelegate({
     required this.anchor,
+    this.secondaryAnchor,
     required this.overlaySize,
     required this.safeArea,
   });
+
+  static const double _handleClearance = 24.0;
 
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
@@ -5790,9 +5834,10 @@ class _MenuLayoutDelegate extends SingleChildLayoutDelegate {
     if (left + childSize.width > maxRight) left = maxRight - childSize.width;
     if (left < minLeft) left = minLeft;
 
-    // 优先显示在选中处上方；上方放不下则转下方；都不够时夹在垂直范围内。
     var top = anchor.dy - childSize.height - margin;
-    if (top < minTop) top = anchor.dy + margin;
+    if (top < minTop) {
+      top = (secondaryAnchor?.dy ?? anchor.dy) + margin + _handleClearance;
+    }
     if (top + childSize.height > maxBottom) top = maxBottom - childSize.height;
     if (top < minTop) top = minTop;
 
@@ -5802,6 +5847,7 @@ class _MenuLayoutDelegate extends SingleChildLayoutDelegate {
   @override
   bool shouldRelayout(covariant _MenuLayoutDelegate oldDelegate) =>
       oldDelegate.anchor != anchor ||
+      oldDelegate.secondaryAnchor != secondaryAnchor ||
       oldDelegate.overlaySize != overlaySize ||
       oldDelegate.safeArea != safeArea;
 }

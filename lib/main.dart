@@ -906,15 +906,15 @@ class _MainPageState extends State<MainPage>
               AppPalette.instance.isPlain
                   ? 'assets/images/ss1.png'
                   : 'assets/images/ms1.png',
-              width: 21,
-              height: 21,
+              width: 21.5,
+              height: 21.5,
               filterQuality: FilterQuality.medium),
           activeIcon: Image.asset(
               AppPalette.instance.isPlain
                   ? 'assets/images/ss2.png'
                   : 'assets/images/ms2.png',
-              width: 21,
-              height: 21,
+              width: 21.5,
+              height: 21.5,
               filterQuality: FilterQuality.medium),
           label: '',
         ),
@@ -1776,8 +1776,8 @@ class _NotificationTabIconState extends State<_NotificationTabIcon>
           navIconAsset(widget.active
               ? 'assets/images/chat_selected.png'
               : 'assets/images/chat.png'),
-          width: 21,
-          height: 21,
+          width: 21.5,
+          height: 21.5,
           filterQuality: FilterQuality.medium,
         ),
         Positioned(

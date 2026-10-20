@@ -13,7 +13,6 @@ import 'shanzhishi_mantra_store.dart';
 import 'shanzhishi_mantra_view.dart';
 import 'shanzhishi_sphere.dart';
 import 'shanzhishi_store.dart';
-import 'ui_sound.dart';
 
 /// 善知识页（底部菜单第 4 格）：
 ///
@@ -41,7 +40,7 @@ class ShanZhiShiPage extends StatefulWidget {
 }
 
 class ShanZhiShiPageState extends State<ShanZhiShiPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final ShanZhiShiStore _store = ShanZhiShiStore.instance;
   final ShanZhiSphereController _sphereCtrl = ShanZhiSphereController();
 
@@ -62,16 +61,14 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 当前选中的名号位次；null = 底部面板不显示（点名号后才出现）。
   int? _selected;
 
-  /// 本 session 内通过「编辑 → 保存」动过的名号（createdAt）：
-  /// 「恢复」按钮只对这些出现，其余时候一律不显示。
-  final Set<int> _editedInSession = {};
-
   // ── 搜索（悬浮在本页，不跳新页面） ──
   bool _searchOpen = false;
   final TextEditingController _searchCtrl = TextEditingController();
 
   // ── 底部上拉面板（与经藏页「全部经典」同款） ──
   static const double _shelfHeaderH = 50;
+  /// 密咒详情 header：名称与顶部横杠之间多留空，比佛号 header 高一截。
+  static const double _mxHeaderH = 56;
   static const double _shelfOpenTopExtra = 12;
   static const double _shelfTopRadius = 16;
   static const double _shelfShadowReach = 14;
@@ -85,6 +82,18 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   bool _shelfExpanded = false;
   late final AnimationController _shelfController;
 
+  // ── 密咒详情面板：与佛号上拉面板同一套抽屉（同样上滑动画、圆角、阴影、
+  // 底色 p.card），只是占屏更高（铺到状态栏下沿）。 ──
+  static const double _mxShelfOpenFraction = 0.95;
+
+  /// 当前打开的密咒名；null = 面板不显示。
+  String? _mxDetailName;
+
+  /// 密咒面板是否处于展开态（收起动画播完才回到 false，动画中重开不卸载）。
+  bool _mxShelfExpanded = false;
+
+  late final AnimationController _mxShelfController;
+
   /// 右下角悬浮球是否展开（展开后显示 添加 / 搜索 / 切换 三个子按钮）。
   bool _showFabMenu = false;
 
@@ -96,6 +105,10 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   void initState() {
     super.initState();
     _shelfController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _mxShelfController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
@@ -113,6 +126,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     _mxStore.removeListener(_onMxStoreChanged);
     widget.activeTab?.removeListener(_onTabChanged);
     _shelfController.dispose();
+    _mxShelfController.dispose();
     _searchCtrl.dispose();
     _mxSearchCtrl.dispose();
     super.dispose();
@@ -153,7 +167,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 打开搜索浮层：搜索框与结果都悬浮在本页上方，不跳转新页面。
   void _openSearch() {
-    unawaited(UiSound.instance.playClick());
     setState(() {
       _searchOpen = true;
       _searchCtrl.clear();
@@ -176,6 +189,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       // 键盘可能一直弹不出来。
       if (logical != 0 && _searchOpen) _closeSearch();
       if (logical != 1 && _mxSearchOpen) _closeMxSearch();
+      // 切回佛号屏时密咒详情还开着：收起它（面板留在密咒屏里也看不见，
+      // 但它的展开态会一直压着两屏共用的悬浮球）。
+      if (logical != 1 && _mxDetailName != null) _closeMxShelf();
     });
   }
 
@@ -183,7 +199,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 打开密咒搜索浮层（搜的是密咒名，不搜佛号）。
   void _openMxSearch() {
-    unawaited(UiSound.instance.playClick());
     setState(() {
       _mxSearchOpen = true;
       _mxSearchCtrl.clear();
@@ -214,15 +229,67 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 点密咒搜索结果：收起浮层，并把名单滚到那条密咒（否则看不出它在哪）。
   void _onMxSearchHit(String mantra) {
-    unawaited(UiSound.instance.playClick());
     _closeMxSearch();
     _mxPageKey.currentState?.revealMantra(mantra);
   }
 
   /// 新建密咒：上拉面板取名，保存进密咒库（重名面板内提示）。
   Future<void> _openMantraAdd() async {
-    unawaited(UiSound.instance.playClick());
     await ShanZhiShiMantraEditSheet.show(context);
+  }
+
+  /// 点某条密咒：在本页底部拉出详情抽屉，查看经文出处与神咒原文。
+  /// 抽屉与点佛号弹出的面板同款（上滑动画、圆角、阴影、同底色）。
+  /// 详情里的经文出处与佛号页一样，点一下进入阅读。
+  void _openMantraDetail(String name) {
+    setState(() {
+      _mxDetailName = name;
+      _mxShelfExpanded = true;
+      // 面板占了右下角：悬浮球先收起，免得压住面板。
+      _showFabMenu = false;
+    });
+    _mxShelfController.forward();
+  }
+
+  /// 点密咒面板 header 收起：整块滑出屏幕下沿后卸载（动画中重开则不卸载）。
+  void _closeMxShelf() {
+    _mxShelfExpanded = false;
+    _mxShelfController.reverse().whenComplete(() {
+      if (!_mxShelfExpanded && mounted) setState(() => _mxDetailName = null);
+    });
+  }
+
+  /// 密咒面板内容区（不含 header）的最大高度：整块面板占可用高度的 95%，
+  /// 比佛号面板（90%）再大一圈，几乎铺到状态栏下沿。
+  double _mxShelfContentMaxHeight() {
+    final mq = MediaQuery.of(context);
+    final available = mq.size.height - mq.padding.top - mq.padding.bottom;
+    return max(
+      0.0,
+      available * _mxShelfOpenFraction - _mxHeaderH - _shelfOpenTopExtra,
+    );
+  }
+
+  /// 纵向拖 header 时按手指位移实时擦洗展开比例（向下拖收起，向上拖展开）。
+  void _onMxShelfDragUpdate(DragUpdateDetails d) {
+    final maxH = _mxShelfContentMaxHeight();
+    final delta = d.primaryDelta ?? 0;
+    if (maxH <= 0 || delta == 0) return;
+    _mxShelfController.value -= delta / maxH;
+  }
+
+  /// 松手吸附：甩动够快按甩动方向，否则吸到离得最近的一端。
+  void _onMxShelfDragEnd(DragEndDetails d) {
+    final velocity = d.primaryVelocity ?? 0;
+    final open = velocity.abs() > 350
+        ? velocity < 0
+        : _mxShelfController.value >= 0.5;
+    if (open) {
+      _mxShelfExpanded = true;
+      _mxShelfController.forward();
+    } else {
+      _closeMxShelf();
+    }
   }
 
   /// 前缀匹配优先、包含匹配其次（与经藏检索口径一致）。
@@ -245,14 +312,12 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 点搜索结果：只把球转到该名号（球心显示它），
   /// 不自动展开底部面板——面板由用户自己点球面名号时才出现。
   void _onSearchHit(int idx) {
-    unawaited(UiSound.instance.playClick());
     _closeSearch();
     _rememberLastTapped(idx);
     _sphereCtrl.animateToIndex(idx);
   }
 
   Future<void> _openAdd() async {
-    unawaited(UiSound.instance.playClick());
     final saved = await ShanZhiShiEditSheet.show(context);
     if (saved == null || !mounted) return;
     setState(() {
@@ -266,7 +331,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   }
 
   void _onNameTapped(int idx) {
-    unawaited(UiSound.instance.playClick());
     setState(() {
       _selected = idx;
     });
@@ -284,7 +348,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   Future<void> _editEntry(ShanyishiEntry entry) async {
     final index = _selected;
     if (index == null) return;
-    unawaited(UiSound.instance.playClick());
     final saved = await ShanZhiShiEditSheet.show(
       context,
       index: index,
@@ -292,9 +355,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
     if (!mounted) return;
     if (saved == null) return;
-    // 编辑并保存过：这一位才有「恢复」（取消保存不出现）。
-    final createdAt = _store[saved]?.createdAt;
-    if (createdAt != null) _editedInSession.add(createdAt);
     setState(() {
       _selected = saved;
     });
@@ -309,8 +369,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 经藏目录里查得到就带上正文路径（正文未下载时由阅读页自己给下载入口），
   /// 查不到就提示一下，不打开空白的「暂无实际文件」页。
   Future<void> _openSutraReading(String sutra) async {
-    unawaited(UiSound.instance.playClick());
-    var link = ShanZhiShiStore.resolveSutra(sutra);
+    // 出处常写成「《经名》」，解析前去掉书名号，免得目录精确/包含匹配失败。
+    final title = sutra.replaceAll(RegExp(r'[《》〈〉]'), '').trim();
+    var link = ShanZhiShiStore.resolveSutra(title);
     if (link == null) {
       // 目录可能还没加载完：等它一次再解析。
       try {
@@ -318,14 +379,14 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       } catch (_) {
         // 目录读取失败就按「找不到」处理。
       }
-      link = ShanZhiShiStore.resolveSutra(sutra);
+      link = ShanZhiShiStore.resolveSutra(title);
     }
     if (!mounted) return;
     final resolved = link;
     if (resolved == null || resolved.filePath.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('经藏里没有找到「$sutra」',
+          content: Text('经藏里没有找到「$title」',
               style: const TextStyle(fontSize: 13)),
           duration: const Duration(seconds: 2),
         ),
@@ -338,36 +399,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
           title: resolved.title,
           filePath: resolved.filePath,
         ),
-      ),
-    );
-  }
-
-  /// 面板右下角「恢复」：把这一位退回最近一次编辑前的版本（一步撤销）。
-  ///
-  /// 名号、关联经文、人天利益一起还原，防止误删；只在编辑保存过之后出现。
-  Future<void> _restoreEntry() async {
-    final index = _selected;
-    if (index == null) return;
-    unawaited(UiSound.instance.playClick());
-    final createdAt = _store[index]?.createdAt;
-    final ok = await _store.restoreLast(index);
-    if (!mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('没有可恢复的版本', style: TextStyle(fontSize: 13)),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-    // 快照已消费：撤掉「可恢复」标记，按钮随之消失。
-    if (createdAt != null) _editedInSession.remove(createdAt);
-    setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('已恢复到编辑前的版本', style: TextStyle(fontSize: 13)),
-        duration: Duration(seconds: 2),
       ),
     );
   }
@@ -395,7 +426,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 点 header 收起：整块滑出屏幕下沿后卸载（动画中重开则不卸载）。
   void _closeShelf() {
-    unawaited(UiSound.instance.playClick());
     _collapseShelf();
   }
 
@@ -420,6 +450,11 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     }
     if (_mxSearchOpen) {
       _closeMxSearch();
+      return true;
+    }
+    // 密咒详情面板还开着：先收起它。
+    if (_mxDetailName != null) {
+      _closeMxShelf();
       return true;
     }
     // 密咒展示面还在：侧滑返回先切回佛号球面。
@@ -557,7 +592,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                         tooltip: '切换',
                         heroTag: '${prefix}_switch',
                         onTap: () => _runFabAction(() {
-                          unawaited(UiSound.instance.playClick());
                           _openSwitch();
                         }),
                         // 用左右双向箭头表示「切换」，与另外两个图标风格一致。
@@ -895,7 +929,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
         // 只由悬浮球的「切换」子按钮点选互换；切页没有过场动画。
         // 右下角悬浮球两页共用一颗、固定在屏幕上不随切页移动，
         // 搜索浮层也提到两屏之外（搜索开着时悬浮球必须压在它下面）。
-        final bool showFab = _selected == null && !_shelfExpanded;
+        final bool showFab = _selected == null &&
+            !_shelfExpanded &&
+            _mxDetailName == null;
         return Stack(
           children: [
             IndexedStack(
@@ -937,8 +973,17 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                   ],
                 ),
                 // 密咒竖排展示面（含星云底光）；本页没有自己的悬浮球——
-                // 悬浮球两页共用，固定在两屏之上。
-                ShanZhiShiMantraView(key: _mxPageKey),
+                // 悬浮球两页共用，固定在两屏之上。详情面板与佛号屏一样
+                // 贴在本屏的 Stack 里（上滑抽屉，不遮状态栏以外的地方）。
+                Stack(
+                  children: [
+                    ShanZhiShiMantraView(
+                      key: _mxPageKey,
+                      onMantraTapped: _openMantraDetail,
+                    ),
+                    if (_mxDetailName != null) _buildMxShelf(p),
+                  ],
+                ),
               ],
             ),
             // 右下角悬浮球（与阅读页右下角那颗同款）：底部面板展开时让位，
@@ -1236,7 +1281,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                       textAlign: TextAlign.left,
                       style: TextStyle(
                         color: p.primary,
-                        fontSize: 16,
+                        fontSize: 18,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1,
                       ),
@@ -1253,7 +1298,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 面板内容：关联经文（竖向一行一部，右侧箭头，点进阅读页）
   /// + 人天利益（一段一块，每段顶部带「人天利益」标志）。
-  /// 右下角固定「编辑」按钮；「恢复」只在编辑保存过且还有快照时出现。
+  /// 右下角固定「编辑」按钮。
   Widget _buildShelfContent(PaletteData p, ShanyishiEntry entry) {
     return Stack(
       children: [
@@ -1262,40 +1307,31 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             padding: const EdgeInsets.fromLTRB(
                 _shelfSidePad, 10, _shelfSidePad, 88),
             children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: _labelChip(p, '关联经文'),
-              ),
-              const SizedBox(height: 6),
               if (entry.sutras.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Text(
-                    '尚未记录关联经文',
+                    '尚未记录经文',
                     style: TextStyle(fontSize: 12.5, color: p.textHint),
                   ),
                 )
               else
-                for (final s in entry.sutras) _sutraLinkRow(p, s),
-              const SizedBox(height: 6),
-              Container(height: 1, color: p.divider),
-              const SizedBox(height: 12),
-              // 人天利益：段与段之间不加分割线。
-              for (final t in entry.paragraphs) ...[
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _labelChip(p, '人天利益'),
-                ),
+                // 一部经一行（经名包成胶囊）；这一部经的人天利益就接在它下面，
+                // 「人天利益」标志贴着段落开头，经文与段落一一对应。
+                // 从第二部经起与上一部经的最后一段拉开距离：不然两部经的
+                // 内容连成一片，看不出下面已经是另一部经了。
+                for (var i = 0; i < entry.sutras.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 18),
+                  _sutraLinkRow(p, entry.sutras[i]),
+                  for (final t in entry.quotes[entry.sutras[i]] ?? const <String>[])
+                    _paragraphBlock(p, t),
+                ],
+              if (_looseParagraphs(entry).isNotEmpty) ...[
                 const SizedBox(height: 6),
-                Text(
-                  t,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: p.text,
-                    height: 1.8,
-                  ),
-                ),
-                const SizedBox(height: 16),
+                Container(height: 1, color: p.divider),
+                const SizedBox(height: 12),
+                // 没挂到任何经文下的人天利益（旧数据）：仍平铺在下面。
+                for (final t in _looseParagraphs(entry)) _paragraphBlock(p, t),
               ],
             ],
           ),
@@ -1303,137 +1339,343 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
         Positioned(
           right: _shelfSidePad,
           bottom: 16,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 恢复：仅在本 session 内「编辑 → 保存」过、且还有快照时出现。
-              if (_store.canRestore(entry) &&
-                  _editedInSession.contains(entry.createdAt)) ...[
-                _PanelActionButton(
-                  key: const ValueKey('shanzhishi_restore'),
-                  palette: p,
-                  icon: Icons.restore,
-                  label: '恢复',
-                  primary: false,
-                  onTap: _restoreEntry,
-                ),
-                const SizedBox(width: 8),
-              ],
-              _PanelActionButton(
-                palette: p,
-                icon: Icons.edit_outlined,
-                label: '编辑',
-                onTap: () => _editEntry(entry),
-              ),
-            ],
+          child: _PanelEditButton(
+            palette: p,
+            onTap: () => _editEntry(entry),
           ),
         ),
       ],
     );
   }
 
-  /// 一部关联经文：一行一名，右侧箭头，点进阅读页。
-  Widget _sutraLinkRow(PaletteData p, String sutra) {
-    return InkWell(
-      key: ValueKey('shanzhishi_sutra_row_$sutra'),
-      borderRadius: BorderRadius.circular(8),
-      onTap: () => _openSutraReading(sutra),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                sutra,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: p.text,
-                  height: 1.5,
+  /// 密咒详情抽屉：与佛号上拉面板同款结构（上滑动画、顶部圆角、外侧阴影、
+  /// 同一底色 p.card），只是占屏更高（95%）。
+  Widget _buildMxShelf(PaletteData p) {
+    final mq = MediaQuery.of(context);
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: mq.padding.bottom,
+      child: AnimatedBuilder(
+        animation: _mxShelfController,
+        builder: (context, _) {
+          final open = _mxShelfController.value;
+          final contentH = _mxShelfContentMaxHeight() * open;
+          // 收起时整块滑出屏幕下沿（连手势条一起让开），完全不残留。
+          final slide = (1 - open) *
+              (_mxHeaderH + _shelfOpenTopExtra + mq.padding.bottom);
+          return Transform.translate(
+            offset: Offset(0, slide),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ClipRRect(
+                  clipBehavior: Clip.antiAlias,
+                  borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(_shelfTopRadius)),
+                  child: Container(
+                    key: const ValueKey('shanzhishi_mx_shelf_panel'),
+                    color: p.card,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildMxShelfHeader(p),
+                        if (contentH > 0)
+                          SizedBox(
+                            height: contentH,
+                            child: _buildMxShelfContent(p),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                // 上边界阴影：只画在面板之外，不压暗面板底色。
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: -_shelfShadowReach,
+                  height: _shelfShadowReach + _shelfTopRadius + 6,
+                  child: _TopEdgeShadow(
+                    radius: _shelfTopRadius,
+                    reach: _shelfShadowReach,
+                    blur: 2.5,
+                    color: Colors.black.withValues(alpha: 0.1),
+                  ),
+                ),
+                // 上边界细线：沿左右圆角连续描边。
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _ShelfTopBorderPainter(
+                        radius: _shelfTopRadius,
+                        color: p.borderSoft,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 密咒详情 header：横杠 + 居中名称。单击收起、上下拖擦洗开合。
+  Widget _buildMxShelfHeader(PaletteData p) {
+    final openExtra = _shelfOpenTopExtra * _mxShelfController.value;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _closeMxShelf,
+      onVerticalDragUpdate: _onMxShelfDragUpdate,
+      onVerticalDragEnd: _onMxShelfDragEnd,
+      child: SizedBox(
+        height: _mxHeaderH + openExtra,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              _shelfSidePad, 8 + openExtra, _shelfSidePad, 0),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: p.textHint,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            Icon(Icons.chevron_right, size: 18, color: p.textHint),
-          ],
+              // 与横杠留出空隙，名称不贴着杠。
+              const SizedBox(height: 14),
+              Text(
+                _mxDetailName ?? '',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: p.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  /// 彩色标签胶囊：「名号」「关联经文」等小标签。
-  Widget _labelChip(PaletteData p, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: p.tintBg,
-        borderRadius: BorderRadius.circular(6),
+  /// 密咒详情内容：神咒原文（纯文字、无色块、无小标题）+ 经文出处（整行色块、
+  /// 右侧箭头，点进阅读页）。右下角固定与佛号面板同款的编辑按钮。
+  Widget _buildMxShelfContent(PaletteData p) {
+    final name = _mxDetailName ?? '';
+    final source = _mxStore.sourceOf(name);
+    final text = _mxStore.textOf(name);
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(
+                _shelfSidePad, 16, _shelfSidePad, 88),
+            children: [
+              if (text.isEmpty)
+                Text(
+                  '尚未填写神咒原文',
+                  style: TextStyle(fontSize: 15, color: p.textHint),
+                )
+              else
+                SelectableText(
+                  text,
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.9,
+                    color: p.text,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              const SizedBox(height: 28),
+              if (source.isEmpty)
+                Text(
+                  '尚未填写经文出处',
+                  style: TextStyle(fontSize: 15, color: p.textHint),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: InkWell(
+                    key: const ValueKey('shanzhishi_mantra_source_row'),
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () => _openSutraReading(source),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: p.tintBg,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              source,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.black,
+                                letterSpacing: 1,
+                              ),
+                            ),
+                          ),
+                          Icon(Icons.chevron_right,
+                              size: 18, color: p.accentDeep),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Positioned(
+          right: _shelfSidePad,
+          bottom: 16,
+          child: _PanelEditButton(
+            palette: p,
+            onTap: () => _editMantra(name),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 密咒面板右下角「编辑」：打开与「添加」同款的面板（回填三项，可改名/改内容）。
+  /// 名称被删空保存 = 删除这条密咒，详情抽屉随之收起。
+  Future<void> _editMantra(String name) async {
+    final saved = await ShanZhiShiMantraEditSheet.show(context, editing: name);
+    if (!mounted) return;
+    if (saved == null) return;
+    if (saved.isEmpty) {
+      _closeMxShelf();
+      return;
+    }
+    setState(() => _mxDetailName = saved);
+  }
+
+  /// 一段人天利益：把「人天利益」四个字当作段落开头那几个字，只是多裹了一层
+  /// 色块——正文紧接其后、换行后回到左边（不缩进），与上文经文色块左对齐。
+  Widget _paragraphBlock(PaletteData p, String text) {
+    return Padding(
+      // 与上面经文色块拉开一点：两者贴太近，会看成同一条。
+      padding: const EdgeInsets.only(top: 8, bottom: 12),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            WidgetSpan(
+              alignment: PlaceholderAlignment.baseline,
+              baseline: TextBaseline.alphabetic,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: p.tintBg,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '人天利益',
+                  style: TextStyle(
+                    // 比正文小一号：它是段落的标记，不该抢正文的注意力。
+                    fontSize: 13,
+                    height: 1.2,
+                    fontWeight: FontWeight.w600,
+                    color: p.accentDeep,
+                  ),
+                ),
+              ),
+            ),
+            const TextSpan(text: '  '),
+            TextSpan(text: text),
+          ],
+        ),
+        style: TextStyle(fontSize: 15, color: p.text, height: 1.8),
       ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: p.accentDeep,
-          letterSpacing: 1,
+    );
+  }
+
+  /// 没挂到任何经文下的人天利益段落（旧数据迁移前的兜底展示）。
+  static List<String> _looseParagraphs(ShanyishiEntry entry) {
+    final tied = <String>{for (final l in entry.quotes.values) ...l};
+    return [for (final t in entry.paragraphs) if (!tied.contains(t)) t];
+  }
+
+  /// 一部关联经文：整行一条色块（铺满宽度），右侧箭头就在色块里，点进阅读页。
+  Widget _sutraLinkRow(PaletteData p, String sutra) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        key: ValueKey('shanzhishi_sutra_row_$sutra'),
+        borderRadius: BorderRadius.circular(6),
+        onTap: () => _openSutraReading(sutra),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          decoration: BoxDecoration(
+            color: p.tintBg,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  sutra,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_right, size: 18, color: p.accentDeep),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// 面板右下角的胶囊按钮（编辑 / 恢复）：主按钮实底，次按钮描边。
-class _PanelActionButton extends StatelessWidget {
+/// 面板右下角的圆形编辑按钮：只有一支笔，淡色底、细描边，刻意压低存在感
+/// （不用纯黑实底——太抢眼，会盖过面板内容）。
+class _PanelEditButton extends StatelessWidget {
   final PaletteData palette;
-  final IconData icon;
-  final String label;
   final VoidCallback onTap;
 
-  /// true = 主按钮（实底），false = 次按钮（描边卡片底）。
-  final bool primary;
-
-  const _PanelActionButton({
-    super.key,
+  const _PanelEditButton({
     required this.palette,
-    required this.icon,
-    required this.label,
     required this.onTap,
-    this.primary = true,
   });
 
   @override
   Widget build(BuildContext context) {
     final p = palette;
-    final Color bg = primary ? p.primary : p.card;
-    final Color fg = primary ? p.card : p.accentDeep;
     return Material(
-      color: bg,
-      elevation: primary ? 3 : 0,
-      shadowColor: Colors.black.withValues(alpha: 0.22),
-      shape: StadiumBorder(
-        side: primary ? BorderSide.none : BorderSide(color: p.borderSoft),
-      ),
+      color: p.tintBg,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        customBorder: const StadiumBorder(),
+        customBorder: const CircleBorder(),
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: fg),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: fg,
-                  letterSpacing: 1,
-                ),
-              ),
-            ],
-          ),
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(Icons.edit_outlined, size: 18, color: p.textSec),
         ),
       ),
     );

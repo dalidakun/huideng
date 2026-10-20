@@ -427,7 +427,7 @@ class ShanZhiShiStore extends ChangeNotifier {
   /// 新增一位名号，返回它的位次（追加到末尾，球面转到它）。
   ///
   /// 默认同名不重复录入：定位到已有的那一位，把经文与引用段落并进去。
-  /// [allowDuplicate] 为 true 时即使同名也另起一位（用户明确选了「添加新的」）。
+  /// [allowDuplicate] 为 true 时即使同名也另起一位（用户明确选了「两个都留着」）。
   Future<int> add(
     String name,
     List<String> sutras, {

@@ -8,7 +8,10 @@ import 'shanzhishi_mantra_store.dart';
 /// 一行放满就换下一行继续排满；上下行留间距，底色块互不相连，密咒多时可上下滑动。
 /// 点某条密咒暂不响应，后续再接持诵功能（搜索命中会高亮并滚到该条）。
 class ShanZhiShiMantraView extends StatefulWidget {
-  const ShanZhiShiMantraView({super.key});
+  /// 点某条密咒时回调（页面据此弹出详情：经文出处、神咒原文）。
+  final ValueChanged<String>? onMantraTapped;
+
+  const ShanZhiShiMantraView({super.key, this.onMantraTapped});
 
   /// 底部让出全局菜单栏（图标区约 46–51 + 安全区），内容不被盖住。
   static const double _bottomInset = 74;
@@ -172,29 +175,36 @@ class ShanZhiShiMantraViewState extends State<ShanZhiShiMantraView> {
     final chars = [for (final c in text.characters) c];
     final key = _stripKeys.putIfAbsent(index, () => GlobalKey());
     final bool hit = index == _highlightIndex;
-    return AnimatedContainer(
-      key: ValueKey('shanzhishi_mantra_$index'),
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOut,
-      width: _stripWidth,
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
-      decoration: BoxDecoration(
-        color: hit ? p.accent.withValues(alpha: 0.22) : p.tintBg,
-        borderRadius: BorderRadius.circular(8),
-        border: hit
-            ? Border.all(color: p.accent, width: 1.4)
-            : Border.all(color: Colors.transparent, width: 1.4),
-      ),
-      child: Text(
-        key: key,
-        chars.join('\n'),
-        maxLines: chars.length,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          fontSize: 13,
-          color: p.text,
-          height: 1.46,
-          letterSpacing: 0.5,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        _clearHighlight();
+        widget.onMantraTapped?.call(text);
+      },
+      child: AnimatedContainer(
+        key: ValueKey('shanzhishi_mantra_$index'),
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOut,
+        width: _stripWidth,
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
+        decoration: BoxDecoration(
+          color: hit ? p.accent.withValues(alpha: 0.22) : p.tintBg,
+          borderRadius: BorderRadius.circular(8),
+          border: hit
+              ? Border.all(color: p.accent, width: 1.4)
+              : Border.all(color: Colors.transparent, width: 1.4),
+        ),
+        child: Text(
+          key: key,
+          chars.join('\n'),
+          maxLines: chars.length,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 13,
+            color: p.text,
+            height: 1.46,
+            letterSpacing: 0.5,
+          ),
         ),
       ),
     );

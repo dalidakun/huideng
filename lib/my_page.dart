@@ -5100,8 +5100,6 @@ class _SettingsMenuSoundTileState extends State<_SettingsMenuSoundTile> {
     final next = !_on;
     setState(() => _on = next);
     UiSound.instance.setEnabled(next);
-    // 打开时立即试听，方便用户确认音效。
-    if (next) UiSound.instance.playClick();
   }
 
   @override

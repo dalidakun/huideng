@@ -4954,7 +4954,7 @@ exports.main = async (event, context) => {
         if (!uid) return fail("unauthorized");
         try {
           await ensureBlessings();
-          const title = String(event.title || "").trim().slice(0, 100);
+          const title = String(event.title || "").trim().slice(0, 5000);
           if (!title) return fail("empty_title");
           const totalDays = Math.min(Math.max(Number(event.totalDays) || 7, 1), 365);
           const methods = normalizeBlessingMethods(event.methods);
@@ -5226,7 +5226,7 @@ exports.main = async (event, context) => {
           if (p.ownerUserId !== uid) return fail("forbidden");
           const patch = { updatedAt: now() };
           if (event.title != null) {
-            const t = String(event.title).trim().slice(0, 100);
+            const t = String(event.title).trim().slice(0, 5000);
             if (!t) return fail("empty_title");
             patch.title = t;
           }
