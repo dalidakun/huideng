@@ -22,22 +22,66 @@ class BlessingTemplateGroup {
   const BlessingTemplateGroup(this.name, this.templates);
 }
 
-/// 一种功课方式（类别 + 单位 + 默认数量），如 念佛 · 声 · 108。
+/// 一种功课方式（类别 + 单位 + 默认数量 + 具体内容），如 诵经 · 遍 · 1 · 金刚经。
 class BlessingMethodOption {
   final String category;
   final String unit;
   final String defaultCount;
+  final List<String> names;
 
-  const BlessingMethodOption(this.category, this.unit, this.defaultCount);
+  const BlessingMethodOption(
+    this.category,
+    this.unit,
+    this.defaultCount, {
+    this.names = const [],
+  });
 }
 
 /// 可选的祈福方式，与功课打卡的类别/单位保持一致。
 const List<BlessingMethodOption> kBlessingMethodOptions = [
-  BlessingMethodOption('诵经', '遍', '1'),
-  BlessingMethodOption('念佛', '声', '108'),
-  BlessingMethodOption('称名', '声', '1000'),
-  BlessingMethodOption('持咒', '遍', '21'),
-  BlessingMethodOption('抄经', '篇', '1'),
+  BlessingMethodOption('诵经', '遍', '1', names: [
+    '金刚经',
+    '心经',
+    '地藏经',
+    '地藏菩萨本愿经',
+    '普门品',
+    '阿弥陀经',
+    '药师经',
+    '无量寿经',
+    '法华经',
+    '华严经',
+    '楞严经',
+  ]),
+  BlessingMethodOption('念佛', '声', '108', names: [
+    '阿弥陀佛',
+    '观世音菩萨',
+    '地藏王菩萨',
+    '药师佛',
+    '释迦牟尼佛',
+    '百佛名',
+  ]),
+  BlessingMethodOption('称名', '声', '1000', names: [
+    '南无阿弥陀佛',
+    '南无观世音菩萨',
+    '南无地藏菩萨',
+    '南无地藏王菩萨',
+    '南无药师佛',
+  ]),
+  BlessingMethodOption('持咒', '遍', '21', names: [
+    '大悲咒',
+    '楞严咒',
+    '往生咒',
+    '药师咒',
+    '六字大明咒',
+    '准提咒',
+  ]),
+  BlessingMethodOption('抄经', '篇', '1', names: [
+    '心经',
+    '金刚经',
+    '地藏经',
+    '普门品',
+    '阿弥陀经',
+  ]),
   BlessingMethodOption('静坐', '分钟', '10'),
 ];
 

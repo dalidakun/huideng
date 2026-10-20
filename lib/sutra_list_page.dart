@@ -4015,6 +4015,15 @@ class SutraListPageState extends State<SutraListPage>
         folder == null ? null : (_folderDisplayNames[folder] ?? folder);
     final words = volumes.fold<int>(0, (sum, v) => sum + v.charCount);
     final readDone = volumes.any((v) => v.isRead);
+    // 首次点击会先走下载流程：这里取第一个分卷的 ID 查下载进度，
+    // 下载中就在卡片右侧显示旋转的进度圈，让用户知道是在下载而不是卡顿。
+    final firstVolume = volumes.isEmpty ? null : volumes.first;
+    final volumeId = firstVolume == null
+        ? null
+        : SutraDownloader.extractId(firstVolume.title, firstVolume.filePath);
+    final progress =
+        volumeId == null ? null : _downloadProgress[volumeId];
+    final downloading = !kIsWeb && progress != null && progress < 1.0;
     final meta = [
       if (folderName != null && folderName.isNotEmpty) folderName,
       if (words > 0) _formatWords(words),
@@ -4079,7 +4088,18 @@ class SutraListPageState extends State<SutraListPage>
                 ),
               ),
               const SizedBox(width: 6),
-              Icon(Icons.chevron_right, size: 18, color: p.textHint),
+              // 下载中：不确定态进度圈一直旋转（大文件、网速慢时不出现
+              // 「看似卡死」的静止高百分比），结束后回到右箭头。
+              downloading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF71867A),
+                      ),
+                    )
+                  : Icon(Icons.chevron_right, size: 18, color: p.textHint),
             ],
           ),
         ),

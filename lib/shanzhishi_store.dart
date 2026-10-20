@@ -92,9 +92,7 @@ class ShanyishiEntry {
       sutras: sutras,
       paragraphs: paragraphs,
       quotes: quotes,
-      createdAt: createdAt is int
-          ? createdAt
-          : int.tryParse('$createdAt') ?? 0,
+      createdAt: createdAt is int ? createdAt : int.tryParse('$createdAt') ?? 0,
     );
   }
 
@@ -123,6 +121,9 @@ class ShanZhiShiStore extends ChangeNotifier {
   static final ShanZhiShiStore instance = ShanZhiShiStore._();
 
   static const String _prefKey = 'shanzhishi_names';
+
+  /// 首次启动写入预置种子时打标记；云端有真实名单时允许覆盖。
+  static const String provisionalMarkerKey = '_provisional_shanzhishi_names';
 
   /// 用户最后点选的名号：下次打开善知识页时球心默认对准它。
   static const String _lastTappedKey = 'shanzhishi_last_tapped';
@@ -310,15 +311,17 @@ class ShanZhiShiStore extends ChangeNotifier {
   }
 
   /// 读本地数据；没存过时写入预置种子。幂等，可重复调用。
-  Future<void> load() async {
-    if (_loaded) return;
+  Future<void> load({bool force = false}) async {
+    if (_loaded && !force) return;
+    if (force) _loaded = false;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefKey);
+    final seeded = raw == null || raw.isEmpty;
     final storedSeedVersion = prefs.getInt(_seedVersionKey) ?? 0;
     _lastTappedName = prefs.getString(_lastTappedKey);
     _entries.clear();
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (raw == null || raw.isEmpty) {
+    if (seeded) {
       for (var i = 0; i < _seeds.length; i++) {
         _entries.add(ShanyishiEntry(
           name: _seeds[i][0],
@@ -331,8 +334,7 @@ class ShanZhiShiStore extends ChangeNotifier {
         final decoded = jsonDecode(raw) as List<dynamic>;
         for (final e in decoded) {
           if (e is! Map) continue;
-          final entry =
-              ShanyishiEntry.fromJson(Map<String, dynamic>.from(e));
+          final entry = ShanyishiEntry.fromJson(Map<String, dynamic>.from(e));
           if (entry != null) _entries.add(entry);
         }
       } catch (_) {
@@ -361,7 +363,9 @@ class ShanZhiShiStore extends ChangeNotifier {
       }
     }
     _loaded = true;
-    await _persist();
+    // seeded 时打上 provisional，云端有真实名单可覆盖；已有本地数据时
+    // 传入 null，保留原有标记（上次种子尚未同步完成时不能丢标记）。
+    await _persist(provisional: seeded ? true : null);
     await prefs.setInt(_seedVersionKey, _seedVersion);
     // 读回编辑前快照（一步撤销），跨重启也能恢复。
     _undo.clear();
@@ -371,8 +375,7 @@ class ShanZhiShiStore extends ChangeNotifier {
         final decoded = jsonDecode(rawUndo) as List<dynamic>;
         for (final e in decoded) {
           if (e is! Map) continue;
-          final entry =
-              ShanyishiEntry.fromJson(Map<String, dynamic>.from(e));
+          final entry = ShanyishiEntry.fromJson(Map<String, dynamic>.from(e));
           if (entry != null) _undo[entry.createdAt] = entry;
         }
       } catch (_) {
@@ -382,12 +385,22 @@ class ShanZhiShiStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _persist() async {
+  /// 云端恢复后强制重读本地数据，让页面立即反映同步结果。
+  Future<void> reload() => load(force: true);
+
+  /// [provisional] 为 true 时写入"首次启动种子"标记，false 时清除，
+  /// null 表示保持原标记不变（加载已有数据时使用）。
+  Future<void> _persist({bool? provisional = false}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _prefKey,
       jsonEncode([for (final e in _entries) e.toJson()]),
     );
+    if (provisional == true) {
+      await prefs.setBool(provisionalMarkerKey, true);
+    } else if (provisional == false) {
+      await prefs.remove(provisionalMarkerKey);
+    }
   }
 
   /// 记录一份编辑前的快照，供「恢复」一步撤销。
@@ -438,9 +451,8 @@ class ShanZhiShiStore extends ChangeNotifier {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return -1;
     // 同名不重复录入：定位到已有的那一位，把经文与引用段落并进去。
-    final existing = allowDuplicate
-        ? -1
-        : _entries.indexWhere((e) => e.name == trimmed);
+    final existing =
+        allowDuplicate ? -1 : _entries.indexWhere((e) => e.name == trimmed);
     if (existing >= 0) {
       return mergeInto(
         existing,
@@ -786,8 +798,8 @@ class ShanZhiShiStore extends ChangeNotifier {
 
     var parsed = parseSutraTitleAndVolume(q);
     if (parsed.base.isNotEmpty && parsed.volume > 0) {
-      final volPath = NoteSutraCatalog.cachedVolumePath(
-          parsed.base, parsed.volume);
+      final volPath =
+          NoteSutraCatalog.cachedVolumePath(parsed.base, parsed.volume);
       if (volPath != null) {
         final base = map[parsed.base];
         return NoteSutraLink(

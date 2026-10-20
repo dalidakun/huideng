@@ -1290,6 +1290,7 @@ class CloudNotesService {
       'upsertUserNotes',
       'upsertUserRecords',
       'createBlessing',
+      'uploadBlessingImage',
       'joinBlessing',
       'leaveBlessing',
       'blessToday',
@@ -2397,8 +2398,9 @@ class CloudNotesService {
   Future<Map<String, dynamic>> callApi(
     String action, {
     Map<String, dynamic>? params,
+    Duration? timeout,
   }) {
-    return _call(action, params: params);
+    return _call(action, params: params, timeout: timeout);
   }
 
   /// AI 网络自诊断：检测云函数到大模型服务的连通性，返回根因结论。

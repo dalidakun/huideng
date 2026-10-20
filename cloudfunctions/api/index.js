@@ -688,6 +688,67 @@ exports.main = async (event, context) => {
     return out;
   }
 
+  // 归一化祈福图片：只保留云存储 fileID，最多 3 张。
+  function normalizeBlessingImages(arr) {
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const v of arr) {
+      const id = String(v || "").trim();
+      if (!id || id.length > 500) continue;
+      // 只接受祈福图片目录下的 fileID，避免借删除接口删到别的文件。
+      if (id.indexOf("/blessings/") < 0 && !id.startsWith("blessings/")) continue;
+      if (out.indexOf(id) >= 0) continue;
+      out.push(id);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+
+  // 把 fileID 批量换成临时访问链接（约 2 小时有效，客户端每次进入详情重新取）。
+  async function resolveBlessingImageUrls(images) {
+    const ids = normalizeBlessingImages(images);
+    if (!ids.length) return [];
+    try {
+      const res = await app.getTempFileURL({ fileList: ids });
+      const map = {};
+      for (const f of (res && res.fileList) || []) {
+        if (f && f.fileID && f.tempFileURL) map[f.fileID] = f.tempFileURL;
+      }
+      // 与 ids 等长，取不到链接的位置留空串，便于客户端按 fileID 配对缓存。
+      return ids.map((id) => map[id] || "");
+    } catch (e) {
+      console.error("[api] getTempFileURL error:", e && e.message ? e.message : e);
+      return ids.map(() => "");
+    }
+  }
+
+  // 尽力删除云存储文件（项目删除/图片被移除时调用，失败不影响主流程）。
+  async function deleteBlessingStorageFiles(images) {
+    const ids = normalizeBlessingImages(images);
+    if (!ids.length) return;
+    try {
+      await app.deleteFile({ fileList: ids });
+    } catch (e) {
+      console.error("[api] deleteFile error:", e && e.message ? e.message : e);
+    }
+  }
+
+  // 从图片字节头识别类型（只接受 jpeg/png/webp），返回扩展名。
+  function blessingImageExt(buf) {
+    if (!buf || buf.length < 12) return "";
+    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpg";
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      return "png";
+    }
+    if (
+      buf.toString("ascii", 0, 4) === "RIFF" &&
+      buf.toString("ascii", 8, 12) === "WEBP"
+    ) {
+      return "webp";
+    }
+    return "";
+  }
+
   // 读某个用户对某祈福的参与文档（无则 null）。文档 id 用 stableDocId 保证唯一。
   async function findBlessingJoin(uid, projectId) {
     const id = stableDocId(uid, "blessingJoin", projectId);
@@ -695,7 +756,7 @@ exports.main = async (event, context) => {
     return data && data[0] ? data[0] : null;
   }
 
-  // 对外返回的祈福项目：不暴露 ownerUserId（匿名共修，只给人数不给身份）。
+  // 对外返回的祈福项目：公开事由内容；ownerUserId 仅供客户端展示发起人与进入主页。
   function publicBlessing(p) {
     return {
       _id: p._id,
@@ -706,9 +767,11 @@ exports.main = async (event, context) => {
       totalDays: p.totalDays || 0,
       startDate: p.startDate || "",
       methods: Array.isArray(p.methods) ? p.methods : [],
+      imageCount: Array.isArray(p.images) ? p.images.length : 0,
       visibility: p.visibility || "public",
       joinerCount: p.joinerCount || 0,
       status: p.status || "normal",
+      ownerUserId: p.ownerUserId || "",
       createdAt: p.createdAt || 0,
       updatedAt: p.updatedAt || 0,
     };
@@ -4950,6 +5013,30 @@ exports.main = async (event, context) => {
 
       // ==================== 祈福共修 ====================
 
+      case "uploadBlessingImage": {
+        if (!uid) return fail("unauthorized");
+        try {
+          const raw = String(event.data || "");
+          if (!raw) return fail("empty_image");
+          const buf = Buffer.from(raw, "base64");
+          if (!buf.length) return fail("empty_image");
+          if (buf.length > 2 * 1024 * 1024) return fail("image_too_large");
+          const ext = blessingImageExt(buf);
+          if (!ext) return fail("bad_image");
+          // 路径不带 uid：图片对社区可见，避免 fileID 泄漏发起者身份。
+          const rand = crypto.randomBytes(12).toString("hex");
+          const cloudPath = `blessings/${Date.now()}_${rand}.${ext}`;
+          const up = await app.uploadFile({ cloudPath, fileContent: buf });
+          const fileId = (up && up.fileID) || "";
+          if (!fileId) return fail("upload_failed");
+          const urls = await resolveBlessingImageUrls([fileId]);
+          return ok({ fileId, url: urls[0] || "" });
+        } catch (e) {
+          console.error("[api] uploadBlessingImage error:", e && e.message ? e.message : e);
+          return fail(e && e.message ? e.message : "上传图片失败");
+        }
+      }
+
       case "createBlessing": {
         if (!uid) return fail("unauthorized");
         try {
@@ -4970,6 +5057,7 @@ exports.main = async (event, context) => {
             totalDays,
             startDate,
             methods,
+            images: normalizeBlessingImages(event.images),
             visibility,
             ownerUserId: uid,
             joinerCount: 1,
@@ -5096,9 +5184,15 @@ exports.main = async (event, context) => {
           if (!p) return fail("not_found");
           if (p.visibility === "private" && p.ownerUserId !== uid) return fail("forbidden");
           const join = uid ? await findBlessingJoin(uid, id) : null;
+          const owner = !!uid && p.ownerUserId === uid;
+          const imgs = normalizeBlessingImages(p.images);
+          const proj = publicBlessing(p);
+          // fileID 只包含随机路径，不含用户信息；回给所有人用于客户端缓存。
+          proj.images = imgs;
+          proj.imageUrls = await resolveBlessingImageUrls(imgs);
           return ok({
-            project: publicBlessing(p),
-            isOwner: !!uid && p.ownerUserId === uid,
+            project: proj,
+            isOwner: owner,
             joinerCount: p.joinerCount || 0,
             progress: join
               ? {
@@ -5225,6 +5319,7 @@ exports.main = async (event, context) => {
           if (!p) return fail("not_found");
           if (p.ownerUserId !== uid) return fail("forbidden");
           const patch = { updatedAt: now() };
+          let removedImages = [];
           if (event.title != null) {
             const t = String(event.title).trim().slice(0, 5000);
             if (!t) return fail("empty_title");
@@ -5243,10 +5338,17 @@ exports.main = async (event, context) => {
             patch.startDate = String(event.startDate);
           }
           if (event.methods != null) patch.methods = normalizeBlessingMethods(event.methods);
+          if (event.images != null) {
+            const nextImages = normalizeBlessingImages(event.images);
+            const oldImages = normalizeBlessingImages(p.images);
+            removedImages = oldImages.filter((v) => nextImages.indexOf(v) < 0);
+            patch.images = nextImages;
+          }
           if (event.visibility != null) {
             patch.visibility = event.visibility === "private" ? "private" : "public";
           }
           await blessingProjects.doc(id).update(patch);
+          if (removedImages.length) await deleteBlessingStorageFiles(removedImages);
           return ok({ updated: true });
         } catch (e) {
           console.error("[api] updateBlessing error:", e && e.message ? e.message : e);
@@ -5265,6 +5367,7 @@ exports.main = async (event, context) => {
           if (!p) return ok({ deleted: true });
           if (p.ownerUserId !== uid) return fail("forbidden");
           await blessingProjects.doc(id).remove();
+          await deleteBlessingStorageFiles(p.images);
           const jr = await blessingParticipants.where({ projectId: id }).limit(1000).get();
           for (const j of jr.data || []) {
             await blessingParticipants.doc(j._id).remove();

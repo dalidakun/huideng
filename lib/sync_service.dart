@@ -32,6 +32,11 @@ class SyncService with WidgetsBindingObserver {
   /// 拉取应用后 +1，供主页面监听并刷新（修学/我的）。
   final ValueNotifier<int> dataVersion = ValueNotifier<int>(0);
 
+  /// 仅测试：直接走一次云端合并，验证 provisional/合并规则。
+  @visibleForTesting
+  Future<bool> applyCloudForTest(Map<String, dynamic> cloud) =>
+      _applyCloud(cloud);
+
   /// 最近一次推送失败的原因（null 表示当前一切正常）。
   /// 以前这里只有一个 `catch (_) {}`：云端停在旧版本、用户毫无察觉，
   /// 直到卸载重装才发现数据丢了。现在把原因暴露出来供「我的」页提示。
@@ -55,6 +60,10 @@ class SyncService with WidgetsBindingObserver {
     'custom_checkin_types',
     'checkin_goals',
   };
+
+  /// 首次启动写入的本地默认值标记：云端有真实数据时允许覆盖。
+  static const String _provisionalShaNamesKey = '_provisional_shanzhishi_names';
+  static const String _provisionalStudyDayKey = '_provisional_study_day';
 
   /// 云端权威字段：这些字段以云端返回值为准，只要云端有非空值就覆盖本地。
   /// 用于修复「第二天后加入时间变昨天、认证状态丢失」等问题——
@@ -88,6 +97,13 @@ class SyncService with WidgetsBindingObserver {
     // 云端旧值复活（本地删除不上传，冷启动恢复若从云端补写会让锁又被锁上）。
     'locked_sutra_title',
     'locked_sutra_file_path',
+    // 笔记已走 userNotes 独立通道（一条一个文档），不再塞进 setUserData
+    // 的共享大包：整份笔记数组很容易超过单 key 3MB 上限，进而拖垮所有
+    // 底部菜单数据的备份。这里只保留独立通道，避免重复上传。
+    'notes',
+    'trash_notes',
+    'notes_dirty',
+    'notes_tombstone',
   };
 
   static const int _maxFileChars = 400000;
@@ -330,8 +346,20 @@ class SyncService with WidgetsBindingObserver {
             prefs.setDouble(canonKey, cd);
             changed = true;
           }
+        } else if (key == 'sutra_states' && cv is String && lv is String) {
+          // 经书状态（已读/收藏/置顶/稍后读）按并集合并，避免本地旧状态
+          // 挡住云端恢复；页面 reload 时再 OR 进 sutras_list.json。
+          final merged = _mergeSutraStatesJson(lv, cv);
+          if (merged != null && merged != lv) {
+            await prefs.setString(key, merged);
+            changed = true;
+          }
         }
       }
+      // 本地首次启动生成的默认值（善知识种子、学习天数等）不能在云端
+      // 已有用户数据时继续挡住恢复：这些 key 在写入时会带上 provisional
+      // 标记，这里统一做一次「云端优先」修正。
+      if (await _applyProvisionalOverrides(prefs, cPrefs)) changed = true;
     }
 
     final cFiles = cloud['files'];
@@ -353,7 +381,8 @@ class SyncService with WidgetsBindingObserver {
               await prefs.setString('user_avatar_path', dest.path);
               changed = true;
             } catch (_) {}
-          }        }
+          }
+        }
       }
 
       final banner = cFiles['banner'];
@@ -425,6 +454,95 @@ class SyncService with WidgetsBindingObserver {
     return changed;
   }
 
+  /// 修正「本地首次启动默认值」与云端真实数据的冲突。
+  ///
+  /// 善知识种子、学习第 1 天都会在登录同步前先写入本地；普通同步规则是
+  /// 「本地已有就跳过云端」，结果重装/换设备后云端数据永远恢复不了。
+  /// 这里仅处理带 provisional 标记的 key：一旦云端有真实数据就采用云端。
+  Future<bool> _applyProvisionalOverrides(
+    SharedPreferences prefs,
+    Map<dynamic, dynamic> cPrefs,
+  ) async {
+    var changed = false;
+
+    if (prefs.getBool(_provisionalShaNamesKey) ?? false) {
+      final cloudNames = cPrefs['shanzhishi_names'];
+      if (cloudNames is String && cloudNames.isNotEmpty) {
+        if (prefs.getString('shanzhishi_names') != cloudNames) {
+          await prefs.setString('shanzhishi_names', cloudNames);
+          changed = true;
+        }
+        await prefs.remove(_provisionalShaNamesKey);
+        changed = true;
+      }
+    }
+
+    if (prefs.getBool(_provisionalStudyDayKey) ?? false) {
+      final rawCount = cPrefs['study_day_count'];
+      final cloudCount =
+          rawCount is int ? rawCount : int.tryParse(rawCount?.toString() ?? '');
+      if (cloudCount != null) {
+        final localCount = prefs.getInt('study_day_count') ?? 0;
+        if (cloudCount > localCount) {
+          await prefs.setInt('study_day_count', cloudCount);
+          final cloudDate = cPrefs['study_last_date']?.toString() ?? '';
+          if (cloudDate.isNotEmpty) {
+            await prefs.setString('study_last_date', cloudDate);
+          }
+          changed = true;
+        }
+        await prefs.remove(_provisionalStudyDayKey);
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  /// 合并两份 `sutra_states` JSON：布尔状态取并集，时间等字段本地优先。
+  /// 返回 null 表示两份都不可用。
+  String? _mergeSutraStatesJson(Object? local, Object? cloud) {
+    final localStr = local is String && local.isNotEmpty ? local : null;
+    final cloudStr = cloud is String && cloud.isNotEmpty ? cloud : null;
+    if (localStr == null) return cloudStr;
+    if (cloudStr == null) return localStr;
+    try {
+      final lm = jsonDecode(localStr);
+      final cm = jsonDecode(cloudStr);
+      if (lm is! Map || cm is! Map) return localStr;
+      final out = <String, dynamic>{};
+      for (final e in lm.entries) {
+        out[e.key.toString()] = e.value is Map
+            ? Map<String, dynamic>.from(e.value as Map)
+            : e.value;
+      }
+      for (final e in cm.entries) {
+        final key = e.key.toString();
+        final existing = out[key];
+        final incoming = e.value;
+        if (existing is Map && incoming is Map) {
+          final merged = Map<String, dynamic>.from(existing);
+          for (final p in incoming.entries) {
+            final k = p.key.toString();
+            if (p.value == true) {
+              merged[k] = true;
+            } else if (!merged.containsKey(k) ||
+                merged[k] == null ||
+                merged[k] == '') {
+              merged[k] = p.value;
+            }
+          }
+          out[key] = merged;
+        } else if (!out.containsKey(key)) {
+          out[key] = incoming;
+        }
+      }
+      return jsonEncode(out);
+    } catch (_) {
+      return localStr;
+    }
+  }
+
   /// 收集本地全部可同步数据。
   Future<Map<String, dynamic>> _collect() async {
     final prefs = await SharedPreferences.getInstance();
@@ -462,8 +580,7 @@ class SyncService with WidgetsBindingObserver {
           final bytes = await f.readAsBytes();
           final fitted = _fitForUpload(bytes, _avatarMaxSize);
           if (fitted != null) {
-            final name =
-                avatarPath.split(Platform.pathSeparator).last;
+            final name = avatarPath.split(Platform.pathSeparator).last;
             files['avatar'] = {'name': name, 'data': base64Encode(fitted)};
           }
         } catch (_) {}
@@ -478,8 +595,7 @@ class SyncService with WidgetsBindingObserver {
           final bytes = await f.readAsBytes();
           final fitted = _fitForUpload(bytes, _bannerMaxSize);
           if (fitted != null) {
-            final name =
-                bannerPath.split(Platform.pathSeparator).last;
+            final name = bannerPath.split(Platform.pathSeparator).last;
             files['banner'] = {'name': name, 'data': base64Encode(fitted)};
           }
         } catch (_) {}
@@ -529,7 +645,15 @@ class SyncService with WidgetsBindingObserver {
     // 经书状态（已读/收藏/置顶/时间）压缩后随 prefs 一起同步。
     // sutras_list.json 本身太大无法整体上传，这里只汇总有状态变化的经书。
     final sutraStates = await _collectSutraStates();
-    if (sutraStates != null) prefsData['sutra_states'] = sutraStates;
+    if (sutraStates != null) {
+      // 文件可能还没应用刚恢复的云端状态；与 pref 并集后再上传，
+      // 避免推送把云端的已读/收藏状态覆盖回旧值。
+      prefsData['sutra_states'] = _mergeSutraStatesJson(
+            sutraStates,
+            prefsData['sutra_states'],
+          ) ??
+          sutraStates;
+    }
 
     return {'prefs': prefsData, 'files': files};
   }
@@ -628,7 +752,8 @@ class SyncService with WidgetsBindingObserver {
   }
 
   /// 安全读取任意类型的 prefs 键（避免类型断言抛错）。
-  Object? _readPref(SharedPreferences prefs, String key) {    try {
+  Object? _readPref(SharedPreferences prefs, String key) {
+    try {
       final v = prefs.getString(key);
       if (v != null) return v;
     } catch (_) {}
@@ -680,8 +805,7 @@ class SyncService with WidgetsBindingObserver {
   /// 无法识别（如用户自选本地文件）时原样返回。
   String? _canonicalSutraPath(String? path, String? title) {
     if (path == null || path.isEmpty) return path;
-    final resolved =
-        SutraAssetPath.resolve(title: title ?? '', filePath: path);
+    final resolved = SutraAssetPath.resolve(title: title ?? '', filePath: path);
     return resolved.startsWith('assets/') ? resolved : path;
   }
 
@@ -743,13 +867,12 @@ class SyncService with WidgetsBindingObserver {
   /// 路径（`last_read_*` 配 `last_read_title`、`locked_*` 配
   /// `locked_sutra_title`），绝不能拿 `current_sutra_title` 去解析别的记录，
   /// 否则会把 A 经的路径改写成 B 经的路径，造成「卡片显示 A、点开是 B」。
-  Object? _normalizeSutraPaths(
-      String key, Object? v, SharedPreferences prefs, [Object? cloudPrefs]) {
+  Object? _normalizeSutraPaths(String key, Object? v, SharedPreferences prefs,
+      [Object? cloudPrefs]) {
     if (!_sutraPathKeys.contains(key)) return v;
     String paired(String cloudKey, String localKey) {
-      final fromCloud = (cloudPrefs is Map)
-          ? cloudPrefs[cloudKey]?.toString()
-          : null;
+      final fromCloud =
+          (cloudPrefs is Map) ? cloudPrefs[cloudKey]?.toString() : null;
       if (fromCloud != null && fromCloud.isNotEmpty) return fromCloud;
       return prefs.getString(localKey) ?? '';
     }
@@ -759,8 +882,8 @@ class SyncService with WidgetsBindingObserver {
         return _canonicalSutraPath(v?.toString(),
             paired('current_sutra_title', 'current_sutra_title'));
       case 'locked_sutra_file_path':
-        return _canonicalSutraPath(v?.toString(),
-            paired('locked_sutra_title', 'locked_sutra_title'));
+        return _canonicalSutraPath(
+            v?.toString(), paired('locked_sutra_title', 'locked_sutra_title'));
       case 'last_read_filePath':
         return _canonicalSutraPath(
             v?.toString(), paired('last_read_title', 'last_read_title'));
@@ -835,7 +958,9 @@ class SyncService with WidgetsBindingObserver {
   /// scroll_*/read_*（阅读滚动位置 / 已读标记）只在本机使用，不同步到云端：
   /// 换设备后阅读位置用 progress_*（进度比例）恢复即可，避免挤占同步包体积。
   bool _isLocalOnlyRedundantKey(String key) {
-    return key.startsWith('scroll_') || key.startsWith('read_');
+    return key.startsWith('scroll_') ||
+        key.startsWith('read_') ||
+        key.startsWith('_provisional_');
   }
 
   /// 尝试把 prefs/云端值解析为 double，解析不了返回 null。

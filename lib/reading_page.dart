@@ -10,6 +10,7 @@ import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'collapsible_bottom_sheet.dart';
 import 'reader_selection_controls.dart';
 import 'shanzhishi_edit_sheet.dart';
 import 'shanzhishi_mantra_edit_sheet.dart';
@@ -134,6 +135,7 @@ class ReadingPageState extends State<ReadingPage>
   // 正文里被高亮的处数；备注段落（@@块）不参与搜索，不_buildParagraphSpans 一致。
   List<(int, int)> _searchMatches = [];
   int _currentMatchIndex = 0;
+
   /// 阅读进度（0~1）。
   ///
   /// 通过 setter 同步写进 [_scrollProgressListenable]：滚动进度只用来显示
@@ -238,8 +240,8 @@ class ReadingPageState extends State<ReadingPage>
   /// 再次去掉 CBETA 编号的基础经名（避免标题栏闪现编号）。
   String get _titleShown {
     final override = SutraTitleOverrides.forTitle(widget.title) ??
-        SutraTitleOverrides.forTitle(
-            SutraDownloader.extractId(null, _resolvedFilePath ?? widget.filePath));
+        SutraTitleOverrides.forTitle(SutraDownloader.extractId(
+            null, _resolvedFilePath ?? widget.filePath));
     return override ?? _displayTitle ?? sutraBaseTitle(widget.title);
   }
 
@@ -293,7 +295,8 @@ class ReadingPageState extends State<ReadingPage>
     _loadReadLaterState();
     _loadLayoutDoneState();
     _loadDisplayTitle();
-    // 内容加载完成后自动检查云端是否有更新排版（所有用户均需执行，不依赖登录状态）。
+    collapsibleSheetCollapsed.addListener(_onCollapsibleSheetCollapsedChanged);
+    // 内容加载完成后自动检查云端是否有更新排版（所有用户均需执行，不依赖登录状态）�?
     _autoCheckAndApplyLayout();
     // 异步获取管理员身份：管理员在菜单显示「编辑经文」。
     CloudNotesService.instance.isAdmin().then((v) {
@@ -391,6 +394,12 @@ class ReadingPageState extends State<ReadingPage>
     _coveredByRoute = false;
   }
 
+  void _onCollapsibleSheetCollapsedChanged() {
+    final collapsed = collapsibleSheetCollapsed.value;
+    _clearSelectionMenu();
+    _coveredByRoute = !collapsed;
+  }
+
   @override
   void didPushNext() {
     ReadingTimeService.instance.stopFor(this);
@@ -432,6 +441,8 @@ class ReadingPageState extends State<ReadingPage>
     _searchController.dispose();
     _noteInputController.dispose();
     _paraTapKeys.clear();
+    collapsibleSheetCollapsed
+        .removeListener(_onCollapsibleSheetCollapsedChanged);
     _clearSelectionMenu();
     _selectionTextState = null;
     // 离开阅读页时收起 AI 面板（WebView 本身常驻，不销毁）。
@@ -478,7 +489,8 @@ class ReadingPageState extends State<ReadingPage>
       final maxScroll = _scrollController.position.maxScrollExtent;
       if (maxScroll > 0) {
         // 只更新字段 + 进度 notifier：不 setState，滚动时正文不再整页重建。
-        _scrollProgress = (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
+        _scrollProgress =
+            (_scrollController.offset / maxScroll).clamp(0.0, 1.0);
         _scheduleSaveScrollPosition();
       }
       if (_scrollController.offset >= maxScroll) {
@@ -857,9 +869,11 @@ class ReadingPageState extends State<ReadingPage>
   /// 只有草稿不比云端已发布版旧时才采用（`sutraEditMeta.updatedAt` 更晚说明
   /// 管理员后来又「完成排版」过，正式版优先），拿不到云端元信息（断网等，
   /// 视为云端无更新，直接恢复草稿。
-  Future<String?> _restoreEditedDraft(String filePath, String editedPath) async {
+  Future<String?> _restoreEditedDraft(
+      String filePath, String editedPath) async {
     try {
-      final draft = await SutraEditDraft.read(title: widget.title, filePath: filePath);
+      final draft =
+          await SutraEditDraft.read(title: widget.title, filePath: filePath);
       if (draft == null) return null;
       final id = SutraDownloader.extractId(widget.title, filePath);
       if (id != null && id.isNotEmpty) {
@@ -1219,9 +1233,8 @@ class ReadingPageState extends State<ReadingPage>
         for (final it in items) {
           final idx = it['index'];
           if (idx is! int) continue;
-          final list =
-              (it['notes'] as List?)?.whereType<ParaNote>().toList() ??
-                  const <ParaNote>[];
+          final list = (it['notes'] as List?)?.whereType<ParaNote>().toList() ??
+              const <ParaNote>[];
           if (list.isNotEmpty) loadedNotes[idx] = list;
         }
         _paraNotes = loadedNotes;
@@ -1311,7 +1324,10 @@ class ReadingPageState extends State<ReadingPage>
       _promptLoginForNotes();
       return;
     }
-    final clean = [for (final n in notes) if (!n.isBlank) n];
+    final clean = [
+      for (final n in notes)
+        if (!n.isBlank) n
+    ];
     setState(() {
       if (clean.isEmpty) {
         _paraNotes.remove(index);
@@ -1532,8 +1548,7 @@ class ReadingPageState extends State<ReadingPage>
       final wasAtStart = _currentFlipPage == 0;
       setState(() {
         _currentFlipPage = 0;
-        _scrollProgress =
-            _flipPages.length > 1 ? 1.0 / _flipPages.length : 1.0;
+        _scrollProgress = _flipPages.length > 1 ? 1.0 / _flipPages.length : 1.0;
       });
       if (!wasAtStart) _pageController?.jumpToPage(0);
       _saveFlipProgress();
@@ -1698,553 +1713,549 @@ class ReadingPageState extends State<ReadingPage>
 
   Widget _buildScaffold(BuildContext context) {
     return Scaffold(
-        backgroundColor: Color(ReaderPreferences.bgColors[_bgColorIndex]),
-        appBar: AppBar(
-          backgroundColor: ReaderPreferences.appBarColor(_bgColorIndex),
-          elevation: 0,
-          leadingWidth: 48,
-          titleSpacing: 0,
-          iconTheme: IconThemeData(
-              color: _isDarkBg
-                  ? Colors.white.withOpacity(0.7)
-                  : const Color(0xFF212121)),
-          title: GestureDetector(
-            onTap: () {
-              final now = DateTime.now();
-              final last = _lastTitleTap;
-              _lastTitleTap = now;
-              if (last != null &&
-                  now.difference(last) < const Duration(milliseconds: 350)) {
-                _scrollToStart();
-              }
-            },
-            onLongPress: () {
-              Clipboard.setData(ClipboardData(text: _titleShown));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('已复制到剪贴板'),
-                  duration: Duration(seconds: 1),
-                ),
-              );
-            },
-            child: Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    _titleShown,
-                    style: TextStyle(
-                      color: _isDarkMode
-                          ? Colors.white.withOpacity(0.7)
-                          : const Color(0xFF212121),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+      backgroundColor: Color(ReaderPreferences.bgColors[_bgColorIndex]),
+      appBar: AppBar(
+        backgroundColor: ReaderPreferences.appBarColor(_bgColorIndex),
+        elevation: 0,
+        leadingWidth: 48,
+        titleSpacing: 0,
+        iconTheme: IconThemeData(
+            color: _isDarkBg
+                ? Colors.white.withOpacity(0.7)
+                : const Color(0xFF212121)),
+        title: GestureDetector(
+          onTap: () {
+            final now = DateTime.now();
+            final last = _lastTitleTap;
+            _lastTitleTap = now;
+            if (last != null &&
+                now.difference(last) < const Duration(milliseconds: 350)) {
+              _scrollToStart();
+            }
+          },
+          onLongPress: () {
+            Clipboard.setData(ClipboardData(text: _titleShown));
+            showCollapsibleAwareSnackBar(
+              context,
+              '已复制到剪贴板',
+              duration: const Duration(seconds: 1),
+            );
+          },
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  _titleShown,
+                  style: TextStyle(
+                    color: _isDarkMode
+                        ? Colors.white.withOpacity(0.7)
+                        : const Color(0xFF212121),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                if (_isSutraAdmin && _isLayoutDone)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
+              ),
+              if (_isSutraAdmin && _isLayoutDone)
+                Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: _isDarkBg
+                          ? const Color(0x33FFD54F)
+                          : const Color(0x1A43A047),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
                         color: _isDarkBg
-                            ? const Color(0x33FFD54F)
-                            : const Color(0x1A43A047),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: _isDarkBg
-                              ? const Color(0x66FFD54F)
-                              : const Color(0x6643A047),
-                          width: 0.5,
-                        ),
+                            ? const Color(0x66FFD54F)
+                            : const Color(0x6643A047),
+                        width: 0.5,
                       ),
-                      child: Text(
-                        '已完成排版',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                          color: _isDarkBg
-                              ? const Color(0xFFFFD54F)
-                              : const Color(0xFF43A047),
-                        ),
+                    ),
+                    child: Text(
+                      '已完成排版',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        color: _isDarkBg
+                            ? const Color(0xFFFFD54F)
+                            : const Color(0xFF43A047),
                       ),
                     ),
                   ),
-              ],
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          SizedBox(
+            width: 32,
+            height: 32,
+            child: IconButton(
+              icon: const Icon(Icons.search, size: 18),
+              onPressed: _toggleSearch,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              splashRadius: 16,
             ),
           ),
-          actions: [
-            SizedBox(
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: SizedBox(
               width: 32,
               height: 32,
               child: IconButton(
-                icon: const Icon(Icons.search, size: 18),
-                onPressed: _toggleSearch,
+                icon: const Icon(Icons.more_horiz, size: 20),
+                onPressed: _toggleMoreMenu,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
                 splashRadius: 16,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: SizedBox(
-                width: 32,
-                height: 32,
-                child: IconButton(
-                  icon: const Icon(Icons.more_horiz, size: 20),
-                  onPressed: _toggleMoreMenu,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 16,
-                ),
-              ),
-            ),
-          ],
-        ),
-        body: SafeArea(
-          child: Listener(
-            onPointerDown: (event) {
-              if (_showMoreMenu && !_isPointerInsideMenu(event.position)) {
-                // 标记这次点击是用来收起菜单的，内容区收到抬起后不弹面板。
-                _menuOpenAtDown = true;
-                setState(() {
-                  _showMoreMenu = false;
-                });
-              }
-              if (_showStylePanel &&
-                  !_isPointerInsideStylePanel(event.position)) {
-                // 标记这次点击是用来收起阅读设置面板的：只收起面板，
-                // 抬起后内容区不再弹「画线感想/笔记」速览面板。
-                _stylePanelDismissAtDown = true;
-                setState(() {
-                  _showStylePanel = false;
-                });
-              }
-            },
-            child: Stack(
-              children: [
-                Column(
-                  children: [
-                    if (_showSearchBar)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 4),
-                        color: Colors.transparent,
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _searchController,
-                                decoration: InputDecoration(
-                                  hintText: '搜索内容',
-                                  hintStyle: const TextStyle(
-                                    color: Color(0xFF999999),
-                                    fontSize: 14,
-                                  ),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                    borderSide: _isDarkBg
-                                        ? BorderSide.none
-                                        : const BorderSide(
-                                            color: Color(0xFFD9D9D9), width: 1),
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.white,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 6),
-                                  isDense: true,
-                                ),
-                                style: const TextStyle(
-                                  color: Color(0xFF212121),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Listener(
+          onPointerDown: (event) {
+            if (_showMoreMenu && !_isPointerInsideMenu(event.position)) {
+              // 标记这次点击是用来收起菜单的，内容区收到抬起后不弹面板。
+              _menuOpenAtDown = true;
+              setState(() {
+                _showMoreMenu = false;
+              });
+            }
+            if (_showStylePanel &&
+                !_isPointerInsideStylePanel(event.position)) {
+              // 标记这次点击是用来收起阅读设置面板的：只收起面板，
+              // 抬起后内容区不再弹「画线感想/笔记」速览面板。
+              _stylePanelDismissAtDown = true;
+              setState(() {
+                _showStylePanel = false;
+              });
+            }
+          },
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  if (_showSearchBar)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 4),
+                      color: Colors.transparent,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _searchController,
+                              decoration: InputDecoration(
+                                hintText: '搜索内容',
+                                hintStyle: const TextStyle(
+                                  color: Color(0xFF999999),
                                   fontSize: 14,
                                 ),
-                                onChanged: _performSearch,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: _isDarkBg
+                                      ? BorderSide.none
+                                      : const BorderSide(
+                                          color: Color(0xFFD9D9D9), width: 1),
+                                ),
+                                filled: true,
+                                fillColor: Colors.white,
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
+                                isDense: true,
                               ),
+                              style: const TextStyle(
+                                color: Color(0xFF212121),
+                                fontSize: 14,
+                              ),
+                              onChanged: _performSearch,
                             ),
-                            if (_searchMatches.isNotEmpty)
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12),
-                                    child: Text(
-                                      '${_currentMatchIndex + 1}/${_searchMatches.length}',
-                                      style: TextStyle(
-                                        color: _isDarkBg
-                                            ? Colors.white.withOpacity(0.7)
-                                            : const Color(0xFF212121),
-                                        fontSize: 14,
-                                      ),
+                          ),
+                          if (_searchMatches.isNotEmpty)
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12),
+                                  child: Text(
+                                    '${_currentMatchIndex + 1}/${_searchMatches.length}',
+                                    style: TextStyle(
+                                      color: _isDarkBg
+                                          ? Colors.white.withOpacity(0.7)
+                                          : const Color(0xFF212121),
+                                      fontSize: 14,
                                     ),
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.keyboard_arrow_up,
-                                        size: 20),
-                                    onPressed: _goToPreviousMatch,
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.keyboard_arrow_down,
-                                        size: 20),
-                                    onPressed: _goToNextMatch,
-                                  ),
-                                ],
-                              ),
-                            if (_searchMatches.isEmpty &&
-                                _searchController.text.isNotEmpty)
-                              Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 8),
-                                child: Text(
-                                  '无匹配',
-                                  style: TextStyle(
-                                    color: _isDarkBg
-                                        ? Colors.white.withOpacity(0.7)
-                                        : const Color(0xFF212121),
-                                    fontSize: 13,
-                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.keyboard_arrow_up,
+                                      size: 20),
+                                  onPressed: _goToPreviousMatch,
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.keyboard_arrow_down,
+                                      size: 20),
+                                  onPressed: _goToNextMatch,
+                                ),
+                              ],
+                            ),
+                          if (_searchMatches.isEmpty &&
+                              _searchController.text.isNotEmpty)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              child: Text(
+                                '无匹配',
+                                style: TextStyle(
+                                  color: _isDarkBg
+                                      ? Colors.white.withOpacity(0.7)
+                                      : const Color(0xFF212121),
+                                  fontSize: 13,
                                 ),
                               ),
-                          ],
-                        ),
+                            ),
+                        ],
                       ),
-                    _buildDownloadBanner(),
-                    Expanded(
-                      child: Listener(
-                        onPointerDown: (event) {
-                          // 注意：此处绝不重置_actionRowTapped —…
-                          // 指针事件按「从内到外」派发，操作栏的内层 Listener
-                          // 先把标记置true，若这里再清掉，onPointerUp 就拦不住了。
-                          _pointerDownPos = event.position;
-                          _longPressActive = false;
-                          // 记录按下时文字是否已选中 / 长按浮层是否已打开，
-                          // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
-                          // 擦除等浮层菜单只连_activeMenuEntries（不记_selectionMenuEntry），
-                          // 因此画_activeMenuEntries 一并覆盖：首点只关菜单，二次点击才弹面板。
-                          _selectionActiveAtDown =
-                              _selectionMenuEntry != null ||
-                                  _activeMenuEntries.isNotEmpty ||
-                                  _hasTextSelection;
-                          // 300ms 后若手指仍未抬起，视为长按（文字选择）。
-                          Future.delayed(const Duration(milliseconds: 300), () {
-                            if (_pointerDownPos != null && mounted) {
-                              _longPressActive = true;
-                            }
-                          });
-                        },
-                        // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
-                        onPointerCancel: (_) {
+                    ),
+                  _buildDownloadBanner(),
+                  Expanded(
+                    child: Listener(
+                      onPointerDown: (event) {
+                        // 注意：此处绝不重置_actionRowTapped —…
+                        // 指针事件按「从内到外」派发，操作栏的内层 Listener
+                        // 先把标记置true，若这里再清掉，onPointerUp 就拦不住了。
+                        _pointerDownPos = event.position;
+                        _longPressActive = false;
+                        // 记录按下时文字是否已选中 / 长按浮层是否已打开，
+                        // 若是，则这次点击用于「收起选中/菜单」，不得弹出底部面板。
+                        // 擦除等浮层菜单只连_activeMenuEntries（不记_selectionMenuEntry），
+                        // 因此画_activeMenuEntries 一并覆盖：首点只关菜单，二次点击才弹面板。
+                        _selectionActiveAtDown = _selectionMenuEntry != null ||
+                            _activeMenuEntries.isNotEmpty ||
+                            _hasTextSelection;
+                        // 300ms 后若手指仍未抬起，视为长按（文字选择）。
+                        Future.delayed(const Duration(milliseconds: 300), () {
+                          if (_pointerDownPos != null && mounted) {
+                            _longPressActive = true;
+                          }
+                        });
+                      },
+                      // 指针被系统打断（来电/手势竞争）时清掉标记，避免残留。
+                      onPointerCancel: (_) {
+                        _actionRowTapped = false;
+                      },
+                      onPointerUp: (event) {
+                        // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
+                        if (_actionRowTapped) {
                           _actionRowTapped = false;
-                        },
-                        onPointerUp: (event) {
-                          // 段落操作栏（AI译/笔记/方框）拦截：阻止触发面板。
-                          if (_actionRowTapped) {
-                            _actionRowTapped = false;
-                            // 同步清理按下状态，避免残留影响 300ms 长按计时器。
-                            _pointerDownPos = null;
-                            _longPressActive = false;
-                            _selectionActiveAtDown = false;
-                            return;
-                          }
-                          // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
-                          final menuOpenAtDown = _menuOpenAtDown;
-                          _menuOpenAtDown = false;
-                          // 记下按下时是否是「收阅读设置面板」的点击（由外层 Listener 设置）。
-                          final styleDismissAtDown = _stylePanelDismissAtDown;
-                          _stylePanelDismissAtDown = false;
-                          final downPos = _pointerDownPos;
+                          // 同步清理按下状态，避免残留影响 300ms 长按计时器。
                           _pointerDownPos = null;
-                          // 长按或滑动均不触发面板。
-                          if (_longPressActive) {
-                            _longPressActive = false;
-                            _selectionActiveAtDown = false;
-                            return;
-                          }
-                          if (downPos != null &&
-                              (event.position - downPos).distance > 10) return;
-                          // 按下时菜单是展开的→这次点击是收菜单，不弹面板。
-                          if (menuOpenAtDown) return;
-                          // 按下时阅读设置面板展开、点在面板外 →这次点击是收面板，
-                          // 不弹「画线感想/笔记」速览面板（模式切换后收起设置不误弹）。
-                          if (styleDismissAtDown) return;
-                          // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
-                          // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
-                          if (_selectionActiveAtDown || _hasTextSelection) {
-                            _selectionActiveAtDown = false;
-                            return;
-                          }
-                          // 延迟到事件分发结束后再决定面板：单击画线的判定完全按
-                          // 几何命中（_resolveUnderlineHit），不依赖手势竞技场时序，
-                          // 避免「有时弹擦除卡片、有时弹底部面板」的时好时坏。
-                          Timer.run(() {
-                            if (!mounted) return;
-                            setState(() {
-                              if (_showMoreMenu) {
-                                _showMoreMenu = false;
-                              } else if (_showStylePanel) {
-                                _showStylePanel = false;
-                              } else if (_showSearchBar) {
-                                _showSearchBar = false;
-                                _searchController.clear();
-                                _searchMatches.clear();
-                                _currentMatchIndex = 0;
-                              }
-                            });
-                            // 点击画线段落：按几何命中决定行为。
-                            //  - 命中画线文字 →只弹「擦除」小菜单，不弹底部面板；
-                            //  - 命中带画线的段落（但不在画线文字上）→不弹任何面板，
-                            //  - 纯正文段落→弹底部画线/感想/阅读设置 面板。
-                            final hit = _resolveUnderlineHit(event.position);
-                            if (hit != null) {
-                              if (hit.start >= 0) {
-                                _showUnderlineMenu(hit.cluster, hit.para,
-                                    hit.start, hit.end, event.position);
-                              }
-                              return;
+                          _longPressActive = false;
+                          _selectionActiveAtDown = false;
+                          return;
+                        }
+                        // 记下按下时是否是「收菜单」的点击（由外层 Listener 设置）。
+                        final menuOpenAtDown = _menuOpenAtDown;
+                        _menuOpenAtDown = false;
+                        // 记下按下时是否是「收阅读设置面板」的点击（由外层 Listener 设置）。
+                        final styleDismissAtDown = _stylePanelDismissAtDown;
+                        _stylePanelDismissAtDown = false;
+                        final downPos = _pointerDownPos;
+                        _pointerDownPos = null;
+                        // 长按或滑动均不触发面板。
+                        if (_longPressActive) {
+                          _longPressActive = false;
+                          _selectionActiveAtDown = false;
+                          return;
+                        }
+                        if (downPos != null &&
+                            (event.position - downPos).distance > 10) return;
+                        // 按下时菜单是展开的→这次点击是收菜单，不弹面板。
+                        if (menuOpenAtDown) return;
+                        // 按下时阅读设置面板展开、点在面板外 →这次点击是收面板，
+                        // 不弹「画线感想/笔记」速览面板（模式切换后收起设置不误弹）。
+                        if (styleDismissAtDown) return;
+                        // 按下时正文正有文字被选中 / 长按浮层菜单打开 →
+                        // 这次点击是「取消选中 / 收起浮层」，不弹出底部面板。
+                        if (_selectionActiveAtDown || _hasTextSelection) {
+                          _selectionActiveAtDown = false;
+                          return;
+                        }
+                        // 延迟到事件分发结束后再决定面板：单击画线的判定完全按
+                        // 几何命中（_resolveUnderlineHit），不依赖手势竞技场时序，
+                        // 避免「有时弹擦除卡片、有时弹底部面板」的时好时坏。
+                        Timer.run(() {
+                          if (!mounted) return;
+                          setState(() {
+                            if (_showMoreMenu) {
+                              _showMoreMenu = false;
+                            } else if (_showStylePanel) {
+                              _showStylePanel = false;
+                            } else if (_showSearchBar) {
+                              _showSearchBar = false;
+                              _searchController.clear();
+                              _searchMatches.clear();
+                              _currentMatchIndex = 0;
                             }
-                            _openQuickPanel();
                           });
-                        },
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            if (_isLoadingContent) {
-                              return const Center(
-                                  child: CircularProgressIndicator());
+                          // 点击画线段落：按几何命中决定行为。
+                          //  - 命中画线文字 →只弹「擦除」小菜单，不弹底部面板；
+                          //  - 命中带画线的段落（但不在画线文字上）→不弹任何面板，
+                          //  - 纯正文段落→弹底部画线/感想/阅读设置 面板。
+                          final hit = _resolveUnderlineHit(event.position);
+                          if (hit != null) {
+                            if (hit.start >= 0) {
+                              _showUnderlineMenu(hit.cluster, hit.para,
+                                  hit.start, hit.end, event.position);
                             }
-                            if (_pageMode == ReaderPreferences.pageModeFlip &&
-                                _searchController.text.isEmpty) {
-                              final pages = _getFlipPages(
-                                  constraints.maxWidth, constraints.maxHeight);
-                              return PageView.builder(
-                                controller: _pageController,
-                                itemCount: pages.length,
-                                onPageChanged: _onFlipPageChanged,
-                                itemBuilder: (context, index) =>
-                                    _buildFlipPage(pages[index], index),
-                              );
-                            }
-                            return SingleChildScrollView(
-                              key: _scrollViewKey,
-                              controller: _scrollController,
-                              child: _searchController.text.isEmpty
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        for (final group in _allClusterGroups())
-                                          _buildClusterParagraph(group,
-                                              showUnaligned: true),
-                                      ],
-                                    )
-                                  : Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        for (final group in _allClusterGroups())
-                                          _buildClusterParagraph(group,
-                                              showUnaligned: false),
-                                      ],
-                                    ),
+                            return;
+                          }
+                          _openQuickPanel();
+                        });
+                      },
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          if (_isLoadingContent) {
+                            return const Center(
+                                child: CircularProgressIndicator());
+                          }
+                          if (_pageMode == ReaderPreferences.pageModeFlip &&
+                              _searchController.text.isEmpty) {
+                            final pages = _getFlipPages(
+                                constraints.maxWidth, constraints.maxHeight);
+                            return PageView.builder(
+                              controller: _pageController,
+                              itemCount: pages.length,
+                              onPageChanged: _onFlipPageChanged,
+                              itemBuilder: (context, index) =>
+                                  _buildFlipPage(pages[index], index),
                             );
-                          },
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                      // 进度条单独监听 notifier：滚动只重建这一行，
-                      // 不触发整篇正文的 build + 全文重排版。
-                      child: ValueListenableBuilder<double>(
-                        valueListenable: _scrollProgressListenable,
-                        builder: (context, progress, _) => Row(
-                          children: [
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(
-                                    AppPalette.instance.isPlain && !_isDarkBg
-                                        ? 2
-                                        : 3),
-                                child: LinearProgressIndicator(
-                                  value: progress,
-                                  minHeight: 5,
-                                  backgroundColor: _isDarkBg
-                                      ? Colors.white.withOpacity(0.15)
-                                      : AppPalette.instance.isPlain
-                                          ? AppPalette.p.border
-                                          : const Color(0xFFE8D9C4),
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                      !_isDarkBg && AppPalette.instance.isPlain
-                                          ? const Color(0xFF4A4A4A)
-                                          : AppPalette.p.accent),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${(progress * 100).toStringAsFixed(1)}%',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: _isDarkBg
-                                    ? Colors.white.withOpacity(0.7)
-                                    : AppPalette.p.textSec,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_showMoreMenu)
-                  Positioned(
-                    key: const ValueKey('more_menu'),
-                    top: 4,
-                    right: 16,
-                    child: Material(
-                      key: _moreMenuKey,
-                      elevation: 6,
-                      borderRadius: BorderRadius.circular(12),
-                      color: _isDarkBg ? const Color(0xFF2c2c2c) : Colors.white,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 6),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (_isSutraAdmin)
-                              _buildMoreMenuItem(
-                                icon: const Icon(Icons.warning_amber_rounded,
-                                    size: 18, color: Color(0xFFE53935)),
-                                label: '编辑经文',
-                                onTap: _openEditor,
-                              ),
-                            if (_isSutraAdmin)
-                              _buildMoreMenuItem(
-                                icon: Icon(
-                                  _isLayoutDone
-                                      ? Icons.check_circle
-                                      : Icons.check_circle_outline,
-                                  size: 18,
-                                  color: _isLayoutDone
-                                      ? (_isDarkBg
-                                          ? const Color(0xFFFFD54F)
-                                          : const Color(0xFF43A047))
-                                      : null,
-                                ),
-                                label: '完成排版',
-                                onTap: _toggleLayoutDone,
-                              ),
-                            if (_isSutraAdmin && _isLayoutDone)
-                              _buildMoreMenuItem(
-                                icon: const Icon(Icons.undo_rounded,
-                                    size: 18, color: Color(0xFFE53935)),
-                                label: '撤销完成排版',
-                                onTap: _toggleLayoutUndone,
-                              ),
-                            _buildMoreMenuItem(
-                              icon:
-                                  const Icon(Icons.settings_outlined, size: 18),
-                              label: '阅读设置',
-                              onTap: _openReadingSettings,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: Icon(
-                                _isFavorite
-                                    ? Icons.favorite
-                                    : Icons.favorite_border,
-                                size: 18,
-                              ),
-                              label: _isFavorite ? '取消收藏' : '收藏',
-                              onTap: _toggleFavorite,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: Icon(
-                                _isReadLater
-                                    ? Icons.bookmark
-                                    : Icons.bookmark_border,
-                                size: 18,
-                              ),
-                              label: _isReadLater ? '取消稍后阅读' : '稍后阅读',
-                              onTap: _toggleReadLater,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: Icon(
-                                _isRead
-                                    ? Icons.mark_chat_read
-                                    : Icons.mark_chat_unread,
-                                size: 18,
-                              ),
-                              label: _isRead ? '取消完成' : '标记完成',
-                              onTap: _toggleRead,
-                            ),
-                            _buildMoreMenuItem(
-                              icon: const Icon(Icons.help_outline, size: 18),
-                              label: '使用说明',
-                              onTap: _openUsageGuide,
-                            ),
-                          ],
-                        ),
+                          }
+                          return SingleChildScrollView(
+                            key: _scrollViewKey,
+                            controller: _scrollController,
+                            child: _searchController.text.isEmpty
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      for (final group in _allClusterGroups())
+                                        _buildClusterParagraph(group,
+                                            showUnaligned: true),
+                                    ],
+                                  )
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      for (final group in _allClusterGroups())
+                                        _buildClusterParagraph(group,
+                                            showUnaligned: false),
+                                    ],
+                                  ),
+                          );
+                        },
                       ),
                     ),
                   ),
-                if (_showFabMenu)
-                  // 展开悬浮菜单时，点菜单外任意位置收起（吞掉点击，避免触发正文）。
-                  Positioned.fill(
-                    key: const ValueKey('fab_overlay'),
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _closeFabMenu,
-                    ),
-                  ),
-                // 悬浮球层：铺满阅读区，内部按当前圆心摆放悬浮球与其弧线菜单。
-                Positioned.fill(
-                  key: const ValueKey('fab_layer'),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) =>
-                        _buildFabMenu(constraints),
-                  ),
-                ),
-                if (_showStylePanel) ...[
-                  // 阅读设置面板打开时，点阅读区任意位置收起。
-                  Positioned.fill(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: () => setState(() => _showStylePanel = false),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      key: _stylePanelKey,
-                      child: _buildReadingSettingsPanel(),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                    // 进度条单独监听 notifier：滚动只重建这一行，
+                    // 不触发整篇正文的 build + 全文重排版。
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: _scrollProgressListenable,
+                      builder: (context, progress, _) => Row(
+                        children: [
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(
+                                  AppPalette.instance.isPlain && !_isDarkBg
+                                      ? 2
+                                      : 3),
+                              child: LinearProgressIndicator(
+                                value: progress,
+                                minHeight: 5,
+                                backgroundColor: _isDarkBg
+                                    ? Colors.white.withOpacity(0.15)
+                                    : AppPalette.instance.isPlain
+                                        ? AppPalette.p.border
+                                        : const Color(0xFFE8D9C4),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    !_isDarkBg && AppPalette.instance.isPlain
+                                        ? const Color(0xFF4A4A4A)
+                                        : AppPalette.p.accent),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${(progress * 100).toStringAsFixed(1)}%',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _isDarkBg
+                                  ? Colors.white.withOpacity(0.7)
+                                  : AppPalette.p.textSec,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
-                if (_showQuickPanel) ...[
-                  // 速览面板打开时，点面板外任意位置收起。
-                  // opaque：吞掉点击，避免下层正文的单击处理再弹面板。
-                  Positioned.fill(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => setState(() => _showQuickPanel = false),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: _buildQuickPanel(),
-                  ),
-                ],
-              ],
               ),
-            ),
+              if (_showMoreMenu)
+                Positioned(
+                  key: const ValueKey('more_menu'),
+                  top: 4,
+                  right: 16,
+                  child: Material(
+                    key: _moreMenuKey,
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(12),
+                    color: _isDarkBg ? const Color(0xFF2c2c2c) : Colors.white,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (_isSutraAdmin)
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.warning_amber_rounded,
+                                  size: 18, color: Color(0xFFE53935)),
+                              label: '编辑经文',
+                              onTap: _openEditor,
+                            ),
+                          if (_isSutraAdmin)
+                            _buildMoreMenuItem(
+                              icon: Icon(
+                                _isLayoutDone
+                                    ? Icons.check_circle
+                                    : Icons.check_circle_outline,
+                                size: 18,
+                                color: _isLayoutDone
+                                    ? (_isDarkBg
+                                        ? const Color(0xFFFFD54F)
+                                        : const Color(0xFF43A047))
+                                    : null,
+                              ),
+                              label: '完成排版',
+                              onTap: _toggleLayoutDone,
+                            ),
+                          if (_isSutraAdmin && _isLayoutDone)
+                            _buildMoreMenuItem(
+                              icon: const Icon(Icons.undo_rounded,
+                                  size: 18, color: Color(0xFFE53935)),
+                              label: '撤销完成排版',
+                              onTap: _toggleLayoutUndone,
+                            ),
+                          _buildMoreMenuItem(
+                            icon: const Icon(Icons.settings_outlined, size: 18),
+                            label: '阅读设置',
+                            onTap: _openReadingSettings,
+                          ),
+                          _buildMoreMenuItem(
+                            icon: Icon(
+                              _isFavorite
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              size: 18,
+                            ),
+                            label: _isFavorite ? '取消收藏' : '收藏',
+                            onTap: _toggleFavorite,
+                          ),
+                          _buildMoreMenuItem(
+                            icon: Icon(
+                              _isReadLater
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_border,
+                              size: 18,
+                            ),
+                            label: _isReadLater ? '取消稍后阅读' : '稍后阅读',
+                            onTap: _toggleReadLater,
+                          ),
+                          _buildMoreMenuItem(
+                            icon: Icon(
+                              _isRead
+                                  ? Icons.mark_chat_read
+                                  : Icons.mark_chat_unread,
+                              size: 18,
+                            ),
+                            label: _isRead ? '取消完成' : '标记完成',
+                            onTap: _toggleRead,
+                          ),
+                          _buildMoreMenuItem(
+                            icon: const Icon(Icons.help_outline, size: 18),
+                            label: '使用说明',
+                            onTap: _openUsageGuide,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (_showFabMenu)
+                // 展开悬浮菜单时，点菜单外任意位置收起（吞掉点击，避免触发正文）。
+                Positioned.fill(
+                  key: const ValueKey('fab_overlay'),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _closeFabMenu,
+                  ),
+                ),
+              // 悬浮球层：铺满阅读区，内部按当前圆心摆放悬浮球与其弧线菜单。
+              Positioned.fill(
+                key: const ValueKey('fab_layer'),
+                child: LayoutBuilder(
+                  builder: (context, constraints) => _buildFabMenu(constraints),
+                ),
+              ),
+              if (_showStylePanel) ...[
+                // 阅读设置面板打开时，点阅读区任意位置收起。
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: () => setState(() => _showStylePanel = false),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    key: _stylePanelKey,
+                    child: _buildReadingSettingsPanel(),
+                  ),
+                ),
+              ],
+              if (_showQuickPanel) ...[
+                // 速览面板打开时，点面板外任意位置收起。
+                // opaque：吞掉点击，避免下层正文的单击处理再弹面板。
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _showQuickPanel = false),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _buildQuickPanel(),
+                ),
+              ],
+            ],
+          ),
         ),
+      ),
     );
   }
 
@@ -2995,8 +3006,8 @@ class ReadingPageState extends State<ReadingPage>
       child: FloatingActionButton(
         heroTag: heroTag,
         onPressed: onTap,
-        backgroundColor:
-            backgroundColor ?? (_isDarkBg ? Colors.white : const Color(0xFFf7f7f7)),
+        backgroundColor: backgroundColor ??
+            (_isDarkBg ? Colors.white : const Color(0xFFf7f7f7)),
         elevation: 8,
         highlightElevation: 12,
         shape: const CircleBorder(),
@@ -3239,9 +3250,8 @@ class ReadingPageState extends State<ReadingPage>
                       );
                     });
                   },
-            onLongPressEnd: _showFabMenu
-                ? null
-                : (_) => _fabDragStartBall = null,
+            onLongPressEnd:
+                _showFabMenu ? null : (_) => _fabDragStartBall = null,
             onLongPressCancel:
                 _showFabMenu ? null : () => _fabDragStartBall = null,
             // 用 AnimatedContainer 平滑过渡底色（FAB 无法动画背景色，会「跳闪」）；
@@ -3570,7 +3580,8 @@ class ReadingPageState extends State<ReadingPage>
     // 任意用户添加了感想即变绿（_paraHasAnyThought 由云端全量查询填充），
     // 合并段还要看本地已保存的备注，避免保存后整簇未刷新导致的短暂不变绿。
     final hasNote = members.any((i) =>
-        _paraHasAnyThought.contains(i) || (_paraNotes[i] ?? const []).isNotEmpty);
+        _paraHasAnyThought.contains(i) ||
+        (_paraNotes[i] ?? const []).isNotEmpty);
     final done = _paraDone[index] == true;
     return Padding(
       // 操作栏紧贴本段文字（与该段一体），
@@ -4798,8 +4809,8 @@ class ReadingPageState extends State<ReadingPage>
         }
       }
       if (head == null) return;
-      final box = _paraTapKeys[head]?.currentContext?.findRenderObject()
-          as RenderBox?;
+      final box =
+          _paraTapKeys[head]?.currentContext?.findRenderObject() as RenderBox?;
       final scrollBox =
           _scrollViewKey.currentContext?.findRenderObject() as RenderBox?;
       if (box == null || scrollBox == null || !box.hasSize) return;
@@ -5706,14 +5717,12 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
               child: Text(
                 '添加至',
                 style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: p.text),
+                    fontSize: 16, fontWeight: FontWeight.w600, color: p.text),
               ),
             ),
             Divider(height: 1, color: p.divider),
-            _addToItem(ctx, _AddToTarget.buddha, Icons.self_improvement,
-                '添加到诸佛菩萨星图'),
+            _addToItem(
+                ctx, _AddToTarget.buddha, Icons.self_improvement, '添加到诸佛菩萨星图'),
             _addToItem(ctx, _AddToTarget.mantra, Icons.graphic_eq, '添加到神咒长河'),
             const SizedBox(height: 8),
           ],
@@ -5727,14 +5736,17 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
       await ShanZhiShiEditSheet.show(
         navContext,
         initialSutra: widget.sutraTitle,
-        initialParagraphs:
-            selectedText.isEmpty ? null : <String>[selectedText],
+        initialParagraphs: selectedText.isEmpty ? null : <String>[selectedText],
+        collapsible: true,
+        collapsedTitle: '添加诸佛菩萨',
       );
     } else {
       await ShanZhiShiMantraEditSheet.show(
         navContext,
         initialSource: widget.sutraTitle,
         initialText: selectedText.isEmpty ? null : selectedText,
+        collapsible: true,
+        collapsedTitle: '添加神咒',
       );
     }
   }
@@ -5772,9 +5784,7 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             widget.close();
             if (t.isNotEmpty) {
               Clipboard.setData(ClipboardData(text: t));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已复制到剪贴板')),
-              );
+              showCollapsibleAwareSnackBar(context, '已复制到剪贴板');
             }
           }),
           _item(_underlined ? Icons.undo : Icons.format_underlined,

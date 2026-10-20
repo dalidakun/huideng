@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'cloud_notes_service.dart';
 
 /// 祈福功课的一种方式，如「念佛 108声」。
@@ -24,12 +27,26 @@ class BlessingMethod {
   Map<String, dynamic> toJson() =>
       {'category': category, 'name': name, 'count': count, 'unit': unit};
 
-  /// 展示文案：如「念佛 108声」。
+  /// 展示文案：如「念佛·阿弥陀佛 × 108声」。
   String get label {
-    final t = name.isNotEmpty ? name : category;
-    if (t.isEmpty) return '';
-    return count.isNotEmpty ? '$t $count$unit' : t;
+    final parts = <String>[
+      if (category.isNotEmpty) category,
+      if (name.isNotEmpty && name != category) name,
+    ];
+    if (parts.isEmpty) return '';
+    final t = parts.join('·');
+    return count.isNotEmpty ? '$t × $count$unit' : t;
   }
+}
+
+/// 祈福图片：fileID 用于本地缓存，url 为临时访问链接。
+class BlessingImage {
+  final String id;
+  final String url;
+
+  const BlessingImage({required this.id, this.url = ''});
+
+  bool get hasUrl => url.isNotEmpty;
 }
 
 /// 一个祈福项目（共修事由）。
@@ -42,10 +59,16 @@ class BlessingProject {
   final int totalDays;
   final String startDate;
   final List<BlessingMethod> methods;
+  final List<String> images; // 云存储 fileID（所有人可拿到，用于缓存与配对）
+  final List<String> imageUrls; // 临时访问链接（与 images 等长，失败位置为空串）
+  final int imageCount;
   final String visibility; // public | private
   final int joinerCount;
   final String status; // normal | closed
   final bool isOwner;
+
+  /// 发起人的用户 id，用于进入发起人个人主页。
+  final String ownerUserId;
 
   const BlessingProject({
     required this.id,
@@ -56,11 +79,39 @@ class BlessingProject {
     this.totalDays = 0,
     this.startDate = '',
     this.methods = const [],
+    this.images = const [],
+    this.imageUrls = const [],
+    this.imageCount = 0,
     this.visibility = 'public',
     this.joinerCount = 0,
     this.status = 'normal',
     this.isOwner = false,
+    this.ownerUserId = '',
   });
+
+  static List<String> _strList(dynamic raw, {bool keepEmpty = false}) {
+    final out = <String>[];
+    if (raw is List) {
+      for (final e in raw) {
+        final s = e?.toString() ?? '';
+        if (s.isNotEmpty || keepEmpty) out.add(s);
+      }
+    }
+    return out;
+  }
+
+  /// 图片列表：fileID 与临时链接按下标配对。
+  List<BlessingImage> get imageList {
+    final out = <BlessingImage>[];
+    final n = images.length > imageUrls.length ? images.length : imageUrls.length;
+    for (var i = 0; i < n; i++) {
+      final id = i < images.length ? images[i] : '';
+      final url = i < imageUrls.length ? imageUrls[i] : '';
+      if (id.isEmpty && url.isEmpty) continue;
+      out.add(BlessingImage(id: id.isEmpty ? url : id, url: url));
+    }
+    return out;
+  }
 
   factory BlessingProject.fromJson(Map<String, dynamic> m) {
     final rawMethods = m['methods'];
@@ -70,6 +121,8 @@ class BlessingProject {
         if (e is Map) methods.add(BlessingMethod.fromJson(e.cast<String, dynamic>()));
       }
     }
+    final images = _strList(m['images']);
+    final imageUrls = _strList(m['imageUrls'], keepEmpty: true);
     return BlessingProject(
       id: (m['_id'] ?? m['id'] ?? '').toString(),
       title: (m['title'] ?? '').toString(),
@@ -81,12 +134,18 @@ class BlessingProject {
           : int.tryParse('${m['totalDays']}') ?? 0,
       startDate: (m['startDate'] ?? '').toString(),
       methods: methods,
+      images: images,
+      imageUrls: imageUrls,
+      imageCount: m['imageCount'] is num
+          ? (m['imageCount'] as num).toInt()
+          : (imageUrls.isNotEmpty ? imageUrls.length : images.length),
       visibility: (m['visibility'] ?? 'public').toString(),
       joinerCount: m['joinerCount'] is num
           ? (m['joinerCount'] as num).toInt()
           : int.tryParse('${m['joinerCount']}') ?? 0,
       status: (m['status'] ?? 'normal').toString(),
       isOwner: m['isOwner'] == true,
+      ownerUserId: (m['ownerUserId'] ?? '').toString(),
     );
   }
 
@@ -231,6 +290,7 @@ class BlessingService {
     int totalDays = 7,
     String startDate = '',
     List<BlessingMethod> methods = const [],
+    List<String> images = const [],
     bool isPrivate = false,
   }) async {
     final res = await _svc.callApi('createBlessing', params: {
@@ -241,6 +301,7 @@ class BlessingService {
       'totalDays': totalDays,
       'startDate': startDate.isEmpty ? today() : startDate,
       'methods': methods.map((e) => e.toJson()).toList(),
+      'images': images,
       'visibility': isPrivate ? 'private' : 'public',
     });
     return (res['id'] ?? '').toString();
@@ -255,6 +316,7 @@ class BlessingService {
     int? totalDays,
     String? startDate,
     List<BlessingMethod>? methods,
+    List<String>? images,
     bool? isPrivate,
   }) async {
     await _svc.callApi('updateBlessing', params: {
@@ -266,8 +328,19 @@ class BlessingService {
       if (totalDays != null) 'totalDays': totalDays,
       if (startDate != null) 'startDate': startDate,
       if (methods != null) 'methods': methods.map((e) => e.toJson()).toList(),
+      if (images != null) 'images': images,
       if (isPrivate != null) 'visibility': isPrivate ? 'private' : 'public',
     });
+  }
+
+  /// 上传一张祈福图片（客户端已压缩），返回云存储 fileID。
+  Future<String> uploadImage(Uint8List bytes) async {
+    final res = await _svc.callApi(
+      'uploadBlessingImage',
+      params: {'data': base64Encode(bytes)},
+      timeout: const Duration(seconds: 30),
+    );
+    return (res['fileId'] ?? '').toString();
   }
 
   Future<void> delete(String id) async {

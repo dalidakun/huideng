@@ -1,15 +1,27 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
+import 'package:image_picker_android/image_picker_android.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 
 import 'app_palette.dart';
+import 'blessing_image_cache.dart';
 import 'blessing_service.dart';
 import 'blessing_templates.dart';
+import 'cloud_notes_service.dart';
+import 'post_time_link.dart';
+import 'user_space_page.dart';
 
 // ─────────────────────────── 通用小组件 ───────────────────────────
 
 Widget _dragHandle(PaletteData p) {
   return Padding(
-    padding: const EdgeInsets.only(top: 10),
+    padding: const EdgeInsets.only(top: 14, bottom: 10),
     child: Center(
       child: Container(
         width: 40,
@@ -96,6 +108,37 @@ DateTime? _parseYmd(String s) {
   return DateTime(y, m, d);
 }
 
+/// 祈福是否已完成或已过期（归入「已完成」列表）。
+bool _isBlessingOver(BlessingItem item) {
+  if (item.progress?.isDone == true) return true;
+  final proj = item.project;
+  if (proj.status == 'closed') return true;
+  final start = _parseYmd(proj.startDate);
+  if (start == null || proj.totalDays <= 0) return false;
+  final end = start.add(Duration(days: proj.totalDays));
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  return !today.isBefore(end);
+}
+
+/// 后台线程压缩祈福图片：最长边 1280、JPEG 80，返回 null 表示无法解码。
+Uint8List? _compressBlessingImage(Uint8List bytes) {
+  try {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return null;
+    var im = decoded;
+    const maxSide = 1280;
+    if (im.width > maxSide || im.height > maxSide) {
+      im = im.width >= im.height
+          ? img.copyResize(im, width: maxSide)
+          : img.copyResize(im, height: maxSide);
+    }
+    return Uint8List.fromList(img.encodeJpg(im, quality: 80));
+  } catch (_) {
+    return null;
+  }
+}
+
 // ─────────────────────────── 新建 / 编辑抽屉 ───────────────────────────
 
 /// 打开祈福编辑抽屉。保存成功返回 true；取消返回 null。
@@ -124,20 +167,42 @@ class _BlessingEditor extends StatefulWidget {
   State<_BlessingEditor> createState() => _BlessingEditorState();
 }
 
+/// 编辑中的一张图片：已存图有 fileId/url，新选图有本地字节。
+class _EditorImage {
+  String? fileId;
+  final String? url;
+  final Uint8List? bytes;
+
+  _EditorImage({this.fileId, this.url, this.bytes});
+}
+
 class _MethodRow {
   final BlessingMethodOption? option;
   final String name;
   final String unit;
+  final TextEditingController? detail;
   bool on;
   final TextEditingController count;
 
   _MethodRow(this.option,
-      {this.on = false, String? name, String? unit, String? count})
+      {this.on = false,
+      String? name,
+      String? unit,
+      String? count,
+      String? detail})
       : name = name ?? option?.category ?? '',
         unit = unit ?? option?.unit ?? '',
+        detail = (option != null && option.names.isNotEmpty)
+            ? TextEditingController(
+                text: (detail != null && detail.trim().isNotEmpty)
+                    ? detail
+                    : option.names.first)
+            : null,
         count = TextEditingController(text: count ?? option?.defaultCount ?? '1');
 
   bool get isCustom => option == null;
+  List<String> get names => option?.names ?? const [];
+  String get detailText => detail?.text.trim() ?? '';
 }
 
 class _CustomMethodResult {
@@ -250,6 +315,10 @@ class _BlessingEditorState extends State<_BlessingEditor> {
   late final TextEditingController _daysCtrl;
   late final List<_MethodRow> _methods;
   final List<_MethodRow> _dropped = [];
+  final List<_EditorImage> _images = [];
+  bool _pickingImages = false;
+  String? _imageError;
+  static const int _maxImages = 3;
   late String _startDate;
   late int _groupIndex;
   String _templateKey = '';
@@ -257,7 +326,6 @@ class _BlessingEditorState extends State<_BlessingEditor> {
   bool _secTemplate = true;
   bool _secDays = false;
   bool _secMethods = false;
-  bool _secDedication = false;
 
   @override
   void initState() {
@@ -283,8 +351,15 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           break;
         }
       }
+      final detail = (hit != null &&
+              hit.name.isNotEmpty &&
+              hit.name != o.category)
+          ? hit.name
+          : null;
       _methods.add(_MethodRow(o,
-          on: hit != null, count: hit?.count ?? o.defaultCount));
+          on: hit != null,
+          count: hit?.count ?? o.defaultCount,
+          detail: detail));
     }
     for (final m in existing) {
       final nm = m.name.isNotEmpty ? m.name : m.category;
@@ -294,37 +369,33 @@ class _BlessingEditorState extends State<_BlessingEditor> {
       _methods.add(_MethodRow(null,
           on: true, name: nm, unit: m.unit, count: m.count));
     }
-    // 手动改事由时，同步刷新模板 chip 的选中态与折叠区的摘要。
-    _titleCtrl.addListener(_onTitleChanged);
-    _targetCtrl.addListener(_onTitleChanged);
-    _dedicationCtrl.addListener(_onTitleChanged);
-  }
-
-  void _onTitleChanged() {
-    if (mounted) setState(() {});
+    for (final im in it?.imageList ?? const <BlessingImage>[]) {
+      _images.add(_EditorImage(
+        fileId: im.id,
+        url: im.hasUrl ? im.url : null,
+      ));
+    }
   }
 
   @override
   void dispose() {
-    _titleCtrl.removeListener(_onTitleChanged);
-    _targetCtrl.removeListener(_onTitleChanged);
-    _dedicationCtrl.removeListener(_onTitleChanged);
     _titleCtrl.dispose();
     _targetCtrl.dispose();
     _dedicationCtrl.dispose();
     _daysCtrl.dispose();
     for (final m in _methods) {
       m.count.dispose();
+      m.detail?.dispose();
     }
     for (final m in _dropped) {
       m.count.dispose();
+      m.detail?.dispose();
     }
     super.dispose();
   }
 
   void _applyTemplate(BlessingTemplate t) {
     setState(() {
-      _titleCtrl.text = t.title;
       _targetCtrl.text = t.target;
       _dedicationCtrl.text = t.dedication;
       _templateKey = t.title;
@@ -355,10 +426,13 @@ class _BlessingEditorState extends State<_BlessingEditor> {
   List<BlessingMethod> _collectMethods() {
     final out = <BlessingMethod>[];
     for (final m in _methods) {
-      if (!m.on || m.name.trim().isEmpty) continue;
+      if (!m.on) continue;
+      final category = m.isCustom ? '' : m.name.trim();
+      final detail = m.isCustom ? m.name.trim() : m.detailText;
+      if (category.isEmpty && detail.isEmpty) continue;
       out.add(BlessingMethod(
-        category: m.isCustom ? '' : m.name.trim(),
-        name: m.isCustom ? m.name.trim() : '',
+        category: category,
+        name: detail,
         count: m.count.text.trim(),
         unit: m.unit,
       ));
@@ -386,6 +460,135 @@ class _BlessingEditorState extends State<_BlessingEditor> {
     });
   }
 
+  int? _androidSdkInt() {
+    final version = Platform.operatingSystemVersion;
+    final api = RegExp(r'API\s*(\d+)').firstMatch(version)?.group(1);
+    if (api != null) return int.tryParse(api);
+    final major = int.tryParse(
+        RegExp(r'Android\s+(\d+)').firstMatch(version)?.group(1) ?? '');
+    if (major == null) return null;
+    const byVersion = {
+      4: 19,
+      5: 21,
+      6: 23,
+      7: 24,
+      8: 26,
+      9: 28,
+      10: 29,
+      11: 30,
+      12: 31,
+      13: 33,
+      14: 34,
+      15: 35,
+      16: 36,
+    };
+    return byVersion[major];
+  }
+
+  Future<List<XFile>> _invokeImagePicker(ImagePicker picker, int remain) async {
+    if (remain == 1) {
+      final one = await picker.pickImage(
+        source: ImageSource.gallery,
+        requestFullMetadata: false,
+      );
+      return one == null ? const <XFile>[] : <XFile>[one];
+    }
+    return picker.pickMultiImage(
+      limit: remain,
+      maxWidth: 2560,
+      maxHeight: 2560,
+      imageQuality: 90,
+      requestFullMetadata: false,
+    );
+  }
+
+  Future<void> _pickImages() async {
+    if (_pickingImages || _saving) return;
+    final remain = _maxImages - _images.length;
+    if (remain <= 0) {
+      _showImageError('最多添加 $_maxImages 张图片');
+      return;
+    }
+    setState(() {
+      _pickingImages = true;
+      _imageError = null;
+    });
+    await BlessingImageCache.hidePickerCache();
+    try {
+      final picker = ImagePicker();
+      final platform = ImagePickerPlatform.instance;
+      final isAndroid = platform is ImagePickerAndroid;
+      // 优先使用系统相册选择器：它直接打开相册并能在选择器中限制最多 3 张，
+      // 不会像旧的文件选择器那样进入文件夹。Android 11+ 支持相册选择器。
+      final sdk = isAndroid ? _androidSdkInt() : null;
+      final usePhotoPicker = isAndroid && (sdk ?? 0) >= 30;
+      if (isAndroid) platform.useAndroidPhotoPicker = usePhotoPicker;
+      final started = DateTime.now();
+      List<XFile> picked;
+      try {
+        picked = await _invokeImagePicker(picker, remain);
+      } catch (e) {
+        debugPrint('Blessing image picker (photo picker) failed: $e');
+        // 部分机型没有系统相册选择器，回退到普通相册。
+        if (isAndroid) {
+          platform.useAndroidPhotoPicker = false;
+          picked = await _invokeImagePicker(picker, remain);
+        } else {
+          rethrow;
+        }
+      }
+      if (picked.isEmpty &&
+          usePhotoPicker &&
+          DateTime.now().difference(started) <
+              const Duration(milliseconds: 900)) {
+        // 系统选择器声明存在但实际没弹出，改用普通相册。
+        if (isAndroid) platform.useAndroidPhotoPicker = false;
+        picked = await _invokeImagePicker(picker, remain);
+      }
+      if (!mounted) return;
+      if (picked.isEmpty) return;
+      if (picked.length > remain) {
+        _showImageError('最多还能添加 $remain 张，请重新选择');
+        return;
+      }
+      var added = 0;
+      for (final f in picked) {
+        if (added >= remain) break;
+        final raw = await f.readAsBytes();
+        if (raw.isEmpty) continue;
+        final out = await compute(_compressBlessingImage, raw);
+        if (out == null) continue;
+        if (out.length > 2 * 1024 * 1024) {
+          if (mounted) _showImageError('图片过大，请换一张');
+          continue;
+        }
+        if (!mounted) return;
+        setState(() {
+          _images.add(_EditorImage(bytes: out));
+          added++;
+        });
+      }
+      if (added == 0 && mounted) _showImageError('未能添加图片，请重试');
+    } catch (e, st) {
+      debugPrint('Blessing image picker failed: $e\n$st');
+      if (!mounted) return;
+      setState(() => _imageError = '选择图片失败，请重试');
+      _toast(context, '选择图片失败：$e');
+    } finally {
+      if (mounted) setState(() => _pickingImages = false);
+    }
+  }
+
+  void _showImageError(String message) {
+    if (!mounted) return;
+    setState(() => _imageError = message);
+  }
+
+  void _removeImage(int index) {
+    if (_saving || _pickingImages) return;
+    setState(() => _images.removeAt(index));
+  }
+
   Future<void> _submit() async {
     if (_saving) return;
     final title = _titleCtrl.text.trim();
@@ -397,6 +600,17 @@ class _BlessingEditorState extends State<_BlessingEditor> {
     setState(() => _saving = true);
     try {
       final methods = _collectMethods();
+      final imageIds = <String>[];
+      for (final im in _images) {
+        var fid = im.fileId;
+        if (fid == null || fid.isEmpty) {
+          if (im.bytes == null) continue;
+          fid = await BlessingService.instance.uploadImage(im.bytes!);
+          if (fid.isEmpty) throw Exception('图片上传失败');
+          im.fileId = fid;
+        }
+        imageIds.add(fid);
+      }
       final it = widget.initial;
       if (it == null) {
         await BlessingService.instance.create(
@@ -407,6 +621,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           totalDays: days,
           startDate: _startDate,
           methods: methods,
+          images: imageIds,
           isPrivate: false,
         );
       } else {
@@ -419,6 +634,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           totalDays: days,
           startDate: _startDate,
           methods: methods,
+          images: imageIds,
           isPrivate: false,
         );
       }
@@ -470,22 +686,6 @@ class _BlessingEditorState extends State<_BlessingEditor> {
                   onToggle: () => setState(() => _secMethods = !_secMethods),
                   child: _methodsContent(p),
                 ),
-                _fold(
-                  p,
-                  title: '回向文',
-                  summary:
-                      _dedicationCtrl.text.trim().isEmpty ? '未填写' : '已填写',
-                  open: _secDedication,
-                  onToggle: () =>
-                      setState(() => _secDedication = !_secDedication),
-                  child: TextField(
-                    controller: _dedicationCtrl,
-                    minLines: 3,
-                    maxLines: 8,
-                    style: TextStyle(fontSize: 14, color: p.text, height: 1.6),
-                    decoration: _fieldDecoration(p, '愿以此功课功德，回向……'),
-                  ),
-                ),
                 const SizedBox(height: 18),
                 _sectionLabel(p, '祈福事由'),
                 const SizedBox(height: 8),
@@ -506,6 +706,43 @@ class _BlessingEditorState extends State<_BlessingEditor> {
                     hintStyle: TextStyle(fontSize: 13, color: p.textHint),
                   ),
                 ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    _sectionLabel(p, '图片'),
+                    const SizedBox(width: 8),
+                    Text('${_images.length}/$_maxImages',
+                        style: TextStyle(fontSize: 11, color: p.textHint)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (var i = 0; i < _images.length; i++) _imageThumb(p, i),
+                    if (_images.length < _maxImages) _addImageTile(p),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (_imageError != null) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.error_outline, size: 13, color: p.primary),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(_imageError!,
+                            style: TextStyle(
+                                fontSize: 11.5,
+                                color: p.primary,
+                                height: 1.4)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                ],
+                _hint(p, '最多 3 张，公开祈福的图片对社区可见'),
               ],
             ),
           ),
@@ -567,6 +804,88 @@ class _BlessingEditorState extends State<_BlessingEditor> {
                 : const Text('保存', style: TextStyle(fontSize: 13)),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _imageThumb(PaletteData p, int index) {
+    final im = _images[index];
+    Widget content;
+    if (im.bytes != null) {
+      content = Image.memory(im.bytes!,
+          fit: BoxFit.cover, gaplessPlayback: true);
+    } else if (im.url != null && im.url!.isNotEmpty) {
+      content = Image.network(
+        im.url!,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Container(
+          color: AppPalette.instance.isPlain ? const Color(0xFFF5F5F5) : p.tintBg,
+          child: Icon(Icons.broken_image_outlined, size: 20, color: p.textHint),
+        ),
+      );
+    } else {
+      content = Container(
+        color: AppPalette.instance.isPlain ? const Color(0xFFF5F5F5) : p.tintBg,
+        child: Icon(Icons.image_outlined, size: 20, color: p.textHint),
+      );
+    }
+    return Stack(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(width: 76, height: 76, child: content),
+        ),
+        Positioned(
+          top: 3,
+          right: 3,
+          child: InkWell(
+            onTap: () => _removeImage(index),
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.close, size: 12, color: Colors.white),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _addImageTile(PaletteData p) {
+    final busy = _pickingImages || _saving;
+    return InkWell(
+      onTap: busy ? null : _pickImages,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 76,
+        height: 76,
+        decoration: BoxDecoration(
+          color: AppPalette.instance.isPlain ? const Color(0xFFF5F5F5) : p.tintBg,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: _pickingImages
+            ? Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: p.primary),
+                ),
+              )
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.add_photo_alternate_outlined,
+                      size: 22, color: p.textSec),
+                  const SizedBox(height: 4),
+                  Text('添加图片',
+                      style: TextStyle(fontSize: 10, color: p.textHint)),
+                ],
+              ),
       ),
     );
   }
@@ -694,7 +1013,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _hint(p, '勾选每日要做的功课，也可自定义添加。'),
+        _hint(p, '勾选每日要做的功课，填写具体内容；也可自定义添加。'),
         const SizedBox(height: 6),
         _buildMethodRows(p),
         const SizedBox(height: 8),
@@ -755,7 +1074,6 @@ class _BlessingEditorState extends State<_BlessingEditor> {
 
   Widget _templateContent(PaletteData p) {
     final group = kBlessingGroups[_groupIndex];
-    final currentTitle = _titleCtrl.text.trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -776,7 +1094,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           runSpacing: 10,
           children: [
             for (final t in group.templates)
-              _templateChip(p, t, currentTitle == t.title.trim()),
+              _templateChip(p, t, _templateKey == t.title),
           ],
         ),
         const SizedBox(height: 16),
@@ -790,6 +1108,20 @@ class _BlessingEditorState extends State<_BlessingEditor> {
           controller: _targetCtrl,
           style: TextStyle(fontSize: 14, color: p.text),
           decoration: _fieldDecoration(p, '如：我的父母 / 灾区同胞 / 法界众生'),
+        ),
+        const SizedBox(height: 16),
+        Text('回向文',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: p.textHint)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _dedicationCtrl,
+          minLines: 3,
+          maxLines: 8,
+          style: TextStyle(fontSize: 14, color: p.text, height: 1.6),
+          decoration: _fieldDecoration(p, '愿以此功课功德，回向……'),
         ),
       ],
     );
@@ -867,7 +1199,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
       children: [
         for (final m in _methods)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
               children: [
                 SizedBox(
@@ -880,44 +1212,106 @@ class _BlessingEditorState extends State<_BlessingEditor> {
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       visualDensity: VisualDensity.compact,
                       side: const BorderSide(width: 1.4),
-                      onChanged: (v) => setState(() => m.on = v ?? false),
+                      onChanged: (v) {
+                        setState(() {
+                          m.on = v ?? false;
+                          final d = m.detail;
+                          if (m.on &&
+                              d != null &&
+                              d.text.trim().isEmpty &&
+                              m.names.isNotEmpty) {
+                            d.text = m.names.first;
+                          }
+                        });
+                      },
                     ),
                   ),
                 ),
-                Expanded(
-                  child: Text('${m.name}（${m.unit}）',
-                      style: TextStyle(fontSize: 14, color: p.text)),
-                ),
+                const SizedBox(width: 4),
+                if (m.isCustom)
+                  Expanded(
+                    child: Text(m.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 13.5, color: p.text)),
+                  )
+                else
+                  Text(m.name,
+                      style: TextStyle(fontSize: 13.5, color: p.text)),
+                const SizedBox(width: 6),
+                if (!m.isCustom && m.names.isNotEmpty)
+                  Expanded(child: _methodDetailField(p, m))
+                else
+                  const Spacer(),
                 if (m.isCustom)
                   GestureDetector(
                     onTap: () => _removeMethod(m),
                     behavior: HitTestBehavior.opaque,
                     child: Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Icon(Icons.close, size: 15, color: p.textHint),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Icon(Icons.close, size: 14, color: p.textHint),
                     ),
                   ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 2),
+                Text('×',
+                    style: TextStyle(fontSize: 12, color: p.textHint)),
+                const SizedBox(width: 4),
                 SizedBox(
-                  width: 88,
+                  width: 52,
                   child: TextField(
                     controller: m.count,
                     enabled: m.on,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: p.text),
+                    style: TextStyle(fontSize: 13, color: p.text),
                     decoration: _fieldDecoration(p, '数量').copyWith(
                       isDense: true,
                       contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                          const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
                     ),
                   ),
                 ),
+                const SizedBox(width: 4),
+                Text(m.unit,
+                    style: TextStyle(fontSize: 12, color: p.textSec)),
               ],
             ),
           ),
       ],
+    );
+  }
+
+  Widget _methodDetailField(PaletteData p, _MethodRow m) {
+    return TextField(
+      controller: m.detail,
+      enabled: m.on,
+      style: TextStyle(fontSize: 12.5, color: p.text),
+      decoration: _fieldDecoration(p, '具体内容').copyWith(
+        isDense: true,
+        contentPadding: const EdgeInsets.fromLTRB(8, 9, 0, 9),
+        suffixIcon: m.on
+            ? PopupMenuButton<String>(
+                padding: EdgeInsets.zero,
+                tooltip: '选择常见内容',
+                icon: Icon(Icons.arrow_drop_down,
+                    size: 18, color: p.textHint),
+                onSelected: (v) => setState(() {
+                  m.detail?.text = v;
+                }),
+                itemBuilder: (_) => [
+                  for (final n in m.names)
+                    PopupMenuItem<String>(
+                      value: n,
+                      child: Text(n,
+                          style: TextStyle(fontSize: 13, color: p.text)),
+                    ),
+                ],
+              )
+            : null,
+        suffixIconConstraints:
+            const BoxConstraints(minWidth: 26, minHeight: 26),
+      ),
     );
   }
 }
@@ -933,7 +1327,7 @@ class BlessingPage extends StatefulWidget {
 
 class _BlessingPageState extends State<BlessingPage>
     with SingleTickerProviderStateMixin {
-  late final TabController _tab = TabController(length: 2, vsync: this);
+  late final TabController _tab = TabController(length: 3, vsync: this);
 
   bool _loadingMine = true;
   bool _loadingComm = true;
@@ -942,6 +1336,20 @@ class _BlessingPageState extends State<BlessingPage>
   List<BlessingItem> _mine = [];
   List<BlessingItem> _comm = [];
   final Set<String> _busy = {};
+
+  List<BlessingItem> get _created =>
+      _mine.where((it) => it.project.isOwner && !_isBlessingOver(it)).toList();
+
+  List<BlessingItem> get _joined =>
+      _mine.where((it) => !_isBlessingOver(it)).toList();
+
+  List<BlessingItem> get _more {
+    final mineIds = _mine.map((it) => it.project.id).toSet();
+    return _comm
+        .where((it) =>
+            !mineIds.contains(it.project.id) && !_isBlessingOver(it))
+        .toList();
+  }
 
   @override
   void initState() {
@@ -1052,6 +1460,17 @@ class _BlessingPageState extends State<BlessingPage>
     }
   }
 
+  Future<void> _openFinished() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const _BlessingArchivePage()),
+    );
+    if (mounted) {
+      _loadMine();
+      _loadComm();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.p;
@@ -1060,22 +1479,39 @@ class _BlessingPageState extends State<BlessingPage>
       appBar: AppBar(
         backgroundColor: p.bg,
         elevation: 0,
-        title: Text('祈福共修',
+        title: Text('祈福',
             style: TextStyle(
-                color: p.text, fontSize: 18, fontWeight: FontWeight.w600)),
+                color: p.text, fontSize: 16, fontWeight: FontWeight.w600)),
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: p.text),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: IconButton(
+              tooltip: '已完成祈福',
+              onPressed: _openFinished,
+              icon: Icon(Icons.check_circle_outline,
+                  size: 22, color: p.primary),
+            ),
+          ),
+        ],
         bottom: TabBar(
           controller: _tab,
           indicatorColor: p.primary,
           labelColor: p.primary,
           unselectedLabelColor: p.textSec,
+          dividerColor: p.border.withValues(alpha: 0.5),
+          dividerHeight: 0.8,
           labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           unselectedLabelStyle:
               const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-          tabs: const [Tab(text: '我的祈福'), Tab(text: '社区共修')],
+          tabs: const [
+            Tab(text: '我发起'),
+            Tab(text: '我参与'),
+            Tab(text: '更多'),
+          ],
         ),
       ),
       body: TabBarView(
@@ -1084,30 +1520,48 @@ class _BlessingPageState extends State<BlessingPage>
           _buildList(
             loading: _loadingMine,
             error: _mineErr,
-            items: _mine,
-            emptyTitle: '还没有祈福',
+            items: _created,
+            emptyTitle: '还没有发起的祈福',
             emptyDesc: '发起一个祈福，把每日功课回向于此',
+            onRetry: _loadMine,
+            builder: (it) => _mineCard(p, it),
+          ),
+          _buildList(
+            loading: _loadingMine,
+            error: _mineErr,
+            items: _joined,
+            emptyTitle: '还没有参与的祈福',
+            emptyDesc: '参与一个祈福，与大家一同回向',
             onRetry: _loadMine,
             builder: (it) => _mineCard(p, it),
           ),
           _buildList(
             loading: _loadingComm,
             error: _commErr,
-            items: _comm,
-            emptyTitle: '暂无共修祈福',
+            items: _more,
+            emptyTitle: '暂无更多祈福',
             emptyDesc: '发起一个公开祈福，与大家一同祈愿',
             onRetry: _loadComm,
             builder: (it) => _commCard(p, it),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _create,
-        backgroundColor: p.primary,
-        foregroundColor: Colors.white,
-        heroTag: 'blessing_fab',
-        shape: const CircleBorder(),
-        child: const Icon(Icons.add, size: 24),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: FloatingActionButton(
+            onPressed: _create,
+            backgroundColor: p.primary,
+            foregroundColor: Colors.white,
+            elevation: 8,
+            highlightElevation: 12,
+            heroTag: 'blessing_fab',
+            shape: const CircleBorder(),
+            child: const Icon(Icons.add, size: 21),
+          ),
+        ),
       ),
     );
   }
@@ -1255,7 +1709,7 @@ class _BlessingPageState extends State<BlessingPage>
           const SizedBox(height: 12),
           Row(
             children: [
-              Text('第 ${prog.doneCount}/${proj.totalDays} 天',
+              Text('已祈福 ${prog.doneCount} 天 / 共 ${proj.totalDays} 天',
                   style: TextStyle(fontSize: 12.5, color: p.textSec)),
               const Spacer(),
               if (!done)
@@ -1306,12 +1760,12 @@ class _BlessingPageState extends State<BlessingPage>
             children: [
               Icon(Icons.groups_outlined, size: 15, color: p.textSec),
               const SizedBox(width: 5),
-              Text('已有 ${proj.joinerCount} 人共修',
+              Text('已有 ${proj.joinerCount} 人祈福',
                   style: TextStyle(fontSize: 12.5, color: p.textSec)),
               const Spacer(),
               _actionButton(
                 p,
-                joined ? '已参与' : '参与共修',
+                joined ? '已参与' : '参与祈福',
                 outline: !joined,
                 enabled: !_busy.contains(proj.id),
                 onTap: () => _toggleJoin(it),
@@ -1337,15 +1791,176 @@ class _BlessingPageState extends State<BlessingPage>
       child: GestureDetector(
         onTap: enabled ? onTap : null,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(15),
             border: Border.all(color: p.primary),
           ),
           child: Text(label,
               style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: fg)),
+                  fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+        ),
+      ),
+    );
+  }
+}
+
+class _BlessingArchivePage extends StatefulWidget {
+  const _BlessingArchivePage();
+
+  @override
+  State<_BlessingArchivePage> createState() => _BlessingArchivePageState();
+}
+
+class _BlessingArchivePageState extends State<_BlessingArchivePage> {
+  bool _loading = true;
+  String? _error;
+  List<BlessingItem> _items = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final list = await BlessingService.instance.listMine();
+      if (!mounted) return;
+      final items = list.where(_isBlessingOver).toList()
+        ..sort((a, b) => b.project.startDate.compareTo(a.project.startDate));
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return Scaffold(
+      backgroundColor: p.bg,
+      appBar: AppBar(
+        backgroundColor: p.bg,
+        elevation: 0,
+        title: Text('已完成祈福',
+            style: TextStyle(
+                color: p.text, fontSize: 16, fontWeight: FontWeight.w600)),
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, color: p.text),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: _buildBody(p),
+    );
+  }
+
+  Widget _buildBody(PaletteData p) {
+    if (_loading) {
+      return Center(
+        child: SizedBox(
+          width: 26,
+          height: 26,
+          child: CircularProgressIndicator(strokeWidth: 2.4, color: p.accent),
+        ),
+      );
+    }
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_error!, style: TextStyle(fontSize: 13, color: p.textSec)),
+            const SizedBox(height: 10),
+            OutlinedButton(onPressed: _load, child: const Text('重试')),
+          ],
+        ),
+      );
+    }
+    if (_items.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.check_circle_outline, size: 42, color: p.border),
+            const SizedBox(height: 12),
+            Text('暂无已完成祈福',
+                style: TextStyle(fontSize: 15, color: p.textSec)),
+            const SizedBox(height: 6),
+            Text('圆满或过期的祈福会收录在这里',
+                style: TextStyle(fontSize: 13, color: p.textHint)),
+          ],
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
+      itemCount: _items.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _card(p, _items[i]),
+    );
+  }
+
+  Widget _card(PaletteData p, BlessingItem it) {
+    final proj = it.project;
+    final prog = it.progress;
+    final done = prog?.isDone == true;
+    return Material(
+      color: p.card,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () async {
+          await Navigator.push(context,
+              MaterialPageRoute(builder: (_) => BlessingDetailPage(id: proj.id)));
+          if (mounted) _load();
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(proj.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: p.text)),
+                  ),
+                  const SizedBox(width: 6),
+                  _tag(p, done ? '已圆满' : '已过期',
+                      color: done ? p.accent : p.textHint),
+                ],
+              ),
+              if (proj.target.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text('回向：${proj.target}',
+                    style: TextStyle(fontSize: 12.5, color: p.textSec)),
+              ],
+              const SizedBox(height: 10),
+              Text(
+                '${proj.startDate} 起 · ${proj.totalDays} 天'
+                '${prog != null ? ' · 已祈福 ${prog.doneCount} 天' : ''}',
+                style: TextStyle(fontSize: 12.5, color: p.textSec),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1353,6 +1968,290 @@ class _BlessingPageState extends State<BlessingPage>
 }
 
 // ─────────────────────────── 详情页 ───────────────────────────
+
+Widget _blessingImageGrid(
+    BuildContext context, PaletteData p, List<BlessingImage> images) {
+  final imgs = images.where((e) => e.id.isNotEmpty || e.hasUrl).toList();
+  if (imgs.isEmpty) return const SizedBox.shrink();
+  if (imgs.length == 1) {
+    return _blessingImageTile(context, p, imgs, 0,
+        width: double.infinity, height: 210);
+  }
+  final h = imgs.length == 2 ? 140.0 : 104.0;
+  return Row(
+    children: [
+      for (var i = 0; i < imgs.length; i++) ...[
+        if (i > 0) const SizedBox(width: 8),
+        Expanded(child: _blessingImageTile(context, p, imgs, i, height: h)),
+      ],
+    ],
+  );
+}
+
+Widget _blessingImageTile(
+  BuildContext context,
+  PaletteData p,
+  List<BlessingImage> images,
+  int index, {
+  double? width,
+  required double height,
+}) {
+  final im = images[index];
+  return GestureDetector(
+    onTap: () => _showBlessingImageViewer(context, images, index),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: width,
+        height: height,
+        color: p.tintBg,
+        child: _BlessingCachedImage(fileId: im.id, url: im.url),
+      ),
+    ),
+  );
+}
+
+/// 以 fileID 为缓存键的图片，临时链接变化时仍能命中本地缓存。
+class _BlessingCachedImage extends StatefulWidget {
+  final String fileId;
+  final String url;
+  final BoxFit fit;
+
+  const _BlessingCachedImage({
+    required this.fileId,
+    required this.url,
+    this.fit = BoxFit.cover,
+  });
+
+  @override
+  State<_BlessingCachedImage> createState() => _BlessingCachedImageState();
+}
+
+class _BlessingCachedImageState extends State<_BlessingCachedImage> {
+  late Future<File?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BlessingCachedImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.fileId != widget.fileId || oldWidget.url != widget.url) {
+      _start();
+    }
+  }
+
+  void _start() {
+    _future = BlessingImageCache.instance.get(widget.fileId, widget.url);
+  }
+
+  Widget _network(PaletteData p) {
+    if (widget.url.isEmpty) {
+      return Center(
+        child: Icon(Icons.broken_image_outlined, size: 24, color: p.textHint),
+      );
+    }
+    return Image.network(
+      widget.url,
+      fit: widget.fit,
+      loadingBuilder: (_, child, progress) {
+        if (progress == null) return child;
+        return Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: p.primary),
+          ),
+        );
+      },
+      errorBuilder: (_, __, ___) => Center(
+        child:
+            Icon(Icons.broken_image_outlined, size: 24, color: p.textHint),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.p;
+    return FutureBuilder<File?>(
+      future: _future,
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.done) {
+          final file = snap.data;
+          if (file != null) {
+            return Image.file(
+              file,
+              fit: widget.fit,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => _network(p),
+            );
+          }
+          return _network(p);
+        }
+        return Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: p.primary),
+          ),
+        );
+      },
+    );
+  }
+}
+
+void _showBlessingImageViewer(
+    BuildContext context, List<BlessingImage> images, int index) {
+  showDialog<void>(
+    context: context,
+    barrierColor: Colors.black,
+    builder: (ctx) => Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: EdgeInsets.zero,
+      child: _BlessingImageViewer(images: images, initialIndex: index),
+    ),
+  );
+}
+
+class _BlessingImageViewer extends StatefulWidget {
+  final List<BlessingImage> images;
+  final int initialIndex;
+
+  const _BlessingImageViewer(
+      {required this.images, required this.initialIndex});
+
+  @override
+  State<_BlessingImageViewer> createState() => _BlessingImageViewerState();
+}
+
+/// 单张图片：未放大时把左右滑动交给 PageView，放大后可平移。
+class _BlessingZoomPage extends StatefulWidget {
+  final Widget child;
+
+  const _BlessingZoomPage({required this.child});
+
+  @override
+  State<_BlessingZoomPage> createState() => _BlessingZoomPageState();
+}
+
+class _BlessingZoomPageState extends State<_BlessingZoomPage> {
+  final TransformationController _ctrl = TransformationController();
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addListener(_onChanged);
+  }
+
+  void _onChanged() {
+    final z = _ctrl.value.getMaxScaleOnAxis() > 1.01;
+    if (z != _zoomed && mounted) setState(() => _zoomed = z);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.removeListener(_onChanged);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onDoubleTap: () {
+        _ctrl.value = _zoomed
+            ? Matrix4.identity()
+            : (Matrix4.identity()..scaleByDouble(2.0, 2.0, 2.0, 1.0));
+      },
+      child: InteractiveViewer(
+        transformationController: _ctrl,
+        panEnabled: _zoomed,
+        minScale: 1,
+        maxScale: 4,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+class _BlessingImageViewerState extends State<_BlessingImageViewer> {
+  late final PageController _page =
+      PageController(initialPage: widget.initialIndex);
+  late int _index = widget.initialIndex;
+
+  @override
+  void dispose() {
+    _page.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final n = widget.images.length;
+    return SizedBox.expand(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: PageView.builder(
+              controller: _page,
+              itemCount: n,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) {
+                final im = widget.images[i];
+                return _BlessingZoomPage(
+                  child: SizedBox.expand(
+                    child: _BlessingCachedImage(
+                      fileId: im.id,
+                      url: im.url,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                ),
+              ),
+            ),
+          ),
+          if (n > 1)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text('${_index + 1}/$n',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white70)),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 class BlessingDetailPage extends StatefulWidget {
   final String id;
@@ -1367,6 +2266,7 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
   bool _loading = true;
   String? _error;
   BlessingDetail? _detail;
+  UserProfile? _author;
   bool _busy = false;
 
   @override
@@ -1387,6 +2287,8 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
         _detail = d;
         _loading = false;
       });
+      final ownerId = d.project.ownerUserId;
+      if (ownerId.isNotEmpty) unawaited(_loadAuthor(ownerId));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1396,14 +2298,43 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
     }
   }
 
+  Future<void> _loadAuthor(String userId) async {
+    try {
+      final users =
+          await CloudNotesService.instance.getUserProfiles([userId]);
+      if (!mounted) return;
+      final hit = users.where((u) => u.id == userId);
+      setState(() => _author = hit.isEmpty ? null : hit.first);
+    } catch (_) {}
+  }
+
   Future<void> _bless() async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
       final res = await BlessingService.instance.blessToday(widget.id);
       if (!mounted) return;
+      final d = _detail;
+      if (d != null) {
+        final today = BlessingService.today();
+        final cur = d.progress;
+        final dates = <String>{...?cur?.doneDates, today}.toList()..sort();
+        setState(() {
+          _detail = BlessingDetail(
+            d.project,
+            BlessingProgress(
+              joined: true,
+              doneCount: res.doneCount,
+              status: res.status,
+              joinedAt: cur?.joinedAt ?? 0,
+              lastDate: today,
+              doneDates: dates,
+            ),
+            d.joinerCount,
+          );
+        });
+      }
       _toast(context, res.isDone ? '祈福圆满，随喜功德' : '今日祈福，功德已记');
-      await _load();
     } catch (e) {
       if (mounted) _toast(context, e.toString());
     } finally {
@@ -1435,6 +2366,32 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _confirmLeave() async {
+    final p = AppPalette.p;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.card,
+        title: Text('退出祈福？',
+            style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: p.text)),
+        content: Text('退出后将不再记录你的祈福进度。',
+            style: TextStyle(fontSize: 13, color: p.textSec, height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消', style: TextStyle(color: p.textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('退出', style: TextStyle(color: p.primary)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) await _leave();
   }
 
   Future<void> _edit() async {
@@ -1487,12 +2444,18 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
         elevation: 0,
         title: Text('祈福详情',
             style: TextStyle(
-                color: p.text, fontSize: 18, fontWeight: FontWeight.w600)),
+                color: p.text, fontSize: 16, fontWeight: FontWeight.w600)),
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: p.text),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
+          if (d?.progress?.joined == true)
+            IconButton(
+              tooltip: '退出祈福',
+              onPressed: _busy ? null : _confirmLeave,
+              icon: Icon(Icons.logout, size: 20, color: p.textSec),
+            ),
           if (d?.project.isOwner == true)
             PopupMenuButton<String>(
               icon: Icon(Icons.more_horiz, color: p.text),
@@ -1536,6 +2499,8 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
     final joined = prog?.joined == true;
     final done = prog?.isDone == true;
     final blessedToday = prog?.doneToday() ?? false;
+    final doneCount = prog?.doneCount ?? 0;
+    final images = proj.imageList.where((e) => e.id.isNotEmpty || e.hasUrl).toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
       children: [
@@ -1550,19 +2515,28 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
             children: [
               Text(proj.title,
                   style: TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.w700, color: p.text)),
-              const SizedBox(height: 10),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.8,
+                      height: 1.5,
+                      color: p.text.withValues(alpha: 0.82))),
+              if (images.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _blessingImageGrid(context, p, images),
+              ],
+              const SizedBox(height: 18),
+              if (_author != null) _authorRow(p, _author!),
               if (proj.target.isNotEmpty)
                 _kv(p, Icons.person_outline, '回向', proj.target),
-              _kv(p, Icons.groups_outlined, '共修', '已有 ${d.joinerCount} 人共修'),
-              _kv(p, Icons.event_outlined, '天数',
+              _kv(p, Icons.groups_outlined, '祈福', '已有 ${d.joinerCount} 人祈福'),
+              _kv(p, Icons.event_outlined, '周期',
                   '${proj.totalDays} 天 · 起于 ${proj.startDate}'),
             ],
           ),
         ),
         const SizedBox(height: 12),
         Container(
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
           decoration: BoxDecoration(
             color: p.card,
             borderRadius: BorderRadius.circular(16),
@@ -1570,149 +2544,242 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  _sectionLabel(p, '我的祈福'),
-                  const Spacer(),
-                  if (done) _tag(p, '已圆满'),
-                ],
-              ),
-              const SizedBox(height: 12),
-              if (!joined)
+              _barSection(
+                p,
                 Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _hint(p, '参与后即可每日祈福打卡，与大家一同回向。'),
-                    const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: _busy ? null : _join,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: p.primary,
-                        minimumSize: const Size(0, 46),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text('参与共修'),
+                    Row(
+                      children: [
+                        _detailSectionTitle(p, '我的祈福'),
+                        const Spacer(),
+                        if (done) _tag(p, '已圆满'),
+                      ],
                     ),
-                  ],
-                )
-              else ...[
-                Row(
-                  children: [
-                    Expanded(
-                      child: ClipRRect(
+                    const SizedBox(height: 10),
+                    if (!joined) ...[
+                      _hint(p, '参与后即可每日祈福，与大家一同回向。'),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: _compactJoinButton(p),
+                      ),
+                    ] else ...[
+                      ClipRRect(
                         borderRadius: BorderRadius.circular(3),
                         child: LinearProgressIndicator(
                           value: proj.totalDays <= 0
                               ? 0
-                              : ((prog?.doneCount ?? 0) / proj.totalDays)
-                                  .clamp(0.0, 1.0),
+                              : (doneCount / proj.totalDays).clamp(0.0, 1.0),
                           minHeight: 6,
                           backgroundColor: p.border,
                           valueColor: AlwaysStoppedAnimation<Color>(p.primary),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text('${prog?.doneCount ?? 0}/${proj.totalDays}',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: p.primary)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                                '已祈福 $doneCount 天 / 共 ${proj.totalDays} 天',
+                                style: TextStyle(
+                                    fontSize: 12, color: p.textSec)),
+                          ),
+                          if (!done) ...[
+                            const SizedBox(width: 8),
+                            _compactBlessButton(p, blessedToday),
+                          ],
+                        ],
+                      ),
+                    ],
                   ],
                 ),
-                const SizedBox(height: 14),
-                if (!done)
-                  FilledButton.icon(
-                    onPressed: (blessedToday || _busy) ? null : _bless,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: p.primary,
-                      disabledBackgroundColor: p.border,
-                      disabledForegroundColor: p.textHint,
-                      minimumSize: const Size(0, 46),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    icon: const Icon(Icons.spa_outlined, size: 18),
-                    label: Text(blessedToday ? '今日已祈福' : '今日祈福'),
-                  ),
-                if (proj.methods.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  _sectionLabel(p, '祈福方式'),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+              ),
+              if (proj.methods.isNotEmpty)
+                _barSection(
+                  p,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final m in proj.methods)
-                        if (m.label.isNotEmpty) _tag(p, m.label),
+                      _detailSectionTitle(p, '祈福方式'),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final m in proj.methods)
+                            if (m.label.isNotEmpty) _tag(p, m.label),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: _busy ? null : _leave,
-                    style: TextButton.styleFrom(
-                      foregroundColor: p.textSec,
-                      minimumSize: const Size(0, 34),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('退出共修'),
+                ),
+              if (proj.dedication.trim().isNotEmpty)
+                _barSection(
+                  p,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _detailSectionTitle(p, '回向文'),
+                      const SizedBox(height: 8),
+                      Text(proj.dedication,
+                          style: TextStyle(
+                              fontSize: 13.5, color: p.text, height: 1.7)),
+                    ],
                   ),
                 ),
-              ],
+              _barSection(
+                p,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _detailSectionTitle(p, '完成记录'),
+                    const SizedBox(height: 8),
+                    if (!joined)
+                      _hint(p, '参与后显示每日祈福记录。')
+                    else ...[
+                      if (prog!.doneDates.isEmpty)
+                        _hint(p, '尚无打卡记录。')
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final date in ([...prog.doneDates]..sort()))
+                              _tag(
+                                  p,
+                                  date.length >= 10
+                                      ? date.substring(5)
+                                      : date),
+                          ],
+                        ),
+                    ],
+                  ],
+                ),
+              ),
             ],
           ),
         ),
-        if (proj.dedication.trim().isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: p.card,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _sectionLabel(p, '回向文'),
-                const SizedBox(height: 10),
-                Text(proj.dedication,
-                    style: TextStyle(fontSize: 14, color: p.text, height: 1.7)),
-              ],
-            ),
-          ),
-        ],
-        if (joined) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: p.card,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _sectionLabel(p, '完成记录'),
-                const SizedBox(height: 10),
-                if ((prog?.doneDates.isEmpty ?? true))
-                  _hint(p, '尚无打卡记录')
-                else
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final date in prog!.doneDates) _tag(p, date.substring(5)),
-                    ],
-                  ),
-              ],
-            ),
-          ),
-        ],
       ],
+    );
+  }
+
+  Widget _barSection(PaletteData p, Widget child) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: child,
+    );
+  }
+
+  Widget _detailSectionTitle(PaletteData p, String text) {
+    return Row(
+      children: [
+        Container(
+          width: 3,
+          height: 15,
+          decoration: BoxDecoration(
+            color: p.primary,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          text,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: p.textSec,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _authorRow(PaletteData p, UserProfile author) {
+    final ownerId = _detail?.project.ownerUserId ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1.5),
+            child: Icon(Icons.person_pin_outlined,
+                size: 15, color: p.textSec),
+          ),
+          const SizedBox(width: 8),
+          Text('发起人：',
+              style: TextStyle(fontSize: 13, color: p.textSec)),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(author.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13, color: p.text)),
+                ),
+                if (author.verified) ...[
+                  const SizedBox(width: 3),
+                  const Icon(Icons.verified,
+                      size: 14, color: Color(0xFF70867A)),
+                ],
+                if (author.account.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: AccountLink(
+                      account: author.account,
+                      onTap: ownerId.isEmpty
+                          ? null
+                          : () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => UserSpacePage(
+                                      userId: ownerId,
+                                      userName: author.name),
+                                ),
+                              ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _compactJoinButton(PaletteData p) {
+    return FilledButton(
+      onPressed: _busy ? null : _join,
+      style: FilledButton.styleFrom(
+        backgroundColor: p.primary,
+        minimumSize: const Size(0, 34),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      child: const Text('参与祈福', style: TextStyle(fontSize: 13)),
+    );
+  }
+
+  Widget _compactBlessButton(PaletteData p, bool blessedToday) {
+    return FilledButton.icon(
+      onPressed: (blessedToday || _busy) ? null : _bless,
+      style: FilledButton.styleFrom(
+        backgroundColor: p.primary,
+        disabledBackgroundColor: p.border,
+        disabledForegroundColor: p.textHint,
+        minimumSize: const Size(0, 30),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+      ),
+      icon: Icon(blessedToday ? Icons.check : Icons.spa_outlined, size: 14),
+      label: Text(blessedToday ? '今日已祈福' : '今日祈福',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
     );
   }
 
@@ -1722,7 +2789,10 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 15, color: p.textSec),
+          Padding(
+            padding: const EdgeInsets.only(top: 1.5),
+            child: Icon(icon, size: 15, color: p.textSec),
+          ),
           const SizedBox(width: 8),
           Text('$label：',
               style: TextStyle(fontSize: 13, color: p.textSec)),

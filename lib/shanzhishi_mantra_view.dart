@@ -8,7 +8,8 @@ import 'shanzhishi_mantra_store.dart';
 /// 一行放满就换下一行继续排满；上下行留间距，底色块互不相连，密咒多时可上下滑动。
 /// 点某条密咒暂不响应，后续再接持诵功能（搜索命中会高亮并滚到该条）。
 class ShanZhiShiMantraView extends StatefulWidget {
-  /// 点某条密咒时回调（页面据此弹出详情：经文出处、神咒原文）。
+  /// 点某条密咒时回调，参数是这条密咒的内部键（同名条目也能区分），
+  /// 页面据此弹出详情：经文出处、神咒原文、人天利益。
   final ValueChanged<String>? onMantraTapped;
 
   const ShanZhiShiMantraView({super.key, this.onMantraTapped});
@@ -88,77 +89,80 @@ class ShanZhiShiMantraViewState extends State<ShanZhiShiMantraView> {
         key: const ValueKey('shanzhishi_mantra_view'),
         color: p.bg,
         child: Stack(
-        children: [
-          // 与佛号星图同一族星云底光，两页观感统一。
-          const Positioned.fill(
-            child: IgnorePointer(child: CustomPaint(painter: _MantraBackdrop())),
-          ),
-          // 顶部让出状态栏并再多留一截，与 toolbar 到底边都保有宽绰的呼吸感。
-          // 列表随密咒 store 变化即时重建（添加后立即出现，不必等整页刷新）。
-          Positioned.fill(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // 屏宽决定能放几列（列宽固定，左右各留 18 的页边）。
-                final availW = constraints.maxWidth - 36;
-                var n = ((availW + _columnGap) / (_stripWidth + _columnGap))
-                    .floor();
-                if (n < 1) n = 1;
-                return ListenableBuilder(
-                  listenable: ShanZhiShiMantraStore.instance,
-                  builder: (context, _) {
-                    final mantras = ShanZhiShiMantraStore.instance.mantras;
-                    // 横向优先、逐列接续：按序号从左往右铺（先填满第一行的各列），
-                    // 之后每条都补进当前最矮的一列——短密咒下面不留空档，
-                    // 同列上下两条只隔 [_stripGap]，整页密实、不会出现成片留白。
-                    final cols = List.generate(n, (_) => <int>[]);
-                    final heights = List.filled(n, 0.0);
-                    for (var i = 0; i < mantras.length; i++) {
-                      var t = 0;
-                      for (var c = 1; c < n; c++) {
-                        if (heights[c] < heights[t] - 0.5) t = c;
-                      }
-                      final extra = cols[t].isEmpty ? 0.0 : _stripGap;
-                      cols[t].add(i);
-                      heights[t] += extra + _stripHeight(mantras[i]);
-                    }
-                    return SingleChildScrollView(
-                      controller: _scrollCtrl,
-                      padding: EdgeInsets.fromLTRB(
-                        18,
-                        mq.padding.top + 30,
-                        18,
-                        mq.padding.bottom + ShanZhiShiMantraView._bottomInset,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (var c = 0; c < cols.length; c++) ...[
-                            SizedBox(
-                              width: _stripWidth,
-                              child: Column(
-                                children: [
-                                  for (var k = 0; k < cols[c].length; k++) ...[
-                                    _strip(cols[c][k],
-                                        mantras[cols[c][k]], p),
-                                    if (k < cols[c].length - 1)
-                                      const SizedBox(height: _stripGap),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            if (c < cols.length - 1)
-                              const SizedBox(width: _columnGap),
-                          ],
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
+          children: [
+            // 与佛号星图同一族星云底光，两页观感统一。
+            const Positioned.fill(
+              child:
+                  IgnorePointer(child: CustomPaint(painter: _MantraBackdrop())),
             ),
-          ),
-        ],
-      ),
+            // 顶部让出状态栏并再多留一截，与 toolbar 到底边都保有宽绰的呼吸感。
+            // 列表随密咒 store 变化即时重建（添加后立即出现，不必等整页刷新）。
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // 屏宽决定能放几列（列宽固定，左右各留 18 的页边）。
+                  final availW = constraints.maxWidth - 36;
+                  var n = ((availW + _columnGap) / (_stripWidth + _columnGap))
+                      .floor();
+                  if (n < 1) n = 1;
+                  return ListenableBuilder(
+                    listenable: ShanZhiShiMantraStore.instance,
+                    builder: (context, _) {
+                      final mantras = ShanZhiShiMantraStore.instance.mantras;
+                      // 横向优先、逐列接续：按序号从左往右铺（先填满第一行的各列），
+                      // 之后每条都补进当前最矮的一列——短密咒下面不留空档，
+                      // 同列上下两条只隔 [_stripGap]，整页密实、不会出现成片留白。
+                      final cols = List.generate(n, (_) => <int>[]);
+                      final heights = List.filled(n, 0.0);
+                      for (var i = 0; i < mantras.length; i++) {
+                        var t = 0;
+                        for (var c = 1; c < n; c++) {
+                          if (heights[c] < heights[t] - 0.5) t = c;
+                        }
+                        final extra = cols[t].isEmpty ? 0.0 : _stripGap;
+                        cols[t].add(i);
+                        heights[t] += extra + _stripHeight(mantras[i]);
+                      }
+                      return SingleChildScrollView(
+                        controller: _scrollCtrl,
+                        padding: EdgeInsets.fromLTRB(
+                          18,
+                          mq.padding.top + 30,
+                          18,
+                          mq.padding.bottom + ShanZhiShiMantraView._bottomInset,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (var c = 0; c < cols.length; c++) ...[
+                              SizedBox(
+                                width: _stripWidth,
+                                child: Column(
+                                  children: [
+                                    for (var k = 0;
+                                        k < cols[c].length;
+                                        k++) ...[
+                                      _strip(
+                                          cols[c][k], mantras[cols[c][k]], p),
+                                      if (k < cols[c].length - 1)
+                                        const SizedBox(height: _stripGap),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              if (c < cols.length - 1)
+                                const SizedBox(width: _columnGap),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -174,12 +178,13 @@ class ShanZhiShiMantraViewState extends State<ShanZhiShiMantraView> {
   Widget _strip(int index, String text, PaletteData p) {
     final chars = [for (final c in text.characters) c];
     final key = _stripKeys.putIfAbsent(index, () => GlobalKey());
+    final entryKey = ShanZhiShiMantraStore.instance.keyAt(index) ?? text;
     final bool hit = index == _highlightIndex;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
         _clearHighlight();
-        widget.onMantraTapped?.call(text);
+        widget.onMantraTapped?.call(entryKey);
       },
       child: AnimatedContainer(
         key: ValueKey('shanzhishi_mantra_$index'),

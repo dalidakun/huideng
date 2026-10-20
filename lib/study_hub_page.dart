@@ -26,6 +26,7 @@ import 'blessing_page.dart';
 import 'blessing_service.dart';
 
 import 'app_palette.dart';
+
 Color get _primary => AppPalette.p.primary;
 Color get _primaryLight => AppPalette.p.textSec;
 Color get _gold => AppPalette.p.accent;
@@ -36,12 +37,11 @@ Color get _textSec => AppPalette.p.textSec;
 Color get _textHint => AppPalette.p.textHint;
 Color get _border => AppPalette.p.border;
 Color get _overlay => AppPalette.p.tintBg;
+
 /// 素白外观下主页大卡片（精读经文/功课打卡）用纯白底；
 /// 暖黄外观下用低饱和浅暖灰，比原奶油黄更素净（仅精读/历史统计两张卡生效）。
 Color get _cardSurface =>
-    AppPalette.instance.isPlain
-        ? Colors.white
-        : const Color(0xFFF6F1EB);
+    AppPalette.instance.isPlain ? Colors.white : const Color(0xFFF6F1EB);
 
 /// 功课打卡卡背景：比上方精读卡略深一层，形成层次区分但保持整体和谐。
 Color get _checkinCardBg => AppPalette.instance.isPlain
@@ -92,36 +92,51 @@ class StudyHubPageState extends State<StudyHubPage>
   double _progress = 0.0;
   List<Map<String, String>> _todayCheckIns = [];
   int _checkinTotalDays = 0;
+
   /// 历史统计的自定义顺序（类型 key），空表示未自定义。
   List<String> _historyStatsOrder = [];
+
   /// 功课回向内容（愿我的功课回向）。
   String _dedication = '';
+
   /// 默认回向文：用户未输入直接保存时使用。
   static const String _kDefaultDedication =
       '愿以此功德，回向于法界，庄严佛净土；上报四重恩，下济三途苦；若有见闻者，悉发菩提心。';
+
+  /// 首次启动写入第 1 天时的本地标记；云端有累计天数时可覆盖。
+  static const String _kProvisionalStudyDay = '_provisional_study_day';
   String? _lockedTitle;
   String? _lockedFilePath;
   bool _currentFavorite = false;
+
   /// 当前精读经文是否已标记完成阅读（青色标题）。
   bool _currentRead = false;
+
   /// 当前精读经文是否已标记稍后阅读。
   bool _currentReadLater = false;
+
   /// 多卷经书的基础经名集合，用于显示「卷X」卷标。
   Set<String> _multiVolumeBases = const {};
+
   /// 精读经文卡小字元信息（部类 · 总字数），如「阿含部 · 12345 字」。
   String _sutraMeta = '';
+
   /// 底部「今日读经 / 累积读经」徽章行 Key：用于测量其宽度，
   /// 让上方的读经进度条与徽章行等宽。
   final GlobalKey _jingDuBadgesKey = GlobalKey();
   double _jingDuBarWidth = 0;
+
   /// 是否允许他人在主页查看我的「精读」（在读经书）。
   bool _allowReadingShare = false;
   List<Map<String, dynamic>> _customTypes = [];
+
   /// 实际配置的功课类型列表（功课打卡卡片与自动分享共用）。
   List<Map<String, dynamic>> _checkInTypesList = [];
   bool _loaded = false;
+
   /// 祈福共修：主页区块展示的当前祈福（我的进行中优先，否则社区热门）。
   BlessingItem? _blessing;
+
   /// 该祈福是否为我参与的（用于决定快捷动作按钮）。
   bool _blessingMine = false;
   bool _blessingLoading = false;
@@ -206,6 +221,11 @@ class StudyHubPageState extends State<StudyHubPage>
       final count = prefs.getInt('study_day_count') ?? 0;
       unawaited(prefs.setInt('study_day_count', count + 1));
       unawaited(prefs.setString('study_last_date', today));
+      // 第一次使用本机时先写了第 1 天；标记后让云端累计天数能在同步时
+      // 覆盖它（后续 reload 会再补记今天）。标记本身不上传。
+      if (lastDate.isEmpty) {
+        unawaited(prefs.setBool(_kProvisionalStudyDay, true));
+      }
     }
 
     String? title;
@@ -435,8 +455,7 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 原子写 sutras_list.json（临时文件 + 改名替换），避免并发读取读到损坏内容。
   Future<void> _writeSutraListAtomic(List<Map<String, dynamic>> list) async {
     final docs = await getApplicationDocumentsDirectory();
-    final file =
-        File('${docs.path}${Platform.pathSeparator}sutras_list.json');
+    final file = File('${docs.path}${Platform.pathSeparator}sutras_list.json');
     final tmp = File('${file.path}.tmp');
     await tmp.writeAsString(jsonEncode(list), flush: true);
     if (await file.exists()) {
@@ -522,7 +541,8 @@ class StudyHubPageState extends State<StudyHubPage>
               ),
               _sheetMenuItem(
                 context,
-                icon: _currentReadLater ? Icons.bookmark : Icons.bookmark_border,
+                icon:
+                    _currentReadLater ? Icons.bookmark : Icons.bookmark_border,
                 title: _currentReadLater ? '取消稍后阅读' : '稍后阅读',
                 onTap: () async {
                   String? msg;
@@ -536,7 +556,9 @@ class StudyHubPageState extends State<StudyHubPage>
               ),
               _sheetMenuItem(
                 context,
-                icon: _currentRead ? Icons.mark_chat_unread : Icons.mark_chat_read,
+                icon: _currentRead
+                    ? Icons.mark_chat_unread
+                    : Icons.mark_chat_read,
                 title: _currentRead ? '取消完成阅读' : '标记完成阅读',
                 onTap: () async {
                   String? msg;
@@ -604,8 +626,7 @@ class StudyHubPageState extends State<StudyHubPage>
       }
       final wasRead = list[idx]['isRead'] == true;
       list[idx]['isRead'] = !wasRead;
-      list[idx]['readTime'] =
-          wasRead ? null : DateTime.now().toIso8601String();
+      list[idx]['readTime'] = wasRead ? null : DateTime.now().toIso8601String();
       await _writeSutraListAtomic(list);
       await SutraFavorites.syncStatePref(title);
       if (!mounted) return;
@@ -836,62 +857,65 @@ class StudyHubPageState extends State<StudyHubPage>
               Divider(height: 1, color: _border),
               Flexible(
                 child: ConstrainedBox(
-                  constraints:
-                      const BoxConstraints(maxHeight: 430),
+                  constraints: const BoxConstraints(maxHeight: 430),
                   child: sutras.isEmpty
-                    ? Padding(
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 40),
-                        child: Center(
-                            child: Text('最近还没有阅读记录',
-                                style: TextStyle(
-                                    fontSize: 13, color: _textHint))),
-                      )
-                    : ListView(
-                        shrinkWrap: true,
-                        padding: EdgeInsets.zero,
-                        children: sutras.map((s) {
-                    final title = s['title'] as String? ?? '';
-                    final fp = s['filePath'] as String?;
-                    final snap = (s['progress'] as num?)?.toDouble() ?? 0.0;
-                    final progress =
-                        liveProgress[title] ?? snap;
-                    return InkWell(
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        if (title.isNotEmpty) _openSutraByPath(title, fp);
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 14),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(_displayTitle(title, filePath: fp),
-                                      style: TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w500,
-                                          color: _text)),
-                const SizedBox(height: 12),
-                                  Text(
-                                      '已读 ${(progress * 100).toStringAsFixed(1)}%',
-                                      style: TextStyle(
-                                          fontSize: 12, color: _textHint)),
-                                ],
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 40),
+                          child: Center(
+                              child: Text('最近还没有阅读记录',
+                                  style: TextStyle(
+                                      fontSize: 13, color: _textHint))),
+                        )
+                      : ListView(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          children: sutras.map((s) {
+                            final title = s['title'] as String? ?? '';
+                            final fp = s['filePath'] as String?;
+                            final snap =
+                                (s['progress'] as num?)?.toDouble() ?? 0.0;
+                            final progress = liveProgress[title] ?? snap;
+                            return InkWell(
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                if (title.isNotEmpty)
+                                  _openSutraByPath(title, fp);
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 14),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                              _displayTitle(title,
+                                                  filePath: fp),
+                                              style: TextStyle(
+                                                  fontSize: 15,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: _text)),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                              '已读 ${(progress * 100).toStringAsFixed(1)}%',
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: _textHint)),
+                                        ],
+                                      ),
+                                    ),
+                                    Icon(Icons.chevron_right,
+                                        color: _textHint, size: 20),
+                                  ],
+                                ),
                               ),
-                            ),
-                            Icon(Icons.chevron_right,
-                                color: _textHint, size: 20),
-                          ],
+                            );
+                          }).toList(),
                         ),
-                      ),
-                    );
-                  }).toList(),
                 ),
-              ),
               ),
               const SizedBox(height: 8),
             ],
@@ -1018,7 +1042,10 @@ class StudyHubPageState extends State<StudyHubPage>
               controller: _scrollController,
               physics: const PullRevealLockPhysics(
                   parent: AlwaysScrollableScrollPhysics()),
-              padding: EdgeInsets.fromLTRB(16, 4, 16,
+              padding: EdgeInsets.fromLTRB(
+                  16,
+                  4,
+                  16,
                   // 底部额外留白：让出右下角「继续阅读」悬浮按钮的高度
                   // （按钮高 42 + 距菜单 28），否则会遮住历史统计的数据。
                   MediaQuery.of(context).padding.bottom + 78),
@@ -1048,7 +1075,8 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Widget _buildCurrentSutraCard() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measureJingDuBarWidth());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _measureJingDuBarWidth());
     if (!_loaded) {
       return Container(
         decoration: BoxDecoration(
@@ -1061,7 +1089,8 @@ class StudyHubPageState extends State<StudyHubPage>
             child: SizedBox(
               width: 22,
               height: 22,
-              child: CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
+              child:
+                  CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
             ),
           ),
         ),
@@ -1107,271 +1136,275 @@ class StudyHubPageState extends State<StudyHubPage>
               behavior: HitTestBehavior.opaque,
               onTap: _openSutra,
               child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                          color: AppPalette.p.readingAccent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8)),
-                      child: Icon(Icons.menu_book_rounded,
-                          size: 16, color: AppPalette.p.readingAccent),
-                    ),
-                    SizedBox(width: AppPalette.instance.isPlain ? 9 : 12),
-                    Text('闻思佛法',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: _textSec)),
-                    if (_currentTitle != null) ...[
-                      const SizedBox(width: 6),
-                      GestureDetector(
-                        onTap: _toggleLock,
-                        child: Icon(
-                          _lockedTitle != null ? Icons.lock : Icons.lock_open,
-                          size: 17,
-                          color: const Color(0xFF71867A),
-                        ),
-                      ),
-                      const Spacer(),
-                      GestureDetector(
-                        onTap: () => _toggleReadingShare(!_allowReadingShare),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 2),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
                           decoration: BoxDecoration(
-                            color: AppPalette.p.readingAccent.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                          child: Text(
-                            _allowReadingShare ? '已允许' : '未允许',
+                              color: AppPalette.p.readingAccent
+                                  .withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8)),
+                          child: Icon(Icons.menu_book_rounded,
+                              size: 16, color: AppPalette.p.readingAccent),
+                        ),
+                        SizedBox(width: AppPalette.instance.isPlain ? 9 : 12),
+                        Text('闻思佛法',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 12,
-                              color: AppPalette.p.readingAccent,
-                              fontWeight: FontWeight.w500,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: _textSec)),
+                        if (_currentTitle != null) ...[
+                          const SizedBox(width: 6),
+                          GestureDetector(
+                            onTap: _toggleLock,
+                            child: Icon(
+                              _lockedTitle != null
+                                  ? Icons.lock
+                                  : Icons.lock_open,
+                              size: 17,
+                              color: const Color(0xFF71867A),
                             ),
                           ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              if (_currentTitle != null) ...[
-                const SizedBox(height: 14),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _openSutra,
-                  onLongPress: _showSutraActionsSheet,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(left: 20, right: 20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                                _displayTitle(_currentTitle!,
-                                    filePath: _currentFilePath),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () =>
+                                _toggleReadingShare(!_allowReadingShare),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppPalette.p.readingAccent
+                                    .withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(11),
+                              ),
+                              child: Text(
+                                _allowReadingShare ? '已允许' : '未允许',
                                 style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    color: _text,
-                                    height: 1.4)),
-                            if (_sutraMeta.isNotEmpty) ...[
-                              const SizedBox(height: 3),
-                              Text(_sutraMeta,
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      color: _textHint,
-                                      fontWeight: FontWeight.w400)),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Padding(
-                        padding: const EdgeInsets.only(left: 20, right: 20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                SizedBox(
-                                  width: _jingDuBarWidth,
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(2),
-                                    child: LinearProgressIndicator(
-                                      value: _progress,
-                                      minHeight: 5,
-                                      backgroundColor: _border,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                          AppPalette.instance.isPlain
-                                              ? const Color(0xFF4A4A4A)
-                                              : AppPalette.p.accent),
-                                    ),
-                                  ),
+                                  fontSize: 12,
+                                  color: AppPalette.p.readingAccent,
+                                  fontWeight: FontWeight.w500,
                                 ),
-                                const SizedBox(width: 8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (_currentTitle != null) ...[
+                    const SizedBox(height: 14),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _openSutra,
+                      onLongPress: _showSutraActionsSheet,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 20, right: 20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Text(
-                                    '已读 ${(_progress * 100).toStringAsFixed(1)}%',
+                                    _displayTitle(_currentTitle!,
+                                        filePath: _currentFilePath),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                        fontSize: 12,
-                                        color: _textHint,
-                                        fontWeight: FontWeight.w500)),
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        color: _text,
+                                        height: 1.4)),
+                                if (_sutraMeta.isNotEmpty) ...[
+                                  const SizedBox(height: 3),
+                                  Text(_sutraMeta,
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: _textHint,
+                                          fontWeight: FontWeight.w400)),
+                                ],
                               ],
                             ),
-                            const SizedBox(height: 20),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
+                          ),
+                          const SizedBox(height: 10),
+                          Padding(
+                            padding: const EdgeInsets.only(left: 20, right: 20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
-                                  key: _jingDuBadgesKey,
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.end,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: ReadingTimeService
-                                          .instance.todaySeconds,
-                                      builder: (context, sec, _) =>
-                                          _buildTimeBadgeItem(
-                                              Icons.timer_outlined,
-                                              '今日读经',
-                                              sec),
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 14, vertical: 2),
-                                      child: Container(
-                                        width: 1,
-                                        height: 30,
-                                        color: _border,
+                                    SizedBox(
+                                      width: _jingDuBarWidth,
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(2),
+                                        child: LinearProgressIndicator(
+                                          value: _progress,
+                                          minHeight: 5,
+                                          backgroundColor: _border,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                  AppPalette.instance.isPlain
+                                                      ? const Color(0xFF4A4A4A)
+                                                      : AppPalette.p.accent),
+                                        ),
                                       ),
                                     ),
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: ReadingTimeService
-                                          .instance.totalSeconds,
-                                      builder: (context, sec, _) =>
-                                          _buildTimeBadgeItem(
-                                              Icons.history,
-                                              '累积读经',
-                                              sec),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                        '已读 ${(_progress * 100).toStringAsFixed(1)}%',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color: _textHint,
+                                            fontWeight: FontWeight.w500)),
+                                  ],
+                                ),
+                                const SizedBox(height: 20),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Row(
+                                      key: _jingDuBadgesKey,
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        ValueListenableBuilder<int>(
+                                          valueListenable: ReadingTimeService
+                                              .instance.todaySeconds,
+                                          builder: (context, sec, _) =>
+                                              _buildTimeBadgeItem(
+                                                  Icons.timer_outlined,
+                                                  '今日读经',
+                                                  sec),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 14, vertical: 2),
+                                          child: Container(
+                                            width: 1,
+                                            height: 30,
+                                            color: _border,
+                                          ),
+                                        ),
+                                        ValueListenableBuilder<int>(
+                                          valueListenable: ReadingTimeService
+                                              .instance.totalSeconds,
+                                          builder: (context, sec, _) =>
+                                              _buildTimeBadgeItem(
+                                                  Icons.history, '累积读经', sec),
+                                        ),
+                                      ],
+                                    ),
+                                    const Spacer(),
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _showRecentSutras,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 2, vertical: 4),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text('最近阅读',
+                                                style: TextStyle(
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: _text)),
+                                            const SizedBox(width: 2),
+                                            Icon(Icons.chevron_right,
+                                                size: 18, color: _textSec),
+                                          ],
+                                        ),
+                                      ),
                                     ),
                                   ],
                                 ),
-                                const Spacer(),
-                                GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _showRecentSutras,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 2, vertical: 4),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text('最近阅读',
-                                            style: TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w500,
-                                                color: _text)),
-                                        const SizedBox(width: 2),
-                                        Icon(Icons.chevron_right, size: 18,
-                                            color: _textSec),
-                                      ],
-                                    ),
-                                  ),
-                                ),
                               ],
                             ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ] else ...[
-                Center(
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 2),
-                      AnimatedBuilder(
-                        animation: _pulseAnim,
-                        builder: (context, child) => Transform.scale(
-                            scale: _pulseAnim.value, child: child),
-                        child: Container(
-                          width: 56,
-                          height: 56,
-                          decoration: BoxDecoration(
-                            color: _overlay,
-                            borderRadius: BorderRadius.circular(16),
                           ),
-                          child: Icon(Icons.auto_stories_rounded,
-                              size: 30,
-                              color: _primaryLight.withValues(alpha: 0.8)),
-                        ),
+                        ],
                       ),
-                      const SizedBox(height: 10),
-                      Text('今日尚未开启经文之旅',
-                          style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w500,
-                              color: _text)),
-                      const SizedBox(height: 4),
-                      Text('选择一部经文，开始今日修学',
-                          style: TextStyle(fontSize: 13, color: _textSec)),
-                      const SizedBox(height: 14),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const SutraListPage())),
-                            icon: const Icon(Icons.explore, size: 17),
-                            label: const Text('浏览经藏',
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _gold,
-                              foregroundColor: Colors.white,
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 11),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12)),
-                              elevation: 0,
+                    ),
+                    const SizedBox(height: 14),
+                  ] else ...[
+                    Center(
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 2),
+                          AnimatedBuilder(
+                            animation: _pulseAnim,
+                            builder: (context, child) => Transform.scale(
+                                scale: _pulseAnim.value, child: child),
+                            child: Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: _overlay,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Icon(Icons.auto_stories_rounded,
+                                  size: 30,
+                                  color: _primaryLight.withValues(alpha: 0.8)),
                             ),
                           ),
-                        ),
+                          const SizedBox(height: 10),
+                          Text('今日尚未开启经文之旅',
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: _text)),
+                          const SizedBox(height: 4),
+                          Text('选择一部经文，开始今日修学',
+                              style: TextStyle(fontSize: 13, color: _textSec)),
+                          const SizedBox(height: 14),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) => const SutraListPage())),
+                                icon: const Icon(Icons.explore, size: 17),
+                                label: const Text('浏览经藏',
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _gold,
+                                  foregroundColor: Colors.white,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 11),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  elevation: 0,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                        ],
                       ),
-                      const SizedBox(height: 6),
-                    ],
-                  ),
-                ),
-              ],
-              const SizedBox(height: 7),
-            ],
+                    ),
+                  ],
+                  const SizedBox(height: 7),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
-    ],
-  );
+          ],
+        ),
+      ],
+    );
   }
 
   /// 测量精读卡底部徽章行宽度，让进度条与其等宽。
@@ -1386,8 +1419,7 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 读经时长徽章：第一行（图标+标题）与第二行（时间）左对齐。
-  Widget _buildTimeBadgeItem(
-      IconData icon, String label, int seconds) {
+  Widget _buildTimeBadgeItem(IconData icon, String label, int seconds) {
     final timeStr = _formatReadTime(seconds);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -1409,9 +1441,7 @@ class StudyHubPageState extends State<StudyHubPage>
         const SizedBox(height: 2),
         Text(timeStr,
             style: TextStyle(
-                fontSize: 14,
-                color: _text,
-                fontWeight: FontWeight.w600)),
+                fontSize: 14, color: _text, fontWeight: FontWeight.w600)),
       ],
     );
   }
@@ -1473,7 +1503,8 @@ class StudyHubPageState extends State<StudyHubPage>
             child: SizedBox(
               width: 22,
               height: 22,
-              child: CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
+              child:
+                  CircularProgressIndicator(strokeWidth: 2.5, color: _primary),
             ),
           ),
         ),
@@ -1482,8 +1513,9 @@ class StudyHubPageState extends State<StudyHubPage>
 
     final items = _loadConfiguredItems(prefs);
     final totalItems = items.length;
-    final doneCount =
-        items.where((item) => _isItemCheckedToday(item['type'], item['name'])).length;
+    final doneCount = items
+        .where((item) => _isItemCheckedToday(item['type'], item['name']))
+        .length;
 
     // 无配置项目时显示引导
     if (items.isEmpty) {
@@ -1524,7 +1556,11 @@ class StudyHubPageState extends State<StudyHubPage>
                   style: TextStyle(fontSize: 14, color: _textHint)),
             ),
             Divider(
-                height: 1, thickness: 0.5, indent: 20, endIndent: 20, color: _border),
+                height: 1,
+                thickness: 0.5,
+                indent: 20,
+                endIndent: 20,
+                color: _border),
             _buildDedicationBlock(),
             const SizedBox(height: 6),
           ],
@@ -1635,7 +1671,11 @@ class StudyHubPageState extends State<StudyHubPage>
           ],
           // 功课回向：贴在打卡卡片底部，用分割线与功课列表区分。
           Divider(
-              height: 1, thickness: 0.5, indent: 20, endIndent: 20, color: _border),
+              height: 1,
+              thickness: 0.5,
+              indent: 20,
+              endIndent: 20,
+              color: _border),
           _buildDedicationBlock(),
           const SizedBox(height: 6),
         ],
@@ -1704,8 +1744,8 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   Future<void> _openBlessingDetail(String id) async {
-    await Navigator.push(context,
-        MaterialPageRoute(builder: (_) => BlessingDetailPage(id: id)));
+    await Navigator.push(
+        context, MaterialPageRoute(builder: (_) => BlessingDetailPage(id: id)));
     if (mounted) _loadBlessing();
   }
 
@@ -1751,7 +1791,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       size: 17, color: _gold),
                 ),
                 const SizedBox(width: 10),
-                Text('祈福共修',
+                Text('祈福',
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -1767,8 +1807,7 @@ class StudyHubPageState extends State<StudyHubPage>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text('全部',
-                            style:
-                                TextStyle(fontSize: 13, color: _textSec)),
+                            style: TextStyle(fontSize: 13, color: _textSec)),
                         Icon(Icons.chevron_right, size: 16, color: _textSec),
                       ],
                     ),
@@ -1828,9 +1867,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: _text)),
+                      fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
             ),
             if (done) ...[
               const SizedBox(width: 6),
@@ -1864,9 +1901,7 @@ class StudyHubPageState extends State<StudyHubPage>
               const SizedBox(width: 10),
               Text('${prog?.doneCount ?? 0}/${proj.totalDays}',
                   style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: _gold)),
+                      fontSize: 13, fontWeight: FontWeight.w600, color: _gold)),
             ],
           )
         else
@@ -1874,7 +1909,7 @@ class StudyHubPageState extends State<StudyHubPage>
             children: [
               Icon(Icons.groups_outlined, size: 15, color: _textSec),
               const SizedBox(width: 5),
-              Text('已有 ${proj.joinerCount} 人共修',
+              Text('已有 ${proj.joinerCount} 人祈福',
                   style: TextStyle(fontSize: 12.5, color: _textSec)),
             ],
           ),
@@ -1883,8 +1918,8 @@ class StudyHubPageState extends State<StudyHubPage>
           children: [
             Text(
                 _blessingMine
-                    ? '第 ${prog?.doneCount ?? 0}/${proj.totalDays} 天'
-                    : '共修祈福',
+                    ? '已祈福 ${prog?.doneCount ?? 0}/${proj.totalDays} 天'
+                    : '与大家一同祈福',
                 style: TextStyle(fontSize: 12.5, color: _textSec)),
             const Spacer(),
             if (mineJoined && !done)
@@ -1895,8 +1930,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 onTap: _blessCurrent,
               )
             else
-              _blessingAction('查看',
-                  onTap: () => _openBlessingDetail(proj.id)),
+              _blessingAction('查看', onTap: () => _openBlessingDetail(proj.id)),
           ],
         ),
       ],
@@ -2112,7 +2146,8 @@ class StudyHubPageState extends State<StudyHubPage>
 
     final goalsRaw = prefs.getString('checkin_goals') ?? '{}';
     final goalsJson = jsonDecode(goalsRaw) as Map<String, dynamic>;
-    final goals = goalsJson.map((k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
+    final goals = goalsJson
+        .map((k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
     debugPrint('[historyStats] checkin_goals=$goalsJson');
 
     final raw = prefs.getString('checkin_records') ?? '[]';
@@ -2141,11 +2176,12 @@ class StudyHubPageState extends State<StudyHubPage>
     // 依据用户长按拖动后保存的类型顺序排序（history_stats_order）：
     // 已保存的类型严格按其保存位置排；尚未出现在保存列表中的类型
     // （如本次新增的自定义功课）排在已保存条目的后面、保持原默认顺序。
-    final orderedKeys = meta.keys.toList()..sort((a, b) {
-      final ia = _historyStatsOrder.indexOf(a);
-      final ib = _historyStatsOrder.indexOf(b);
-      return (ia < 0 ? 9999 : ia).compareTo(ib < 0 ? 9999 : ib);
-    });
+    final orderedKeys = meta.keys.toList()
+      ..sort((a, b) {
+        final ia = _historyStatsOrder.indexOf(a);
+        final ib = _historyStatsOrder.indexOf(b);
+        return (ia < 0 ? 9999 : ia).compareTo(ib < 0 ? 9999 : ib);
+      });
 
     return [
       for (final k in orderedKeys)
@@ -2165,7 +2201,8 @@ class StudyHubPageState extends State<StudyHubPage>
   Map<String, List<String>> _buildStatDetails(SharedPreferences prefs) {
     final out = <String, List<String>>{};
     out['reading'] = [
-      for (final e in _decodeNamedList(prefs.getString('setting_reading_titles')))
+      for (final e
+          in _decodeNamedList(prefs.getString('setting_reading_titles')))
         if (e.$1.trim().isNotEmpty) e.$1.trim(),
     ];
     out['nianfo'] = [
@@ -2205,8 +2242,7 @@ class StudyHubPageState extends State<StudyHubPage>
     }
 
     return InkWell(
-      onTap: () =>
-          _toggleCheckIn(typeKey, category, itemName: name),
+      onTap: () => _toggleCheckIn(typeKey, category, itemName: name),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
         child: Row(
@@ -2245,8 +2281,7 @@ class StudyHubPageState extends State<StudyHubPage>
                   ? _border
                   : _border.withValues(alpha: 0.6),
               splash: const Color(0xFF71867A),
-              onTap: () =>
-                  _toggleCheckIn(typeKey, category, itemName: name),
+              onTap: () => _toggleCheckIn(typeKey, category, itemName: name),
             ),
           ],
         ),
@@ -2366,12 +2401,24 @@ class StudyHubPageState extends State<StudyHubPage>
 
   List<Map<String, dynamic>> _allCheckInTypes() {
     return [
-      {'key': 'reading', 'label': '诵经', 'icon': Icons.chrome_reader_mode_outlined},
+      {
+        'key': 'reading',
+        'label': '诵经',
+        'icon': Icons.chrome_reader_mode_outlined
+      },
       {'key': 'nianfo', 'label': '念佛', 'icon': Icons.local_florist_outlined},
       {'key': 'buddha', 'label': '称名', 'icon': Icons.spa_outlined},
-      {'key': 'mantra', 'label': '持咒', 'icon': Icons.notifications_none_outlined},
+      {
+        'key': 'mantra',
+        'label': '持咒',
+        'icon': Icons.notifications_none_outlined
+      },
       {'key': 'copying', 'label': '抄经', 'icon': Icons.edit_outlined},
-      {'key': 'meditation', 'label': '静坐', 'icon': Icons.self_improvement_outlined},
+      {
+        'key': 'meditation',
+        'label': '静坐',
+        'icon': Icons.self_improvement_outlined
+      },
       ..._customTypes.map((t) => {
             'key': t['key'],
             'label': (t['category'] ?? t['label'] ?? '').toString(),
@@ -2381,7 +2428,8 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 依据功课设置筛选实际配置的类型；全部未配置时回退为固定五项，避免空卡。
-  List<Map<String, dynamic>> _buildConfiguredCheckInTypes(SharedPreferences prefs) {
+  List<Map<String, dynamic>> _buildConfiguredCheckInTypes(
+      SharedPreferences prefs) {
     final all = _allCheckInTypes();
     final configured = all.where((t) {
       switch (t['key']) {
@@ -2435,7 +2483,8 @@ class StudyHubPageState extends State<StudyHubPage>
   Future<bool> _maybeAutoShareCheckin(SharedPreferences prefs,
       {bool silent = false}) async {
     try {
-      if (!(prefs.getBool('privacy_share_daily_checkin') ?? false)) return false;
+      if (!(prefs.getBool('privacy_share_daily_checkin') ?? false))
+        return false;
       if (!AuthService.instance.isLoggedIn) return false;
       final today = _today();
       if (prefs.getString('shared_checkin_date') == today) return false;
@@ -2462,12 +2511,11 @@ class StudyHubPageState extends State<StudyHubPage>
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: _card,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text('恭喜你完成今天的功课！',
               style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: _text)),
+                  fontSize: 18, fontWeight: FontWeight.w600, color: _text)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2532,49 +2580,55 @@ class StudyHubPageState extends State<StudyHubPage>
       if (!done.contains(key)) continue;
       switch (key) {
         case 'meditation':
-          for (final e in _decodeStrList(prefs.getString('setting_meditation_minutes'))) {
+          for (final e in _decodeStrList(
+              prefs.getString('setting_meditation_minutes'))) {
             if (e.trim().isNotEmpty) lines.add('静坐 ${e.trim()}分钟');
           }
         case 'reading':
-          for (final e in _decodeNamedList(prefs.getString('setting_reading_titles'))) {
+          for (final e
+              in _decodeNamedList(prefs.getString('setting_reading_titles'))) {
             if (e.$1.isNotEmpty) {
               lines.add('诵经 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
             }
           }
         case 'nianfo':
-          for (final e in _decodeNamedList(prefs.getString('setting_nianfo_items'))) {
+          for (final e
+              in _decodeNamedList(prefs.getString('setting_nianfo_items'))) {
             if (e.$1.isNotEmpty) {
               lines.add('念佛 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
             }
           }
         case 'mantra':
-          for (final e in _decodeNamedList(prefs.getString('setting_mantra_items'))) {
+          for (final e
+              in _decodeNamedList(prefs.getString('setting_mantra_items'))) {
             if (e.$1.isNotEmpty) {
               lines.add('持咒 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}遍' : ''}');
             }
           }
         case 'buddha':
-          for (final e in _decodeNamedList(prefs.getString('setting_buddha_items'))) {
+          for (final e
+              in _decodeNamedList(prefs.getString('setting_buddha_items'))) {
             if (e.$1.isNotEmpty) {
               lines.add('称名 ${e.$1}${e.$2.isNotEmpty ? ' ${e.$2}声' : ''}');
             }
           }
         case 'copying':
-          for (final e in _decodeStrList(prefs.getString('setting_copying_titles'))) {
+          for (final e
+              in _decodeStrList(prefs.getString('setting_copying_titles'))) {
             if (e.trim().isNotEmpty) lines.add('抄经 ${e.trim()}');
           }
         default:
           for (final c in _customTypes) {
             if (c['key'] == key) {
-              final category =
-                  (c['category'] ?? c['label'] ?? '').toString();
+              final category = (c['category'] ?? c['label'] ?? '').toString();
               final unit = (c['unit'] ?? '遍').toString();
               final itemList = c['items'] as List<dynamic>? ?? [];
               for (final it in itemList) {
                 final name = (it['name'] ?? '').toString();
                 final count = (it['count'] ?? '').toString();
                 if (name.isNotEmpty) {
-                  lines.add('$category·$name ${count.trim().isEmpty ? '0' : count.trim()}$unit');
+                  lines.add(
+                      '$category·$name ${count.trim().isEmpty ? '0' : count.trim()}$unit');
                 }
               }
             }
@@ -2601,7 +2655,8 @@ class StudyHubPageState extends State<StudyHubPage>
       if (d is List) {
         for (final e in d) {
           if (e is Map) {
-            out.add(((e['name'] ?? '').toString(), (e['count'] ?? '').toString()));
+            out.add(
+                ((e['name'] ?? '').toString(), (e['count'] ?? '').toString()));
           } else {
             out.add((e.toString(), ''));
           }
@@ -2642,8 +2697,8 @@ class StudyHubPageState extends State<StudyHubPage>
             final itemList = c['items'] as List<dynamic>? ?? [];
             return itemList.fold<double>(
                 0,
-                (s, it) => s +
-                    (double.tryParse((it['count'] ?? '').toString()) ?? 0));
+                (s, it) =>
+                    s + (double.tryParse((it['count'] ?? '').toString()) ?? 0));
           }
         }
         return 0;
@@ -2675,8 +2730,7 @@ class StudyHubPageState extends State<StudyHubPage>
     // 自定义功课：每项为「类别 → 名称列表」，同类别共享单位。
     for (final c in _customTypes) {
       final key = c['key']?.toString() ?? '';
-      final category =
-          (c['category'] ?? c['label'] ?? '').toString().trim();
+      final category = (c['category'] ?? c['label'] ?? '').toString().trim();
       final unit = c['unit']?.toString() ?? '遍';
       if (category.isEmpty) continue;
       final itemList = c['items'] as List<dynamic>? ?? [];
@@ -2697,8 +2751,8 @@ class StudyHubPageState extends State<StudyHubPage>
     return items;
   }
 
-  void _addNamedItems(List<Map<String, dynamic>> items,
-      SharedPreferences prefs, String type, String category, String unit) {
+  void _addNamedItems(List<Map<String, dynamic>> items, SharedPreferences prefs,
+      String type, String category, String unit) {
     final raw = prefs.getString('setting_${_settingsKey(type)}');
     if (raw == null || raw.isEmpty) return;
     try {
@@ -2761,8 +2815,8 @@ class StudyHubPageState extends State<StudyHubPage>
 
   /// 检查某个具体功课项目今天是否已打卡。
   bool _isItemCheckedToday(String typeKey, String itemName) {
-    return _todayCheckIns.any(
-        (r) => r['type'] == typeKey && r['name'] == itemName);
+    return _todayCheckIns
+        .any((r) => r['type'] == typeKey && r['name'] == itemName);
   }
 }
 
@@ -2828,9 +2882,8 @@ class _CheckInButtonState extends State<_CheckInButton>
       fg = checked ? _primary : const Color(0xFF71867A);
     }
     final labelChars = widget.label.characters;
-    final label = labelChars.length > 2
-        ? '${labelChars.take(2)}…'
-        : widget.label;
+    final label =
+        labelChars.length > 2 ? '${labelChars.take(2)}…' : widget.label;
     return GestureDetector(
       onTapDown: _onTapDown,
       onTapUp: _onTapUp,
@@ -2889,8 +2942,7 @@ class _CheckInButtonState extends State<_CheckInButton>
                     color: const Color(0xFF1A1A1A),
                     border: Border.all(color: Colors.white, width: 1),
                   ),
-                  child: const Icon(Icons.check,
-                      size: 8, color: Colors.white),
+                  child: const Icon(Icons.check, size: 8, color: Colors.white),
                 ),
               ),
           ],
@@ -3019,5 +3071,3 @@ class _SplashCircleState extends State<_SplashCircle>
     );
   }
 }
-
-

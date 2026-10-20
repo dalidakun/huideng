@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
 import 'app_palette.dart';
+import 'collapsible_bottom_sheet.dart';
 import 'note_sutra_links.dart';
 import 'shanzhishi_store.dart';
 
@@ -40,7 +42,23 @@ class ShanZhiShiEditSheet extends StatefulWidget {
     ShanyishiEntry? entry,
     String? initialSutra,
     List<String>? initialParagraphs,
+    bool collapsible = false,
+    String? collapsedTitle,
   }) {
+    final sheet = ShanZhiShiEditSheet(
+      index: index,
+      entry: entry,
+      initialSutra: initialSutra,
+      initialParagraphs: initialParagraphs,
+    );
+    if (collapsible) {
+      return showCollapsibleBottomSheet<int>(
+        context,
+        collapsedTitle: collapsedTitle ??
+            (index == null && entry == null ? '添加善知识' : '编辑善知识'),
+        builder: (_) => sheet,
+      );
+    }
     return showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
@@ -52,12 +70,7 @@ class ShanZhiShiEditSheet extends StatefulWidget {
       // 固定占屏幕 90% 高：引用段落往往较多，给足编辑空间。
       builder: (_) => FractionallySizedBox(
         heightFactor: 0.9,
-        child: ShanZhiShiEditSheet(
-          index: index,
-          entry: entry,
-          initialSutra: initialSutra,
-          initialParagraphs: initialParagraphs,
-        ),
+        child: sheet,
       ),
     );
   }
@@ -81,7 +94,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
   /// 当前激活的经文：下面显示的就是它的人天利益；null = 无经文可选。
   String? _activeSutra;
 
-  /// 人天利益输入区的字形：与 [_ParaRulePainter] 的测量共用同一套字号行高。
+  /// 人天利益输入区的字形：与 [ParaRulePainter] 的测量共用同一套字号行高。
   TextStyle get _paraStyle =>
       TextStyle(fontSize: 14, color: AppPalette.p.text, height: 1.8);
 
@@ -142,7 +155,10 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
       // 只把「还没挂到任何经文下」的旧段落归到第一条经文；
       // 已经在某部经名下、只是被镜像进平铺池的那些不重复搬。
       final tied = <String>{for (final l in quotes.values) ...l};
-      final loose = [for (final t in flat) if (!tied.contains(t)) t];
+      final loose = [
+        for (final t in flat)
+          if (!tied.contains(t)) t
+      ];
       if (loose.isNotEmpty) {
         final first = _sutras.first;
         quotes[first] = [...loose, ...?quotes[first]];
@@ -160,8 +176,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
       for (final s in _sutras)
         s: _newParaCtrl((quotes[s] ?? const []).join('\n\n')),
     };
-    _flatCtrl =
-        _sutras.isEmpty ? _newParaCtrl(flat.join('\n\n')) : null;
+    _flatCtrl = _sutras.isEmpty ? _newParaCtrl(flat.join('\n\n')) : null;
     _activeSutra = _sutras.isEmpty ? null : _sutras.first;
   }
 
@@ -199,70 +214,14 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
     super.dispose();
   }
 
-  /// 量出当前输入区里每处「段间分界」的 y：行位一律问在渲染这段文字的
-  /// [RenderEditable] 要，跟屏幕上的字共用一套坐标，折行/字体/行高都不必猜。
-  /// 分界两侧隔着空行时画在空档正中，紧挨着（一行一段的口径）就画在交界。
+  /// 量出当前输入区里每处「段间分界」的 y 并刷新虚线层（人天利益）。
   void _measureParaRules() {
     if (!mounted) return;
-    List<double> next = const [];
     final ctrl = _activeParaCtrl;
-    final box = _paraStackKey.currentContext?.findRenderObject() as RenderBox?;
-    final editable = box == null ? null : _findRenderEditable(box);
-    if (ctrl != null && editable != null) {
-      final raw = ctrl.text.replaceAll('\r\n', '\n');
-      final lines = raw.split('\n');
-      final starts = <int>[];
-      var acc = 0;
-      for (final l in lines) {
-        starts.add(acc);
-        acc += l.length + 1;
-      }
-      // RenderEditable 在输入区里的纵向原点（正常就是 0，取出来更保险）。
-      final originY =
-          editable.localToGlobal(Offset.zero, ancestor: box).dy;
-      double lineTop(int line) => originY +
-          editable
-              .getLocalRectForCaret(
-                  TextPosition(offset: starts[line].clamp(0, raw.length)))
-              .top;
-
-      final rules = <double>[];
-      final ranges = paragraphLineRanges(lines);
-      for (var k = 0; k < ranges.length; k++) {
-        final b = ranges[k].$2;
-        if (k + 1 < ranges.length) {
-          final nextStart = ranges[k + 1].$1;
-          final gapTop = lineTop(b);
-          // 空行隔开的一段：画在空档正中；相邻两行就直接画在交界上。
-          rules.add(nextStart > b
-              ? (gapTop + lineTop(nextStart)) / 2
-              : lineTop(nextStart));
-        } else if (b < lines.length) {
-          // 末尾还留着的空行：同样居中（光标所在那一行的下沿就是空档底）。
-          final caret = editable.getLocalRectForCaret(
-              TextPosition(offset: raw.length));
-          rules.add((lineTop(b) + originY + caret.bottom) / 2);
-        }
-      }
-      next = rules;
-    }
+    final next = ctrl == null
+        ? const <double>[]
+        : measureParagraphRules(stackKey: _paraStackKey, ctrl: ctrl);
     if (!listEquals(_paraRules.value, next)) _paraRules.value = next;
-  }
-
-  /// 从输入区往下找出真正排字的那个 [RenderEditable]。
-  RenderEditable? _findRenderEditable(RenderObject root) {
-    RenderEditable? found;
-    void visit(RenderObject o) {
-      if (found != null) return;
-      if (o is RenderEditable) {
-        found = o;
-        return;
-      }
-      o.visitChildren(visit);
-    }
-
-    visit(root);
-    return found;
   }
 
   // ─────────── 待选经文浮层 ───────────
@@ -409,18 +368,14 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
   TextEditingController? get _activeParaCtrl =>
       _activeSutra != null ? _paraCtrls[_activeSutra] : _flatCtrl;
 
-  /// 已录入过有相同字符的名号时（≥2 个相同字符就算，通用尊称不计），弹合并选择框：
-  /// 点某一位 = 与它并成一条、保留它的名字；「合并到当前名号」= 反过来，
-  /// 保留刚输入的名字、把相似条目并进来后删掉。底部仍可「两个都留着」；
-  /// 名字与某条完全同名时不再提供「两个都留着」（一样的名字留两条没有意义）。
+  /// 已录入过有相同字符的名号时（≥2 个相同字符就算，通用尊称不计），
+  /// 弹提示框：只有两个方向——点某一位 = 合并到这位旧名号（保留它的名字）；
+  /// 「保存两者」= 各存各的。候选名号完整显示，不做省略。
   /// 返回 null 表示取消（留在面板上继续编辑）。
   Future<_SimilarPick?> _chooseSimilarTargets(
     List<(int, String)> candidates,
   ) {
     final p = AppPalette.p;
-    final query = _nameCtrl.text.trim();
-    // 完全同名：两条名字一模一样，直接要求合并。
-    final exact = candidates.any((c) => c.$2 == query);
     return showDialog<_SimilarPick>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -432,15 +387,16 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
               fontSize: 17, fontWeight: FontWeight.w600, color: p.text),
         ),
         content: SizedBox(
-          width: 280,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (var i = 0; i < candidates.length; i++)
-                _similarTargetRow(i, candidates[i], p),
-              _keepNewNameRow(p, query),
-            ],
+          width: 300,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < candidates.length; i++)
+                  _similarTargetRow(i, candidates[i], p),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -448,18 +404,17 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
             onPressed: () => Navigator.pop(ctx),
             child: Text('取消', style: TextStyle(color: p.textSec)),
           ),
-          if (!exact)
-            TextButton(
-              key: const ValueKey('shanzhishi_add_new'),
-              onPressed: () => Navigator.pop(ctx, _SimilarPick(-1)),
-              child: Text('两个都留着', style: TextStyle(color: p.accentDeep)),
-            ),
+          TextButton(
+            key: const ValueKey('shanzhishi_add_new'),
+            onPressed: () => Navigator.pop(ctx, const _SimilarPick(-1)),
+            child: Text('保存两者', style: TextStyle(color: p.accentDeep)),
+          ),
         ],
       ),
     );
   }
 
-  /// 一条候选项：合并到这一位（保留它的名字）。
+  /// 一条候选项：合并到这一位（保留它的名字）。名字完整换行显示。
   /// 第一条沿用旧的 key，便于既有测试与外部语义对齐。
   Widget _similarTargetRow(int i, (int, String) cand, PaletteData p) {
     final key = i == 0
@@ -474,46 +429,19 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Text(
                   '合并到「${cand.$2}」（已有名号）',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  softWrap: true,
                   style: TextStyle(fontSize: 14.5, color: p.text, height: 1.4),
                 ),
               ),
-              Icon(Icons.chevron_right, size: 18, color: p.textHint),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 「合并到当前名号」这一行：合并方向反过来——保留刚输入的名号，
-  /// 把上面那些相似名号的内容并进来后删掉它们。
-  Widget _keepNewNameRow(PaletteData p, String query) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        key: const ValueKey('shanzhishi_keep_new_name'),
-        onTap: () =>
-            Navigator.of(context).pop(const _SimilarPick(-1, keepNewName: true)),
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '合并到当前「$query」（当前名号）',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 14.5, color: p.text, height: 1.4),
-                ),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(Icons.chevron_right, size: 18, color: p.textHint),
               ),
-              Icon(Icons.chevron_right, size: 18, color: p.textHint),
             ],
           ),
         ),
@@ -567,19 +495,9 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
           paragraphs: paragraphs,
           quotes: quotes,
         );
-        if (pick.keepNewName) {
-          // 反向合并：保留刚输入的名号，把每条相似名号并进来后删掉。
-          result = index;
-          for (final (_, candName) in similar) {
-            final live = store.entries.indexWhere((e) => e.name == candName);
-            if (live < 0) continue;
-            result = await store.mergeAndRemove(live, result);
-          }
-        } else {
-          result = pick.targetIndex >= 0
-              ? await store.mergeAndRemove(index, pick.targetIndex)
-              : index;
-        }
+        result = pick.targetIndex >= 0
+            ? await store.mergeAndRemove(index, pick.targetIndex)
+            : index;
       } catch (_) {
         if (mounted) setState(() => _saving = false);
         return;
@@ -589,8 +507,8 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
       return;
     }
 
-    // 新增：同样按「摘掉通用尊称后 ≥2 个相同字符」查重，列出全部候选名号
-    // （色字标出共同字符），用户选合并方向，或「两个都留着」另起一位。
+    // 新增：同样按「摘掉通用尊称后 ≥2 个相同字符」查重，列出全部候选名号，
+    // 用户选合并到旧的，或「保存两者」另起一位。
     final similar = store.findSimilarEntries(name);
     var pick = const _SimilarPick(-1);
     if (similar.isNotEmpty) {
@@ -605,21 +523,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
 
     int result;
     try {
-      if (pick.keepNewName) {
-        // 反向合并：先按新名号另起一位，再把每条相似名号并进来后删掉。
-        result = await store.add(
-          name,
-          _sutras,
-          paragraphs: paragraphs,
-          quotes: quotes,
-          allowDuplicate: true,
-        );
-        for (final (_, candName) in similar) {
-          final live = store.entries.indexWhere((e) => e.name == candName);
-          if (live < 0) continue;
-          result = await store.mergeAndRemove(live, result);
-        }
-      } else if (pick.targetIndex >= 0) {
+      if (pick.targetIndex >= 0) {
         result = await store.mergeInto(
           pick.targetIndex,
           sutras: _sutras,
@@ -632,7 +536,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
           _sutras,
           paragraphs: paragraphs,
           quotes: quotes,
-          // 用户已明确选「两个都留着」：同名也另起一位，不再默默合并。
+          // 用户已明确选「保存两者」：同名也另起一位，不再默默合并。
           allowDuplicate: similar.isNotEmpty,
         );
       }
@@ -669,10 +573,11 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                     ),
                   ),
                 ),
-                GestureDetector(
-                  onTap: () => Navigator.pop(context),
-                  child: Icon(Icons.close, size: 20, color: p.textSec),
-                ),
+                if (_isEdit)
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Icon(Icons.close, size: 20, color: p.textSec),
+                  ),
               ],
             ),
           ),
@@ -692,7 +597,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                         fontSize: 16, color: p.text, letterSpacing: 1),
                     decoration: InputDecoration(
                       counterText: '',
-                      hintText: '如：地藏王菩萨',
+                      hintText: '地藏菩萨',
                       hintStyle: TextStyle(fontSize: 14, color: p.textHint),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
@@ -774,8 +679,9 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                         children: [
                           Positioned.fill(
                             child: CustomPaint(
-                              key: const ValueKey('shanzhishi_paragraphs_rules'),
-                              painter: _ParaRulePainter(
+                              key:
+                                  const ValueKey('shanzhishi_paragraphs_rules'),
+                              painter: ParaRulePainter(
                                 // 用 hint 灰而不是 border 米白：太浅的线等于没画，
                                 // 这段虚线要能让用户一眼看出「这里已经分段了」。
                                 rules: _paraRules.value,
@@ -790,6 +696,10 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                             maxLines: null,
                             keyboardType: TextInputType.multiline,
                             textAlignVertical: TextAlignVertical.top,
+                            // 回车＝换一段：一个换行自动补成「空行＋新行」。
+                            inputFormatters: const [
+                              ParagraphBreakInputFormatter(),
+                            ],
                             style: _paraStyle,
                             decoration: InputDecoration(
                               isCollapsed: true,
@@ -821,9 +731,8 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                 ),
                 const SizedBox(width: 6),
                 FilledButton(
-                  onPressed: _nameCtrl.text.trim().isEmpty || _saving
-                      ? null
-                      : _save,
+                  onPressed:
+                      _nameCtrl.text.trim().isEmpty || _saving ? null : _save,
                   style: FilledButton.styleFrom(
                     backgroundColor: p.primary,
                     foregroundColor: p.card,
@@ -832,7 +741,7 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
                         horizontal: 22, vertical: 10),
                     textStyle: const TextStyle(fontSize: 14),
                   ),
-                  child: Text(_isEdit ? '保存' : '添加'),
+                  child: const Text('保存'),
                 ),
               ],
             ),
@@ -888,14 +797,12 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
   }
 }
 
-/// 新增/编辑时遇到同名 / 高度相似名号，用户在合并提示里选的处理方式：
-/// [targetIndex] ≥ 0 = 并进该位（保留它的名字）；< 0 = 不并进已有条目，
-/// 此时 [keepNewName] 为 true 表示反过来合并——保留刚输入的名号、
-/// 把相似条目并进来后删掉；false = 「两个都留着」，各存各的。
+/// 新增/编辑时遇到同名 / 高度相似名号，用户在提示框里选的处理方式：
+/// [targetIndex] ≥ 0 = 并进该位（保留它的名字）；< 0 = 「保存两者」，
+/// 各存各的（同名也各算一位）。
 class _SimilarPick {
-  const _SimilarPick(this.targetIndex, {this.keepNewName = false});
+  const _SimilarPick(this.targetIndex);
   final int targetIndex;
-  final bool keepNewName;
 }
 
 /// 人天利益的分段口径（保存与画虚线共用）：空行分段；整段没有空行时一行一段。
@@ -921,11 +828,125 @@ List<(int, int)> paragraphLineRanges(List<String> lines) {
   return ranges;
 }
 
-/// 人天利益输入区的段间虚线。位置不在这里算：由 [_measureParaRules] 从
+/// 量出输入区里每处「段间分界」的 y：行位一律问在渲染这段文字的
+/// [RenderEditable] 要，跟屏幕上的字共用一套坐标，折行/字体/行高都不必猜。
+/// 分界两侧隔着空行时画在空档正中，紧挨着（一行一段的口径）就画在交界。
+/// 末尾空行：光标若已落到空行下面一行（回车后的新位置），空档只算到光标
+/// 行顶，虚线画在空行正中、光标在线下；光标还停在空行上时盖住光标那一行。
+List<double> measureParagraphRules({
+  required GlobalKey stackKey,
+  required TextEditingController ctrl,
+}) {
+  final box = stackKey.currentContext?.findRenderObject() as RenderBox?;
+  if (box == null) return const [];
+  final editable = _findRenderEditable(box);
+  if (editable == null) return const [];
+  final raw = ctrl.text.replaceAll('\r\n', '\n');
+  final lines = raw.split('\n');
+  final starts = <int>[];
+  var acc = 0;
+  for (final l in lines) {
+    starts.add(acc);
+    acc += l.length + 1;
+  }
+  // RenderEditable 在输入区里的纵向原点（正常就是 0，取出来更保险）。
+  final originY = editable.localToGlobal(Offset.zero, ancestor: box).dy;
+  double lineTop(int line) =>
+      originY +
+      editable
+          .getLocalRectForCaret(
+              TextPosition(offset: starts[line].clamp(0, raw.length)))
+          .top;
+
+  final rules = <double>[];
+  final ranges = paragraphLineRanges(lines);
+  for (var k = 0; k < ranges.length; k++) {
+    final b = ranges[k].$2;
+    if (k + 1 < ranges.length) {
+      final nextStart = ranges[k + 1].$1;
+      final gapTop = lineTop(b);
+      // 空行隔开的一段：画在空档正中；相邻两行就直接画在交界上。
+      rules.add(nextStart > b
+          ? (gapTop + lineTop(nextStart)) / 2
+          : lineTop(nextStart));
+    } else if (b < lines.length) {
+      // 末尾还留着的空行。光标（量的就是文末位置）已经落到空行下面一行时，
+      // 空档算到光标行顶为止；还停在同一行时按旧行为盖住光标那一行。
+      final caretLine = lines.length - 1;
+      if (caretLine > b) {
+        rules.add((lineTop(b) + lineTop(caretLine)) / 2);
+      } else {
+        final caret =
+            editable.getLocalRectForCaret(TextPosition(offset: raw.length));
+        rules.add((lineTop(b) + originY + caret.bottom) / 2);
+      }
+    }
+  }
+  return rules;
+}
+
+/// 从输入区往下找出真正排字的那个 [RenderEditable]。
+RenderEditable? _findRenderEditable(RenderObject root) {
+  RenderEditable? found;
+  void visit(RenderObject o) {
+    if (found != null) return;
+    if (o is RenderEditable) {
+      found = o;
+      return;
+    }
+    o.visitChildren(visit);
+  }
+
+  visit(root);
+  return found;
+}
+
+/// 段落输入区的回车口径：按一下回车＝换一段。平台只送来一个换行，这里把
+/// 它扩成「空行＋新行」并把光标放到空行下面——段间虚线随即画出，用户不必
+/// 再按一次回车去追光标。光标两侧已贴着的空行会被收成一个（光标已经在空行
+/// 下面时回车等于没按，不叠空行）；粘贴、删字、组字中的输入原样放行。
+class ParagraphBreakInputFormatter extends TextInputFormatter {
+  const ParagraphBreakInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final oldText = oldValue.text;
+    final newText = newValue.text;
+    // 只拦「恰好插进一个换行」的编辑。
+    if (!newValue.selection.isCollapsed ||
+        !newValue.composing.isCollapsed ||
+        newText.length != oldText.length + 1) {
+      return newValue;
+    }
+    final caret = newValue.selection.extentOffset;
+    if (caret < 1 || newText[caret - 1] != '\n') return newValue;
+    if (newText.substring(0, caret - 1) + newText.substring(caret) != oldText) {
+      return newValue;
+    }
+    // 把插入点两侧贴着的换行收成一个空行，光标落在空行下面。
+    var start = caret - 1;
+    while (start > 0 && oldText[start - 1] == '\n') {
+      start--;
+    }
+    var end = caret - 1;
+    while (end < oldText.length && oldText[end] == '\n') {
+      end++;
+    }
+    final head = oldText.substring(0, start);
+    final tail = oldText.substring(end);
+    return TextEditingValue(
+      text: '$head\n\n$tail',
+      selection: TextSelection.collapsed(offset: head.length + 2),
+    );
+  }
+}
+
+/// 段落输入区的段间虚线。位置不在这里算：由 [measureParagraphRules] 从
 /// 真正的 `RenderEditable` 上量好每处「段间分界」的 y 交进来，这里只负责画，
 /// 所以线跟字永远是同一套坐标，不会穿到上一段的字里去。
-class _ParaRulePainter extends CustomPainter {
-  _ParaRulePainter({required this.rules, required this.color});
+class ParaRulePainter extends CustomPainter {
+  ParaRulePainter({required this.rules, required this.color});
 
   /// 每处「段间分界」在输入区坐标里的 y。
   final List<double> rules;
@@ -955,6 +976,6 @@ class _ParaRulePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ParaRulePainter old) =>
+  bool shouldRepaint(ParaRulePainter old) =>
       old.color != color || !listEquals(old.rules, rules);
 }

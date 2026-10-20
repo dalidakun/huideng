@@ -67,6 +67,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   // ── 底部上拉面板（与经藏页「全部经典」同款） ──
   static const double _shelfHeaderH = 50;
+
   /// 密咒详情 header：名称与顶部横杠之间多留空，比佛号 header 高一截。
   static const double _mxHeaderH = 56;
   static const double _shelfOpenTopExtra = 12;
@@ -88,6 +89,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
 
   /// 当前打开的密咒名；null = 面板不显示。
   String? _mxDetailName;
+
+  /// 当前打开的密咒内部键（同名条目靠它区分详情与编辑目标）。
+  String? _mxDetailKey;
 
   /// 密咒面板是否处于展开态（收起动画播完才回到 false，动画中重开不卸载）。
   bool _mxShelfExpanded = false;
@@ -118,6 +122,37 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     unawaited(_store.load());
     unawaited(_mxStore.load());
     unawaited(NoteSutraCatalog.load());
+  }
+
+  /// 云端数据恢复后重读两套 store，并按名号恢复当前选中项，
+  /// 避免页面继续展示同步前写入的本地种子。
+  Future<void> reload() async {
+    final selected = _selected;
+    final selectedName =
+        selected != null && selected >= 0 && selected < _store.length
+            ? _store.entries[selected].name
+            : null;
+    final mxDetailName = _mxDetailName;
+    await Future.wait([_store.reload(), _mxStore.reload()]);
+    if (!mounted) return;
+    int? nextSelected;
+    if (selectedName != null) {
+      final idx = _store.entries.indexWhere((e) => e.name == selectedName);
+      if (idx >= 0) nextSelected = idx;
+    }
+    setState(() {
+      _selected = nextSelected;
+      if (mxDetailName != null && !_mxStore.mantras.contains(mxDetailName)) {
+        _mxDetailName = null;
+        _mxDetailKey = null;
+      }
+    });
+    final target = nextSelected;
+    if (target != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _sphereCtrl.animateToIndex(target);
+      });
+    }
   }
 
   @override
@@ -238,11 +273,14 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     await ShanZhiShiMantraEditSheet.show(context);
   }
 
-  /// 点某条密咒：在本页底部拉出详情抽屉，查看经文出处与神咒原文。
+  /// 点某条密咒：在本页底部拉出详情抽屉，查看经文出处、神咒原文与人天利益。
   /// 抽屉与点佛号弹出的面板同款（上滑动画、圆角、阴影、同底色）。
   /// 详情里的经文出处与佛号页一样，点一下进入阅读。
-  void _openMantraDetail(String name) {
+  /// [key] 是密咒的内部键（同名条目也能各看各的）。
+  void _openMantraDetail(String key) {
+    final name = _mxStore.nameOfKey(key) ?? '';
     setState(() {
+      _mxDetailKey = key;
       _mxDetailName = name;
       _mxShelfExpanded = true;
       // 面板占了右下角：悬浮球先收起，免得压住面板。
@@ -255,7 +293,12 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   void _closeMxShelf() {
     _mxShelfExpanded = false;
     _mxShelfController.reverse().whenComplete(() {
-      if (!_mxShelfExpanded && mounted) setState(() => _mxDetailName = null);
+      if (!_mxShelfExpanded && mounted) {
+        setState(() {
+          _mxDetailName = null;
+          _mxDetailKey = null;
+        });
+      }
     });
   }
 
@@ -281,9 +324,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 松手吸附：甩动够快按甩动方向，否则吸到离得最近的一端。
   void _onMxShelfDragEnd(DragEndDetails d) {
     final velocity = d.primaryVelocity ?? 0;
-    final open = velocity.abs() > 350
-        ? velocity < 0
-        : _mxShelfController.value >= 0.5;
+    final open =
+        velocity.abs() > 350 ? velocity < 0 : _mxShelfController.value >= 0.5;
     if (open) {
       _mxShelfExpanded = true;
       _mxShelfController.forward();
@@ -386,8 +428,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     if (resolved == null || resolved.filePath.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('经藏里没有找到「$title」',
-              style: const TextStyle(fontSize: 13)),
+          content:
+              Text('经藏里没有找到「$title」', style: const TextStyle(fontSize: 13)),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -478,9 +520,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 松手吸附：甩动够快按甩动方向，否则吸到离得最近的一端。
   void _onShelfDragEnd(DragEndDetails d) {
     final velocity = d.primaryVelocity ?? 0;
-    final open = velocity.abs() > 350
-        ? velocity < 0
-        : _shelfController.value >= 0.5;
+    final open =
+        velocity.abs() > 350 ? velocity < 0 : _shelfController.value >= 0.5;
     if (open) {
       _openShelf();
     } else {
@@ -505,11 +546,11 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   ///
   /// 子按钮方向为 0°（正前）/ 45° / 90°（正上）：球在右半屏就朝左展开、
   /// 在下半屏就朝上展开（靠近边缘时自动反向，弧线始终落在屏内）。
-  String get _fabPrefix => _pageIdx == 0 ? 'shanzhishi_fab' : 'shanzhishi_mx_fab';
+  String get _fabPrefix =>
+      _pageIdx == 0 ? 'shanzhishi_fab' : 'shanzhishi_mx_fab';
 
   Widget _buildFabLayer(MediaQueryData mq) {
-    const double box =
-        _fabRadius + _fabItemSize / 2 + _fabToggleSize / 2 + 4;
+    const double box = _fabRadius + _fabItemSize / 2 + _fabToggleSize / 2 + 4;
     final prefix = _fabPrefix;
     final bool onMantra = _pageIdx != 0;
     return Positioned.fill(
@@ -565,8 +606,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                         ballInBox: ballInBox,
                         tooltip: '添加',
                         heroTag: '${prefix}_add',
-                        onTap: () => _runFabAction(
-                            onMantra ? _openMantraAdd : _openAdd),
+                        onTap: () =>
+                            _runFabAction(onMantra ? _openMantraAdd : _openAdd),
                         child: const Icon(Icons.add, size: 22),
                       ),
                       // 搜索：佛号屏搜名号，密咒屏搜密咒。
@@ -578,8 +619,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                         ballInBox: ballInBox,
                         tooltip: '搜索',
                         heroTag: '${prefix}_search',
-                        onTap: () =>
-                            _runFabAction(onMantra ? _openMxSearch : _openSearch),
+                        onTap: () => _runFabAction(
+                            onMantra ? _openMxSearch : _openSearch),
                         child: const Icon(Icons.search, size: 20),
                       ),
                       // 切换：直接换到另一屏（两页同一个入口；当前屏与目标跟随 _pageIdx）。
@@ -843,62 +884,62 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                 const SizedBox(height: 8),
                 // 结果浮层同佛号搜索：只随查询文本重建，不整页 setState。
                 ListenableBuilder(
-                  listenable: _mxSearchCtrl,
-                  builder: (context, _) {
-                    final query = _mxSearchCtrl.text.trim();
-                    if (query.isEmpty) return const SizedBox.shrink();
-                    return Material(
-                      key: const ValueKey('shanzhishi_mx_search_results'),
-                      color: p.card,
-                      elevation: 6,
-                      shadowColor: Colors.black.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(12),
-                      clipBehavior: Clip.antiAlias,
-                      child: ConstrainedBox(
-                        constraints:
-                            BoxConstraints(maxHeight: mq.size.height * 0.4),
-                        child: _mxSearchHits.isEmpty
-                            ? Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 14),
-                                child: Text(
-                                  '没有找到「$query」',
-                                  style: TextStyle(
-                                      fontSize: 13.5, color: p.textSec),
-                                ),
-                              )
-                            : Builder(builder: (context) {
-                                final hits = _mxSearchHits;
-                                return ListView.builder(
-                                  shrinkWrap: true,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 4),
-                                  itemCount: hits.length,
-                                  itemBuilder: (_, i) {
-                                    final mantra = hits[i];
-                                    return InkWell(
-                                      onTap: () => _onMxSearchHit(mantra),
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 16, vertical: 13),
-                                        child: Text(
-                                          mantra,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 15,
-                                            color: p.text,
-                                            letterSpacing: 0.8,
+                    listenable: _mxSearchCtrl,
+                    builder: (context, _) {
+                      final query = _mxSearchCtrl.text.trim();
+                      if (query.isEmpty) return const SizedBox.shrink();
+                      return Material(
+                        key: const ValueKey('shanzhishi_mx_search_results'),
+                        color: p.card,
+                        elevation: 6,
+                        shadowColor: Colors.black.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(12),
+                        clipBehavior: Clip.antiAlias,
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(maxHeight: mq.size.height * 0.4),
+                          child: _mxSearchHits.isEmpty
+                              ? Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 14),
+                                  child: Text(
+                                    '没有找到「$query」',
+                                    style: TextStyle(
+                                        fontSize: 13.5, color: p.textSec),
+                                  ),
+                                )
+                              : Builder(builder: (context) {
+                                  final hits = _mxSearchHits;
+                                  return ListView.builder(
+                                    shrinkWrap: true,
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 4),
+                                    itemCount: hits.length,
+                                    itemBuilder: (_, i) {
+                                      final mantra = hits[i];
+                                      return InkWell(
+                                        onTap: () => _onMxSearchHit(mantra),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 16, vertical: 13),
+                                          child: Text(
+                                            mantra,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 15,
+                                              color: p.text,
+                                              letterSpacing: 0.8,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    );
-                                  },
-                                );
-                              }),
+                                      );
+                                    },
+                                  );
+                                }),
                         ),
                       );
-                }),
+                    }),
               ],
             ),
           ),
@@ -929,9 +970,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
         // 只由悬浮球的「切换」子按钮点选互换；切页没有过场动画。
         // 右下角悬浮球两页共用一颗、固定在屏幕上不随切页移动，
         // 搜索浮层也提到两屏之外（搜索开着时悬浮球必须压在它下面）。
-        final bool showFab = _selected == null &&
-            !_shelfExpanded &&
-            _mxDetailName == null;
+        final bool showFab =
+            _selected == null && !_shelfExpanded && _mxDetailName == null;
         return Stack(
           children: [
             IndexedStack(
@@ -954,7 +994,6 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                           onNameTapped: _onNameTapped,
                           // 转动落定不再配音：随球自转/磁吸落定会不定期冒
                           // 声，像气泡音；点选等主动操作的提示音保留。
-
                         ),
                       ),
                     ),
@@ -968,7 +1007,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                               strokeWidth: 1.4, color: p.textHint),
                         ),
                       )
-                    else if (names.isEmpty) _buildEmptySphere(p),
+                    else if (names.isEmpty)
+                      _buildEmptySphere(p),
                     if (entry != null) _buildShelf(p, entry),
                   ],
                 ),
@@ -1008,7 +1048,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             const SizedBox(height: 90),
             Text(
               '球面还没有名号',
-              style: TextStyle(fontSize: 14, color: p.textSec, letterSpacing: 1),
+              style:
+                  TextStyle(fontSize: 14, color: p.textSec, letterSpacing: 1),
             ),
             const SizedBox(height: 6),
             Text(
@@ -1304,8 +1345,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       children: [
         Positioned.fill(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(
-                _shelfSidePad, 10, _shelfSidePad, 88),
+            padding:
+                const EdgeInsets.fromLTRB(_shelfSidePad, 10, _shelfSidePad, 88),
             children: [
               if (entry.sutras.isEmpty)
                 Padding(
@@ -1323,7 +1364,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                 for (var i = 0; i < entry.sutras.length; i++) ...[
                   if (i > 0) const SizedBox(height: 18),
                   _sutraLinkRow(p, entry.sutras[i]),
-                  for (final t in entry.quotes[entry.sutras[i]] ?? const <String>[])
+                  for (final t
+                      in entry.quotes[entry.sutras[i]] ?? const <String>[])
                     _paragraphBlock(p, t),
                 ],
               if (_looseParagraphs(entry).isNotEmpty) ...[
@@ -1467,35 +1509,43 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
   }
 
-  /// 密咒详情内容：神咒原文（纯文字、无色块、无小标题）+ 经文出处（整行色块、
-  /// 右侧箭头，点进阅读页）。右下角固定与佛号面板同款的编辑按钮。
+  /// 密咒详情内容：神咒原文（居左、纯文字、无色块、无小标题，带注音 / 备注）
+  /// + 经文出处（整行色块、右侧箭头，点进阅读页）+ 人天利益。
+  /// 右下角固定与佛号面板同款的编辑按钮。
   Widget _buildMxShelfContent(PaletteData p) {
-    final name = _mxDetailName ?? '';
-    final source = _mxStore.sourceOf(name);
-    final text = _mxStore.textOf(name);
+    final key = _mxDetailKey;
+    final source = _mxStore.sourceOfKey(key);
+    final text = _mxStore.textOfKey(key);
+    final benefit = _mxStore.benefitOfKey(key);
+    final annotations = _mxStore.annotationsOfKey(key);
     return Stack(
       children: [
         Positioned.fill(
           child: ListView(
-            padding: EdgeInsets.fromLTRB(
-                _shelfSidePad, 16, _shelfSidePad, 88),
+            padding: EdgeInsets.fromLTRB(_shelfSidePad, 16, _shelfSidePad, 88),
             children: [
               if (text.isEmpty)
                 Text(
                   '尚未填写神咒原文',
                   style: TextStyle(fontSize: 15, color: p.textHint),
                 )
-              else
+              else if (annotations.isEmpty)
                 SelectableText(
                   text,
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 16,
                     height: 1.9,
                     color: p.text,
                     letterSpacing: 0.5,
                   ),
+                )
+              else
+                SelectionArea(
+                  child: Text.rich(
+                    _buildAnnotatedMantraSpan(p, text, annotations),
+                  ),
                 ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 20),
               if (source.isEmpty)
                 Text(
                   '尚未填写经文出处',
@@ -1538,6 +1588,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                     ),
                   ),
                 ),
+              for (final t in benefit) _paragraphBlock(p, t),
             ],
           ),
         ),
@@ -1546,24 +1597,96 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
           bottom: 16,
           child: _PanelEditButton(
             palette: p,
-            onTap: () => _editMantra(name),
+            onTap: _editMantra,
           ),
         ),
       ],
     );
   }
 
-  /// 密咒面板右下角「编辑」：打开与「添加」同款的面板（回填三项，可改名/改内容）。
+  /// 把带批注的神咒原文拼成富文本：注音显示在选中文字上方，
+  /// 备注以更小的字显示在文字下方；正文本身不改动。
+  TextSpan _buildAnnotatedMantraSpan(
+    PaletteData p,
+    String text,
+    List<MantraAnnotation> annotations,
+  ) {
+    final body = TextStyle(
+      fontSize: 16,
+      height: 1.9,
+      color: p.text,
+      letterSpacing: 0.5,
+    );
+    final rubyStyle = TextStyle(
+      fontSize: 10,
+      height: 1.2,
+      fontWeight: FontWeight.w600,
+      color: p.accentDeep,
+    );
+    final noteStyle = TextStyle(
+      fontSize: 11,
+      height: 1.4,
+      color: p.textSec,
+    );
+    final sorted = [...annotations]
+      ..sort((a, b) => a.start != b.start ? a.start - b.start : a.end - b.end);
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final ann in sorted) {
+      final s = ann.start.clamp(0, text.length);
+      final e = ann.end.clamp(0, text.length);
+      if (e <= s || s < cursor) continue;
+      if (s > cursor) spans.add(TextSpan(text: text.substring(cursor, s)));
+      spans.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (ann.hasRuby) Text(ann.ruby, style: rubyStyle),
+            Text(text.substring(s, e), style: body),
+            if (ann.hasNote)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(ann.note, style: noteStyle),
+              ),
+          ],
+        ),
+      ));
+      cursor = e;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor)));
+    }
+    return TextSpan(style: body, children: spans);
+  }
+
+  /// 密咒面板右下角「编辑」：打开与「添加」同款的面板（回填各项，可改名/改内容）。
   /// 名称被删空保存 = 删除这条密咒，详情抽屉随之收起。
-  Future<void> _editMantra(String name) async {
-    final saved = await ShanZhiShiMantraEditSheet.show(context, editing: name);
+  Future<void> _editMantra() async {
+    final name = _mxDetailName ?? '';
+    final key = _mxDetailKey;
+    final saved = await ShanZhiShiMantraEditSheet.show(
+      context,
+      editing: name,
+      editingKey: key,
+    );
     if (!mounted) return;
     if (saved == null) return;
     if (saved.isEmpty) {
       _closeMxShelf();
       return;
     }
-    setState(() => _mxDetailName = saved);
+    // 合并到已有条目时，当前那条已被删掉，改按合并后的名字重新定位。
+    var newKey = key;
+    if (newKey == null || _mxStore.nameOfKey(newKey) == null) {
+      final idx = _mxStore.mantras.indexOf(saved);
+      newKey = idx >= 0 ? _mxStore.keyAt(idx) : null;
+    }
+    setState(() {
+      _mxDetailName = saved;
+      _mxDetailKey = newKey;
+    });
   }
 
   /// 一段人天利益：把「人天利益」四个字当作段落开头那几个字，只是多裹了一层
@@ -1579,8 +1702,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
               alignment: PlaceholderAlignment.baseline,
               baseline: TextBaseline.alphabetic,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: p.tintBg,
                   borderRadius: BorderRadius.circular(6),
@@ -1609,7 +1731,10 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 没挂到任何经文下的人天利益段落（旧数据迁移前的兜底展示）。
   static List<String> _looseParagraphs(ShanyishiEntry entry) {
     final tied = <String>{for (final l in entry.quotes.values) ...l};
-    return [for (final t in entry.paragraphs) if (!tied.contains(t)) t];
+    return [
+      for (final t in entry.paragraphs)
+        if (!tied.contains(t)) t
+    ];
   }
 
   /// 一部关联经文：整行一条色块（铺满宽度），右侧箭头就在色块里，点进阅读页。

@@ -229,8 +229,9 @@ class _MyAppState extends State<MyApp> {
             Positioned.fill(
               child: ValueListenableBuilder<bool>(
                 valueListenable: readingShortcutCover,
-                builder: (_, show, __) =>
-                    show ? const _ReadingShortcutCover() : const SizedBox.shrink(),
+                builder: (_, show, __) => show
+                    ? const _ReadingShortcutCover()
+                    : const SizedBox.shrink(),
               ),
             ),
           ],
@@ -342,15 +343,15 @@ class _AppEntryState extends State<_AppEntry> {
       widget.startupAction == ShortcutActions.continueReading;
 
   /// 桌面「新建笔记」快捷方式：跳过计时启动图，首帧后直接打开新建笔记输入框。
-  bool get _continueToNote =>
-      widget.startupAction == ShortcutActions.newNote;
+  bool get _continueToNote => widget.startupAction == ShortcutActions.newNote;
 
   @override
   void initState() {
     super.initState();
     if (_continueToReading) {
       // 跳过 2 秒启动图：首帧渲染出静态启动图 cover 后立即解析并打开阅读页。
-      WidgetsBinding.instance.addPostFrameCallback((_) => _openStartupReading());
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _openStartupReading());
     } else if (_continueToNote) {
       // 同理：首帧渲染出静态启动图 cover 后立即打开新建笔记输入框。
       WidgetsBinding.instance.addPostFrameCallback((_) => _openStartupNote());
@@ -634,7 +635,10 @@ class _MainPageState extends State<MainPage>
     _studyHubKey.currentState?.reload();
     _bodhiKey.currentState?.reload();
     _myKey.currentState?.reload();
+    unawaited(_shanZhiShiKey.currentState?.reload() ?? Future<void>.value());
     unawaited(_sutraListKey.currentState?.reload());
+    // 通知开关随 prefs 恢复后，重新按本机时区调度打卡提醒。
+    unawaited(NotificationService.instance.syncCheckinReminder());
   }
 
   /// 清理应用文档目录里残留的旧头像/横幅文件（只保留 prefs 当前引用的），
@@ -1377,7 +1381,8 @@ class _MainPageState extends State<MainPage>
     if (sect == null) return;
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => SectDetailPage(sect: sect, initialTab: 1)),
+      MaterialPageRoute(
+          builder: (_) => SectDetailPage(sect: sect, initialTab: 1)),
     );
   }
 
@@ -1474,9 +1479,7 @@ class _MainPageState extends State<MainPage>
                       ),
                   // Scaffold 的 FAB 定位读取的是 viewPadding，需同步加高，
                   // 否则右下角加号按钮会落到菜单栏上重叠。
-                  viewPadding: MediaQuery.of(context)
-                      .viewPadding
-                      .copyWith(
+                  viewPadding: MediaQuery.of(context).viewPadding.copyWith(
                         bottom:
                             MediaQuery.of(context).viewPadding.bottom + navBase,
                       ),
@@ -1617,51 +1620,51 @@ class _BottomNavBar extends StatelessWidget {
         ),
       ),
       child: SafeArea(
-            top: false,
-            child: SizedBox(
-              height: base,
-              child: Row(
-                children: List.generate(items.length, (i) {
-                  final selected = i == currentIndex;
-                  final item = items[i];
-                  final Widget icon = selected ? item.activeIcon : item.icon;
-                  return Expanded(
-                    child: InkWell(
-                      onTap: () {
-                        // 点击菜单时播放清脆短暂的自带点击音效。
-                        UiSound.instance.playClick();
-                        onTap(i);
-                      },
-                      borderRadius: BorderRadius.circular(10),
-                      child: Center(
-                        child: SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 160),
-                            reverseDuration: const Duration(milliseconds: 70),
-                            switchInCurve: Curves.easeOutCubic,
-                            switchOutCurve: Curves.easeInCubic,
-                            transitionBuilder: (child, anim) => FadeTransition(
-                              opacity: anim,
-                              child: ScaleTransition(
-                                scale: Tween<double>(begin: 0.88, end: 1)
-                                    .animate(anim),
-                                child: child,
-                              ),
-                            ),
-                            child: KeyedSubtree(
-                              key: ValueKey<bool>(selected),
-                              child: Center(child: icon),
-                            ),
+        top: false,
+        child: SizedBox(
+          height: base,
+          child: Row(
+            children: List.generate(items.length, (i) {
+              final selected = i == currentIndex;
+              final item = items[i];
+              final Widget icon = selected ? item.activeIcon : item.icon;
+              return Expanded(
+                child: InkWell(
+                  onTap: () {
+                    // 点击菜单时播放清脆短暂的自带点击音效。
+                    UiSound.instance.playClick();
+                    onTap(i);
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: Center(
+                    child: SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 160),
+                        reverseDuration: const Duration(milliseconds: 70),
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        transitionBuilder: (child, anim) => FadeTransition(
+                          opacity: anim,
+                          child: ScaleTransition(
+                            scale: Tween<double>(begin: 0.88, end: 1)
+                                .animate(anim),
+                            child: child,
                           ),
+                        ),
+                        child: KeyedSubtree(
+                          key: ValueKey<bool>(selected),
+                          child: Center(child: icon),
                         ),
                       ),
                     ),
-                  );
-                }),
-              ),
-            ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
       ),
     );
 
@@ -2214,7 +2217,9 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
 
   /// 从当前露出量收合到 0，收完才把 WebView 让给其他入口（否则露出中途会闪没）。
   void _collapse() {
-    _ctrl.animateBack(0.0, curve: Curves.easeInOutCubic).whenCompleteOrCancel(() {
+    _ctrl
+        .animateBack(0.0, curve: Curves.easeInOutCubic)
+        .whenCompleteOrCancel(() {
       if (!mounted || homeReveal.value || homeRevealScrub.value > 0) return;
       AssistantSession.instance.release(AssistantSurface.home);
     });
@@ -2246,8 +2251,7 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
         // 圆点从主页开始下移、顶部露出 DeepSeek 区域时才出现（先是一个圆点），
         // 展开进度到临界点正好铺成三个。
         const double dotsStart = 0.1;
-        final dotsT =
-            ((t - dotsStart) / (_crit - dotsStart)).clamp(0.0, 1.0);
+        final dotsT = ((t - dotsStart) / (_crit - dotsStart)).clamp(0.0, 1.0);
         final dotsIn = (dotsT * 4).clamp(0.0, 1.0);
         // 越过临界点后圆点淡出，让位给逐渐清晰的 DeepSeek 页。
         final dotsOpacity = t <= _crit

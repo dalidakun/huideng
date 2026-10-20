@@ -24,6 +24,7 @@ import 'sect_community_page.dart';
 import 'sect_detail_page.dart';
 
 import 'app_palette.dart';
+
 Color get _gold => AppPalette.p.accent;
 Color get _bg => AppPalette.p.bg;
 Color get _card => AppPalette.p.card;
@@ -105,7 +106,10 @@ class BodhiSpacePage extends StatefulWidget {
 class BodhiSpacePageState extends State<BodhiSpacePage>
     with RouteAware, WidgetsBindingObserver {
   void reload() {
-    // 有新帖时只把新帖插入到顶部，避免「整页刷新」的体感。
+    // 云端恢复可能补回栏目顺序/自定义栏目，先重读本地配置再刷新内容。
+    unawaited(_loadTabOrder());
+    unawaited(_loadCustomTab());
+    // 被动刷新时只拉取最新进入的几条，避免「首页刷新」抢滚动。
     if (BodhiSpacePageState.newPostBadge.value > 0) {
       _refreshNewPostsOnly();
     } else {
@@ -123,11 +127,13 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
 
   int _tabIndex = 0;
   List<String> _plazaTabs = ['discuss', 'hot', 'follow'];
+
   /// 自定义工具栏：栏目名（默认「列表」，可改名）+ 经文/话题条目（数量不限），
   /// 点击工具栏上的自定义栏目向下展开列表，点击条目进入对应讨论页。
   String _customTabName = '列表';
   List<CustomTabItem> _customItems = const [];
   bool _customTabOpen = false;
+
   /// 自定义面板悬浮层：锚定在工具栏下边缘（LayerLink 跟随滚动），
   /// 以 OverlayEntry 盖在帖子流上方，而不是占位把内容挤下去。
   final LayerLink _customPanelLink = LayerLink();
@@ -145,49 +151,63 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   bool _feedInitial = true;
   bool _feedLoading = false;
   bool _feedError = false;
+
   /// 关注 tab 关注态刷新失败（登录失效）时的状态：
   /// 此时不能显示「还没有关注同修」的空态误导用户，需提示重新登录。
   bool _feedAuthDead = false;
+
   /// 点击「显示X条新帖子」后当前栏目切到「最新优先」视图：新帖从列表第一条开始展示。
   /// 推荐栏默认按热度排序，切到最新视图后新帖不会被旧热帖压住；切走栏目或下拉刷新后恢复默认。
   bool _feedNewestFirst = false;
   List<AnnouncementItem> _announcements = [];
+
   /// 有未读公告：右上角公告图标显示实体圆点角标（打开公告页即视为已读）。
   bool _hasUnreadAnnouncement = false;
   static const int _feedPageSize = 20;
+
   /// 讨论栏目顶部的热门话题 / 热门经文（云端按累计热度聚合降序返回）。
   /// 卡片上把全部条目铺出来显示，「更多」全量榜页复用同一份数据。
   List<HotDiscussionItem> _hotTopics = [];
   List<HotDiscussionItem> _hotSutras = [];
+
   /// 热门榜是否已成功拉取过一次：用于区分「未就绪（加载中/请求失败）」与
   /// 「确实一条都没有」。前者不渲染热门块避免占位闪烁，后者渲染一行引导文案。
   bool _hotLoaded = false;
+
   /// 热门经文的基础经名 → 显示名（含卷标），用于热门榜胶囊显示。
   Map<String, String> _hotSutraDisplayNames = const {};
+
   /// 「热门/推荐/关注」新帖提醒：后台静默统计新帖数量，只更新「X条新帖子」提醒条，
   /// 不自动刷新列表，点击提醒或下拉才手动刷出，避免浏览时被打断。
   Timer? _newPostTimer;
   bool _newPostChecking = false;
   bool _appActive = true;
   int _newPostCount = 0;
+
   /// 滚动到顶部提醒条被隐藏时，是否显示悬浮的「显示X帖子」按钮。
   bool _showNewPostPill = false;
+
   /// 右下角按钮形态：按滚动方向切换——往下滑显示「回到顶部」，往上调显示「新建笔记」。
   /// 两者外观完全一致，仅白色图标不同；滑到最顶部时强制回到「新建笔记」，
   /// 这样滑到列表最底部也能直接新建笔记，不用先滚回顶部。
   bool _fabBackToTop = false;
+
   /// 判定滚动方向的基准偏移量：与当前位置差值累计到 [_kFabDirDelta] 才切形态，
   /// 抗手指微抖与惯性滚动末端回弹造成的图标闪烁。
   double _fabRefOffset = 0;
+
   /// 切换右下角按钮形态所需的最小位移（像素）。
   static const double _kFabDirDelta = 6;
+
   /// _loadFeed 重入闸门：防止点击「显示X帖子」时双击重入，
   /// 或后台轮询新帖与点击触发的加载同时跑导致请求/状态错乱。
   bool _feedRefreshing = false;
+
   /// 刚发布、服务端列表尚未返回的本地回复（回复id → 回复帖）：
   /// 后台刷新覆盖列表时重新补挂，直到服务端返回该回复（或父帖消失）才清除，
   /// 保证评论后头像连线不因刷新而闪没。
   final Map<String, PlazaNote> _pendingLocalReplies = {};
+
   /// 全局「有新帖未查看」标记：驱动底部「菩提空间」菜单图标上的 70867A 小圆点。
   static final ValueNotifier<int> newPostBadge = ValueNotifier<int>(0);
   static const Duration _newPostCheckInterval = Duration(seconds: 30);
@@ -202,8 +222,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
 
   /// 「讨论」栏目的判定：正文含 #话题 或 $经名 的帖子即视为讨论。
   static final RegExp _discussTopicRe = RegExp(r'#([^\s#，。！？,;:!?（）()]+)');
-  static final RegExp _discussSutraRe =
-      RegExp(r'\$([^\s#$，。！？,;:!?（）()@]+)');
+  static final RegExp _discussSutraRe = RegExp(r'\$([^\s#$，。！？,;:!?（）()@]+)');
 
   static bool _isDiscussionNote(PlazaNote n) {
     final text = '${n.title}\n${n.content}';
@@ -331,7 +350,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       final tabOrderRaw = prefs.getString('plaza_tab_order');
       if (tabOrderRaw != null && tabOrderRaw.isNotEmpty) {
         try {
-          final saved = (jsonDecode(tabOrderRaw) as List<dynamic>).cast<String>();
+          final saved =
+              (jsonDecode(tabOrderRaw) as List<dynamic>).cast<String>();
           final valid = <String>[];
           for (final k in saved) {
             if (k == 'discover') {
@@ -404,8 +424,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   /// 只影响自己客户端的展示顺序，其他用户看不到。
   List<PlazaNote> _hoistOwnNotes(List<PlazaNote> list) {
     if (list.isEmpty) return list;
-    bool fresh(PlazaNote n) =>
-        CloudNotesService.isRecentlyPublished(n.id);
+    bool fresh(PlazaNote n) => CloudNotesService.isRecentlyPublished(n.id);
     final mine = list.where(fresh).toList();
     if (mine.isEmpty || mine.length == list.length) return list;
     return [...mine, ...list.where((n) => !fresh(n))];
@@ -904,9 +923,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     try {
       if (tab == 'latest' || tab == 'hot') {
         // 用户正停留在最新优先视图时，后台刷新也保持最新排序，避免新帖被旧热帖顶掉。
-        final keepNewest = tab == 'hot' &&
-            _feedNewestFirst &&
-            _plazaTabs[_tabIndex] == tab;
+        final keepNewest =
+            tab == 'hot' && _feedNewestFirst && _plazaTabs[_tabIndex] == tab;
         final sort = (tab == 'hot' && !keepNewest) ? 'hot' : 'latest';
         var (list, nextPage, hasMore) = await _fetchFilteredFeed(1, sort);
         list = await CloudNotesService.instance.enrichFeedAuthors(list);
@@ -954,7 +972,9 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
             final (list, more) = await CloudNotesService.instance
                 .getFollowingNotes(page: page, pageSize: _feedPageSize);
             for (final n in list) {
-              if (!_isBlockedContent(n) && !_isBannedNote(n) && seen.add(n.id)) {
+              if (!_isBlockedContent(n) &&
+                  !_isBannedNote(n) &&
+                  seen.add(n.id)) {
                 all.add(n);
               }
             }
@@ -1034,9 +1054,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
 
   Future<void> _loadMoreFeed() async {
     final tab = _plazaTabs[_tabIndex];
-    if (_feedLoading ||
-        !_feedHasMore ||
-        _feedInitial) {
+    if (_feedLoading || !_feedHasMore || _feedInitial) {
       return;
     }
     setState(() => _feedLoading = true);
@@ -1052,8 +1070,10 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
           _feedLoading = false;
         });
         for (final n in list) {
-          if (n.ownerUserId.isNotEmpty) UserAvatarCache.instance.request(n.ownerUserId);
-          if (n.repostSourceUserId.isNotEmpty) UserAvatarCache.instance.request(n.repostSourceUserId);
+          if (n.ownerUserId.isNotEmpty)
+            UserAvatarCache.instance.request(n.ownerUserId);
+          if (n.repostSourceUserId.isNotEmpty)
+            UserAvatarCache.instance.request(n.repostSourceUserId);
         }
         if (_mergePendingLocalReplies()) {
           setState(() {});
@@ -1078,8 +1098,10 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       });
       // 预取新加载页的作者头像。
       for (final n in list) {
-        if (n.ownerUserId.isNotEmpty) UserAvatarCache.instance.request(n.ownerUserId);
-        if (n.repostSourceUserId.isNotEmpty) UserAvatarCache.instance.request(n.repostSourceUserId);
+        if (n.ownerUserId.isNotEmpty)
+          UserAvatarCache.instance.request(n.ownerUserId);
+        if (n.repostSourceUserId.isNotEmpty)
+          UserAvatarCache.instance.request(n.repostSourceUserId);
       }
       // 新加载的页里出现了待定回复的父帖时，把回复补挂成组。
       if (_mergePendingLocalReplies()) {
@@ -1145,8 +1167,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   void _onCustomTabRevision() => unawaited(_loadCustomTab());
 
   /// 保存自定义工具栏配置并更新工具栏（条目为空时收起自定义栏目）。
-  Future<void> _saveCustomTab(
-      String name, List<CustomTabItem> items) async {
+  Future<void> _saveCustomTab(String name, List<CustomTabItem> items) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
         'plaza_custom_tab',
@@ -1344,13 +1365,10 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              _customItems.isEmpty
-                                  ? '添加关注的经文和话题'
-                                  : '继续添加经文和话题',
+                              _customItems.isEmpty ? '添加关注的经文和话题' : '继续添加经文和话题',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style:
-                                  TextStyle(fontSize: 14, color: _textSec),
+                              style: TextStyle(fontSize: 14, color: _textSec),
                             ),
                           ),
                         ],
@@ -1360,9 +1378,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                   // 面板底部分割线：跟随工具栏横线规则，仅素白外观显示。
                   if (AppPalette.instance.isPlain)
                     Divider(
-                        height: 1,
-                        thickness: 0.5,
-                        color: AppPalette.p.divider),
+                        height: 1, thickness: 0.5, color: AppPalette.p.divider),
                 ],
               ),
             ),
@@ -1536,8 +1552,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                           children: [
                             for (final it in items)
                               Container(
-                                padding:
-                                    const EdgeInsets.fromLTRB(10, 4, 2, 4),
+                                padding: const EdgeInsets.fromLTRB(10, 4, 2, 4),
                                 decoration: BoxDecoration(
                                   color: _overlay,
                                   borderRadius: BorderRadius.circular(10),
@@ -1548,8 +1563,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                     customItemGlyph(it, size: 14),
                                     const SizedBox(width: 4),
                                     ConstrainedBox(
-                                      constraints: const BoxConstraints(
-                                          maxWidth: 150),
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 150),
                                       child: Text(it.name,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -1582,11 +1597,10 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                           isDense: true,
                           hintText: r'输入 $ 搜索经文，输入 # 搜索话题',
                           hintStyle: TextStyle(color: _textHint),
-                          prefixIcon: Icon(Icons.search,
-                              size: 18, color: _textHint),
-                          prefixIconConstraints:
-                              const BoxConstraints.tightFor(
-                                  width: 36, height: 36),
+                          prefixIcon:
+                              Icon(Icons.search, size: 18, color: _textHint),
+                          prefixIconConstraints: const BoxConstraints.tightFor(
+                              width: 36, height: 36),
                           suffixIcon: queryCtrl.text.isEmpty
                               ? null
                               : GestureDetector(
@@ -1597,9 +1611,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                   child: Icon(Icons.close,
                                       size: 16, color: _textHint),
                                 ),
-                          suffixIconConstraints:
-                              const BoxConstraints.tightFor(
-                                  width: 32, height: 32),
+                          suffixIconConstraints: const BoxConstraints.tightFor(
+                              width: 32, height: 32),
                           filled: true,
                           fillColor: _bg,
                           contentPadding: const EdgeInsets.symmetric(
@@ -1626,9 +1639,9 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                 ...sutraResults.map((s) => InkWell(
                                       onTap: () => tryAdd(
                                           setSheet,
-                                              CustomTabItem(
-                                                  type: 'sutra',
-                                                  name: s.title,
+                                          CustomTabItem(
+                                              type: 'sutra',
+                                              name: s.title,
                                               path: s.filePath)),
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
@@ -1650,8 +1663,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                                               NoteSutraCatalog
                                                                   .cachedMultiVolumeBases),
                                                       maxLines: 1,
-                                                      overflow: TextOverflow
-                                                          .ellipsis,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
                                                       style: TextStyle(
                                                           fontSize: 14,
                                                           fontWeight:
@@ -1665,8 +1678,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                                             .ellipsis,
                                                         style: TextStyle(
                                                             fontSize: 11,
-                                                            color:
-                                                                _textHint)),
+                                                            color: _textHint)),
                                                   ],
                                                 ],
                                               ),
@@ -1708,8 +1720,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                                 ...topicResults.map((t) => InkWell(
                                       onTap: () => tryAdd(
                                           setSheet,
-                                      CustomTabItem(
-                                          type: 'topic', name: t)),
+                                          CustomTabItem(
+                                              type: 'topic', name: t)),
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 4, vertical: 9),
@@ -1778,8 +1790,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       if (panelWasOpen) _openCustomPanel();
       return;
     }
-    await _saveCustomTab(
-        savedName.isEmpty ? '列表' : savedName, List.of(items));
+    await _saveCustomTab(savedName.isEmpty ? '列表' : savedName, List.of(items));
     // 保存后若原本展开且还有条目，重新展开面板以显示最新条目与「继续添加」行。
     if (panelWasOpen && items.isNotEmpty) _openCustomPanel();
   }
@@ -2078,7 +2089,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
           ),
         ];
       }
-if (_feedAuthDead) {
+      if (_feedAuthDead) {
         return [
           if (hotCard != null) hotCard,
           SliverFillRemaining(
@@ -2109,8 +2120,7 @@ if (_feedAuthDead) {
     final showFooter = _feedLoading || !_feedHasMore || _feedError;
     return [
       if (hotCard != null) hotCard,
-      if (_newPostCount > 0)
-        SliverToBoxAdapter(child: _buildNewPostBanner()),
+      if (_newPostCount > 0) SliverToBoxAdapter(child: _buildNewPostBanner()),
       SliverPadding(
         // 横向内边距放在列表层：分割线随内容缩进、不贴手机边缘（与话题页一致）。
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
@@ -2157,7 +2167,9 @@ if (_feedAuthDead) {
           '显示$_newPostCount帖子',
           textAlign: TextAlign.center,
           style: const TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF70867A)),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF70867A)),
         ),
       ),
     );
@@ -2207,8 +2219,8 @@ if (_feedAuthDead) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 18),
         child: Center(
-          child: Text('— 到底了 —',
-              style: TextStyle(fontSize: 12, color: _textHint)),
+          child:
+              Text('— 到底了 —', style: TextStyle(fontSize: 12, color: _textHint)),
         ),
       );
     }
@@ -2463,8 +2475,7 @@ if (_feedAuthDead) {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(label,
-                style: TextStyle(fontSize: 13, color: _textSec)),
+            Text(label, style: TextStyle(fontSize: 13, color: _textSec)),
             Icon(Icons.chevron_right, size: 15, color: _textSec),
           ],
         ),
@@ -2571,8 +2582,7 @@ if (_feedAuthDead) {
           n.ownerUserId.isNotEmpty &&
           followed.contains(n.ownerUserId);
       if (!isMine && !isFollowed) continue;
-      final parentId =
-          _visibleReplyParent(n, byId, me?.id, followed);
+      final parentId = _visibleReplyParent(n, byId, me?.id, followed);
       if (parentId != null) {
         // 挂到可见祖先下。其墓碑记录（自上而下）即「祖先与本回复之间」
         // 被删掉的节点——如 b 删除后 c 重挂到 a：a → [b占位] → c。
@@ -2584,19 +2594,20 @@ if (_feedAuthDead) {
       } else if (_repostSourceBlocked(n)) {
         // 评论的原帖作者已被屏蔽：生成「已屏蔽用户」占位根帖，保留自己这条评论。
         final id = n.repostOf;
-        final g = groupFor(id, note: PlazaNote(
-          id: id,
-          ownerUserId: n.repostSourceUserId,
-          title: '',
-          content: '',
-          authorName: n.repostSourceAuthor,
-          visibility: 'public',
-          status: 'normal',
-          likeCount: 0,
-          commentCount: 0,
-          createdAt: 0,
-          updatedAt: 0,
-        ));
+        final g = groupFor(id,
+            note: PlazaNote(
+              id: id,
+              ownerUserId: n.repostSourceUserId,
+              title: '',
+              content: '',
+              authorName: n.repostSourceAuthor,
+              visibility: 'public',
+              status: 'normal',
+              likeCount: 0,
+              commentCount: 0,
+              createdAt: 0,
+              updatedAt: 0,
+            ));
         g.replies.add(n);
       } else if (n.tombstoneAncestorIds.isNotEmpty ||
           CloudNotesService.instance.locallyDeletedNoteIds
@@ -2621,9 +2632,8 @@ if (_feedAuthDead) {
 
   /// 回复帖往上找在列表内可见的最近祖先（根帖、自己的回复或关注用户的回复）：
   /// 中间经过的他人回复不可见时继续向上，最终挂到可见祖先下。
-  String? _visibleReplyParent(
-      PlazaNote n, Map<String, PlazaNote> byId, String? meId,
-      Set<String> followed) {
+  String? _visibleReplyParent(PlazaNote n, Map<String, PlazaNote> byId,
+      String? meId, Set<String> followed) {
     var cur = n;
     final visited = <String>{};
     while (cur.repostOf.isNotEmpty && visited.add(cur.repostOf)) {
@@ -2797,7 +2807,8 @@ if (_feedAuthDead) {
                     // 固定长度下延线段 + 末端 6px：连向下方 ReplyChain 首个头像
                     //（占位卡矮，Stack 覆盖线会被压没；端点间距与删除占位一致）。
                     const SizedBox(height: 6),
-                    Container(width: 1, height: 20, color: const Color(0xFFC9C9C9)),
+                    Container(
+                        width: 1, height: 20, color: const Color(0xFFC9C9C9)),
                     const SizedBox(height: 6),
                   ],
                 ],
@@ -2829,8 +2840,7 @@ if (_feedAuthDead) {
                         Icon(Icons.block, size: 16, color: _textSec),
                         SizedBox(width: 8),
                         Text('已屏蔽用户',
-                            style:
-                                TextStyle(fontSize: 14, color: _textSec)),
+                            style: TextStyle(fontSize: 14, color: _textSec)),
                       ],
                     ),
                   ),
@@ -3001,47 +3011,47 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
         color: _bg,
         child: Column(
           children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 4, 0),
-              child: Row(
-                // 底对齐：选中态金色短横杆与工具栏底部横线刚好接触。
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // 与个人主页同款分布：栏目均分整行宽度。
-                  for (var i = 0; i < tabs.length; i++)
-                    _buildTab(
-                      context,
-                      _plazaTabMeta[tabs[i]] ?? tabs[i],
-                      // 自定义面板展开时固定栏目保持失活：
-                      // 金色短杠只出现在自定义栏目下。
-                      selected: tabIndex == i && !customTabOpen,
-                      onTap: () => onTabChanged(i),
-                    ),
-                  if (customTabLabel.isNotEmpty)
-                    _buildTab(
-                      context,
-                      customTabLabel,
-                      selected: customTabOpen,
-                      onTap: onCustomTabPressed,
-                      // 短线随栏目字数：两字 36（与固定栏目同宽），三字及以上 52。
-                      underlineWidth: customTabLabel.length >= 3 ? 52 : 36,
-                      trailingIcon: Icon(
-                        customTabOpen
-                            ? Icons.keyboard_arrow_up
-                            : Icons.keyboard_arrow_down,
-                        size: 15,
-                        color: customTabOpen ? _text : _textSec,
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 4, 0),
+                child: Row(
+                  // 底对齐：选中态金色短横杆与工具栏底部横线刚好接触。
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // 与个人主页同款分布：栏目均分整行宽度。
+                    for (var i = 0; i < tabs.length; i++)
+                      _buildTab(
+                        context,
+                        _plazaTabMeta[tabs[i]] ?? tabs[i],
+                        // 自定义面板展开时固定栏目保持失活：
+                        // 金色短杠只出现在自定义栏目下。
+                        selected: tabIndex == i && !customTabOpen,
+                        onTap: () => onTabChanged(i),
                       ),
-                    ),
-                ],
+                    if (customTabLabel.isNotEmpty)
+                      _buildTab(
+                        context,
+                        customTabLabel,
+                        selected: customTabOpen,
+                        onTap: onCustomTabPressed,
+                        // 短线随栏目字数：两字 36（与固定栏目同宽），三字及以上 52。
+                        underlineWidth: customTabLabel.length >= 3 ? 52 : 36,
+                        trailingIcon: Icon(
+                          customTabOpen
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          size: 15,
+                          color: customTabOpen ? _text : _textSec,
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          // 工具栏下边缘横线：仅素白外观显示（米黄外观不加横线），
-          // 样式与帖子分割线一致、横向贴满手机两边，栏目按钮刚好位于其上方。
-          if (AppPalette.instance.isPlain)
-            Divider(height: 1, thickness: 0.5, color: AppPalette.p.divider),
+            // 工具栏下边缘横线：仅素白外观显示（米黄外观不加横线），
+            // 样式与帖子分割线一致、横向贴满手机两边，栏目按钮刚好位于其上方。
+            if (AppPalette.instance.isPlain)
+              Divider(height: 1, thickness: 0.5, color: AppPalette.p.divider),
           ],
         ),
       ),
@@ -3199,8 +3209,8 @@ class _AnnouncementListPageState extends State<AnnouncementListPage> {
                   child: SizedBox(
                     width: 24,
                     height: 24,
-                    child:
-                        CircularProgressIndicator(strokeWidth: 2.2, color: _gold),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.2, color: _gold),
                   ),
                 ),
               )
@@ -3251,8 +3261,8 @@ class _AnnouncementListPageState extends State<AnnouncementListPage> {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-                builder: (_) => NoteDetailPage(
-                    noteId: item.id, isAnnouncement: true)),
+                builder: (_) =>
+                    NoteDetailPage(noteId: item.id, isAnnouncement: true)),
           ),
           borderRadius: BorderRadius.circular(14),
           child: Container(
@@ -3273,8 +3283,8 @@ class _AnnouncementListPageState extends State<AnnouncementListPage> {
                 Row(
                   children: [
                     Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
                         color: _gold.withValues(alpha: 0.14),
                         borderRadius: BorderRadius.circular(6),
@@ -3340,8 +3350,7 @@ class _AnnouncementListPageState extends State<AnnouncementListPage> {
             style: TextStyle(
                 fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
         const SizedBox(height: 8),
-        Text('管理员发布的公告将在这里显示',
-            style: TextStyle(fontSize: 13, color: _textSec)),
+        Text('管理员发布的公告将在这里显示', style: TextStyle(fontSize: 13, color: _textSec)),
       ],
     );
   }

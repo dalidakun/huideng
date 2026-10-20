@@ -13,16 +13,30 @@ void main() {
     ShanZhiShiStore.instance.resetForTest();
   });
 
+  testWidgets('add sheet has no header close button', (tester) async {
+    await ShanZhiShiStore.instance.load();
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => ShanZhiShiEditSheet.show(context),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.close), findsNothing);
+  });
+
   Future<void> openEdit(WidgetTester tester,
       {required void Function(int?) save, int? index}) async {
     final store = ShanZhiShiStore.instance;
     await store.load();
     // 默认挑一条没有任何 80% 近似兄弟的名号，避免「不改名保存」被查重框挡住。
-    index ??= store.entries
-        .indexWhere((e) =>
-            store.findSimilarIndex(e.name,
-                skip: store.entries.indexOf(e)) ==
-            -1);
+    index ??= store.entries.indexWhere((e) =>
+        store.findSimilarIndex(e.name, skip: store.entries.indexOf(e)) == -1);
     final entry = store[index]!;
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
@@ -75,17 +89,17 @@ void main() {
     expect(store[0]!.name, '测试菩萨');
     expect(store[0]!.paragraphs, ['测试段落一', '测试段落二']);
     // 人天利益按经文各存一份：这段落在它唯一的那部经名下。
-    expect(store[0]!.quotes, {'地藏菩萨本愿经': ['测试段落一', '测试段落二']});
+    expect(store[0]!.quotes, {
+      '地藏菩萨本愿经': ['测试段落一', '测试段落二']
+    });
   });
 
   testWidgets('编辑面板打开时回填已有段落（旧数据也能回填）', (tester) async {
     final store = ShanZhiShiStore.instance;
     await store.load();
     // 挑一条没有任何 80% 近似兄弟的名号，不改名保存不会被查重框拦住。
-    final iSafe = store.entries.indexWhere(
-            (e) => store.findSimilarIndex(e.name,
-                    skip: store.entries.indexOf(e)) ==
-                -1);
+    final iSafe = store.entries.indexWhere((e) =>
+        store.findSimilarIndex(e.name, skip: store.entries.indexOf(e)) == -1);
     expect(iSafe, greaterThanOrEqualTo(0));
     await store.update(iSafe, paragraphs: ['第一段', '第二段']);
     // 重新打开面板：段落应回填到输入区。
@@ -339,10 +353,10 @@ void main() {
     // 两侧离得一样远（量行位的两套算法差不到四分之一行）。
     expect((dash - paraBottom) - (nextTop - dash), lessThan(lineH * 0.25));
 
-    // 空档三行：仍然居中（不是贴着上一段）。
+    // 末尾还剩空行、光标已落到最下面一行：虚线画在空行区正中，不贴上一段。
     await type('第一段\n\n\n');
     final dash3 = await dashY();
-    expect((dash3 - paraBottom - 1.5 * lineH).abs(), lessThan(lineH * 0.25));
+    expect((dash3 - paraBottom - 1.0 * lineH).abs(), lessThan(lineH * 0.25));
 
     // 上一段很长、折成好几行时，线也得在它下面，不能落进字里。
     final long = '一二三四五六七八九十' * 12;
@@ -354,7 +368,41 @@ void main() {
     expect(dashWrapped, lessThan(wrappedBottom + lineH));
   });
 
-  testWidgets('编辑改名撞车：提示「两个都留着 / 合并」', (tester) async {
+  testWidgets('人天利益：按一次回车自动补成空行，光标落到分割线下方', (tester) async {
+    await openEdit(tester, save: (_) {});
+    final field = find.byKey(const ValueKey('shanzhishi_paragraphs_field'));
+    final rules = find.byKey(const ValueKey('shanzhishi_paragraphs_rules'));
+    final ctrl = tester.widget<TextField>(field).controller!;
+
+    await tester.enterText(field, '第一段');
+    await tester.pump();
+    expect(ctrl.text, '第一段');
+
+    // 模拟平台送来的一个换行（回车）。
+    Future<void> pressEnter() async {
+      tester.testTextInput.updateEditingValue(TextEditingValue(
+        text: '${ctrl.text}\n',
+        selection: TextSelection.collapsed(offset: ctrl.text.length + 1),
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    await pressEnter();
+    // 一个换行自动补成「空行＋新行」，光标落在空行下面那行（分割线之下）。
+    expect(ctrl.text, '第一段\n\n');
+    expect(ctrl.selection.extentOffset, 5);
+    // 段间虚线随之画出。
+    final paint = tester.widget<CustomPaint>(rules);
+    expect((paint.painter! as ParaRulePainter).rules, isNotEmpty);
+
+    // 光标已经在空行下面时再按：不叠空行。
+    await pressEnter();
+    expect(ctrl.text, '第一段\n\n');
+    expect(ctrl.selection.extentOffset, 5);
+  });
+
+  testWidgets('编辑改名撞车：提示「保存两者 / 合并」', (tester) async {
     int? saved;
     await openEdit(tester, save: (v) => saved = v, index: 0);
     final store = ShanZhiShiStore.instance;
@@ -367,7 +415,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('或有重名善知识'), findsOneWidget);
 
-    // 两个都留着：照常保存，条数不变。
+    // 保存两者：照常保存，条数不变，相似条目原样留着。
     await tester.tap(find.byKey(const ValueKey('shanzhishi_add_new')));
     await tester.pumpAndSettle();
     expect(saved, 0);
@@ -398,7 +446,7 @@ void main() {
     expect(store[saved!]!.name, '地藏王菩萨');
   });
 
-  testWidgets('编辑改名撞车选「保留新名号」：保留新名，相似条目并进来后删掉', (tester) async {
+  testWidgets('编辑改名撞车选「保存两者」：只改本条，不删相似条目', (tester) async {
     final store = ShanZhiShiStore.instance;
     await store.load();
     await store.update(0, paragraphs: ['来自地藏菩萨的段落']);
@@ -412,22 +460,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('或有重名善知识'), findsOneWidget);
 
-    // 合并方向反过来：保留刚输入的名号，把相似条目并进来后删掉。
-    await tester.tap(find.byKey(const ValueKey('shanzhishi_keep_new_name')));
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_add_new')));
     await tester.pumpAndSettle();
+    expect(store.length, before);
     expect(store.entries.any((e) => e.name == '地藏菩萨摩'), isTrue);
-    expect(store.entries.any((e) => e.name == '地藏菩萨'), isFalse);
-    final merged = store.entries.firstWhere((e) => e.name == '地藏菩萨摩');
-    expect(merged.paragraphs, contains('来自地藏菩萨的段落'));
-    expect(store.length, lessThan(before));
-    expect(saved, isNotNull);
+    expect(store.entries.any((e) => e.name == '地藏王菩萨'), isTrue);
+    expect(store[0]!.paragraphs, contains('来自地藏菩萨的段落'));
+    expect(saved, 0);
     expect(store[saved!]!.name, '地藏菩萨摩');
   });
 
-  testWidgets('编辑完全同名：只允许合并，不再提供「两个都留着」', (tester) async {
+  testWidgets('编辑完全同名：可合并到已有，也可「保存两者」', (tester) async {
     final store = ShanZhiShiStore.instance;
     await store.load();
-    // 造一个完全同名的重复（模拟之前选「两个都留着」留下的两条）。
+    // 造一个完全同名的重复（模拟之前选「保存两者」留下的两条）。
     await store.update(1, name: store[0]!.name);
 
     await tester.pumpWidget(MaterialApp(
@@ -452,12 +498,12 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
     expect(find.text('或有重名善知识'), findsOneWidget);
-    // 名字一模一样：直接要求合并，只剩两个合并方向和取消。
-    expect(find.byKey(const ValueKey('shanzhishi_add_new')), findsNothing);
+    // 只剩两个方向：合并到已有，或保存两者；不再有「合并到当前」。
+    expect(find.byKey(const ValueKey('shanzhishi_add_new')), findsOneWidget);
     expect(
-        find.byKey(const ValueKey('shanzhishi_keep_new_name')), findsOneWidget);
-    expect(
-        find.byKey(const ValueKey('shanzhishi_merge_existing')), findsOneWidget);
+        find.byKey(const ValueKey('shanzhishi_keep_new_name')), findsNothing);
+    expect(find.byKey(const ValueKey('shanzhishi_merge_existing')),
+        findsOneWidget);
   });
 
   testWidgets('编辑不改名也查重：与现存近似名号提示合并', (tester) async {
