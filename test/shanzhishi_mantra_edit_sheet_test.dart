@@ -315,6 +315,21 @@ void main() {
       expect(merged[1].note, '莲花');
     });
 
+    test('原文前后有空白：批注跟着去掉的头空白一起左移', () async {
+      final store = await loadedStore();
+      await store.add(
+        '空白咒',
+        text: '  \n嗡嘛呢',
+        annotations: const [
+          MantraAnnotation(start: 3, end: 4, ruby: 'ōng'),
+        ],
+      );
+      expect(store.textOf('空白咒'), '嗡嘛呢');
+      final saved = store.annotationsOf('空白咒').single;
+      expect(saved.start, 0);
+      expect(saved.end, 1);
+    });
+
     testWidgets('选中文字后点「注音」：保存并在清单里可删除', (tester) async {
       final store = await loadedStore();
       await openSheet(tester);
@@ -329,10 +344,13 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_ruby_tool')));
       await tester.pumpAndSettle();
       expect(find.text('「嗡」'), findsOneWidget);
+      // 注音与备注分开：点注音只出现注音输入框。
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_ruby_input')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_note_input')),
+          findsNothing);
       await tester.enterText(
           find.byKey(const ValueKey('shanzhishi_mantra_ruby_input')), 'ōng');
-      await tester.enterText(
-          find.byKey(const ValueKey('shanzhishi_mantra_note_input')), '归命');
       await tester.tap(
           find.byKey(const ValueKey('shanzhishi_mantra_annotation_save')));
       await tester.pumpAndSettle();
@@ -340,6 +358,23 @@ void main() {
       expect(find.byKey(const ValueKey('shanzhishi_mantra_annotation_0')),
           findsOneWidget);
       expect(find.textContaining('注音：ōng'), findsOneWidget);
+
+      // 备注单独录入：从清单里的「备注」进入。
+      final noteEdit =
+          find.byKey(const ValueKey('shanzhishi_mantra_annotation_edit_note_0'));
+      await tester.ensureVisible(noteEdit);
+      await tester.pumpAndSettle();
+      await tester.tap(noteEdit);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_note_input')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('shanzhishi_mantra_ruby_input')),
+          findsNothing);
+      await tester.enterText(
+          find.byKey(const ValueKey('shanzhishi_mantra_note_input')), '归命');
+      await tester.tap(
+          find.byKey(const ValueKey('shanzhishi_mantra_annotation_save')));
+      await tester.pumpAndSettle();
       expect(find.textContaining('备注：归命'), findsOneWidget);
 
       await tester.enterText(

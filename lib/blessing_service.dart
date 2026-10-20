@@ -103,7 +103,8 @@ class BlessingProject {
   /// 图片列表：fileID 与临时链接按下标配对。
   List<BlessingImage> get imageList {
     final out = <BlessingImage>[];
-    final n = images.length > imageUrls.length ? images.length : imageUrls.length;
+    final n =
+        images.length > imageUrls.length ? images.length : imageUrls.length;
     for (var i = 0; i < n; i++) {
       final id = i < images.length ? images[i] : '';
       final url = i < imageUrls.length ? imageUrls[i] : '';
@@ -118,7 +119,8 @@ class BlessingProject {
     final methods = <BlessingMethod>[];
     if (rawMethods is List) {
       for (final e in rawMethods) {
-        if (e is Map) methods.add(BlessingMethod.fromJson(e.cast<String, dynamic>()));
+        if (e is Map)
+          methods.add(BlessingMethod.fromJson(e.cast<String, dynamic>()));
       }
     }
     final images = _strList(m['images']);
@@ -218,6 +220,50 @@ class BlessingDetail {
   const BlessingDetail(this.project, this.progress, this.joinerCount);
 }
 
+/// 祈福分享帖的结构化标记；后接 base64(JSON) 元数据。
+const String kBlessingShareMetaPrefix = '§§BL§§';
+
+/// 组装一条祈福分享到菩提空间的正文。
+///
+/// 正文保留可读的标题 / 回向，便于不支持结构化渲染的场景展示；
+/// 末尾用 [kBlessingShareMetaPrefix] 附带卡片所需的完整数据，
+/// 标记行之后的文本为用户备注，渲染时显示在祈福卡片上方。
+String blessingShareContent(BlessingProject proj, {String remark = ''}) {
+  final note = remark.trim();
+  final data = <String, dynamic>{
+    'id': proj.id,
+    'title': proj.title,
+    'target': proj.target,
+    'dedication': proj.dedication,
+    'totalDays': proj.totalDays,
+    'joinerCount': proj.joinerCount,
+    'status': proj.status,
+    'methods': [
+      for (final m in proj.methods)
+        if (m.label.isNotEmpty) m.label,
+    ],
+  };
+  final meta = base64Encode(utf8.encode(jsonEncode(data)));
+  final lines = <String>[
+    if (proj.title.isNotEmpty) '【为众祈福】${proj.title}',
+    if (proj.target.isNotEmpty) '回向：${proj.target}',
+    '',
+    '$kBlessingShareMetaPrefix$meta',
+    if (note.isNotEmpty) '',
+    if (note.isNotEmpty) note,
+  ];
+  return lines.join('\n');
+}
+
+/// 分享一条祈福到菩提空间，返回云端帖子 id。
+Future<String> shareBlessingToBodhiSpace(BlessingProject project,
+    {String remark = ''}) {
+  return CloudNotesService.instance.publishNote(
+    title: '为众祈福',
+    content: blessingShareContent(project, remark: remark),
+  );
+}
+
 /// 祈福共修云接口封装，全部经 CloudNotesService 的统一入口调用。
 class BlessingService {
   BlessingService._();
@@ -243,7 +289,9 @@ class BlessingService {
           final prog = m['progress'];
           out.add(BlessingItem(
             BlessingProject.fromJson(m),
-            prog is Map ? BlessingProgress.fromJson(prog.cast<String, dynamic>()) : null,
+            prog is Map
+                ? BlessingProgress.fromJson(prog.cast<String, dynamic>())
+                : null,
           ));
         }
       }
@@ -259,7 +307,8 @@ class BlessingService {
   }
 
   /// 社区公开的祈福。
-  Future<List<BlessingItem>> listCommunity({int page = 1, int pageSize = 30}) async {
+  Future<List<BlessingItem>> listCommunity(
+      {int page = 1, int pageSize = 30}) async {
     final res = await _svc.callApi('getBlessings',
         params: {'scope': 'all', 'page': page, 'pageSize': pageSize});
     return _parseItems(res['items']);
@@ -277,7 +326,9 @@ class BlessingService {
         : int.tryParse('${res['joinerCount']}') ?? project.joinerCount;
     return BlessingDetail(
       project,
-      prog is Map ? BlessingProgress.fromJson(prog.cast<String, dynamic>()) : null,
+      prog is Map
+          ? BlessingProgress.fromJson(prog.cast<String, dynamic>())
+          : null,
       count,
     );
   }
@@ -357,8 +408,8 @@ class BlessingService {
 
   /// 今日祈福打卡（每天一次）。
   Future<BlessingProgress> blessToday(String id, {String? date}) async {
-    final res = await _svc.callApi('blessToday',
-        params: {'id': id, 'date': date ?? today()});
+    final res = await _svc
+        .callApi('blessToday', params: {'id': id, 'date': date ?? today()});
     return BlessingProgress(
       joined: true,
       doneCount: res['doneCount'] is num

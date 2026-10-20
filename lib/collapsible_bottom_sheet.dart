@@ -14,6 +14,9 @@ final ValueNotifier<bool> _collapsibleSheetOpen = ValueNotifier<bool>(false);
 final ValueNotifier<bool> collapsibleSheetCollapsed =
     ValueNotifier<bool>(false);
 
+/// 当前是否有可收起面板开着（展开或收起都算）。
+bool get isCollapsibleSheetOpen => _collapsibleSheetOpen.value;
+
 /// 复制成功等提示要显示在收起横条上方，不能被横条挡住。
 void showCollapsibleAwareSnackBar(
   BuildContext context,

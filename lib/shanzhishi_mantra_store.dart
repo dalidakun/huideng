@@ -381,13 +381,12 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     if (!allowDuplicate && mantras.contains(key)) return false;
     final entry = _AddedMantra(id: _newId(), name: key);
     _added.insert(0, entry);
-    final (trimmedText, cleaned) =
-        _trimTextWithAnnotations(text, annotations);
+    final trimmedText = text.trim();
     _details[_addedKey(entry)] = (
       source: source.trim(),
       text: trimmedText,
       benefit: _cleanTexts(benefit),
-      annotations: cleaned,
+      annotations: _fitAnnotations(annotations, text),
     );
     await _persist();
     notifyListeners();
@@ -427,13 +426,11 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       final entry = _firstAddedByKey(target.key);
       if (entry != null) entry.name = newKey;
     }
-    final (trimmedText, cleaned) =
-        _trimTextWithAnnotations(text, annotations);
     _details[target.key] = (
       source: source.trim(),
-      text: trimmedText,
+      text: text.trim(),
       benefit: _cleanTexts(benefit),
-      annotations: cleaned,
+      annotations: _fitAnnotations(annotations, text),
     );
     await _persist();
     notifyListeners();
@@ -593,18 +590,21 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     return out;
   }
 
-  /// 原文保存前统一去掉首尾空白：批注起点跟着开头的空白一起平移。
-  static (String, List<MantraAnnotation>) _trimTextWithAnnotations(
-    String raw,
-    Iterable<MantraAnnotation> anns,
+  /// 原文保存时会去掉首尾空白；批注的下标基于输入框里的原文，
+  /// 这里按被去掉的头部空白整体左移，再按新长度夹紧。
+  static List<MantraAnnotation> _fitAnnotations(
+    List<MantraAnnotation> raw,
+    String rawText,
   ) {
-    final text = raw.trim();
-    final lead = raw.length - raw.trimLeft().length;
-    final shifted = [
-      for (final a in anns)
-        a.copyWith(start: a.start - lead, end: a.end - lead),
-    ];
-    return (text, _cleanAnnotations(shifted, text.length));
+    final trimmed = rawText.trim();
+    final lead = rawText.length - rawText.trimLeft().length;
+    final shifted = lead == 0
+        ? raw
+        : [
+            for (final a in raw)
+              a.copyWith(start: a.start - lead, end: a.end - lead),
+          ];
+    return _cleanAnnotations(shifted, trimmed.length);
   }
 
   /// 批注按原文长度夹紧、去掉无效项（越界/空内容），并按起点排序。

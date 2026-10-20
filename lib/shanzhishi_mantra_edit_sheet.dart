@@ -18,17 +18,15 @@ class _MantraPick {
   final String targetName;
 }
 
-/// 注音 / 备注对话框的结果：[delete] 为 true 时删除这条批注。
+/// 注音 / 备注对话框的结果：两个字段各自返回，未编辑的那项原样带回。
 class _AnnotationResult {
   const _AnnotationResult({
     required this.ruby,
     required this.note,
-    this.delete = false,
   });
 
   final String ruby;
   final String note;
-  final bool delete;
 }
 
 /// 注音 / 备注输入框。自己持有输入控制器，随对话框一起释放。
@@ -95,25 +93,27 @@ class _AnnotationDialogState extends State<_AnnotationDialog> {
                 ),
               ),
               const SizedBox(height: 14),
-              _annotationField(
-                key: const ValueKey('shanzhishi_mantra_ruby_input'),
-                controller: _rubyCtrl,
-                p: p,
-                label: '注音',
-                hint: '如：ōng ma ṇi pad me hūṃ',
-                autofocus: widget.focusRuby,
-                maxLines: 1,
-              ),
-              const SizedBox(height: 12),
-              _annotationField(
-                key: const ValueKey('shanzhishi_mantra_note_input'),
-                controller: _noteCtrl,
-                p: p,
-                label: '备注',
-                hint: '写下这段文字的备注（可多行）',
-                autofocus: !widget.focusRuby,
-                maxLines: 5,
-              ),
+              // 注音与备注分开录入：点哪个工具就只改哪一项，另一项原样保留。
+              if (widget.focusRuby)
+                _annotationField(
+                  key: const ValueKey('shanzhishi_mantra_ruby_input'),
+                  controller: _rubyCtrl,
+                  p: p,
+                  label: '注音',
+                  hint: '如：ōng ma ṇi pad me hūṃ',
+                  autofocus: true,
+                  maxLines: 1,
+                )
+              else
+                _annotationField(
+                  key: const ValueKey('shanzhishi_mantra_note_input'),
+                  controller: _noteCtrl,
+                  p: p,
+                  label: '备注',
+                  hint: '写下这段文字的备注（可多行）',
+                  autofocus: true,
+                  maxLines: 5,
+                ),
             ],
           ),
         ),
@@ -124,7 +124,10 @@ class _AnnotationDialogState extends State<_AnnotationDialog> {
             key: const ValueKey('shanzhishi_mantra_annotation_delete'),
             onPressed: () => Navigator.pop(
               context,
-              const _AnnotationResult(ruby: '', note: '', delete: true),
+              _AnnotationResult(
+                ruby: widget.focusRuby ? '' : _rubyCtrl.text.trim(),
+                note: widget.focusRuby ? _noteCtrl.text.trim() : '',
+              ),
             ),
             child: Text('删除', style: TextStyle(color: p.accentDeep)),
           ),
@@ -532,7 +535,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       final i = index ??
           _annotations.indexWhere(
               (a) => a.start == start && a.end == end);
-      if (result.delete || (result.ruby.isEmpty && result.note.isEmpty)) {
+      // 只清空当前工具对应的那一项；另一项还在就保留这条批注。
+      if (result.ruby.isEmpty && result.note.isEmpty) {
         if (i >= 0) _annotations.removeAt(i);
         return;
       }
@@ -582,34 +586,66 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     ];
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: InkWell(
+      child: Container(
         key: ValueKey('shanzhishi_mantra_annotation_$i'),
-        borderRadius: BorderRadius.circular(6),
-        onTap: () => _openAnnotationDialog(ruby: true, editIndex: i),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
-          decoration: BoxDecoration(
-            color: p.tintBg,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  parts.join('  '),
-                  style: TextStyle(fontSize: 12.5, color: p.text, height: 1.4),
-                ),
+        padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+        decoration: BoxDecoration(
+          color: p.tintBg,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                parts.join('  '),
+                style: TextStyle(fontSize: 12.5, color: p.text, height: 1.4),
               ),
-              GestureDetector(
-                key: ValueKey('shanzhishi_mantra_annotation_delete_$i'),
-                behavior: HitTestBehavior.opaque,
-                onTap: () => setState(() => _annotations.removeAt(i)),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.close, size: 15, color: p.textHint),
-                ),
+            ),
+            _annotationMiniAction(
+              p,
+              key: ValueKey('shanzhishi_mantra_annotation_edit_ruby_$i'),
+              label: '注音',
+              onTap: () => _openAnnotationDialog(ruby: true, editIndex: i),
+            ),
+            _annotationMiniAction(
+              p,
+              key: ValueKey('shanzhishi_mantra_annotation_edit_note_$i'),
+              label: '备注',
+              onTap: () => _openAnnotationDialog(ruby: false, editIndex: i),
+            ),
+            GestureDetector(
+              key: ValueKey('shanzhishi_mantra_annotation_delete_$i'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _annotations.removeAt(i)),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 15, color: p.textHint),
               ),
-            ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _annotationMiniAction(
+    PaletteData p, {
+    required Key key,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      key: key,
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: p.accentDeep,
           ),
         ),
       ),

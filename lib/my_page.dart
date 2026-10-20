@@ -39,6 +39,7 @@ import 'loading_widgets.dart';
 import 'sutra_list_page.dart';
 import 'ui_sound.dart';
 import 'reading_note_post.dart';
+import 'blessing_share_post.dart';
 
 import 'app_palette.dart';
 
@@ -1595,7 +1596,8 @@ class _PostBlockState extends State<PostBlock> {
                             authorName: displayNickname,
                             ownerUserId: displayUserId ?? '',
                           ),
-                        ] else if (SutraNotesPost.isSutraNotesPost(content)) ...[
+                        ] else if (SutraNotesPost.isSutraNotesPost(
+                            content)) ...[
                           SutraNotesPostView(
                             post: SutraNotesPost.parse(content)!,
                             noteId: displayNoteId ?? '',
@@ -1611,6 +1613,11 @@ class _PostBlockState extends State<PostBlock> {
                             sutraLibrary:
                                 NoteSutraCatalog.cachedTitleMap ?? const {},
                             authorName: displayNickname,
+                          ),
+                        ] else if (BlessingSharePost.isBlessingShare(
+                            content)) ...[
+                          BlessingSharePostView(
+                            post: BlessingSharePost.parse(content)!,
                           ),
                         ] else
                           LayoutBuilder(
@@ -4384,8 +4391,7 @@ class _BookmarksPageState extends State<BookmarksPage>
             children: [
               IconButton(
                 onPressed: () => Navigator.pop(context),
-                icon:
-                    Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
+                icon: Icon(Icons.arrow_back_ios_new, color: _text, size: 20),
               ),
               const SizedBox(width: 4),
               Text('书签',
@@ -4430,9 +4436,7 @@ class _BookmarksPageState extends State<BookmarksPage>
                   // 末尾收尾分割线，保证最后一条帖子下方也有分割线（与「帖子」Tab 一致）。
                   if (index == notes.length) {
                     return Divider(
-                        height: 1,
-                        thickness: 0.5,
-                        color: AppPalette.p.divider);
+                        height: 1, thickness: 0.5, color: AppPalette.p.divider);
                   }
                   final note = notes[index];
                   return Column(
@@ -4488,10 +4492,11 @@ class _BookmarksPageState extends State<BookmarksPage>
               style: FilledButton.styleFrom(
                 backgroundColor: _gold,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                 minimumSize: const Size(0, 38),
-                shape:
-                    RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
                 elevation: 0,
               ),
               child: const Text('登录',

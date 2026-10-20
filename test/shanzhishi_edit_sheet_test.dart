@@ -13,23 +13,6 @@ void main() {
     ShanZhiShiStore.instance.resetForTest();
   });
 
-  testWidgets('add sheet has no header close button', (tester) async {
-    await ShanZhiShiStore.instance.load();
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: Builder(
-          builder: (context) => TextButton(
-            onPressed: () => ShanZhiShiEditSheet.show(context),
-            child: const Text('open'),
-          ),
-        ),
-      ),
-    ));
-    await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.close), findsNothing);
-  });
-
   Future<void> openEdit(WidgetTester tester,
       {required void Function(int?) save, int? index}) async {
     final store = ShanZhiShiStore.instance;

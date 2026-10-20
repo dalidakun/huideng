@@ -286,7 +286,7 @@ void main() {
     expect(find.text('嗡嘛呢叭咪吽'), findsNothing);
   });
 
-  testWidgets('神咒详情：注音在上、备注在下，经文出处夹在咒文与人天利益之间',
+  testWidgets('神咒详情：注音标在字上、备注集中成块放在咒文下，经文出处居中夹在中间',
       (tester) async {
     await pumpPage(tester);
     await ShanZhiShiMantraStore.instance.add(
@@ -309,15 +309,115 @@ void main() {
 
     final ruby = find.textContaining('ōng', findRichText: true);
     expect(ruby, findsOneWidget);
+    final notes = find.byKey(const ValueKey('shanzhishi_mantra_notes'));
+    expect(notes, findsOneWidget);
     expect(find.textContaining('归命', findRichText: true), findsOneWidget);
     final textY = tester.getTopLeft(ruby).dy;
+    final notesY = tester.getTopLeft(notes).dy;
     final sourceY = tester.getTopLeft(find.text('《药师经》')).dy;
     final benefitY = tester.getTopLeft(find.text('人天利益')).dy;
-    expect(textY, lessThan(sourceY));
+    expect(textY, lessThan(notesY));
+    expect(notesY, lessThan(sourceY));
     expect(sourceY, lessThan(benefitY));
+
+    // 首行注音画在行框上方，不能被咒文列表顶部裁掉：它的上边必须落在
+    // 列表可视区之内（列表顶部有一条留白专门让出注音高度）。
+    final listTop =
+        tester.getRect(find.byKey(const ValueKey('shanzhishi_mx_list'))).top;
+    final rubyRect = tester.getRect(find.text('ōng'));
+    expect(rubyRect.top, greaterThanOrEqualTo(listTop));
   });
 
-  testWidgets('密咒面板右下角编辑按钮：回填内容，改完保存即生效', (tester) async {    await pumpPage(tester);
+  testWidgets('跨行的大范围注音不会吞掉后面每一条注音', (tester) async {
+    await pumpPage(tester);
+    await ShanZhiShiMantraStore.instance.add(
+      '多行批注咒',
+      source: '《药师经》',
+      text: '嗡嘛呢\n叭咪吽\n梭哈',
+      annotations: const [
+        // 整段（跨三行）标了一个注音。
+        MantraAnnotation(start: 0, end: 8, ruby: 'BROAD'),
+        // 第二、三行各自又单独标了注音。
+        MantraAnnotation(start: 4, end: 5, ruby: 'BBB'),
+        MantraAnnotation(start: 8, end: 9, ruby: 'CCC'),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_switch')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_0')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('BROAD'), findsOneWidget);
+    expect(find.text('BBB'), findsOneWidget);
+    expect(find.text('CCC'), findsOneWidget);
+    // 第二、三行的注音依次在下方，没有被第一行遮住。
+    final broadY = tester.getTopLeft(find.text('BROAD')).dy;
+    final bY = tester.getTopLeft(find.text('BBB')).dy;
+    final cY = tester.getTopLeft(find.text('CCC')).dy;
+    expect(broadY, lessThan(bY));
+    expect(bY, lessThan(cY));
+    // 三行正文都还在（跨行注音没有把文字吞进一个行内占位符）。
+    expect(find.text('叭'), findsOneWidget);
+    expect(find.text('梭'), findsOneWidget);
+  });
+
+  testWidgets('系统字号调大时：注音仍压在字上方，不进正文', (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.platformDispatcher.clearAllTestValues);
+    await pumpPage(tester);
+    await ShanZhiShiMantraStore.instance.add(
+      '大字号咒',
+      source: '《药师经》',
+      text: '唵嘛呢\n叭咪吽',
+      annotations: const [
+        MantraAnnotation(start: 0, end: 1, ruby: 'ōng'),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_switch')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_0')));
+    await tester.pumpAndSettle();
+    // 大字号下详情头部有既有的固定高度溢出告警，与本用例无关。
+    while (tester.takeException() != null) {}
+
+    final ruby = find.text('ōng');
+    final chunk = find.text('唵');
+    expect(ruby, findsOneWidget);
+    expect(chunk, findsOneWidget);
+    final rr = tester.getRect(ruby);
+    final cr = tester.getRect(chunk);
+    // 注音底边必须在正文字「字面」的上方，不压进字里。
+    // （注音画在行距空隙里，允许探进正文行框的上留白，所以和行框顶比没意义；
+    //   字面顶 = 行框顶 + 上半行距，行框高 16×2.3×1.3、字面高 16×1.3。）
+    final glyphTop = cr.top + (cr.height - 16 * 1.3) / 2;
+    expect(glyphTop - rr.bottom, greaterThanOrEqualTo(0));
+    // 正文只被系统字号放大一次（16×2.3×1.3≈47.8），不是两倍（≈63）。
+    expect(cr.height, inInclusiveRange(44, 51));
+    // 咒文段落正好两行：注音不能把正文挤出多余的空白行。
+    // 被注音的「唵」在纯文本里是占位符，用后面的「嘛呢」认段落。
+    RichText? mainRt;
+    for (final el in find.byType(RichText).evaluate()) {
+      final w = el.widget as RichText;
+      if (w.text.toPlainText().contains('嘛呢')) {
+        mainRt = w;
+        break;
+      }
+    }
+    expect(mainRt, isNotNull);
+    final pr = tester.getRect(find.byWidget(mainRt!));
+    expect((pr.height / cr.height).round(), 2);
+  });
+
+  testWidgets('密咒面板右下角编辑按钮：回填内容，改完保存即生效', (tester) async {
+    await pumpPage(tester);
     await ShanZhiShiMantraStore.instance.add(
       '测试神咒',
       source: '《药师经》',
@@ -369,6 +469,49 @@ void main() {
     expect(find.text('新咒文'), findsOneWidget);
     final store = ShanZhiShiMantraStore.instance;
     expect(store.textOf('测试神咒'), '新咒文');
+  });
+
+  testWidgets('编辑里给咒文加注音：保存后详情直接显示注音', (tester) async {
+    await pumpPage(tester);
+    await ShanZhiShiMantraStore.instance.add(
+      '流程咒',
+      source: '《药师经》',
+      text: '嗡嘛呢叭咪吽',
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_ring')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_fab_switch')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shanzhishi_mantra_0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.pumpAndSettle();
+
+    final textField =
+        find.byKey(const ValueKey('shanzhishi_mantra_text_field'));
+    final ctrl = tester.widget<TextField>(textField).controller!;
+    ctrl.selection = const TextSelection(baseOffset: 0, extentOffset: 1);
+    await tester.pump();
+    final rubyTool = find.byKey(const ValueKey('shanzhishi_mantra_ruby_tool'));
+    await tester.ensureVisible(rubyTool);
+    await tester.pumpAndSettle();
+    await tester.tap(rubyTool);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('shanzhishi_mantra_ruby_input')), 'ōng');
+    await tester.tap(
+        find.byKey(const ValueKey('shanzhishi_mantra_annotation_save')));
+    await tester.pumpAndSettle();
+    final saveButton = find.widgetWithText(FilledButton, '保存');
+    await tester.ensureVisible(saveButton);
+    await tester.pumpAndSettle();
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('编辑神咒'), findsNothing);
+    expect(find.text('ōng'), findsOneWidget);
   });
 
   testWidgets('编辑神咒时名称也删空：保存即删除，不再显示', (tester) async {

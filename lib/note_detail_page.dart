@@ -16,6 +16,7 @@ import 'quote_box.dart';
 import 'reading_badges.dart';
 import 'reading_note_post.dart';
 import 'reading_sutra_notes_page.dart';
+import 'blessing_share_post.dart';
 import 'reply_thread.dart';
 import 'text_input_sheet.dart';
 import 'post_time_link.dart';
@@ -980,6 +981,12 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                     noteId: note.id,
                                     sutraLibrary: _sutraLib,
                                     authorName: note.authorName,
+                                  )
+                                else if (BlessingSharePost.isBlessingShare(
+                                    note.content))
+                                  BlessingSharePostView(
+                                    post:
+                                        BlessingSharePost.parse(note.content)!,
                                   )
                                 else
                                   // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。
@@ -2455,7 +2462,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         final metaIdx = newContent.indexOf(kSutraNotesMetaPrefix);
         if (metaIdx > 0) {
           final before = newContent.substring(0, metaIdx).trim();
-          final parts = before.split(RegExp(r'\n\s*\n'))
+          final parts = before
+              .split(RegExp(r'\n\s*\n'))
               .map((s) => s.trim())
               .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
               .toList();
@@ -2465,15 +2473,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             final content = (n['content'] ?? '').toString();
             if (content.contains(sutraTag)) {
               // 提取本地笔记中 $经文名 之后的正文部分
-              final localParts = content.split(RegExp(r'\n\s*\n'))
+              final localParts = content
+                  .split(RegExp(r'\n\s*\n'))
                   .map((s) => s.trim())
                   .where((s) => s.isNotEmpty && !s.startsWith(r'$'))
                   .toList();
               if (localParts.isNotEmpty && parts.isNotEmpty) {
                 // 用新内容的对应段落替换本地笔记正文
-                final header = content.split(RegExp(r'\n\s*\n'))
-                    .firstWhere((s) => s.trim().startsWith(r'$'),
-                        orElse: () => '');
+                final header = content.split(RegExp(r'\n\s*\n')).firstWhere(
+                    (s) => s.trim().startsWith(r'$'),
+                    orElse: () => '');
                 if (header.isNotEmpty) {
                   n['content'] = '$header\n\n${parts.first}';
                   n['updatedAt'] = DateTime.now().toIso8601String();

@@ -50,6 +50,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('open_sheet')));
     await tester.pumpAndSettle();
+    expect(isCollapsibleSheetOpen, isTrue);
     final sheetField = find.descendant(
       of: find.byKey(const ValueKey('collapsible_sheet_panel')),
       matching: find.byType(TextField),

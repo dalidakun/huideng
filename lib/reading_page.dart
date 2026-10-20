@@ -5793,7 +5793,8 @@ class _IdeaMenuCardState extends State<_IdeaMenuCard> {
             setState(() => _underlined = !_underlined);
             widget.onDrawUnderline(s, e);
           }),
-          _item(Icons.playlist_add, '添加至', _openAddTo),
+          if (!isCollapsibleSheetOpen)
+            _item(Icons.playlist_add, '添加至', _openAddTo),
           _item(Icons.edit_note, '备注', () {
             final (s, e) = _activeRange;
             widget.close();

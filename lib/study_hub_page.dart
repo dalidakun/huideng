@@ -48,6 +48,14 @@ Color get _checkinCardBg => AppPalette.instance.isPlain
     ? const Color(0xFFF2F5EF)
     : const Color(0xFFF8EED9);
 
+/// 主页祈福区块中的一条：项目 + 是否属于我（发起或参与）。
+class _HomeBlessing {
+  final BlessingItem item;
+  final bool mine;
+
+  const _HomeBlessing(this.item, {required this.mine});
+}
+
 class StudyHubPage extends StatefulWidget {
   /// 左上角头像点击回调：从左侧滑出个人菜单。
   final VoidCallback? onOpenSideMenu;
@@ -134,13 +142,14 @@ class StudyHubPageState extends State<StudyHubPage>
   List<Map<String, dynamic>> _checkInTypesList = [];
   bool _loaded = false;
 
-  /// 祈福共修：主页区块展示的当前祈福（我的进行中优先，否则社区热门）。
-  BlessingItem? _blessing;
-
-  /// 该祈福是否为我参与的（用于决定快捷动作按钮）。
-  bool _blessingMine = false;
+  /// 祈福共修：主页区块展示两条，优先我发起的，其次我参与的，
+  /// 另一条取我参与的其他祈福或社区「更多」中的推荐。
+  List<_HomeBlessing> _blessings = const [];
   bool _blessingLoading = false;
   bool _blessingBusy = false;
+
+  /// 正在分享的祈福 id（只让当前分享按钮进入忙碌态，避免另一条跟着闪动）。
+  final Set<String> _blessingSharing = {};
   final ScrollController _scrollController = ScrollController();
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
@@ -1706,33 +1715,75 @@ class StudyHubPageState extends State<StudyHubPage>
 
   // ---------- 祈福共修 ----------
 
-  /// 拉取祈福数据：优先展示我进行中的祈福，否则社区最新的一条。
+  /// 祈福是否仍在进行中：已完成、已关闭或已过期的归入归档。
+  bool _isBlessingActive(BlessingItem item) {
+    if (item.progress?.isDone == true) return false;
+    final proj = item.project;
+    if (proj.status == 'closed') return false;
+    final parts = proj.startDate.split('-');
+    if (parts.length == 3 && proj.totalDays > 0) {
+      final y = int.tryParse(parts[0]);
+      final m = int.tryParse(parts[1]);
+      final d = int.tryParse(parts[2]);
+      if (y != null && m != null && d != null) {
+        final end = DateTime(y, m, d).add(Duration(days: proj.totalDays));
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        if (!today.isBefore(end)) return false;
+      }
+    }
+    return true;
+  }
+
+  /// 拉取两条祈福：第一条以我发起的为主（否则我参与的），
+  /// 第二条取另一条我参与的，或社区「更多」中的推荐。
   Future<void> _loadBlessing() async {
     if (mounted) setState(() => _blessingLoading = true);
-    BlessingItem? pick;
-    var mine = false;
+    List<BlessingItem> mine = const [];
+    List<BlessingItem> comm = const [];
     try {
-      final list = await BlessingService.instance.listMine(pageSize: 20);
-      if (list.isNotEmpty) {
-        final active =
-            list.where((e) => !(e.progress?.isDone ?? false)).toList();
-        pick = active.isNotEmpty ? active.first : list.first;
-        mine = true;
-      }
+      mine = await BlessingService.instance.listMine(pageSize: 30);
     } catch (_) {}
-    if (pick == null) {
-      try {
-        final list = await BlessingService.instance.listCommunity(pageSize: 20);
-        if (list.isNotEmpty) {
-          pick = list.first;
-          mine = false;
-        }
-      } catch (_) {}
+    try {
+      comm = await BlessingService.instance.listCommunity(pageSize: 30);
+    } catch (_) {}
+
+    final mineActive = mine.where(_isBlessingActive).toList();
+    final created = mineActive.where((e) => e.project.isOwner).toList();
+    final joined = mineActive.where((e) => !e.project.isOwner).toList();
+    final mineIds = mine.map((e) => e.project.id).toSet();
+    final more = comm
+        .where((e) => !mineIds.contains(e.project.id) && _isBlessingActive(e))
+        .toList();
+
+    _HomeBlessing? first;
+    if (created.isNotEmpty) {
+      first = _HomeBlessing(created.first, mine: true);
+    } else if (joined.isNotEmpty) {
+      first = _HomeBlessing(joined.first, mine: true);
+    } else if (more.isNotEmpty) {
+      first = _HomeBlessing(more.first, mine: false);
     }
+
+    _HomeBlessing? second;
+    final usedId = first?.item.project.id;
+    final otherJoined = joined.where((e) => e.project.id != usedId).toList();
+    final otherMore = more.where((e) => e.project.id != usedId).toList();
+    final otherMine = mineActive.where((e) => e.project.id != usedId).toList();
+    if (otherJoined.isNotEmpty) {
+      second = _HomeBlessing(otherJoined.first, mine: true);
+    } else if (otherMore.isNotEmpty) {
+      second = _HomeBlessing(otherMore.first, mine: false);
+    } else if (otherMine.isNotEmpty) {
+      second = _HomeBlessing(otherMine.first, mine: true);
+    }
+
     if (!mounted) return;
     setState(() {
-      _blessing = pick;
-      _blessingMine = mine;
+      _blessings = [
+        if (first != null) first,
+        if (second != null) second,
+      ];
       _blessingLoading = false;
     });
   }
@@ -1750,9 +1801,8 @@ class StudyHubPageState extends State<StudyHubPage>
   }
 
   /// 主页快捷「今日祈福」。
-  Future<void> _blessCurrent() async {
-    final item = _blessing;
-    if (item == null || _blessingBusy) return;
+  Future<void> _blessCurrent(BlessingItem item) async {
+    if (_blessingBusy) return;
     setState(() => _blessingBusy = true);
     try {
       final res = await BlessingService.instance.blessToday(item.project.id);
@@ -1767,7 +1817,31 @@ class StudyHubPageState extends State<StudyHubPage>
     }
   }
 
-  /// 祈福共修区块：主页最下方，展示当前祈福与进入详情页的入口。
+  /// 分享一条祈福到菩提空间：先填写备注并确认。
+  Future<void> _shareBlessing(BlessingItem item) async {
+    final id = item.project.id;
+    if (_blessingSharing.contains(id)) return;
+    if (!AuthService.instance.isLoggedIn) {
+      _showToast('分享到菩提空间需要先登录');
+      return;
+    }
+    final remark = await showBlessingShareDialog(
+      context,
+      blessingTitle: item.project.title,
+    );
+    if (remark == null || !mounted) return;
+    setState(() => _blessingSharing.add(id));
+    try {
+      await shareBlessingToBodhiSpace(item.project, remark: remark);
+      if (mounted) _showTopToast('已分享到菩提空间');
+    } catch (e) {
+      if (mounted) _showTopToast('分享失败：$e', isError: true);
+    } finally {
+      if (mounted) setState(() => _blessingSharing.remove(id));
+    }
+  }
+
+  /// 祈福共修区块：主页最下方，展示两条祈福与进入详情页的入口。
   Widget _buildBlessingBlock() {
     return Container(
       decoration: BoxDecoration(
@@ -1777,56 +1851,77 @@ class StudyHubPageState extends State<StudyHubPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 14, 0),
-            child: Row(
-              children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                      color: _gold.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Icon(Icons.volunteer_activism_outlined,
-                      size: 17, color: _gold),
-                ),
-                const SizedBox(width: 10),
-                Text('祈福',
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: _text)),
-                const Spacer(),
-                InkWell(
-                  onTap: _openBlessingPage,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('全部',
-                            style: TextStyle(fontSize: 13, color: _textSec)),
-                        Icon(Icons.chevron_right, size: 16, color: _textSec),
-                      ],
-                    ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _openBlessingPage,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+              child: Row(
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                        color: _gold.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Icon(Icons.volunteer_activism_outlined,
+                        size: 17, color: _gold),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  Text('为众祈福',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: _text)),
+                ],
+              ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
             child: _buildBlessingBody(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+            child: _buildBlessingMoreButton(),
           ),
         ],
       ),
     );
   }
 
+  /// 祈福卡片底部「查看更多」：与经藏页廿册经典的查看更多样式一致。
+  Widget _buildBlessingMoreButton() {
+    return Material(
+      color: _gold.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _openBlessingPage,
+        child: SizedBox(
+          height: 38,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '查看更多',
+                style: TextStyle(
+                  color: AppPalette.p.accentDeep,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Icon(Icons.chevron_right,
+                  size: 17, color: AppPalette.p.accentDeep),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBlessingBody() {
-    if (_blessingLoading && _blessing == null) {
+    if (_blessingLoading && _blessings.isEmpty) {
       return Row(
         children: [
           SizedBox(
@@ -1839,8 +1934,7 @@ class StudyHubPageState extends State<StudyHubPage>
         ],
       );
     }
-    final item = _blessing;
-    if (item == null) {
+    if (_blessings.isEmpty) {
       return Row(
         children: [
           Expanded(
@@ -1852,22 +1946,41 @@ class StudyHubPageState extends State<StudyHubPage>
         ],
       );
     }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < _blessings.length; i++) ...[
+          if (i > 0) const SizedBox(height: 20),
+          _buildBlessingItemBody(_blessings[i]),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildBlessingItemBody(_HomeBlessing entry) {
+    final item = entry.item;
     final proj = item.project;
     final prog = item.progress;
     final done = prog?.isDone == true;
     final blessedToday = prog?.doneToday() ?? false;
-    final mineJoined = _blessingMine && (prog?.joined == true);
+    final mineJoined = entry.mine && (prog?.joined == true);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Expanded(
-              child: Text(proj.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w600, color: _text)),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _openBlessingDetail(proj.id),
+                child: Text(proj.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: _text)),
+              ),
             ),
             if (done) ...[
               const SizedBox(width: 6),
@@ -1881,7 +1994,7 @@ class StudyHubPageState extends State<StudyHubPage>
               style: TextStyle(fontSize: 12.5, color: _textSec)),
         ],
         const SizedBox(height: 10),
-        if (_blessingMine)
+        if (entry.mine)
           Row(
             children: [
               Expanded(
@@ -1916,18 +2029,25 @@ class StudyHubPageState extends State<StudyHubPage>
         const SizedBox(height: 10),
         Row(
           children: [
-            Text(
-                _blessingMine
-                    ? '已祈福 ${prog?.doneCount ?? 0}/${proj.totalDays} 天'
-                    : '与大家一同祈福',
-                style: TextStyle(fontSize: 12.5, color: _textSec)),
-            const Spacer(),
+            Expanded(
+              child: Text(
+                  entry.mine
+                      ? '已祈福 ${prog?.doneCount ?? 0}/${proj.totalDays} 天'
+                      : '与大家一同祈福',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12.5, color: _textSec)),
+            ),
+            _blessingShareButton(proj.id, onTap: () => _shareBlessing(item)),
+            const SizedBox(width: 8),
             if (mineJoined && !done)
               _blessingAction(
                 blessedToday ? '今日已祈福' : '今日祈福',
                 enabled: !blessedToday && !_blessingBusy,
                 filled: !blessedToday,
-                onTap: _blessCurrent,
+                bordered: false,
+                dense: true,
+                onTap: () => _blessCurrent(item),
               )
             else
               _blessingAction('查看', onTap: () => _openBlessingDetail(proj.id)),
@@ -1937,26 +2057,56 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
+  Widget _blessingShareButton(String id, {required VoidCallback onTap}) {
+    final busy = _blessingSharing.contains(id);
+    return Opacity(
+      opacity: busy ? 0.5 : 1,
+      child: GestureDetector(
+        onTap: busy ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: _gold.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.share_outlined, size: 12.5, color: _gold),
+              const SizedBox(width: 4),
+              Text('分享',
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600, color: _gold)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _blessingAction(
     String label, {
     required VoidCallback onTap,
     bool enabled = true,
     bool filled = true,
+    bool bordered = true,
+    bool dense = false,
   }) {
     return Opacity(
       opacity: enabled ? 1 : 0.5,
       child: GestureDetector(
         onTap: enabled ? onTap : null,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          padding: EdgeInsets.symmetric(
+              horizontal: dense ? 10 : 14, vertical: dense ? 5 : 7),
           decoration: BoxDecoration(
             color: filled ? _gold : Colors.transparent,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: _gold),
+            borderRadius: BorderRadius.circular(dense ? 14 : 18),
+            border: bordered ? Border.all(color: _gold) : null,
           ),
           child: Text(label,
               style: TextStyle(
-                  fontSize: 12.5,
+                  fontSize: dense ? 12 : 12.5,
                   fontWeight: FontWeight.w600,
                   color: filled ? Colors.white : _gold)),
         ),

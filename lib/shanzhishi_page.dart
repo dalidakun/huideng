@@ -1509,7 +1509,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
   }
 
-  /// 密咒详情内容：神咒原文（居左、纯文字、无色块、无小标题，带注音 / 备注）
+  /// 密咒详情内容：神咒原文（居中，注音标在字上）
+  /// + 备注（整块色块，集中放在咒文下面）
   /// + 经文出处（整行色块、右侧箭头，点进阅读页）+ 人天利益。
   /// 右下角固定与佛号面板同款的编辑按钮。
   Widget _buildMxShelfContent(PaletteData p) {
@@ -1521,74 +1522,104 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     return Stack(
       children: [
         Positioned.fill(
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(_shelfSidePad, 16, _shelfSidePad, 88),
+          child: Column(
             children: [
-              if (text.isEmpty)
-                Text(
-                  '尚未填写神咒原文',
-                  style: TextStyle(fontSize: 15, color: p.textHint),
-                )
-              else if (annotations.isEmpty)
-                SelectableText(
-                  text,
-                  style: TextStyle(
-                    fontSize: 16,
-                    height: 1.9,
-                    color: p.text,
-                    letterSpacing: 0.5,
-                  ),
-                )
-              else
-                SelectionArea(
-                  child: Text.rich(
-                    _buildAnnotatedMantraSpan(p, text, annotations),
+              // 神咒名字与咒文之间的居中插图（半透明，钉在顶部，不随正文滚动）。
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 26),
+                child: Opacity(
+                  opacity: 0.55,
+                  child: Image.asset(
+                    'assets/images/shen.png',
+                    width: 210,
+                    fit: BoxFit.contain,
                   ),
                 ),
-              const SizedBox(height: 20),
-              if (source.isEmpty)
-                Text(
-                  '尚未填写经文出处',
-                  style: TextStyle(fontSize: 15, color: p.textHint),
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: InkWell(
-                    key: const ValueKey('shanzhishi_mantra_source_row'),
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => _openSutraReading(source),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: p.tintBg,
-                        borderRadius: BorderRadius.circular(6),
+              ),
+              Expanded(
+                child: ListView(
+                  key: const ValueKey('shanzhishi_mx_list'),
+                  padding:
+                      EdgeInsets.fromLTRB(_shelfSidePad, 0, _shelfSidePad, 88),
+                  children: [
+                    // 首行注音画在行框上方的空隙里（Stack 用 Clip.none 溢出绘制），
+                    // 但第一行行框紧贴文本顶，注音会被边缘裁掉，
+                    // 文本上方先补一段留白把首行注音让出来。
+                    if (annotations.isNotEmpty)
+                      const SizedBox(height: 14),
+                    if (text.isEmpty)
+                      Text(
+                        '尚未填写神咒原文',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 15, color: p.textHint),
+                      )
+                    else if (annotations.isEmpty)
+                      SelectableText(
+                        text,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 16,
+                          height: 2.3,
+                          color: p.text,
+                          letterSpacing: 0.5,
+                        ),
+                      )
+                    else
+                      SelectionArea(
+                        child: Text.rich(
+                          _buildAnnotatedMantraSpan(p, text, annotations),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              source,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.black,
-                                letterSpacing: 1,
-                              ),
+                    if (annotations.any((a) => a.hasNote))
+                      _buildMantraNotesBlock(p, text, annotations),
+                    const SizedBox(height: 20),
+                    if (source.isEmpty)
+                      Text(
+                        '尚未填写经文出处',
+                        style: TextStyle(fontSize: 15, color: p.textHint),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: InkWell(
+                          key: const ValueKey('shanzhishi_mantra_source_row'),
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () => _openSutraReading(source),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: p.tintBg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    source,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.black,
+                                      letterSpacing: 1,
+                                    ),
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right,
+                                    size: 18, color: p.accentDeep),
+                              ],
                             ),
                           ),
-                          Icon(Icons.chevron_right,
-                              size: 18, color: p.accentDeep),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
+                    for (final t in benefit) _paragraphBlock(p, t),
+                  ],
                 ),
-              for (final t in benefit) _paragraphBlock(p, t),
+              ),
             ],
           ),
         ),
@@ -1604,8 +1635,8 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
   }
 
-  /// 把带批注的神咒原文拼成富文本：注音显示在选中文字上方，
-  /// 备注以更小的字显示在文字下方；正文本身不改动。
+  /// 把带批注的神咒原文拼成富文本：注音叠在选中文字上方，
+  /// 不占额外行高，正文不会被挤下去；备注不在这里显示。
   TextSpan _buildAnnotatedMantraSpan(
     PaletteData p,
     String text,
@@ -1613,52 +1644,182 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   ) {
     final body = TextStyle(
       fontSize: 16,
-      height: 1.9,
+      height: 2.3,
       color: p.text,
       letterSpacing: 0.5,
     );
     final rubyStyle = TextStyle(
-      fontSize: 10,
-      height: 1.2,
+      fontSize: 11,
+      height: 1.1,
       fontWeight: FontWeight.w600,
       color: p.accentDeep,
     );
-    final noteStyle = TextStyle(
-      fontSize: 11,
-      height: 1.4,
-      color: p.textSec,
-    );
-    final sorted = [...annotations]
-      ..sort((a, b) => a.start != b.start ? a.start - b.start : a.end - b.end);
+    // 注音的高度：2.3 行高在字上下各留 ~9.3px 空隙，注音以字距上方为中心
+    // 画在空隙里，整行比正文放松，注音不挤。
+    const rubySpace = 12.0;
+    final rubies = <({int start, int end, MantraAnnotation ann})>[
+      for (final ann in annotations)
+        if (ann.hasRuby)
+          (
+            start: ann.start.clamp(0, text.length),
+            end: ann.end.clamp(0, text.length),
+            ann: ann,
+          )
+    ]..removeWhere((r) => r.end <= r.start);
+
+    // 同一处被多条批注覆盖时，让范围更小的那条优先（例如整段注音里
+    // 单独给某几个字再标一次），免得后加的注音被大范围批注吞掉。
+    int? winnerAt(int i) {
+      int? best;
+      var bestLen = 1 << 30;
+      for (var k = 0; k < rubies.length; k++) {
+        final r = rubies[k];
+        if (i < r.start || i >= r.end) continue;
+        final len = r.end - r.start;
+        if (len < bestLen) {
+          bestLen = len;
+          best = k;
+        }
+      }
+      return best;
+    }
+
     final spans = <InlineSpan>[];
-    var cursor = 0;
-    for (final ann in sorted) {
-      final s = ann.start.clamp(0, text.length);
-      final e = ann.end.clamp(0, text.length);
-      if (e <= s || s < cursor) continue;
-      if (s > cursor) spans.add(TextSpan(text: text.substring(cursor, s)));
+    // 每条批注只在它「胜出」的第一段文字上标一次注音；被别的批注打断的
+    // 后半段仍然照常显示正文，避免同一注音反复出现。
+    final shown = <int>{};
+    var i = 0;
+    while (i < text.length) {
+      final w = winnerAt(i);
+      // 换行必须留在普通文本里：WidgetSpan 内部带换行会把多行挤进一个
+      // 行内占位符，导致后面的注音和排版都不对。
+      if (w == null || text[i] == '\n' || text[i] == '\r') {
+        var j = i + 1;
+        while (j < text.length &&
+            text[j] != '\n' &&
+            text[j] != '\r' &&
+            winnerAt(j) == w) {
+          j++;
+        }
+        spans.add(TextSpan(text: text.substring(i, j)));
+        i = j;
+        continue;
+      }
+      var j = i + 1;
+      while (j < text.length &&
+          text[j] != '\n' &&
+          text[j] != '\r' &&
+          winnerAt(j) == w) {
+        j++;
+      }
+      if (!shown.add(w)) {
+        spans.add(TextSpan(text: text.substring(i, j)));
+        i = j;
+        continue;
+      }
+      final chunk = Text(
+        text.substring(i, j),
+        style: body,
+        // WidgetSpan 里的子组件会被 Flutter 按段落字号再缩放一次，
+        // 这里自己不再吃系统字号，免得注音和占位高度被放大两倍、压进正文。
+        textScaler: TextScaler.noScaling,
+      );
+      // Stack 只按正文排版：占位符高度=正文本身，基线=正文基线，
+      // 行高、字的位置和没有注音时完全一样。
       spans.add(WidgetSpan(
-        alignment: PlaceholderAlignment.middle,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        alignment: PlaceholderAlignment.baseline,
+        baseline: TextBaseline.alphabetic,
+        child: Stack(
+          clipBehavior: Clip.none,
           children: [
-            if (ann.hasRuby) Text(ann.ruby, style: rubyStyle),
-            Text(text.substring(s, e), style: body),
-            if (ann.hasNote)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(ann.note, style: noteStyle),
+            chunk,
+            // 注音负偏移画到行距空隙里，不参与排版。
+            // IgnoreBaseline 很关键：Stack 的基线取「所有子节点里最高的一条」，
+            // 不挡住注音的话会被它带成负值，整行被垫高一行（多出空白行）。
+            Positioned(
+              top: -rubySpace / 2,
+              left: -60,
+              right: -60,
+              child: IgnoreBaseline(
+                child: Center(
+                  child: Text(
+                    rubies[w].ann.ruby,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: rubyStyle,
+                    textScaler: TextScaler.noScaling,
+                  ),
+                ),
               ),
+            ),
           ],
         ),
       ));
-      cursor = e;
-    }
-    if (cursor < text.length) {
-      spans.add(TextSpan(text: text.substring(cursor)));
+      i = j;
     }
     return TextSpan(style: body, children: spans);
+  }
+
+  /// 全部备注集中放在咒文下面，用一个色块整体包住。
+  Widget _buildMantraNotesBlock(
+    PaletteData p,
+    String text,
+    List<MantraAnnotation> annotations,
+  ) {
+    final notes = [
+      for (final a in annotations)
+        if (a.hasNote) a
+    ]..sort((a, b) => a.start != b.start ? a.start - b.start : a.end - b.end);
+    final quotedStyle = TextStyle(
+      fontWeight: FontWeight.w600,
+      color: p.accentDeep,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Container(
+        key: const ValueKey('shanzhishi_mantra_notes'),
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        decoration: BoxDecoration(
+          color: p.tintBg,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '备注',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: p.accentDeep,
+                letterSpacing: 1,
+              ),
+            ),
+            for (final ann in notes)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Builder(builder: (_) {
+                  final s = ann.start.clamp(0, text.length);
+                  final e = ann.end.clamp(0, text.length);
+                  final quoted = e > s ? text.substring(s, e) : '';
+                  return Text.rich(
+                    TextSpan(
+                      children: [
+                        if (quoted.isNotEmpty)
+                          TextSpan(text: '「$quoted」', style: quotedStyle),
+                        if (quoted.isNotEmpty) const TextSpan(text: '  '),
+                        TextSpan(text: ann.note),
+                      ],
+                    ),
+                    style: TextStyle(fontSize: 13.5, height: 1.6, color: p.text),
+                  );
+                }),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 密咒面板右下角「编辑」：打开与「添加」同款的面板（回填各项，可改名/改内容）。
