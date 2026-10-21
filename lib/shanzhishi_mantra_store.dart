@@ -138,13 +138,15 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
   Set<String> _hidden = {};
 
   /// 详情：内部键（`a:id` / `b:内置原名`）→
-  /// (出处, 原文, 人天利益段落, 原文批注)。
+  /// (关联经文, 原文, 人天利益段落（平铺），按经文分组的人天利益, 原文批注)。
   final Map<
       String,
       ({
+        List<String> sources,
         String source,
         String text,
         List<String> benefit,
+        Map<String, List<String>> benefitBySutra,
         List<MantraAnnotation> annotations,
       })> _details = {};
 
@@ -222,27 +224,51 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     return null;
   }
 
-  /// 某条密咒的经文出处（内置或未填写时为空串）。
+  /// 某条密咒的关联经文（内置或未填写时为空表）。
+  List<String> sourcesOf(String name) => sourcesOfKey(_resolve(name)?.key);
+
+  /// 某条密咒的经文出处（内置或未填写时为空串）。多部经用「 / 」接成一串。
   String sourceOf(String name) => sourceOfKey(_resolve(name)?.key);
 
   /// 某条密咒的神咒原文（内置或未填写时为空串）。
   String textOf(String name) => textOfKey(_resolve(name)?.key);
 
-  /// 某条密咒的人天利益段落（内置或未填写时为空表）。
+  /// 某条密咒的人天利益段落（内置或未填写时为空表，平铺）。
   List<String> benefitOf(String name) => benefitOfKey(_resolve(name)?.key);
+
+  /// 某条密咒按经文分组的人天利益。
+  Map<String, List<String>> benefitBySutraOf(String name) =>
+      benefitBySutraOfKey(_resolve(name)?.key);
 
   /// 某条密咒的神咒原文批注（未填写时为空表）。
   List<MantraAnnotation> annotationsOf(String name) =>
       annotationsOfKey(_resolve(name)?.key);
 
-  /// 按内部键取出的经文出处。
-  String sourceOfKey(String? key) => _details[key]?.source ?? '';
+  /// 按内部键取出的关联经文。
+  List<String> sourcesOfKey(String? key) {
+    final d = _details[key];
+    if (d == null) return const [];
+    if (d.sources.isNotEmpty) return d.sources;
+    if (d.source.isNotEmpty) return [d.source];
+    return const [];
+  }
+
+  /// 按内部键取出的经文出处：多部经用「 / 」接成一串（没有则退回首条）。
+  String sourceOfKey(String? key) {
+    final list = sourcesOfKey(key);
+    if (list.isNotEmpty) return list.join(' / ');
+    return _details[key]?.source ?? '';
+  }
 
   /// 按内部键取出的神咒原文。
   String textOfKey(String? key) => _details[key]?.text ?? '';
 
-  /// 按内部键取出的人天利益段落。
+  /// 按内部键取出的人天利益段落（平铺）。
   List<String> benefitOfKey(String? key) => _details[key]?.benefit ?? const [];
+
+  /// 按内部键取出按经文分组的人天利益。
+  Map<String, List<String>> benefitBySutraOfKey(String? key) =>
+      _details[key]?.benefitBySutra ?? const {};
 
   /// 按内部键取出的神咒原文批注。
   List<MantraAnnotation> annotationsOfKey(String? key) =>
@@ -328,9 +354,38 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
         }
       }
       final detail = (
+        sources: () {
+          if (v.length >= 5 && v[4] is List) {
+            final list = <String>[];
+            for (final t in v[4] as List) {
+              final s = t.toString().trim();
+              if (s.isNotEmpty && !list.contains(s)) list.add(s);
+            }
+            if (list.isNotEmpty) return list;
+          }
+          final src = v[0].toString().trim();
+          return src.isEmpty ? const <String>[] : [src];
+        }(),
         source: v[0].toString(),
         text: v[1].toString(),
         benefit: benefit,
+        benefitBySutra: () {
+          if (v.length >= 6 && v[5] is Map) {
+            final map = <String, List<String>>{};
+            for (final e in (v[5] as Map).entries) {
+              final key = e.key.toString().trim();
+              if (key.isEmpty || e.value is! List) continue;
+              final list = <String>[];
+              for (final t in e.value as List) {
+                final s = t.toString().trim();
+                if (s.isNotEmpty && !list.contains(s)) list.add(s);
+              }
+              if (list.isNotEmpty) map[key] = list;
+            }
+            return map;
+          }
+          return const <String, List<String>>{};
+        }(),
         annotations: _parseAnnotations(v.length >= 4 ? v[3] : null),
       );
       final rawKey = e.key.toString();
@@ -371,8 +426,10 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
   Future<bool> add(
     String name, {
     String source = '',
+    List<String>? sources,
     String text = '',
     List<String> benefit = const [],
+    Map<String, List<String>>? benefitBySutra,
     List<MantraAnnotation> annotations = const [],
     bool allowDuplicate = false,
   }) async {
@@ -382,10 +439,15 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     final entry = _AddedMantra(id: _newId(), name: key);
     _added.insert(0, entry);
     final trimmedText = text.trim();
+    final benefitList = _cleanTexts(benefit);
+    final srcList = _cleanTexts(sources ?? (source.trim().isEmpty ? const [] : [source.trim()]));
+    final benefitBy = _cleanBenefitBySutra(benefitBySutra ?? const {});
     _details[_addedKey(entry)] = (
-      source: source.trim(),
+      sources: srcList,
+      source: srcList.join(' / '),
       text: trimmedText,
-      benefit: _cleanTexts(benefit),
+      benefit: benefitList,
+      benefitBySutra: benefitBy,
       annotations: _fitAnnotations(annotations, text),
     );
     await _persist();
@@ -401,8 +463,10 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     String? newName,
     String? entryKey,
     String source = '',
+    List<String>? sources,
     String text = '',
     List<String> benefit = const [],
+    Map<String, List<String>>? benefitBySutra,
     List<MantraAnnotation> annotations = const [],
     bool allowDuplicate = false,
   }) async {
@@ -426,10 +490,14 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       final entry = _firstAddedByKey(target.key);
       if (entry != null) entry.name = newKey;
     }
+    final srcList = _cleanTexts(sources ?? (source.trim().isEmpty ? const [] : [source.trim()]));
+    final benefitBy = _cleanBenefitBySutra(benefitBySutra ?? const {});
     _details[target.key] = (
-      source: source.trim(),
+      sources: srcList,
+      source: srcList.join(' / '),
       text: text.trim(),
       benefit: _cleanTexts(benefit),
+      benefitBySutra: benefitBy,
       annotations: _fitAnnotations(annotations, text),
     );
     await _persist();
@@ -486,24 +554,34 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     String name, {
     String? entryKey,
     String source = '',
+    List<String>? sources,
     String text = '',
     List<String> benefit = const [],
+    Map<String, List<String>>? benefitBySutra,
     List<MantraAnnotation> annotations = const [],
   }) async {
     final target = _resolve(name, entryKey);
     if (target == null) return false;
     final old = _details[target.key] ??
         (
+          sources: const <String>[],
           source: '',
           text: '',
           benefit: const <String>[],
+          benefitBySutra: const <String, List<String>>{},
           annotations: const <MantraAnnotation>[],
         );
     final newText = text.trim();
+    final mergedSources = _joinSources(
+      old.sources,
+      sources ?? (source.trim().isEmpty ? const [] : [source.trim()]),
+    );
     _details[target.key] = (
-      source: _joinSource(old.source, source.trim()),
+      sources: mergedSources,
+      source: mergedSources.join(' / '),
       text: _joinText(old.text, newText),
       benefit: _joinBenefits(old.benefit, benefit),
+      benefitBySutra: _joinBenefitBySutra(old.benefitBySutra, benefitBySutra),
       annotations: _joinAnnotations(
         old.text,
         old.annotations,
@@ -532,15 +610,20 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     if (moved != null) {
       final old = _details[k.key] ??
           (
+            sources: const <String>[],
             source: '',
             text: '',
             benefit: const <String>[],
+            benefitBySutra: const <String, List<String>>{},
             annotations: const <MantraAnnotation>[],
           );
+      final mergedSources = _joinSources(old.sources, moved.sources);
       _details[k.key] = (
-        source: _joinSource(old.source, moved.source),
+        sources: mergedSources,
+        source: mergedSources.join(' / '),
         text: _joinText(old.text, moved.text),
         benefit: _joinBenefits(old.benefit, moved.benefit),
+        benefitBySutra: _joinBenefitBySutra(old.benefitBySutra, moved.benefitBySutra),
         annotations: _joinAnnotations(
           old.text,
           old.annotations,
@@ -550,13 +633,6 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       );
     }
     return remove(d.name, entryKey: d.key);
-  }
-
-  /// 出处合并：新的非空优先；两条不同且都有值时用「 / 」接上。
-  static String _joinSource(String a, String b) {
-    if (b.isEmpty) return a;
-    if (a.isEmpty || a == b) return b;
-    return '$a / $b';
   }
 
   /// 原文合并：新的非空优先；两条不同且都有值时空行接上（两段都留着）。
@@ -569,6 +645,45 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
   /// 人天利益段落合并：两条的段落去空去重、按原顺序接上。
   static List<String> _joinBenefits(List<String> a, List<String> b) =>
       _cleanTexts([...a, ...b]);
+
+  /// 关联经文合并：两条的经名去空去重、按原顺序接上。
+  static List<String> _joinSources(List<String>? a, List<String>? b) =>
+      _cleanTexts([...?a, ...?b]);
+
+  /// 清理「按经文分组的人天利益」：经名去空、段落去空去重，空组丢掉，
+  /// 保持原有顺序。
+  static Map<String, List<String>> _cleanBenefitBySutra(
+    Map<String, List<String>> raw,
+  ) {
+    final out = <String, List<String>>{};
+    for (final e in raw.entries) {
+      final k = e.key.trim();
+      if (k.isEmpty) continue;
+      final cleaned = _cleanTexts(e.value);
+      if (cleaned.isEmpty) continue;
+      out[k] = cleaned;
+    }
+    return out;
+  }
+
+  /// 按经文分组的人天利益合并：同一部经的段落去空去重接上，
+  /// 其余经名整体带上；保持 [a] 里已有经名的顺序，新经名按 [b] 顺序追加。
+  static Map<String, List<String>> _joinBenefitBySutra(
+    Map<String, List<String>> a,
+    Map<String, List<String>>? b,
+  ) {
+    final out = <String, List<String>>{};
+    for (final e in a.entries) {
+      out[e.key] = _cleanTexts(e.value);
+    }
+    for (final e in (b ?? const <String, List<String>>{}).entries) {
+      final k = e.key.trim();
+      if (k.isEmpty) continue;
+      out[k] = _cleanTexts([...?out[k], ...e.value]);
+    }
+    out.removeWhere((_, v) => v.isEmpty);
+    return out;
+  }
 
   /// 原文批注合并：[bText] 接在 [aText] 后面时，其批注整体后移，
   /// 落在新原文的对应位置上。
@@ -592,19 +707,43 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
 
   /// 原文保存时会去掉首尾空白；批注的下标基于输入框里的原文，
   /// 这里按被去掉的头部空白整体左移，再按新长度夹紧。
+  ///
+  /// 关键：落在被去掉的「尾部空白」上的批注不能直接丢掉——用户可能是
+  /// 在最后一行/末尾空白上写的备注，保存后原文被 trim 掉，若直接丢弃
+  /// 会造成「前面的备注不见了」。这类批注收缩到「最后一个保留字符」上。
   static List<MantraAnnotation> _fitAnnotations(
     List<MantraAnnotation> raw,
     String rawText,
   ) {
+    if (raw.isEmpty) return const [];
     final trimmed = rawText.trim();
     final lead = rawText.length - rawText.trimLeft().length;
-    final shifted = lead == 0
-        ? raw
-        : [
-            for (final a in raw)
-              a.copyWith(start: a.start - lead, end: a.end - lead),
-          ];
-    return _cleanAnnotations(shifted, trimmed.length);
+    final len = trimmed.length;
+    final out = <MantraAnnotation>[];
+    for (final a in raw) {
+      var s = a.start - lead;
+      var e = a.end - lead;
+      if (e <= 0) continue; // 完全落在被 trim 的头部空白里：无对应文字。
+      // 终点越过保留区的，收到保留区末尾。
+      if (s >= len) {
+        // 起点也在保留区之外（落在被 trim 的尾部空白上）：
+        // 收缩到最后一个保留字符，保住这条备注。
+        if (len == 0 || !a.isValid) continue;
+        s = len - 1;
+        e = len;
+      } else {
+        if (s < 0) s = 0;
+        if (e > len) e = len;
+        if (e <= s) continue;
+      }
+      final fit = a.copyWith(start: s, end: e);
+      if (!fit.isValid) continue;
+      out.add(fit);
+    }
+    out.sort((x, y) => x.start != y.start
+        ? x.start - y.start
+        : x.end - y.end);
+    return out;
   }
 
   /// 批注按原文长度夹紧、去掉无效项（越界/空内容），并按起点排序。
@@ -644,6 +783,26 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       if (t.isNotEmpty && !out.contains(t)) out.add(t);
     }
     return out;
+  }
+
+  /// 只更新某条密咒的原文批注（注音 / 备注）：原文与其他内容原样保留。
+  Future<void> saveAnnotationsKey(
+    String? key,
+    List<MantraAnnotation> annotations,
+  ) async {
+    if (key == null) return;
+    final d = _details[key];
+    if (d == null) return;
+    _details[key] = (
+      sources: d.sources,
+      source: d.source,
+      text: d.text,
+      benefit: d.benefit,
+      benefitBySutra: d.benefitBySutra,
+      annotations: _cleanAnnotations(annotations, d.text.length),
+    );
+    await _persist();
+    notifyListeners();
   }
 
   /// 删除一条密咒：自建的从名单移除，内置的记进隐藏名单；详情一并清掉。

@@ -330,6 +330,27 @@ void main() {
       expect(saved.end, 1);
     });
 
+    test('落在被 trim 的尾部空白上的备注不会丢：收缩到最后一个保留字符', () async {
+      final store = await loadedStore();
+      await store.add(
+        '尾空咒',
+        text: '嗡嘛呢\n',
+        annotations: const [
+          MantraAnnotation(start: 0, end: 1, note: '前备注'),
+          // 这条备注写在末尾的换行上，保存时原文被 trim，不能丢。
+          MantraAnnotation(start: 3, end: 4, note: '末尾备注'),
+        ],
+      );
+      expect(store.textOf('尾空咒'), '嗡嘛呢');
+      final saved = store.annotationsOf('尾空咒');
+      expect(saved.length, 2);
+      expect(saved[0].note, '前备注');
+      expect(saved[1].note, '末尾备注');
+      // 收缩到最后一个保留字符「呢」上。
+      expect(saved[1].start, 2);
+      expect(saved[1].end, 3);
+    });
+
     testWidgets('选中文字后点「注音」：保存并在清单里可删除', (tester) async {
       final store = await loadedStore();
       await openSheet(tester);

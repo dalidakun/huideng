@@ -137,6 +137,11 @@ flutter:
     - assets/images/sjx.png
     # 善知识密咒详情抽屉：神咒名字与咒文之间的居中插图。
     - assets/images/shen.png
+    # 密咒详情右下角竖排四图标（按拼音全拼命名）。
+    - assets/images/pinyin.png
+    - assets/images/beizhu.png
+    - assets/images/yuedu.png
+    - assets/images/bianji.png
     # 宗门页行首图标（首字母缩写，1=素白外观，2=米黄外观；律宗暂无切图）。
     - assets/menpai/
     - assets/famen/

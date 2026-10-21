@@ -93,10 +93,38 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 当前打开的密咒内部键（同名条目靠它区分详情与编辑目标）。
   String? _mxDetailKey;
 
+  /// 详情页是否显示注音（右下角图标开关，默认显示）。切换不影响已存数据。
+  bool _mxShowRuby = true;
+  bool _mxShowNotes = true;
+
+  /// 密咒原文的选区监听：长按选中文字后取精确的 start/end 偏移，
+  /// 供「注音 / 备注」直接对选中片段编辑。
+  final SelectionListenerNotifier _mxSelectionNotifier =
+      SelectionListenerNotifier();
+
+  /// 咒文列表滚动控制器：展开备注时滚到备注块，长咒文也能立刻看到备注。
+  final ScrollController _mxListController = ScrollController();
+
   /// 密咒面板是否处于展开态（收起动画播完才回到 false，动画中重开不卸载）。
   bool _mxShelfExpanded = false;
 
   late final AnimationController _mxShelfController;
+
+  // ── 密咒详情第三层抽屉：从神咒面板内再上滑一层，比神咒面板矮一截，
+  // 用来放「关联经文 + 人天利益」（阅读）或「对咒文的备注」（备注）。 ──
+
+  /// 第三层抽屉占可用高度的比例（比神咒面板的 95% 矮一些）。
+  static const double _mxDrawerOpenFraction = 0.62;
+
+  /// 第三层抽屉 header 高度。
+  static const double _mxDrawerHeaderH = 52;
+
+  /// 第三层抽屉当前内容：null = 收起；'reading' = 关联经文 + 人天利益。
+  String? _mxDrawerMode;
+
+  bool _mxDrawerExpanded = false;
+
+  late final AnimationController _mxDrawerController;
 
   /// 右下角悬浮球是否展开（展开后显示 添加 / 搜索 / 切换 三个子按钮）。
   bool _showFabMenu = false;
@@ -115,6 +143,10 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     _mxShelfController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
+    );
+    _mxDrawerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
     );
     _store.addListener(_onStoreChanged);
     _mxStore.addListener(_onMxStoreChanged);
@@ -162,6 +194,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     widget.activeTab?.removeListener(_onTabChanged);
     _shelfController.dispose();
     _mxShelfController.dispose();
+    _mxDrawerController.dispose();
+    _mxSelectionNotifier.dispose();
+    _mxListController.dispose();
     _searchCtrl.dispose();
     _mxSearchCtrl.dispose();
     super.dispose();
@@ -283,6 +318,13 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       _mxDetailKey = key;
       _mxDetailName = name;
       _mxShelfExpanded = true;
+      // 每次打开默认显示注音；有备注时备注块也直接展开，点「备注」可收起。
+      _mxShowRuby = true;
+      _mxShowNotes = true;
+      // 第三层抽屉默认收起。
+      _mxDrawerMode = null;
+      _mxDrawerExpanded = false;
+      _mxDrawerController.value = 0;
       // 面板占了右下角：悬浮球先收起，免得压住面板。
       _showFabMenu = false;
     });
@@ -292,13 +334,69 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 点密咒面板 header 收起：整块滑出屏幕下沿后卸载（动画中重开则不卸载）。
   void _closeMxShelf() {
     _mxShelfExpanded = false;
+    _mxDrawerExpanded = false;
+    _mxDrawerController.value = 0;
     _mxShelfController.reverse().whenComplete(() {
       if (!_mxShelfExpanded && mounted) {
         setState(() {
           _mxDetailName = null;
           _mxDetailKey = null;
+          _mxDrawerMode = null;
         });
       }
+    });
+  }
+
+  /// 打开第三层抽屉：[mode] 目前只有 'reading'（关联经文 + 人天利益）。
+  /// 已在同一 mode 且展开时再点则收起。
+  void _openMxDrawer(String mode) {
+    final closing = _mxDrawerMode == mode && _mxDrawerExpanded;
+    setState(() {
+      if (closing) {
+        _mxDrawerExpanded = false;
+      } else {
+        _mxDrawerMode = mode;
+        _mxDrawerExpanded = true;
+      }
+    });
+    if (closing) {
+      _mxDrawerController.reverse().whenComplete(() {
+        if (!_mxDrawerExpanded && mounted) {
+          setState(() => _mxDrawerMode = null);
+        }
+      });
+    } else {
+      _mxDrawerController.forward();
+    }
+  }
+
+  /// 收起第三层抽屉（保留 mode，动画完再清，避免内容中途变空）。
+  void _closeMxDrawer() {
+    _mxDrawerExpanded = false;
+    _mxDrawerController.reverse().whenComplete(() {
+      if (!_mxDrawerExpanded && mounted) {
+        setState(() => _mxDrawerMode = null);
+      }
+    });
+  }
+
+  /// 展开/收起咒文备注。展开时等新布局完成再滚到列表底部，
+  /// 长咒文里备注块在正文下方，不滚动的话只能看到下划线。
+  void _toggleMxNotes() {
+    final show = !_mxShowNotes;
+    setState(() => _mxShowNotes = show);
+    if (show) _scrollToMxNotes();
+  }
+
+  /// 等备注块完成布局后，把咒文列表滚到最底部，让备注信息进入视口。
+  void _scrollToMxNotes() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_mxListController.hasClients) return;
+      _mxListController.animateTo(
+        _mxListController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
     });
   }
 
@@ -311,6 +409,13 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       0.0,
       available * _mxShelfOpenFraction - _mxHeaderH - _shelfOpenTopExtra,
     );
+  }
+
+  /// 第三层抽屉内容区高度：占可用高度的 [_mxDrawerOpenFraction]。
+  double _mxDrawerMaxContentHeight() {
+    final mq = MediaQuery.of(context);
+    final available = mq.size.height - mq.padding.top - mq.padding.bottom;
+    return max(0.0, available * _mxDrawerOpenFraction - _mxDrawerHeaderH);
   }
 
   /// 纵向拖 header 时按手指位移实时擦洗展开比例（向下拖收起，向上拖展开）。
@@ -1509,17 +1614,17 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
   }
 
-  /// 密咒详情内容：神咒原文（居中，注音标在字上）
-  /// + 备注（整块色块，集中放在咒文下面）
-  /// + 经文出处（整行色块、右侧箭头，点进阅读页）+ 人天利益。
-  /// 右下角固定与佛号面板同款的编辑按钮。
+  /// 密咒详情内容：整页只剩顶部插图 + 神咒原文（居左，注音标在字上）。
+  /// 关联经文 / 人天利益收进第三层抽屉；咒文备注点右下角图标后在咒文下方
+  /// 内联展开。右下角竖排四个图标按钮（注音 / 备注 / 阅读 / 编辑）。
   Widget _buildMxShelfContent(PaletteData p) {
     final key = _mxDetailKey;
-    final source = _mxStore.sourceOfKey(key);
     final text = _mxStore.textOfKey(key);
-    final benefit = _mxStore.benefitOfKey(key);
     final annotations = _mxStore.annotationsOfKey(key);
+    final hasRuby = annotations.any((a) => a.hasRuby);
+    final hasNotes = annotations.any((a) => a.hasNote);
     return Stack(
+      clipBehavior: Clip.none,
       children: [
         Positioned.fill(
           child: Column(
@@ -1539,109 +1644,357 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
               Expanded(
                 child: ListView(
                   key: const ValueKey('shanzhishi_mx_list'),
-                  padding:
-                      EdgeInsets.fromLTRB(_shelfSidePad, 0, _shelfSidePad, 88),
+                  controller: _mxListController,
+                  padding: EdgeInsets.fromLTRB(
+                      _shelfSidePad, 0, _shelfSidePad + 52, 88),
                   children: [
                     // 首行注音画在行框上方的空隙里（Stack 用 Clip.none 溢出绘制），
                     // 但第一行行框紧贴文本顶，注音会被边缘裁掉，
                     // 文本上方先补一段留白把首行注音让出来。
-                    if (annotations.isNotEmpty)
-                      const SizedBox(height: 14),
+                    // 留白只跟「有没有注音」有关，不跟开关走：开关注音时高度不变，
+                    // 正文不会上下跳，只是注音出现或消失。
+                    SizedBox(height: hasRuby ? 14 : 0),
                     if (text.isEmpty)
                       Text(
                         '尚未填写神咒原文',
-                        textAlign: TextAlign.center,
+                        textAlign: TextAlign.left,
                         style: TextStyle(fontSize: 15, color: p.textHint),
-                      )
-                    else if (annotations.isEmpty)
-                      SelectableText(
-                        text,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 16,
-                          height: 2.3,
-                          color: p.text,
-                          letterSpacing: 0.5,
-                        ),
                       )
                     else
                       SelectionArea(
-                        child: Text.rich(
-                          _buildAnnotatedMantraSpan(p, text, annotations),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    if (annotations.any((a) => a.hasNote))
-                      _buildMantraNotesBlock(p, text, annotations),
-                    const SizedBox(height: 20),
-                    if (source.isEmpty)
-                      Text(
-                        '尚未填写经文出处',
-                        style: TextStyle(fontSize: 15, color: p.textHint),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: InkWell(
-                          key: const ValueKey('shanzhishi_mantra_source_row'),
-                          borderRadius: BorderRadius.circular(6),
-                          onTap: () => _openSutraReading(source),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: p.tintBg,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    source,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.black,
-                                      letterSpacing: 1,
-                                    ),
+                        contextMenuBuilder: (context, state) =>
+                            _buildMxSelectionToolbar(state, text),
+                        child: SelectionListener(
+                          selectionNotifier: _mxSelectionNotifier,
+                          child: annotations.isEmpty
+                              ? Text(
+                                  text,
+                                  textAlign: TextAlign.left,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    height: 2.3,
+                                    color: p.text,
+                                    letterSpacing: 0.5,
                                   ),
+                                )
+                              : Text.rich(
+                                  _buildAnnotatedMantraSpan(
+                                    p,
+                                    text,
+                                    annotations,
+                                    showRuby: _mxShowRuby,
+                                  ),
+                                  textAlign: TextAlign.left,
                                 ),
-                                Icon(Icons.chevron_right,
-                                    size: 18, color: p.accentDeep),
-                              ],
-                            ),
-                          ),
                         ),
                       ),
-                    for (final t in benefit) _paragraphBlock(p, t),
+                    // 备注不再走第三层抽屉：点「备注」直接在咒文下方展开，
+                    // 被备注的文字始终带下划线，方便回看时找到位置。
+                    if (_mxShowNotes && hasNotes)
+                      _buildMantraNotesBlock(p, text, annotations),
                   ],
                 ),
               ),
             ],
           ),
         ),
+        // 第三层抽屉：从神咒面板内再上滑一层，比神咒面板矮，压住咒文。
+        if (_mxDrawerMode != null) _buildMxDrawer(p),
+        // 整页只剩咒文与按钮：右下角竖排四个图标（注音 / 备注 / 阅读 / 编辑）。
+        // 放在抽屉之后：抽屉展开时按钮仍浮在最上层，可再点一次收起。
         Positioned(
           right: _shelfSidePad,
           bottom: 16,
-          child: _PanelEditButton(
+          child: _MxActionColumn(
             palette: p,
-            onTap: _editMantra,
+            showRuby: _mxShowRuby,
+            showNotes: _mxShowNotes,
+            hasNotes: hasNotes,
+            onRuby: () => setState(() => _mxShowRuby = !_mxShowRuby),
+            onNotes: _toggleMxNotes,
+            onReading: () => _openMxDrawer('reading'),
+            onEdit: _editMantra,
           ),
         ),
       ],
     );
   }
 
+  /// 密咒原文的选区工具栏：去掉系统默认的「分享」，补上「注音」「备注」，
+  /// 复制 / 全选保持系统行为，顺序为 复制、注音、备注、全选。
+  Widget _buildMxSelectionToolbar(SelectableRegionState state, String text) {
+    final custom = <ContextMenuButtonItem>[
+      ContextMenuButtonItem(
+        label: '注音',
+        onPressed: () {
+          final range = _mxSelectedRange(text.length);
+          state.hideToolbar();
+          if (range != null) {
+            unawaited(_editMxSelectionAnnotation(
+              start: range.$1,
+              end: range.$2,
+              ruby: true,
+            ));
+          }
+        },
+      ),
+      ContextMenuButtonItem(
+        label: '备注',
+        onPressed: () {
+          final range = _mxSelectedRange(text.length);
+          state.hideToolbar();
+          if (range != null) {
+            unawaited(_editMxSelectionAnnotation(
+              start: range.$1,
+              end: range.$2,
+              ruby: false,
+            ));
+          }
+        },
+      ),
+    ];
+    final items = <ContextMenuButtonItem>[];
+    var inserted = false;
+    for (final item in state.contextMenuButtonItems) {
+      if (item.type == ContextMenuButtonType.share) continue;
+      if (item.type == ContextMenuButtonType.selectAll) {
+        if (!inserted) {
+          items.addAll(custom);
+          inserted = true;
+        }
+        items.add(item);
+      } else {
+        items.add(item);
+      }
+    }
+    if (!inserted) items.addAll(custom);
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: state.contextMenuAnchors,
+      buttonItems: items,
+    );
+  }
+
+  /// 当前选区在咒文里的偏移；无效或已收起时返回 null。
+  (int, int)? _mxSelectedRange(int textLength) {
+    if (!_mxSelectionNotifier.registered || textLength == 0) return null;
+    final range = _mxSelectionNotifier.selection.range;
+    if (range == null) return null;
+    final start = range.startOffset.clamp(0, textLength);
+    final end = range.endOffset.clamp(0, textLength);
+    if (end <= start) return null;
+    return (start, end);
+  }
+
+  /// 对选中的咒文片段直接编辑注音或备注，不必再进整页编辑。
+  Future<void> _editMxSelectionAnnotation({
+    required int start,
+    required int end,
+    required bool ruby,
+  }) async {
+    final key = _mxDetailKey;
+    final text = _mxStore.textOfKey(key);
+    final cs = start.clamp(0, text.length);
+    final ce = end.clamp(0, text.length);
+    if (ce <= cs) return;
+    final annotations = _mxStore.annotationsOfKey(key);
+    var existingIndex = -1;
+    for (var i = 0; i < annotations.length; i++) {
+      if (annotations[i].start == cs && annotations[i].end == ce) {
+        existingIndex = i;
+        break;
+      }
+    }
+    final existing =
+        existingIndex >= 0 ? annotations[existingIndex] : null;
+    final result = await showDialog<MantraAnnotationResult>(
+      context: context,
+      builder: (_) => MantraAnnotationDialog(
+        quoted: text.substring(cs, ce),
+        initialRuby: existing?.ruby ?? '',
+        initialNote: existing?.note ?? '',
+        focusRuby: ruby,
+        canDelete: existing != null,
+      ),
+    );
+    if (result == null || !mounted) return;
+    final current = _mxStore.annotationsOfKey(key);
+    var currentIndex = -1;
+    for (var i = 0; i < current.length; i++) {
+      if (current[i].start == cs && current[i].end == ce) {
+        currentIndex = i;
+        break;
+      }
+    }
+    final next = List<MantraAnnotation>.of(current);
+    if (result.ruby.isEmpty && result.note.isEmpty) {
+      if (currentIndex >= 0) next.removeAt(currentIndex);
+    } else {
+      final ann = MantraAnnotation(
+        start: cs,
+        end: ce,
+        ruby: result.ruby,
+        note: result.note,
+      );
+      if (currentIndex >= 0) {
+        next[currentIndex] = ann;
+      } else {
+        next.add(ann);
+      }
+    }
+    final showRuby = result.ruby.isNotEmpty && !_mxShowRuby;
+    final showNotes = result.note.isNotEmpty && !_mxShowNotes;
+    if (showRuby || showNotes) {
+      setState(() {
+        if (showRuby) _mxShowRuby = true;
+        if (showNotes) _mxShowNotes = true;
+      });
+    }
+    await _mxStore.saveAnnotationsKey(key, next);
+    if (result.note.isNotEmpty) _scrollToMxNotes();
+  }
+
+  /// 第三层抽屉：比神咒面板矮一截，只放「关联经文 + 人天利益」。
+  /// 咒文备注改为在咒文下方内联展开，不再占用这一层抽屉。
+  Widget _buildMxDrawer(PaletteData p) {
+    final key = _mxDetailKey;
+    final headerH = _mxDrawerHeaderH;
+    final contentH = _mxDrawerMaxContentHeight();
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: AnimatedBuilder(
+        animation: _mxDrawerController,
+        builder: (context, _) {
+          final open = _mxDrawerController.value;
+          final slide = (1 - open) * (headerH + contentH);
+          return Transform.translate(
+            offset: Offset(0, slide),
+            child: ClipRRect(
+              clipBehavior: Clip.antiAlias,
+              borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(_shelfTopRadius)),
+              child: Container(
+                key: const ValueKey('shanzhishi_mx_drawer_panel'),
+                color: p.tintBg,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildMxDrawerHeader(p),
+                    SizedBox(
+                      height: contentH,
+                      child: _buildMxReadingDrawer(p, key),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 第三层抽屉 header：横杠 + 标题（关联经文），点空白收起。
+  Widget _buildMxDrawerHeader(PaletteData p) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _closeMxDrawer,
+      child: SizedBox(
+        height: _mxDrawerHeaderH,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(_shelfSidePad, 16, _shelfSidePad, 0),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: p.textHint,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Image.asset(
+                    'assets/images/yuedu.png',
+                    width: 18,
+                    height: 18,
+                    fit: BoxFit.contain,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '关联经文',
+                    style: TextStyle(
+                      color: p.primary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 关联经文抽屉：每部经单独一行（点进阅读），其下接这部经的人天利益，
+  /// 与善知识详情面板同款。没有关联经文时给出提示。
+  Widget _buildMxReadingDrawer(PaletteData p, String? key) {
+    final sources = _mxStore.sourcesOfKey(key);
+    final bySutra = _mxStore.benefitBySutraOfKey(key);
+    final loose = _mxStore.benefitOfKey(key);
+    // 每部经挂到它名下的人天利益；没有按经文分开存的旧数据就把整份利益
+    // 挂在唯一的经文下（有经文时不再另外平铺）。
+    final attached = <String>{for (final l in bySutra.values) ...l};
+    final flatOrphan = [
+      for (final t in loose)
+        if (!attached.contains(t)) t
+    ];
+    final flatUnderSingle = sources.length == 1 ? flatOrphan : const <String>[];
+    final looseTail = sources.length == 1 ? const <String>[] : flatOrphan;
+    return ListView(
+      key: const ValueKey('shanzhishi_mx_reading_drawer'),
+      padding: const EdgeInsets.fromLTRB(_shelfSidePad, 8, _shelfSidePad, 24),
+      children: [
+        if (sources.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(
+              '尚未记录关联经文',
+              style: TextStyle(fontSize: 12.5, color: p.textHint),
+            ),
+          )
+        else
+          for (var i = 0; i < sources.length; i++) ...[
+            if (i > 0) const SizedBox(height: 18),
+            _sutraLinkRow(p, sources[i]),
+            for (final t in bySutra[sources[i]] ?? const <String>[])
+              _paragraphBlock(p, t),
+            if (sources.length == 1)
+              for (final t in flatUnderSingle) _paragraphBlock(p, t),
+          ],
+        // 没挂到任何经文下的人天利益（旧数据）：平铺在下面。
+        for (final t in looseTail) _paragraphBlock(p, t),
+      ],
+    );
+  }
+
   /// 把带批注的神咒原文拼成富文本：注音叠在选中文字上方，
-  /// 不占额外行高，正文不会被挤下去；备注不在这里显示。
+  /// 不占额外行高，正文不会被挤下去；被备注的文字画一条下划线。
+  /// [showRuby] 为 false 时不画注音（正文照常显示）。
   TextSpan _buildAnnotatedMantraSpan(
     PaletteData p,
     String text,
-    List<MantraAnnotation> annotations,
-  ) {
+    List<MantraAnnotation> annotations, {
+    bool showRuby = true,
+  }) {
     final body = TextStyle(
       fontSize: 16,
       height: 2.3,
@@ -1657,6 +2010,22 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     // 注音的高度：2.3 行高在字上下各留 ~9.3px 空隙，注音以字距上方为中心
     // 画在空隙里，整行比正文放松，注音不挤。
     const rubySpace = 12.0;
+    // 备注只画下划线，不影响行高。先铺一张覆盖表，逐字标出是否落在
+    // 某条备注里，后面按「注音/备注边界」切段即可，避免每个字都遍历批注。
+    final noteCovered = List<bool>.filled(text.length, false);
+    for (final ann in annotations) {
+      if (!ann.hasNote) continue;
+      final s = ann.start.clamp(0, text.length);
+      final e = ann.end.clamp(0, text.length);
+      for (var k = s; k < e; k++) {
+        noteCovered[k] = true;
+      }
+    }
+    final noteLine = TextStyle(
+      decoration: TextDecoration.underline,
+      decorationColor: p.accentDeep,
+      decorationThickness: 1.4,
+    );
     final rubies = <({int start, int end, MantraAnnotation ann})>[
       for (final ann in annotations)
         if (ann.hasRuby)
@@ -1692,16 +2061,26 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     while (i < text.length) {
       final w = winnerAt(i);
       // 换行必须留在普通文本里：WidgetSpan 内部带换行会把多行挤进一个
-      // 行内占位符，导致后面的注音和排版都不对。
-      if (w == null || text[i] == '\n' || text[i] == '\r') {
+      // 行内占位符，导致后面的注音和排版都不对。换行单独成段，也不画下划线。
+      if (text[i] == '\n' || text[i] == '\r') {
+        spans.add(TextSpan(text: text[i]));
+        i++;
+        continue;
+      }
+      // 纯正文段：在「注音边界」和「备注边界」任一变化处切开。
+      if (w == null) {
         var j = i + 1;
         while (j < text.length &&
             text[j] != '\n' &&
             text[j] != '\r' &&
-            winnerAt(j) == w) {
+            winnerAt(j) == null &&
+            noteCovered[j] == noteCovered[i]) {
           j++;
         }
-        spans.add(TextSpan(text: text.substring(i, j)));
+        spans.add(TextSpan(
+          text: text.substring(i, j),
+          style: noteCovered[i] ? noteLine : null,
+        ));
         i = j;
         continue;
       }
@@ -1709,17 +2088,22 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       while (j < text.length &&
           text[j] != '\n' &&
           text[j] != '\r' &&
-          winnerAt(j) == w) {
+          winnerAt(j) == w &&
+          noteCovered[j] == noteCovered[i]) {
         j++;
       }
       if (!shown.add(w)) {
-        spans.add(TextSpan(text: text.substring(i, j)));
+        spans.add(TextSpan(
+          text: text.substring(i, j),
+          style: noteCovered[i] ? noteLine : null,
+        ));
         i = j;
         continue;
       }
       final chunk = Text(
         text.substring(i, j),
-        style: body,
+        // 注音块也要带下划线：备注可能正好落在有注音的字上。
+        style: noteCovered[i] ? body.merge(noteLine) : body,
         // WidgetSpan 里的子组件会被 Flutter 按段落字号再缩放一次，
         // 这里自己不再吃系统字号，免得注音和占位高度被放大两倍、压进正文。
         textScaler: TextScaler.noScaling,
@@ -1736,22 +2120,27 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             // 注音负偏移画到行距空隙里，不参与排版。
             // IgnoreBaseline 很关键：Stack 的基线取「所有子节点里最高的一条」，
             // 不挡住注音的话会被它带成负值，整行被垫高一行（多出空白行）。
-            Positioned(
-              top: -rubySpace / 2,
-              left: -60,
-              right: -60,
-              child: IgnoreBaseline(
-                child: Center(
-                  child: Text(
-                    rubies[w].ann.ruby,
-                    maxLines: 1,
-                    softWrap: false,
-                    style: rubyStyle,
-                    textScaler: TextScaler.noScaling,
+            if (showRuby)
+              Positioned(
+                top: -rubySpace / 2,
+                left: -60,
+                right: -60,
+                child: IgnoreBaseline(
+                  child: Center(
+                    // 注音只是正文上方的装饰，不能参与选区：否则选区文本会混入
+                    // 注音、偏移也会错位，导致「注音 / 备注」落到错误的字上。
+                    child: SelectionContainer.disabled(
+                      child: Text(
+                        rubies[w].ann.ruby,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: rubyStyle,
+                        textScaler: TextScaler.noScaling,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ));
@@ -1760,7 +2149,9 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     return TextSpan(style: body, children: spans);
   }
 
-  /// 全部备注集中放在咒文下面，用一个色块整体包住。
+  /// 备注块直接跟在咒文下方：每条备注一枚独立色块，左侧小箭头朝上，
+  /// 表示它对应上方带下划线的文字；块内再引用一次原文字，避免长咒文
+  /// 里找不到指的是哪一句。
   Widget _buildMantraNotesBlock(
     PaletteData p,
     String text,
@@ -1770,55 +2161,76 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       for (final a in annotations)
         if (a.hasNote) a
     ]..sort((a, b) => a.start != b.start ? a.start - b.start : a.end - b.end);
-    final quotedStyle = TextStyle(
-      fontWeight: FontWeight.w600,
-      color: p.accentDeep,
-    );
+    if (notes.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 18),
-      child: Container(
-        key: const ValueKey('shanzhishi_mantra_notes'),
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-        decoration: BoxDecoration(
-          color: p.tintBg,
-          borderRadius: BorderRadius.circular(8),
+      key: const ValueKey('shanzhishi_mantra_notes'),
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < notes.length; i++)
+            Padding(
+              padding: EdgeInsets.only(top: i == 0 ? 0 : 10),
+              child: _buildMantraNoteCard(p, text, notes[i]),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMantraNoteCard(
+    PaletteData p,
+    String text,
+    MantraAnnotation ann,
+  ) {
+    final s = ann.start.clamp(0, text.length);
+    final e = ann.end.clamp(0, text.length);
+    final quoted = e > s ? text.substring(s, e) : '';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 9),
+          child: Icon(
+            Icons.arrow_upward_rounded,
+            size: 15,
+            color: p.accentDeep,
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '备注',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: p.accentDeep,
-                letterSpacing: 1,
+        const SizedBox(width: 6),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 9, 12, 11),
+            decoration: BoxDecoration(
+              color: p.tintBg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: p.accentDeep.withValues(alpha: 0.18),
               ),
             ),
-            for (final ann in notes)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Builder(builder: (_) {
-                  final s = ann.start.clamp(0, text.length);
-                  final e = ann.end.clamp(0, text.length);
-                  final quoted = e > s ? text.substring(s, e) : '';
-                  return Text.rich(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  if (quoted.isNotEmpty)
                     TextSpan(
-                      children: [
-                        if (quoted.isNotEmpty)
-                          TextSpan(text: '「$quoted」', style: quotedStyle),
-                        if (quoted.isNotEmpty) const TextSpan(text: '  '),
-                        TextSpan(text: ann.note),
-                      ],
+                      text: '「$quoted」',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: p.accentDeep,
+                        decoration: TextDecoration.underline,
+                        decorationColor: p.accentDeep,
+                        decorationThickness: 1.2,
+                      ),
                     ),
-                    style: TextStyle(fontSize: 13.5, height: 1.6, color: p.text),
-                  );
-                }),
+                  if (quoted.isNotEmpty) const TextSpan(text: '  '),
+                  TextSpan(text: ann.note),
+                ],
               ),
-          ],
+              style: TextStyle(fontSize: 15, height: 1.65, color: p.text),
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -1962,6 +2374,129 @@ class _PanelEditButton extends StatelessWidget {
           width: 40,
           height: 40,
           child: Icon(Icons.edit_outlined, size: 18, color: p.textSec),
+        ),
+      ),
+    );
+  }
+}
+
+/// 密咒面板右下角竖排图标按钮列（自上而下：注音 / 备注 / 阅读 / 编辑）。
+/// 注音是开关：开启时高亮；其余单击触发对应动作。整页只留咒文与这排按钮。
+class _MxActionColumn extends StatelessWidget {
+  final PaletteData palette;
+  final bool showRuby;
+  final bool showNotes;
+  final bool hasNotes;
+  final VoidCallback onRuby;
+  final VoidCallback onNotes;
+  final VoidCallback onReading;
+  final VoidCallback onEdit;
+
+  const _MxActionColumn({
+    required this.palette,
+    required this.showRuby,
+    required this.showNotes,
+    required this.hasNotes,
+    required this.onRuby,
+    required this.onNotes,
+    required this.onReading,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _MxIconButton(
+          palette: p,
+          key: const ValueKey('shanzhishi_mx_ruby_toggle'),
+          asset: 'assets/images/pinyin.png',
+          highlighted: showRuby,
+          tooltip: showRuby ? '关闭注音' : '显示注音',
+          onTap: onRuby,
+        ),
+        const SizedBox(height: 10),
+        _MxIconButton(
+          palette: p,
+          key: const ValueKey('shanzhishi_mx_notes_button'),
+          asset: 'assets/images/beizhu.png',
+          highlighted: showNotes && hasNotes,
+          tooltip: showNotes ? '收起备注' : '咒文备注',
+          onTap: onNotes,
+        ),
+        const SizedBox(height: 10),
+        _MxIconButton(
+          palette: p,
+          key: const ValueKey('shanzhishi_mx_reading_button'),
+          asset: 'assets/images/yuedu.png',
+          highlighted: false,
+          tooltip: '关联经文',
+          onTap: onReading,
+        ),
+        const SizedBox(height: 10),
+        _MxIconButton(
+          palette: p,
+          key: const ValueKey('shanzhishi_mx_edit_button'),
+          asset: 'assets/images/bianji.png',
+          highlighted: false,
+          tooltip: '编辑',
+          onTap: onEdit,
+        ),
+      ],
+    );
+  }
+}
+
+/// 竖排图标按钮列里的单颗按钮：圆形底色 + 图片图标，可选高亮态。
+class _MxIconButton extends StatelessWidget {
+  final PaletteData palette;
+  final String asset;
+  final bool highlighted;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _MxIconButton({
+    super.key,
+    required this.palette,
+    required this.asset,
+    required this.highlighted,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: p.card,
+        shape: CircleBorder(
+          side: highlighted
+              ? BorderSide(color: p.accentDeep, width: 1.2)
+              : BorderSide(color: p.borderSoft),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Center(
+              child: Opacity(
+                opacity: highlighted ? 1 : 0.75,
+                child: Image.asset(
+                  asset,
+                  width: 20,
+                  height: 20,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

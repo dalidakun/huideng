@@ -588,25 +588,29 @@ class ShanZhiShiStore extends ChangeNotifier {
   }
 
   /// 两个名号之间有多少个相同字符（重复字按出现次数计）。
-  /// 例：「地藏菩萨」vs「地藏王菩萨」= 4。
+  /// 两个名号之间最长公共连续子串的长度。
+  /// 必须是连着的相同字符序列才算相同（如「地藏菩萨」vs「地藏王菩萨」中的「地藏」）。
   static int nameCommonChars(String a, String b) {
-    final x = a.trim();
-    final y = b.trim();
+    final xStr = a.trim();
+    final yStr = b.trim();
+    if (xStr.isEmpty || yStr.isEmpty) return 0;
+    final x = xStr.runes.toList();
+    final y = yStr.runes.toList();
     if (x.isEmpty || y.isEmpty) return 0;
-    final counts = <int, int>{};
-    for (final r in x.runes) {
-      counts[r] = (counts[r] ?? 0) + 1;
+    var maxLen = 0;
+    final dp = List.generate(x.length + 1, (_) => List.filled(y.length + 1, 0));
+    for (int i = 1; i <= x.length; i++) {
+      for (int j = 1; j <= y.length; j++) {
+        if (x[i - 1] == y[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+          if (dp[i][j] > maxLen) maxLen = dp[i][j];
+        } else {
+          dp[i][j] = 0;
+        }
+      }
     }
-    var common = 0;
-    for (final r in y.runes) {
-      final n = counts[r] ?? 0;
-      if (n <= 0) continue;
-      counts[r] = n - 1;
-      common++;
-    }
-    return common;
+    return maxLen;
   }
-
   /// 保存前的查重名单：与 [name] 摘掉通用尊称（「菩萨 / 如来 / 佛 / 咒」等，
   /// 见 [genericNameTerms]）后还有 ≥ [minCommon] 个相同字符（默认 2 个）的
   /// 所有已有名号；完全同名必然命中。

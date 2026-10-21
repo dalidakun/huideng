@@ -19,8 +19,8 @@ class _MantraPick {
 }
 
 /// 注音 / 备注对话框的结果：两个字段各自返回，未编辑的那项原样带回。
-class _AnnotationResult {
-  const _AnnotationResult({
+class MantraAnnotationResult {
+  const MantraAnnotationResult({
     required this.ruby,
     required this.note,
   });
@@ -30,8 +30,9 @@ class _AnnotationResult {
 }
 
 /// 注音 / 备注输入框。自己持有输入控制器，随对话框一起释放。
-class _AnnotationDialog extends StatefulWidget {
-  const _AnnotationDialog({
+class MantraAnnotationDialog extends StatefulWidget {
+  const MantraAnnotationDialog({
+    super.key,
     required this.quoted,
     required this.initialRuby,
     required this.initialNote,
@@ -46,10 +47,11 @@ class _AnnotationDialog extends StatefulWidget {
   final bool canDelete;
 
   @override
-  State<_AnnotationDialog> createState() => _AnnotationDialogState();
+  State<MantraAnnotationDialog> createState() =>
+      _MantraAnnotationDialogState();
 }
 
-class _AnnotationDialogState extends State<_AnnotationDialog> {
+class _MantraAnnotationDialogState extends State<MantraAnnotationDialog> {
   late final TextEditingController _rubyCtrl =
       TextEditingController(text: widget.initialRuby);
   late final TextEditingController _noteCtrl =
@@ -124,7 +126,7 @@ class _AnnotationDialogState extends State<_AnnotationDialog> {
             key: const ValueKey('shanzhishi_mantra_annotation_delete'),
             onPressed: () => Navigator.pop(
               context,
-              _AnnotationResult(
+              MantraAnnotationResult(
                 ruby: widget.focusRuby ? '' : _rubyCtrl.text.trim(),
                 note: widget.focusRuby ? _noteCtrl.text.trim() : '',
               ),
@@ -139,7 +141,7 @@ class _AnnotationDialogState extends State<_AnnotationDialog> {
           key: const ValueKey('shanzhishi_mantra_annotation_save'),
           onPressed: () => Navigator.pop(
             context,
-            _AnnotationResult(
+            MantraAnnotationResult(
               ruby: _rubyCtrl.text.trim(),
               note: _noteCtrl.text.trim(),
             ),
@@ -270,7 +272,17 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
   final TextEditingController _nameCtrl = TextEditingController();
   final TextEditingController _sourceCtrl = TextEditingController();
   final TextEditingController _textCtrl = TextEditingController();
-  final TextEditingController _benefitCtrl = TextEditingController();
+
+  /// 人天利益：一部经对应一个输入区（各存各的），点选经文切换显示哪一个。
+  /// 一条经文都没有时才用 [_flatCtrl]。
+  late final Map<String, TextEditingController> _paraCtrls;
+
+  /// 没有任何关联经文时的段落输入区；有经文时为 null。
+  TextEditingController? _flatCtrl;
+
+  /// 当前激活的经文。
+  String? _activeSutra;
+
   bool _saving = false;
 
   /// 神咒原文上的注音 / 备注批注（保存时随原文一起写入）。
@@ -283,17 +295,79 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
   final GlobalKey _benefitStackKey = GlobalKey();
   final ValueNotifier<List<double>> _benefitRules = ValueNotifier(const []);
 
+  /// 任一「人天利益」输入区文字变化都会自增，触发重新量虚线。
+  final ValueNotifier<int> _benefitRev = ValueNotifier(0);
+
   /// 编辑中的那条密咒名（原名）；null = 添加。
   String? get _editing => widget.editing;
 
   /// 编辑中的那条密咒内部键（同名条目时用它精确定位）。
   String? get _editingKey => widget.editingKey;
 
+  late final List<String> _sutras;
+
   /// 经文出处输入框的锚点：候选取经浮层挂在它下方，不挤动下面的内容。
   final LayerLink _sourceLink = LayerLink();
   OverlayEntry? _suggestOverlay;
   List<NoteSutraLink> _suggestions = const [];
   Timer? _debounce;
+
+  TextEditingController _newParaCtrl([String text = '']) {
+    final c = TextEditingController(text: text);
+    // 任何一处文字变化都触发重新量虚线（与善知识页同款）。
+    c.addListener(() => _benefitRev.value++);
+    return c;
+  }
+
+  void _initParagraphEditors() {
+    final editing = _editing;
+    final store = ShanZhiShiMantraStore.instance;
+    final key = _editingKey;
+    final quotes = <String, List<String>>{};
+    if (editing != null) {
+      final bySutra = key == null
+          ? store.benefitBySutraOf(editing)
+          : store.benefitBySutraOfKey(key);
+      for (final e in bySutra.entries) {
+        quotes[e.key] = List.of(e.value);
+      }
+      var flat = List<String>.of(key == null
+          ? store.benefitOf(editing)
+          : store.benefitOfKey(key));
+      if (flat.isEmpty && quotes.isNotEmpty) {
+        for (final sutra in _sutras) {
+          for (final t in quotes[sutra] ?? const <String>[]) {
+            if (!flat.contains(t)) flat.add(t);
+          }
+        }
+        for (final list in quotes.values) {
+          for (final t in list) {
+            if (!flat.contains(t)) flat.add(t);
+          }
+        }
+        quotes.clear();
+      }
+      if (_sutras.isNotEmpty && flat.isNotEmpty) {
+        final tied = <String>{for (final l in quotes.values) ...l};
+        final loose = [for (final t in flat) if (!tied.contains(t)) t];
+        if (loose.isNotEmpty) {
+          final first = _sutras.first;
+          quotes[first] = [...loose, ...?quotes[first]];
+        }
+        flat = const [];
+      }
+      _paraCtrls = {
+        for (final s in _sutras)
+          s: _newParaCtrl((quotes[s] ?? const []).join('\n\n')),
+      };
+      _flatCtrl = _sutras.isEmpty ? _newParaCtrl(flat.join('\n\n')) : null;
+      _activeSutra = _sutras.isEmpty ? null : _sutras.first;
+      return;
+    }
+    _paraCtrls = {for (final s in _sutras) s: _newParaCtrl()};
+    _flatCtrl = _sutras.isEmpty ? _newParaCtrl() : null;
+    _activeSutra = _sutras.isEmpty ? null : _sutras.first;
+  }
 
   @override
   void initState() {
@@ -304,18 +378,20 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       final key = _editingKey;
       _nameCtrl.text = editing;
       // 没带内部键时按名字找（同名条目仍由 key 精确定位）。
-      _sourceCtrl.text =
-          key == null ? store.sourceOf(editing) : store.sourceOfKey(key);
+      final sources = key == null
+          ? store.sourcesOf(editing)
+          : store.sourcesOfKey(key);
+      _sutras = List.of(sources);
       _textCtrl.text =
           key == null ? store.textOf(editing) : store.textOfKey(key);
       _annotations = key == null
           ? List.of(store.annotationsOf(editing))
           : List.of(store.annotationsOfKey(key));
-      final benefit =
-          key == null ? store.benefitOf(editing) : store.benefitOfKey(key);
-      _benefitCtrl.text = benefit.join('\n\n');
     } else {
+      // 从阅读页打开时带进来的经名只预填到出处输入框里（还没确认成经文），
+      // 保存时会自动算作一条关联经文。
       final initialSource = widget.initialSource?.trim();
+      _sutras = [];
       if (initialSource != null && initialSource.isNotEmpty) {
         _sourceCtrl.text = initialSource;
       }
@@ -324,6 +400,7 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
         _textCtrl.text = initialText;
       }
     }
+    _initParagraphEditors();
     _lastText = _textCtrl.text;
     _textCtrl.addListener(_onTextChanged);
   }
@@ -337,18 +414,22 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     _nameCtrl.dispose();
     _sourceCtrl.dispose();
     _textCtrl.dispose();
-    _benefitCtrl.dispose();
+    for (final c in _paraCtrls.values) {
+      c.dispose();
+    }
+    _flatCtrl?.dispose();
     _benefitRules.dispose();
+    _benefitRev.dispose();
     super.dispose();
   }
 
   /// 量出人天利益输入区里每处「段间分界」的 y 并刷新虚线层。
   void _measureBenefitRules() {
     if (!mounted) return;
-    final next = measureParagraphRules(
-      stackKey: _benefitStackKey,
-      ctrl: _benefitCtrl,
-    );
+    final ctrl = _activeParaCtrl;
+    final next = ctrl == null
+        ? const <double>[]
+        : measureParagraphRules(stackKey: _benefitStackKey, ctrl: ctrl);
     if (!listEquals(_benefitRules.value, next)) _benefitRules.value = next;
   }
 
@@ -520,9 +601,9 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       }
     }
     final quoted = _textCtrl.text.substring(start, end);
-    final result = await showDialog<_AnnotationResult>(
+    final result = await showDialog<MantraAnnotationResult>(
       context: context,
-      builder: (_) => _AnnotationDialog(
+      builder: (_) => MantraAnnotationDialog(
         quoted: quoted,
         initialRuby: existing?.ruby ?? '',
         initialNote: existing?.note ?? '',
@@ -710,10 +791,7 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                     final s = _suggestions[i];
                     return InkWell(
                       onTap: () {
-                        _sourceCtrl.text = s.title;
-                        _sourceCtrl.selection =
-                            TextSelection.collapsed(offset: s.title.length);
-                        _setSuggestions(const []);
+                        _addSutra(s.title);
                       },
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
@@ -749,6 +827,40 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       _setSuggestions(result);
     });
   }
+
+  void _addSutra(String name) {
+    final t = name.trim();
+    if (t.isEmpty || _sutras.contains(t)) {
+      _sourceCtrl.clear();
+      _setSuggestions(const []);
+      return;
+    }
+    setState(() {
+      _sutras.add(t);
+      _paraCtrls[t] = _newParaCtrl();
+      _activeSutra = t;
+      _sourceCtrl.clear();
+    });
+    _setSuggestions(const []);
+  }
+
+  void _removeSutra(String sutra) {
+    final wasActive = _activeSutra == sutra;
+    final removedText = _paraCtrls[sutra]?.text ?? '';
+    setState(() {
+      _sutras.remove(sutra);
+      _paraCtrls.remove(sutra)?.dispose();
+      if (wasActive) {
+        _activeSutra = _sutras.isEmpty ? null : _sutras.first;
+      }
+      if (_sutras.isEmpty && _flatCtrl == null) {
+        _flatCtrl = _newParaCtrl(removedText.trim());
+      }
+    });
+  }
+
+  TextEditingController? get _activeParaCtrl =>
+      _activeSutra != null ? _paraCtrls[_activeSutra] : _flatCtrl;
 
   /// 已有重复 / 相似的密咒时的提示框：只有两个方向——点某一条 = 合并到
   /// 这条旧密咒（保留它的名字）；「保存两者」= 各存各的（同名也各算一条）。
@@ -831,9 +943,9 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     );
   }
 
-  /// 收集人天利益输入区里的段落：空行分段；整段没有空行时退回「一行一段」。
-  List<String> _collectBenefitParagraphs() {
-    final lines = _benefitCtrl.text.replaceAll('\r\n', '\n').split('\n');
+  /// 收集一片输入区里的段落：空行分段；整段没有空行时退回「一行一段」。
+  List<String> _collectParagraphs(TextEditingController ctrl) {
+    final lines = ctrl.text.replaceAll('\r\n', '\n').split('\n');
     final out = <String>[];
     for (final (a, b) in paragraphLineRanges(lines)) {
       final t = lines.sublist(a, b).join('\n').trim();
@@ -841,6 +953,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     }
     return out;
   }
+
+
 
   Future<void> _save() async {
     final typed = _nameCtrl.text.trim();
@@ -862,10 +976,31 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     if (typed.isEmpty) return;
     setState(() => _saving = true);
     final store = ShanZhiShiMantraStore.instance;
-    final source = _sourceCtrl.text;
     final text = _textCtrl.text;
     final annotations = _annotations;
-    final benefit = _collectBenefitParagraphs();
+    // 出处输入框里还没回车确认的经名，保存时也算数：把它当作已添加的经文，
+    // 没有经文时原本写在「无经文」输入区的人天利益顺手挂到这部经名下。
+    final pendingSource = _sourceCtrl.text.trim();
+    if (pendingSource.isNotEmpty && !_sutras.contains(pendingSource)) {
+      final carried = _sutras.isEmpty ? (_flatCtrl?.text ?? '') : '';
+      _sutras.add(pendingSource);
+      _paraCtrls[pendingSource] = _newParaCtrl(carried);
+      _activeSutra = pendingSource;
+      _flatCtrl?.dispose();
+      _flatCtrl = null;
+    }
+    final quotes = <String, List<String>>{};
+    for (final sutra in _sutras) {
+      final texts = _collectParagraphs(_paraCtrls[sutra]!);
+      if (texts.isNotEmpty) quotes[sutra] = texts;
+    }
+    final flat = (_sutras.isEmpty && _flatCtrl != null)
+        ? _collectParagraphs(_flatCtrl!)
+        : <String>[];
+    final paragraphs = <String>[
+      ...flat,
+      for (final sutra in _sutras) ...?quotes[sutra],
+    ];
 
     // 保存前查重（口径同佛号：完全同名，或摘掉通用尊称后 ≥2 个相同字符）。
     // 撞名时只有两个方向：合并到旧的那条，或「保存两者」各存各的。
@@ -892,9 +1027,10 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
         // 并进选中的那一条（保留它的名字），当前这条删掉。
         final ok = await store.mergeInto(
           mergeIntoName,
-          source: source,
+          sources: _sutras,
           text: text,
-          benefit: benefit,
+          benefit: paragraphs,
+          benefitBySutra: quotes,
           annotations: annotations,
         );
         if (ok && editing != null && editing != mergeIntoName) {
@@ -910,18 +1046,20 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       // 没有相似项，或用户选「保存两者」：照常保存（同名允许另起一条）。
       final ok = editing == null
           ? await store.add(typed,
-              source: source,
+              sources: _sutras,
               text: text,
-              benefit: benefit,
+              benefit: paragraphs,
+              benefitBySutra: quotes,
               annotations: annotations,
               allowDuplicate: saveBoth)
           : await store.update(
               editing,
               newName: typed,
               entryKey: _editingKey,
-              source: source,
+              sources: _sutras,
               text: text,
-              benefit: benefit,
+              benefit: paragraphs,
+              benefitBySutra: quotes,
               annotations: annotations,
               allowDuplicate: saveBoth,
             );
@@ -1009,18 +1147,29 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                       ),
                     ),
                   const SizedBox(height: 18),
-                  _label(p, '经文出处'),
-                  const SizedBox(height: 8),
-                  CompositedTransformTarget(
-                    link: _sourceLink,
-                    child: _field(
-                      key: const ValueKey('shanzhishi_mantra_source_field'),
-                      controller: _sourceCtrl,
-                      hint: '搜索经藏，或直接输入经名',
-                      maxLength: 100,
-                      onChanged: _onSourceChanged,
-                    ),
-                  ),
+                   _label(p, '经文出处'),
+                   const SizedBox(height: 8),
+                   if (_sutras.isNotEmpty) ...[
+                     Wrap(
+                       spacing: 8,
+                       runSpacing: 8,
+                       children: [
+                         for (final sutra in _sutras) _sutraChip(sutra, p),
+                       ],
+                     ),
+                     const SizedBox(height: 10),
+                   ],
+                   CompositedTransformTarget(
+                     link: _sourceLink,
+                     child: _field(
+                       key: const ValueKey('shanzhishi_mantra_source_field'),
+                       controller: _sourceCtrl,
+                       hint: '搜索经藏，或直接输入经名后回车',
+                       maxLength: 100,
+                       onChanged: _onSourceChanged,
+                       onSubmitted: _addSutra,
+                     ),
+                   ),
                   const SizedBox(height: 18),
                   _annotationToolbar(p),
                   const SizedBox(height: 8),
@@ -1057,14 +1206,22 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                   Container(height: 0.8, color: p.borderSoft),
                   const SizedBox(height: 14),
                   _label(p, '人天利益'),
+                  if (_activeSutra != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '当前经文：$_activeSutra',
+                      style: TextStyle(fontSize: 12, color: p.accentDeep),
+                    ),
+                  ],
                   const SizedBox(height: 8),
-                  // 与添加善知识同款：一片无边框的大输入区，空行分段，
+                  // 与善知识同款：一片无边框的大输入区，空行分段，
                   // 段与段之间自动画一条虚线；回车自动补空行并把光标接到
                   // 空行下面。
                   ListenableBuilder(
-                    listenable: Listenable.merge([_benefitCtrl, _benefitRules]),
+                    listenable: Listenable.merge([_benefitRev, _benefitRules]),
                     builder: (context, _) {
-                      // 文字排完版才知道每行落在哪儿，所以量行位放到这一帧之后。
+                      final ctrl = _activeParaCtrl;
+                      if (ctrl == null) return const SizedBox.shrink();
                       WidgetsBinding.instance
                           .addPostFrameCallback((_) => _measureBenefitRules());
                       return Stack(
@@ -1083,7 +1240,7 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                           TextField(
                             key: const ValueKey(
                                 'shanzhishi_mantra_benefit_field'),
-                            controller: _benefitCtrl,
+                            controller: ctrl,
                             minLines: 12,
                             maxLines: null,
                             maxLength: 4000,
@@ -1102,7 +1259,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                               isCollapsed: true,
                               border: InputBorder.none,
                               counterText: '',
-                              hintText: '输入神咒的人天利益\n一段一条，空行分隔',
+                              hintText: '输入神咒的人天利益\n一段一条，空行分隔\n'
+                                  '点选经文对应人天利益段落',
                               hintStyle: TextStyle(
                                   fontSize: 14, color: p.textHint, height: 1.8),
                             ),
@@ -1157,6 +1315,41 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     );
   }
 
+  Widget _sutraChip(String name, PaletteData p) {
+    final active = name == _activeSutra;
+    return GestureDetector(
+      key: ValueKey('shanzhishi_mantra_source_chip_$name'),
+      onTap: () => setState(() => _activeSutra = name),
+      child: Container(
+        padding: const EdgeInsets.only(left: 12, top: 6, bottom: 6, right: 4),
+        decoration: BoxDecoration(
+          color: active ? p.accent.withValues(alpha: 0.16) : p.tintBg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: active ? p.accent : p.borderSoft),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              name,
+              style: TextStyle(
+                fontSize: 13,
+                color: active ? p.accentDeep : p.text,
+                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+            const SizedBox(width: 2),
+            GestureDetector(
+              key: ValueKey('shanzhishi_mantra_source_remove_$name'),
+              onTap: () => _removeSutra(name),
+              child: Icon(Icons.close, size: 14, color: p.textSec),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _field({
     required Key key,
     required TextEditingController controller,
@@ -1169,6 +1362,7 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     TextInputType? keyboardType,
     TextAlignVertical? textAlignVertical,
     ValueChanged<String>? onChanged,
+    ValueChanged<String>? onSubmitted,
   }) {
     final p = AppPalette.p;
     return TextField(
@@ -1182,6 +1376,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       keyboardType: keyboardType,
       textAlignVertical: textAlignVertical,
       onChanged: onChanged,
+      onSubmitted: onSubmitted,
+      textInputAction: onSubmitted != null ? TextInputAction.done : null,
       style: TextStyle(fontSize: 16, color: p.text, letterSpacing: 1),
       decoration: InputDecoration(
         counterText: '',
