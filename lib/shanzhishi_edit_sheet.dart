@@ -327,6 +327,21 @@ class _ShanZhiShiEditSheetState extends State<ShanZhiShiEditSheet> {
       _setSuggestions(const []);
       return;
     }
+    // 分卷经书只写合并名点不开对的那一卷（永远落到卷一）：提示改选带卷标的名字。
+    if (ShanZhiShiStore.mergedSutraNames.contains(t)) {
+      _sutraCtrl.clear();
+      _setSuggestions(const []);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '《$t》分卷，请选「$t卷一」这样带卷标的名字',
+            style: const TextStyle(fontSize: 13),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     setState(() {
       _sutras.add(t);
       // 新经文各有一片自己的输入区，加完顺手切到它。

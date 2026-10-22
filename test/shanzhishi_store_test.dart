@@ -47,27 +47,27 @@ void main() {
       final store = ShanZhiShiStore.instance;
       await store.load();
       expect(store.loaded, isTrue);
-      expect(store.length, 113);
+      expect(store.length, 208);
       expect(store[0]!.name, '地藏菩萨');
 
       // 重新加载（模拟重启）：仍是预置名单，不重复添加。
       store.resetForTest();
       await store.load();
-      expect(store.length, 113);
+      expect(store.length, 208);
     });
 
     test('add 追加并持久化，返回新位次', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
       final idx = await store.add('大日如来', ['佛说卢遮那成佛经']);
-      expect(idx, 113);
+      expect(idx, 208);
       expect(store[idx]!.name, '大日如来');
 
       store.resetForTest();
       await store.load();
-      expect(store.length, 114);
-      expect(store[113]!.name, '大日如来');
-      expect(store[113]!.sutras, ['佛说卢遮那成佛经']);
+      expect(store.length, 209);
+      expect(store[208]!.name, '大日如来');
+      expect(store[208]!.sutras, ['佛说卢遮那成佛经']);
     });
 
     test('同名重复录入定位到已有位次并合并经文', () async {
@@ -76,7 +76,7 @@ void main() {
       final first = await store.add('妙吉祥菩萨', []);
       final again = await store.add('妙吉祥菩萨', ['妙法莲华经药王菩萨本事品']);
       expect(again, first);
-      expect(store.length, 114);
+      expect(store.length, 209);
       expect(store[first]!.sutras, ['妙法莲华经药王菩萨本事品']);
     });
 
@@ -97,11 +97,11 @@ void main() {
       final second = store[1]!.name;
       await store.removeAt(0);
       expect(store[0]!.name, second);
-      expect(store.length, 112);
+      expect(store.length, 207);
 
       store.resetForTest();
       await store.load();
-      expect(store.length, 112);
+      expect(store.length, 207);
       expect(store[0]!.name, second);
     });
 
@@ -217,6 +217,7 @@ void main() {
     test('旧版按经书存的 quotes 仍可写入（兼容旧调用）', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
+      await store.update(0, sutras: ['占察善恶业报经']);
       final sutra = store[0]!.sutras.first;
       await store.update(0, quotes: {
         sutra: ['段落一'],
@@ -298,7 +299,7 @@ void main() {
     test('mergeInto 合并经文与段落，不新增条目、不改名号', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
-      await store.update(0, sutras: ['地藏菩萨本愿经'], paragraphs: ['旧段落']);
+      await store.update(0, sutras: ['地藏菩萨本愿经卷一'], paragraphs: ['旧段落']);
       final before = store.length;
 
       final idx = await store.mergeInto(
@@ -310,13 +311,13 @@ void main() {
       expect(idx, 0);
       expect(store.length, before);
       expect(store[0]!.name, '地藏菩萨');
-      expect(store[0]!.sutras, ['地藏菩萨本愿经', '占察善恶业报经']);
+      expect(store[0]!.sutras, ['地藏菩萨本愿经卷一', '占察善恶业报经']);
       expect(store[0]!.paragraphs, ['旧段落', '新段落']);
 
       // 落盘后重读仍在。
       store.resetForTest();
       await store.load();
-      expect(store[0]!.sutras, ['地藏菩萨本愿经', '占察善恶业报经']);
+      expect(store[0]!.sutras, ['地藏菩萨本愿经卷一', '占察善恶业报经']);
       expect(store[0]!.paragraphs, ['旧段落', '新段落']);
     });
 
@@ -337,7 +338,8 @@ void main() {
       expect(store[idx]!.sutras, ['新经']);
       // 原有那一位没被并。
       expect(store[0]!.name, '地藏菩萨');
-      expect(store[0]!.sutras, ['地藏菩萨本愿经']);
+      // 预置里不再预挂「地藏菩萨本愿经」（分卷经书只写合并名点不开对卷）。
+      expect(store[0]!.sutras, isEmpty);
     });
   });
 
@@ -391,6 +393,52 @@ void main() {
       await store.removeAt(0);
       expect(store.canRestore(store[0]!), isFalse);
       expect(await store.restoreLast(0), isFalse);
+    });
+  });
+
+  group('分卷经书：合并名不作关联经文', () {
+    test('预置名号里没有「地藏菩萨本愿经」这个合并名', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      for (final e in store.entries) {
+        expect(e.sutras, isNot(contains('地藏菩萨本愿经')));
+      }
+    });
+
+    test('新增/修改时合并名被去掉，带卷标的照旧保留', () async {
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final idx = await store.add(
+        '测试地藏',
+        ['地藏菩萨本愿经', '地藏菩萨本愿经卷一', '地藏菩萨本愿经卷二'],
+      );
+      expect(store[idx]!.sutras, ['地藏菩萨本愿经卷一', '地藏菩萨本愿经卷二']);
+    });
+
+    test('老数据里挂着的合并名读档时清掉（连它名下的段落）', () async {
+      SharedPreferences.setMockInitialValues({
+        'shanzhishi_names': jsonEncode([
+          {
+            'name': '老数据菩萨',
+            'sutras': ['地藏菩萨本愿经', '地藏菩萨本愿经卷二'],
+            'paragraphs': ['合并名的段落', '卷二段落'],
+            'quotes': {
+              '地藏菩萨本愿经': ['合并名的段落'],
+              '地藏菩萨本愿经卷二': ['卷二段落'],
+            },
+            'createdAt': 1,
+          },
+        ]),
+      });
+      final store = ShanZhiShiStore.instance;
+      await store.load();
+      final e = store.entries.firstWhere((e) => e.name == '老数据菩萨');
+      expect(e.sutras, ['地藏菩萨本愿经卷二']);
+      expect(e.quotes, {
+        '地藏菩萨本愿经卷二': ['卷二段落']
+      });
+      // 段落正文不丢。
+      expect(e.paragraphs, ['合并名的段落', '卷二段落']);
     });
   });
 

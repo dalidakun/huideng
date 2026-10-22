@@ -440,7 +440,8 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
     _added.insert(0, entry);
     final trimmedText = text.trim();
     final benefitList = _cleanTexts(benefit);
-    final srcList = _cleanTexts(sources ?? (source.trim().isEmpty ? const [] : [source.trim()]));
+    final srcList = _cleanTexts(
+        sources ?? (source.trim().isEmpty ? const [] : [source.trim()]));
     final benefitBy = _cleanBenefitBySutra(benefitBySutra ?? const {});
     _details[_addedKey(entry)] = (
       sources: srcList,
@@ -490,7 +491,8 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       final entry = _firstAddedByKey(target.key);
       if (entry != null) entry.name = newKey;
     }
-    final srcList = _cleanTexts(sources ?? (source.trim().isEmpty ? const [] : [source.trim()]));
+    final srcList = _cleanTexts(
+        sources ?? (source.trim().isEmpty ? const [] : [source.trim()]));
     final benefitBy = _cleanBenefitBySutra(benefitBySutra ?? const {});
     _details[target.key] = (
       sources: srcList,
@@ -623,7 +625,8 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
         source: mergedSources.join(' / '),
         text: _joinText(old.text, moved.text),
         benefit: _joinBenefits(old.benefit, moved.benefit),
-        benefitBySutra: _joinBenefitBySutra(old.benefitBySutra, moved.benefitBySutra),
+        benefitBySutra:
+            _joinBenefitBySutra(old.benefitBySutra, moved.benefitBySutra),
         annotations: _joinAnnotations(
           old.text,
           old.annotations,
@@ -740,9 +743,7 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       if (!fit.isValid) continue;
       out.add(fit);
     }
-    out.sort((x, y) => x.start != y.start
-        ? x.start - y.start
-        : x.end - y.end);
+    out.sort((x, y) => x.start != y.start ? x.start - y.start : x.end - y.end);
     return out;
   }
 
@@ -758,9 +759,7 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
       if (e <= s || !a.isValid) continue;
       out.add(a.copyWith(start: s, end: e));
     }
-    out.sort((x, y) => x.start != y.start
-        ? x.start - y.start
-        : x.end - y.end);
+    out.sort((x, y) => x.start != y.start ? x.start - y.start : x.end - y.end);
     return out;
   }
 
@@ -845,6 +844,8 @@ class ShanZhiShiMantraStore extends ChangeNotifier {
                 e.value.text,
                 e.value.benefit,
                 [for (final a in e.value.annotations) a.toJson()],
+                e.value.sources,
+                e.value.benefitBySutra,
               ],
           }));
     } catch (_) {}

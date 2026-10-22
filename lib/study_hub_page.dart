@@ -20,6 +20,7 @@ import 'sync_service.dart';
 import 'reading_time_service.dart';
 import 'sutra_downloader.dart';
 import 'note_sutra_links.dart';
+import 'recent_sutra_store.dart';
 import 'dedication_page.dart';
 import 'dedication_store.dart';
 import 'blessing_page.dart';
@@ -150,6 +151,9 @@ class StudyHubPageState extends State<StudyHubPage>
 
   /// 正在分享的祈福 id（只让当前分享按钮进入忙碌态，避免另一条跟着闪动）。
   final Set<String> _blessingSharing = {};
+
+  /// 本次会话中已成功分享过的祈福 id（分享后按钮转为淡金）。
+  final Set<String> _blessingShared = {};
   final ScrollController _scrollController = ScrollController();
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
@@ -810,14 +814,20 @@ class StudyHubPageState extends State<StudyHubPage>
     final prefs = await SharedPreferences.getInstance();
     // 最近阅读记录（recent_sutras，格式 `经名|||路径`，新读在前）最多取前 20 部：
     // 不限最近几天，哪怕是一个月前读过的也照常展示，保证列表始终有内容。
-    final raw = prefs.getStringList('recent_sutras') ?? [];
+    // 同一部经可能因不同入口的经名写法而被重复记录，按「同一部经」去重，只显示一条。
+    final stored = prefs.getStringList('recent_sutras') ?? [];
+    final raw = dedupeRecentSutraEntries(stored);
+    if (raw.length != stored.length) {
+      await prefs.setStringList('recent_sutras', raw);
+    }
     final sutras = raw
         .map((e) {
           final parts = e.split('|||');
           if (parts.isEmpty || parts[0].isEmpty) return null;
+          final path = parts.length > 1 ? parts[1] : '';
           return <String, dynamic>{
             'title': parts[0],
-            'filePath': parts.length > 1 ? parts[1] : '',
+            'filePath': path,
           };
         })
         .whereType<Map<String, dynamic>>()
@@ -1833,7 +1843,10 @@ class StudyHubPageState extends State<StudyHubPage>
     setState(() => _blessingSharing.add(id));
     try {
       await shareBlessingToBodhiSpace(item.project, remark: remark);
-      if (mounted) _showTopToast('已分享到菩提空间');
+      if (mounted) {
+        setState(() => _blessingShared.add(id));
+        _showTopToast('已分享到菩提空间');
+      }
     } catch (e) {
       if (mounted) _showTopToast('分享失败：$e', isError: true);
     } finally {
@@ -2029,23 +2042,14 @@ class StudyHubPageState extends State<StudyHubPage>
         const SizedBox(height: 10),
         Row(
           children: [
-            Expanded(
-              child: Text(
-                  entry.mine
-                      ? '已祈福 ${prog?.doneCount ?? 0}/${proj.totalDays} 天'
-                      : '与大家一同祈福',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12.5, color: _textSec)),
-            ),
+            const Spacer(),
             _blessingShareButton(proj.id, onTap: () => _shareBlessing(item)),
             const SizedBox(width: 8),
             if (mineJoined && !done)
               _blessingAction(
                 blessedToday ? '今日已祈福' : '今日祈福',
                 enabled: !blessedToday && !_blessingBusy,
-                filled: !blessedToday,
-                bordered: false,
+                muted: blessedToday,
                 dense: true,
                 onTap: () => _blessCurrent(item),
               )
@@ -2059,25 +2063,24 @@ class StudyHubPageState extends State<StudyHubPage>
 
   Widget _blessingShareButton(String id, {required VoidCallback onTap}) {
     final busy = _blessingSharing.contains(id);
+    final shared = _blessingShared.contains(id);
     return Opacity(
       opacity: busy ? 0.5 : 1,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: busy ? null : onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: _gold.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.share_outlined, size: 12.5, color: _gold),
-              const SizedBox(width: 4),
-              Text('分享',
-                  style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600, color: _gold)),
-            ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Opacity(
+            opacity: shared ? 0.5 : 1,
+            child: Image.asset(
+              AppPalette.instance.isPlain
+                  ? 'assets/images/subai.png'
+                  : 'assets/images/jinse.png',
+              width: 18,
+              height: 18,
+              fit: BoxFit.contain,
+            ),
           ),
         ),
       ),
@@ -2091,24 +2094,27 @@ class StudyHubPageState extends State<StudyHubPage>
     bool filled = true,
     bool bordered = true,
     bool dense = false,
+    bool muted = false,
   }) {
     return Opacity(
-      opacity: enabled ? 1 : 0.5,
+      opacity: enabled || muted ? 1 : 0.5,
       child: GestureDetector(
         onTap: enabled ? onTap : null,
         child: Container(
           padding: EdgeInsets.symmetric(
               horizontal: dense ? 10 : 14, vertical: dense ? 5 : 7),
           decoration: BoxDecoration(
-            color: filled ? _gold : Colors.transparent,
+            color: muted
+                ? _gold.withValues(alpha: 0.30)
+                : (filled ? _gold : Colors.transparent),
             borderRadius: BorderRadius.circular(dense ? 14 : 18),
-            border: bordered ? Border.all(color: _gold) : null,
+            border: bordered && !muted ? Border.all(color: _gold) : null,
           ),
           child: Text(label,
               style: TextStyle(
                   fontSize: dense ? 12 : 12.5,
                   fontWeight: FontWeight.w600,
-                  color: filled ? Colors.white : _gold)),
+                  color: muted || filled ? Colors.white : _gold)),
         ),
       ),
     );

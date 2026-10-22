@@ -18,7 +18,7 @@ class _MantraPick {
   final String targetName;
 }
 
-/// 注音 / 备注对话框的结果：两个字段各自返回，未编辑的那项原样带回。
+/// 梵音 / 备注对话框的结果：两个字段各自返回。
 class MantraAnnotationResult {
   const MantraAnnotationResult({
     required this.ruby,
@@ -29,7 +29,10 @@ class MantraAnnotationResult {
   final String note;
 }
 
-/// 注音 / 备注输入框。自己持有输入控制器，随对话框一起释放。
+/// 梵音 / 备注输入框：两个字段在同一个对话框里一起录、一起改。
+/// 没有单独的「删除」按钮：把两项都清空再保存，这行的批注就整条移除。
+/// [focusRuby] 只决定打开时焦点落在哪个输入框。自己持有输入控制器，
+/// 随对话框一起释放。
 class MantraAnnotationDialog extends StatefulWidget {
   const MantraAnnotationDialog({
     super.key,
@@ -37,14 +40,14 @@ class MantraAnnotationDialog extends StatefulWidget {
     required this.initialRuby,
     required this.initialNote,
     required this.focusRuby,
-    required this.canDelete,
   });
 
   final String quoted;
   final String initialRuby;
   final String initialNote;
+
+  /// true = 焦点先落在梵音输入框（点「梵音」进来），false = 备注输入框。
   final bool focusRuby;
-  final bool canDelete;
 
   @override
   State<MantraAnnotationDialog> createState() =>
@@ -71,7 +74,7 @@ class _MantraAnnotationDialogState extends State<MantraAnnotationDialog> {
       backgroundColor: p.card,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: Text(
-        widget.focusRuby ? '注音' : '备注',
+        '梵音 / 备注',
         style:
             TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: p.text),
       ),
@@ -95,44 +98,32 @@ class _MantraAnnotationDialogState extends State<MantraAnnotationDialog> {
                 ),
               ),
               const SizedBox(height: 14),
-              // 注音与备注分开录入：点哪个工具就只改哪一项，另一项原样保留。
-              if (widget.focusRuby)
-                _annotationField(
-                  key: const ValueKey('shanzhishi_mantra_ruby_input'),
-                  controller: _rubyCtrl,
-                  p: p,
-                  label: '注音',
-                  hint: '如：ōng ma ṇi pad me hūṃ',
-                  autofocus: true,
-                  maxLines: 1,
-                )
-              else
-                _annotationField(
-                  key: const ValueKey('shanzhishi_mantra_note_input'),
-                  controller: _noteCtrl,
-                  p: p,
-                  label: '备注',
-                  hint: '写下这段文字的备注（可多行）',
-                  autofocus: true,
-                  maxLines: 5,
-                ),
+              // 梵音与备注一起录入：两项同时显示，点哪个菜单只是决定
+              // 打开时焦点先落在哪个框，另一项也随时可以改。
+              _annotationField(
+                key: const ValueKey('shanzhishi_mantra_ruby_input'),
+                controller: _rubyCtrl,
+                p: p,
+                label: '梵音',
+                hint: '如：ōng ma ṇi pad me hūṃ',
+                autofocus: widget.focusRuby,
+                maxLines: 1,
+              ),
+              const SizedBox(height: 12),
+              _annotationField(
+                key: const ValueKey('shanzhishi_mantra_note_input'),
+                controller: _noteCtrl,
+                p: p,
+                label: '备注',
+                hint: '写下这句咒文的备注（可多行）',
+                autofocus: !widget.focusRuby,
+                maxLines: 5,
+              ),
             ],
           ),
         ),
       ),
       actions: [
-        if (widget.canDelete)
-          TextButton(
-            key: const ValueKey('shanzhishi_mantra_annotation_delete'),
-            onPressed: () => Navigator.pop(
-              context,
-              MantraAnnotationResult(
-                ruby: widget.focusRuby ? '' : _rubyCtrl.text.trim(),
-                note: widget.focusRuby ? _noteCtrl.text.trim() : '',
-              ),
-            ),
-            child: Text('删除', style: TextStyle(color: p.accentDeep)),
-          ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: Text('取消', style: TextStyle(color: p.textSec)),
@@ -285,7 +276,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
 
   bool _saving = false;
 
-  /// 神咒原文上的注音 / 备注批注（保存时随原文一起写入）。
+  /// 神咒原文上的梵音 / 备注批注（这里只看不改；真正的增改在详情页
+  /// 长按咒文添加。保存时随原文一起写入，原文字符变了会跟着平移）。
   List<MantraAnnotation> _annotations = [];
 
   /// 上一次的原文：输入变化时用它算出编辑区间，把批注位置跟着平移。
@@ -433,16 +425,16 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
     if (!listEquals(_benefitRules.value, next)) _benefitRules.value = next;
   }
 
-  // ─────────── 神咒原文批注（注音 / 备注） ───────────
+  // ─────────── 神咒原文批注（梵音 / 备注） ───────────
 
-  /// 原文或选区变化：选区变了只刷新工具栏可用态；文字变了把批注位置平移到新原文。
+  /// 原文文字变化时把批注位置平移到新原文上（编辑面板不展示 / 不改批注，
+  /// 但原文编辑不能让已存的批注错位）。
   void _onTextChanged() {
     final next = _textCtrl.text;
     if (next != _lastText) {
       _annotations = _remapAnnotations(_annotations, _lastText, next);
       _lastText = next;
     }
-    if (mounted) setState(() {});
   }
 
   /// 文字被编辑后，把批注区间按「公共前缀 / 后缀」算出的改动区间平移、
@@ -495,242 +487,6 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
       out.add(ann.copyWith(start: s, end: e));
     }
     return out;
-  }
-
-  /// 当前选区（正常化后的起止）；没有选中文字时为 null。
-  (int, int)? get _selectedRange {
-    final sel = _textCtrl.selection;
-    if (!sel.isValid || sel.isCollapsed) return null;
-    final s = math.min(sel.start, sel.end);
-    final e = math.max(sel.start, sel.end);
-    if (e <= s || e > _textCtrl.text.length) return null;
-    return (s, e);
-  }
-
-  /// 神咒原文顶部的编辑工具栏：给选中的文字加注音 / 备注。
-  Widget _annotationToolbar(PaletteData p) {
-    final hasSelection = _selectedRange != null;
-    return Row(
-      children: [
-        _label(p, '神咒原文'),
-        const Spacer(),
-        _annotationTool(
-          p,
-          key: const ValueKey('shanzhishi_mantra_ruby_tool'),
-          icon: Icons.text_fields,
-          label: '注音',
-          enabled: hasSelection,
-          onTap: () => _openAnnotationDialog(ruby: true),
-        ),
-        const SizedBox(width: 8),
-        _annotationTool(
-          p,
-          key: const ValueKey('shanzhishi_mantra_note_tool'),
-          icon: Icons.edit_note,
-          label: '备注',
-          enabled: hasSelection,
-          onTap: () => _openAnnotationDialog(ruby: false),
-        ),
-      ],
-    );
-  }
-
-  Widget _annotationTool(
-    PaletteData p, {
-    required Key key,
-    required IconData icon,
-    required String label,
-    required bool enabled,
-    required VoidCallback onTap,
-  }) {
-    final color = enabled ? p.accentDeep : p.textHint;
-    return GestureDetector(
-      key: key,
-      behavior: HitTestBehavior.opaque,
-      onTap: enabled ? onTap : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: enabled ? p.tintBg : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: enabled ? p.tintBg : p.borderSoft),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 15, color: color),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 为选中文字（或已有的某条批注）写注音 / 备注；已有批注可在这里删除。
-  Future<void> _openAnnotationDialog({
-    required bool ruby,
-    int? editIndex,
-  }) async {
-    var index = editIndex;
-    MantraAnnotation? existing;
-    int start;
-    int end;
-    if (index != null && index >= 0 && index < _annotations.length) {
-      existing = _annotations[index];
-      start = existing.start;
-      end = existing.end;
-    } else {
-      final range = _selectedRange;
-      if (range == null) return;
-      start = range.$1;
-      end = range.$2;
-      index = _annotations.indexWhere(
-          (a) => a.start == start && a.end == end);
-      if (index >= 0) {
-        existing = _annotations[index];
-      } else {
-        index = null;
-      }
-    }
-    final quoted = _textCtrl.text.substring(start, end);
-    final result = await showDialog<MantraAnnotationResult>(
-      context: context,
-      builder: (_) => MantraAnnotationDialog(
-        quoted: quoted,
-        initialRuby: existing?.ruby ?? '',
-        initialNote: existing?.note ?? '',
-        focusRuby: ruby,
-        canDelete: existing != null,
-      ),
-    );
-    if (result == null || !mounted) return;
-    setState(() {
-      final i = index ??
-          _annotations.indexWhere(
-              (a) => a.start == start && a.end == end);
-      // 只清空当前工具对应的那一项；另一项还在就保留这条批注。
-      if (result.ruby.isEmpty && result.note.isEmpty) {
-        if (i >= 0) _annotations.removeAt(i);
-        return;
-      }
-      final ann = MantraAnnotation(
-        start: start,
-        end: end,
-        ruby: result.ruby,
-        note: result.note,
-      );
-      if (i >= 0) {
-        _annotations[i] = ann;
-      } else {
-        _annotations.add(ann);
-      }
-      _annotations.sort((a, b) => a.start != b.start
-          ? a.start - b.start
-          : a.end - b.end);
-    });
-  }
-
-  /// 已加批注的清单：点行可再次编辑，右侧可直接删除。
-  Widget _annotationList(PaletteData p) {
-    if (_annotations.isEmpty) return const SizedBox.shrink();
-    final text = _textCtrl.text;
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Column(
-        key: const ValueKey('shanzhishi_mantra_annotation_list'),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (var i = 0; i < _annotations.length; i++)
-            _annotationRow(p, i, text),
-        ],
-      ),
-    );
-  }
-
-  Widget _annotationRow(PaletteData p, int i, String text) {
-    final ann = _annotations[i];
-    final s = ann.start.clamp(0, text.length);
-    final e = ann.end.clamp(0, text.length);
-    final quoted = e > s ? text.substring(s, e) : '';
-    final parts = <String>[
-      if (quoted.isNotEmpty) '「$quoted」',
-      if (ann.hasRuby) '注音：${ann.ruby}',
-      if (ann.hasNote) '备注：${ann.note}',
-    ];
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Container(
-        key: ValueKey('shanzhishi_mantra_annotation_$i'),
-        padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
-        decoration: BoxDecoration(
-          color: p.tintBg,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                parts.join('  '),
-                style: TextStyle(fontSize: 12.5, color: p.text, height: 1.4),
-              ),
-            ),
-            _annotationMiniAction(
-              p,
-              key: ValueKey('shanzhishi_mantra_annotation_edit_ruby_$i'),
-              label: '注音',
-              onTap: () => _openAnnotationDialog(ruby: true, editIndex: i),
-            ),
-            _annotationMiniAction(
-              p,
-              key: ValueKey('shanzhishi_mantra_annotation_edit_note_$i'),
-              label: '备注',
-              onTap: () => _openAnnotationDialog(ruby: false, editIndex: i),
-            ),
-            GestureDetector(
-              key: ValueKey('shanzhishi_mantra_annotation_delete_$i'),
-              behavior: HitTestBehavior.opaque,
-              onTap: () => setState(() => _annotations.removeAt(i)),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Icon(Icons.close, size: 15, color: p.textHint),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _annotationMiniAction(
-    PaletteData p, {
-    required Key key,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      key: key,
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: p.accentDeep,
-          ),
-        ),
-      ),
-    );
   }
 
   // ─────────── 经文出处候选 ───────────
@@ -1170,9 +926,9 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                        onSubmitted: _addSutra,
                      ),
                    ),
-                  const SizedBox(height: 18),
-                  _annotationToolbar(p),
-                  const SizedBox(height: 8),
+                   const SizedBox(height: 18),
+                   _label(p, '神咒原文'),
+                   const SizedBox(height: 8),
                   // 不加框：一片可直接写的空白。神咒原文不画段间虚线，
                   // 回车就是普通换行。
                   TextField(
@@ -1183,8 +939,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                     maxLength: 2000,
                     keyboardType: TextInputType.multiline,
                     textAlignVertical: TextAlignVertical.top,
-                    // 选中文字后不弹系统的剪切 / 复制 / 粘贴，
-                    // 改由上方工具栏「注音 / 备注」处理。
+                    // 选中文字后不弹系统的剪切 / 复制 / 粘贴：
+                    // 梵音 / 备注统一在详情页长按咒文添加，这里只编辑原文。
                     contextMenuBuilder: (context, editableTextState) =>
                         const SizedBox.shrink(),
                     style: TextStyle(
@@ -1201,9 +957,8 @@ class _ShanZhiShiMantraEditSheetState extends State<ShanZhiShiMantraEditSheet> {
                           fontSize: 14, color: p.textHint, height: 1.8),
                     ),
                   ),
-                  _annotationList(p),
-                  const SizedBox(height: 20),
-                  Container(height: 0.8, color: p.borderSoft),
+                   const SizedBox(height: 20),
+                   Container(height: 0.8, color: p.borderSoft),
                   const SizedBox(height: 14),
                   _label(p, '人天利益'),
                   if (_activeSutra != null) ...[

@@ -137,50 +137,64 @@ class ShanZhiShiStore extends ChangeNotifier {
   /// 预置种子的版本：版本升级时把「还没出现过的种子名号」补进现有名单，
   /// 不覆盖用户已录入的数据，也不会让用户删掉的名号复活。
   static const String _seedVersionKey = 'shanzhishi_seed_version';
-  static const int _seedVersion = 3;
+  static const int _seedVersion = 5;
+
+  static const String _baifoBenefit =
+      '若有一心受持读诵，忆念不忘此佛名者，所生贪欲、瞋恚、愚痴、诸怖畏等，即得除灭，未生贪欲、瞋恚、愚痴、诸怖畏者，能令不生。';
+
+  /// 分卷经书的「合并名」：这类经在经藏里是好几卷，只写合并名点不开对的那一卷
+  /// （永远落到卷一），关联经文必须写带卷标的名字（「…卷一」「…卷二」）。
+  ///
+  /// 这里只挡**精确等于**合并名的条目，带卷标的照旧保留：
+  /// 「地藏菩萨本愿经卷一」「地藏菩萨本愿经卷二」都是好名字。
+  static const Set<String> mergedSutraNames = {'地藏菩萨本愿经'};
 
   /// 首次安装预置的名号（名字 + 出现的经文），避免空球起手。
   /// 第一段：《地藏菩萨本愿经》里出现的佛菩萨名号；用户删掉后不再回来。
   /// 第二段：常见佛菩萨名号汇编（关联经文留空，用户可后补）。
+  ///
+  /// 第一段不预置关联经文：《地藏菩萨本愿经》在经藏里是卷一、卷二两卷
+  /// （T13n0412_001／T13n0412_002），关联经文只写合并名点不开对的那一卷
+  /// （永远落到卷一），要哪一卷由用户在编辑面板里从经藏按卷选。
   static const List<List<String>> _seeds = [
-    ['地藏菩萨', '地藏菩萨本愿经'],
+    ['地藏菩萨'],
     // 称佛名号品第九明确列举的佛名（共 19 尊）。
-    ['无边身如来', '地藏菩萨本愿经'],
-    ['宝性如来', '地藏菩萨本愿经'],
-    ['波头摩胜如来', '地藏菩萨本愿经'],
-    ['师子吼如来', '地藏菩萨本愿经'],
-    ['拘留孙佛', '地藏菩萨本愿经'],
-    ['毗婆尸佛', '地藏菩萨本愿经'],
-    ['宝胜如来', '地藏菩萨本愿经'],
-    ['宝相如来', '地藏菩萨本愿经'],
-    ['袈裟幢如来', '地藏菩萨本愿经'],
-    ['大通山王如来', '地藏菩萨本愿经'],
-    ['净月佛', '地藏菩萨本愿经'],
-    ['山王佛', '地藏菩萨本愿经'],
-    ['智胜佛', '地藏菩萨本愿经'],
-    ['净名王佛', '地藏菩萨本愿经'],
-    ['智成就佛', '地藏菩萨本愿经'],
-    ['无上佛', '地藏菩萨本愿经'],
-    ['妙声佛', '地藏菩萨本愿经'],
-    ['满月佛', '地藏菩萨本愿经'],
-    ['月面佛', '地藏菩萨本愿经'],
+    ['无边身如来'],
+    ['宝性如来'],
+    ['波头摩胜如来'],
+    ['师子吼如来'],
+    ['拘留孙佛'],
+    ['毗婆尸佛'],
+    ['宝胜如来'],
+    ['宝相如来'],
+    ['袈裟幢如来'],
+    ['大通山王如来'],
+    ['净月佛'],
+    ['山王佛'],
+    ['智胜佛'],
+    ['净名王佛'],
+    ['智成就佛'],
+    ['无上佛'],
+    ['妙声佛'],
+    ['满月佛'],
+    ['月面佛'],
     // 其他品中出现的佛名。
-    ['释迦牟尼佛', '地藏菩萨本愿经'],
-    ['师子奋迅具足万行如来', '地藏菩萨本愿经'],
-    ['觉华定自在王如来', '地藏菩萨本愿经'],
-    ['一切智成就如来', '地藏菩萨本愿经'],
-    ['清净莲华目如来', '地藏菩萨本愿经'],
+    ['释迦牟尼佛'],
+    ['师子奋迅具足万行如来'],
+    ['觉华定自在王如来'],
+    ['一切智成就如来'],
+    ['清净莲华目如来'],
     // 菩萨名。
-    ['文殊师利菩萨', '地藏菩萨本愿经'],
-    ['定自在王菩萨', '地藏菩萨本愿经'],
-    ['财首菩萨', '地藏菩萨本愿经'],
-    ['无尽意菩萨', '地藏菩萨本愿经'],
-    ['解脱菩萨', '地藏菩萨本愿经'],
-    ['普贤菩萨', '地藏菩萨本愿经'],
-    ['普广菩萨', '地藏菩萨本愿经'],
-    ['观世音菩萨', '地藏菩萨本愿经'],
-    ['虚空藏菩萨', '地藏菩萨本愿经'],
-    ['弥勒菩萨', '地藏菩萨本愿经'],
+    ['文殊师利菩萨'],
+    ['定自在王菩萨'],
+    ['财首菩萨'],
+    ['无尽意菩萨'],
+    ['解脱菩萨'],
+    ['普贤菩萨'],
+    ['普广菩萨'],
+    ['观世音菩萨'],
+    ['虚空藏菩萨'],
+    ['弥勒菩萨'],
     // 常见佛菩萨名号汇编（关联经文留空）。
     ['阿弥陀佛'],
     ['药师琉璃光如来'],
@@ -255,11 +269,102 @@ class ShanZhiShiStore extends ChangeNotifier {
     ['大行普贤菩萨'],
     ['大愿地藏菩萨'],
     ['慈氏菩萨'],
-    ['虚空藏菩萨摩诃萨'],
-    ['金刚手菩萨摩诃萨'],
-    ['除盖障菩萨摩诃萨'],
-    ['无尽意菩萨摩诃萨'],
-    ['宝檀华菩萨摩诃萨'],
+    // 佛说百佛名经所列佛名（人天利益统一）
+    ['月光佛', '佛说百佛名经'],
+    ['阿閦佛', '佛说百佛名经'],
+    ['大庄严佛', '佛说百佛名经'],
+    ['多伽罗香佛', '佛说百佛名经'],
+    ['常照曜佛', '佛说百佛名经'],
+    ['栴檀德佛', '佛说百佛名经'],
+    ['最上佛', '佛说百佛名经'],
+    ['莲华幢佛', '佛说百佛名经'],
+    ['莲华生佛', '佛说百佛名经'],
+    ['宝聚佛', '佛说百佛名经'],
+    ['阿伽楼香佛', '佛说百佛名经'],
+    ['大精进佛', '佛说百佛名经'],
+    ['娑伽罗佛', '佛说百佛名经'],
+    ['巨海佛', '佛说百佛名经'],
+    ['幢德佛', '佛说百佛名经'],
+    ['梵德佛', '佛说百佛名经'],
+    ['大香佛', '佛说百佛名经'],
+    ['大生佛', '佛说百佛名经'],
+    ['宝网佛', '佛说百佛名经'],
+    ['阿弥陀佛', '佛说百佛名经'],
+    ['大施德佛', '佛说百佛名经'],
+    ['大金柱佛', '佛说百佛名经'],
+    ['大念佛', '佛说百佛名经'],
+    ['言无尽佛', '佛说百佛名经'],
+    ['常散华佛', '佛说百佛名经'],
+    ['大爱佛', '佛说百佛名经'],
+    ['师子香胜佛', '佛说百佛名经'],
+    ['养德佛', '佛说百佛名经'],
+    ['帝释火焰佛', '佛说百佛名经'],
+    ['常乐德佛', '佛说百佛名经'],
+    ['师子华德佛', '佛说百佛名经'],
+    ['寂灭幢佛', '佛说百佛名经'],
+    ['戒王佛', '佛说百佛名经'],
+    ['普德佛', '佛说百佛名经'],
+    ['普德象佛', '佛说百佛名经'],
+    ['无忧德佛', '佛说百佛名经'],
+    ['优波罗香佛', '佛说百佛名经'],
+    ['大地佛', '佛说百佛名经'],
+    ['大龙德佛', '佛说百佛名经'],
+    ['清净王佛', '佛说百佛名经'],
+    ['莲华德佛', '佛说百佛名经'],
+    ['舍华佛', '佛说百佛名经'],
+    ['龙德佛', '佛说百佛名经'],
+    ['华聚佛', '佛说百佛名经'],
+    ['香象佛', '佛说百佛名经'],
+    ['常观佛', '佛说百佛名经'],
+    ['正作佛', '佛说百佛名经'],
+    ['善住佛', '佛说百佛名经'],
+    ['尼瞿嚧陀王佛', '佛说百佛名经'],
+    ['无上王佛', '佛说百佛名经'],
+    ['月德佛', '佛说百佛名经'],
+    ['栴檀林佛', '佛说百佛名经'],
+    ['日藏佛', '佛说百佛名经'],
+    ['德藏佛', '佛说百佛名经'],
+    ['须弥力佛', '佛说百佛名经'],
+    ['摩尼藏佛', '佛说百佛名经'],
+    ['金刚王佛', '佛说百佛名经'],
+    ['威德佛', '佛说百佛名经'],
+    ['无坏佛', '佛说百佛名经'],
+    ['善见佛', '佛说百佛名经'],
+    ['精进德佛', '佛说百佛名经'],
+    ['大海佛', '佛说百佛名经'],
+    ['覆婆罗树佛', '佛说百佛名经'],
+    ['跋蹉德佛', '佛说百佛名经'],
+    ['佛天佛', '佛说百佛名经'],
+    ['师子幢佛', '佛说百佛名经'],
+    ['毗头德佛', '佛说百佛名经'],
+    ['无边德佛', '佛说百佛名经'],
+    ['德智佛', '佛说百佛名经'],
+    ['厚德佛', '佛说百佛名经'],
+    ['华幢佛', '佛说百佛名经'],
+    ['象德佛', '佛说百佛名经'],
+    ['龙德佛', '佛说百佛名经'],
+    ['德生佛', '佛说百佛名经'],
+    ['德婆瑳子佛', '佛说百佛名经'],
+    ['论议佛', '佛说百佛名经'],
+    ['普见佛', '佛说百佛名经'],
+    ['宝多罗佛', '佛说百佛名经'],
+    ['普舍佛', '佛说百佛名经'],
+    ['大供养德佛', '佛说百佛名经'],
+    ['大网佛', '佛说百佛名经'],
+    ['断一切众生疑王佛', '佛说百佛名经'],
+    ['宝德佛', '佛说百佛名经'],
+    ['普盖佛', '佛说百佛名经'],
+    ['大盖佛', '佛说百佛名经'],
+    ['胜德佛', '佛说百佛名经'],
+    ['千供养佛', '佛说百佛名经'],
+    ['宝莲华奋迅佛', '佛说百佛名经'],
+    ['智幡佛', '佛说百佛名经'],
+    ['宝月德佛', '佛说百佛名经'],
+    ['尼瞿嚧陀婆瑳王佛', '佛说百佛名经'],
+    ['常德佛', '佛说百佛名经'],
+    ['普莲华佛', '佛说百佛名经'],
+    ['平等德佛', '佛说百佛名经'],
+    ['龙护救济佛', '佛说百佛名经'],
   ];
 
   /// 版本 1 及更早的旧版预置：升级到 [_seedVersion] 时，
@@ -322,10 +427,18 @@ class ShanZhiShiStore extends ChangeNotifier {
     _entries.clear();
     final now = DateTime.now().millisecondsSinceEpoch;
     if (seeded) {
+      final seen = <String>{};
       for (var i = 0; i < _seeds.length; i++) {
+        final seed = _seeds[i];
+        final name = normalizeName(seed[0]);
+        if (name.isEmpty || !seen.add(name)) continue;
+        final sutras =
+            seed.length > 1 ? _cleanSutras(seed.sublist(1)) : const <String>[];
+        final paragraphs = sutras.contains('佛说百佛名经') ? [_baifoBenefit] : const <String>[];
         _entries.add(ShanyishiEntry(
-          name: _seeds[i][0],
-          sutras: _seeds[i].length > 1 ? _seeds[i].skip(1).toList() : const [],
+          name: name,
+          sutras: sutras,
+          paragraphs: paragraphs,
           createdAt: now + i,
         ));
       }
@@ -351,17 +464,32 @@ class ShanZhiShiStore extends ChangeNotifier {
         final existing = {for (final e in _entries) e.name};
         var i = 0;
         for (final seed in _seeds) {
-          if (existing.add(seed[0])) {
-            _entries.add(ShanyishiEntry(
-              name: seed[0],
-              sutras: seed.length > 1 ? seed.skip(1).toList() : const [],
-              createdAt: now + i,
-            ));
+          final name = normalizeName(seed[0]);
+          if (name.isEmpty || !existing.add(name)) {
+            i++;
+            continue;
           }
+          final sutras = seed.length > 1 ? seed.sublist(1) : const <String>[];
+          final paragraphs = sutras.contains('佛说百佛名经') ? [_baifoBenefit] : const <String>[];
+          _entries.add(ShanyishiEntry(
+            name: name,
+            sutras: sutras,
+            paragraphs: paragraphs,
+            createdAt: now + i,
+          ));
           i++;
         }
       }
     }
+    // 分卷经书的「合并名」清一遍：老数据里可能还挂着「地藏菩萨本愿经」，
+    // 点进去只会落到卷一；带卷标的（「…卷一」「…卷二」）照旧保留。
+    for (var i = 0; i < _entries.length; i++) {
+      final cleaned = _withoutMergedSutras(_entries[i]);
+      if (!identical(cleaned, _entries[i])) _entries[i] = cleaned;
+    }
+    // 名号规范化：老数据里可能还带着「南无」前缀 /「摩诃萨」尾缀，
+    // 统一去掉；因此撞名的两位合并成一位（经文与段落取并集）。
+    _normalizeAllNames();
     _loaded = true;
     // seeded 时打上 provisional，云端有真实名单可覆盖；已有本地数据时
     // 传入 null，保留原有标记（上次种子尚未同步完成时不能丢标记）。
@@ -376,7 +504,7 @@ class ShanZhiShiStore extends ChangeNotifier {
         for (final e in decoded) {
           if (e is! Map) continue;
           final entry = ShanyishiEntry.fromJson(Map<String, dynamic>.from(e));
-          if (entry != null) _undo[entry.createdAt] = entry;
+          if (entry != null) _undo[entry.createdAt] = _withoutMergedSutras(entry);
         }
       } catch (_) {
         // 快照坏了就当作没有，不影响主数据。
@@ -448,7 +576,7 @@ class ShanZhiShiStore extends ChangeNotifier {
     List<String> paragraphs = const [],
     bool allowDuplicate = false,
   }) async {
-    final trimmed = name.trim();
+    final trimmed = normalizeName(name);
     if (trimmed.isEmpty) return -1;
     // 同名不重复录入：定位到已有的那一位，把经文与引用段落并进去。
     final existing =
@@ -463,10 +591,14 @@ class ShanZhiShiStore extends ChangeNotifier {
     }
     final cleanedSutras = _cleanSutras(sutras);
     final cleanedQuotes = _cleanQuotes(quotes);
+    var cleanedParagraphs = _cleanTexts(paragraphs);
+    if (cleanedParagraphs.isEmpty && cleanedSutras.contains('佛说百佛名经')) {
+      cleanedParagraphs = [_baifoBenefit];
+    }
     _entries.add(ShanyishiEntry(
       name: trimmed,
       sutras: cleanedSutras,
-      paragraphs: _cleanTexts(paragraphs),
+      paragraphs: cleanedParagraphs,
       quotes: _pruneQuotes(cleanedQuotes, cleanedSutras),
       createdAt: DateTime.now().millisecondsSinceEpoch,
     ));
@@ -673,7 +805,7 @@ class ShanZhiShiStore extends ChangeNotifier {
   }) async {
     if (index < 0 || index >= _entries.length) return;
     final old = _entries[index];
-    final newName = (name ?? old.name).trim();
+    final newName = normalizeName(name ?? old.name);
     if (newName.isEmpty) return;
     final newSutras = sutras != null ? _cleanSutras(sutras) : old.sutras;
     final newQuotes = quotes != null
@@ -718,9 +850,55 @@ class ShanZhiShiStore extends ChangeNotifier {
     final out = <String>[];
     for (final s in raw) {
       final t = s.trim();
-      if (t.isNotEmpty && !out.contains(t)) out.add(t);
+      // 分卷经书的「合并名」不作为关联经文：点进去只会落到卷一。
+      if (t.isEmpty || mergedSutraNames.contains(t)) continue;
+      if (!out.contains(t)) out.add(t);
     }
     return out;
+  }
+
+  /// 去掉一位名号上挂着的「合并名」关联经文（带卷标的保留）。
+  ///
+  /// 老数据里可能还留着合并名（《地藏菩萨本愿经》），读档时顺手清掉。
+  static ShanyishiEntry _withoutMergedSutras(ShanyishiEntry e) {
+    final sutras = _cleanSutras(e.sutras);
+    if (sutras.length == e.sutras.length) return e;
+    return e.copyWith(sutras: sutras, quotes: _pruneQuotes(e.quotes, sutras));
+  }
+
+  /// 就地规范化所有名号：去「南无」前缀 /「摩诃萨」尾缀；规范化后撞名的
+  /// 两位合并成一位（经文、引用段落取并集），保留最早出现的那一位。
+  void _normalizeAllNames() {
+    final merged = <String, int>{};
+    final out = <ShanyishiEntry>[];
+    for (final e in _entries) {
+      final name = normalizeName(e.name);
+      if (name.isEmpty) continue;
+      final at = merged[name];
+      if (at == null) {
+        merged[name] = out.length;
+        out.add(name == e.name ? e : e.copyWith(name: name));
+        continue;
+      }
+      // 撞名：把这一位的经文/段落并进已保留的那一位。
+      final keep = out[at];
+      final sutras = _cleanSutras([...keep.sutras, ...e.sutras]);
+      final paragraphs = _cleanTexts([...keep.paragraphs, ...e.paragraphs]);
+      final quotes = <String, List<String>>{
+        for (final q in keep.quotes.entries) q.key: List.of(q.value),
+      };
+      e.quotes.forEach((sutra, texts) {
+        quotes[sutra] = _cleanTexts([...?quotes[sutra], ...texts]);
+      });
+      out[at] = keep.copyWith(
+        sutras: sutras,
+        paragraphs: paragraphs,
+        quotes: _pruneQuotes(quotes, sutras),
+      );
+    }
+    _entries
+      ..clear()
+      ..addAll(out);
   }
 
   /// 段落文本去空、去重（保持原有顺序）。
@@ -779,6 +957,20 @@ class ShanZhiShiStore extends ChangeNotifier {
   /// 种子比对键：名号 + 经文，用于判断某条预置有没有被用户改过。
   static String _seedKey(String name, Iterable<String> sutras) =>
       '$name\u0000${sutras.join("\u0001")}';
+
+  /// 名号规范化：去掉开头的「南无」三称前缀（「南无阿弥陀佛」→「阿弥陀佛」），
+  /// 再去掉结尾的「摩诃萨」尊称尾缀（「虚空藏菩萨摩诃萨」→「虚空藏菩萨」）。
+  /// 只处理整词前缀/后缀，名字中间的同字串不动。
+  static String normalizeName(String name) {
+    var s = name.trim();
+    while (s.startsWith('南无')) {
+      s = s.substring(2);
+    }
+    while (s.length > 3 && s.endsWith('摩诃萨')) {
+      s = s.substring(0, s.length - 3);
+    }
+    return s.trim();
+  }
 
   /// 把经文展示名解析成经藏条目（拿到可跳转的正文路径）。
   ///

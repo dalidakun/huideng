@@ -93,6 +93,27 @@ double ellipsoidStretchFor(double width, double height) {
 /// 取较大值：橄榄形顶部那个「点」两侧不再留出大块空白，顶头更饱满。
 const double kSilhouetteExponent = 3.2;
 
+// ── 球体渲染质感参数（只影响绘制，不影响铺排/命中） ──
+
+/// 球面明暗：中心到边缘的暗化强度（越大球越「实」）。
+const double kSphereEdgeShade = 0.22;
+
+/// 轮廓内收光晕的强度与半径倍数（贴着剪影的一圈微光，勾出边界）。
+const double kSphereRimGlow = 0.16;
+const double kSphereRimScale = 1.02;
+
+/// 偏移高光强度与偏移方向（负=左上），暗示光源、托出球面弧度。
+const double kSphereHighlight = 0.13;
+const double kSphereHighlightOffset = -0.36;
+
+/// 经纬网格的透明度与线宽：转动时最直观地读出「球」。
+const double kSphereGridAlpha = 0.075;
+const double kSphereGridWidth = 0.9;
+
+/// 网格纬线条数（南北半球各若干）、经线条数（整圈等分）。
+const int kSphereGridParallels = 7;
+const int kSphereGridMeridians = 12;
+
 /// 把橄榄形投影坐标 (x, y) 做超椭圆化后再乘半径/拉伸：
 /// |x|、|y| < 1 时向外鼓（两头变宽、四角变满），> 1（透视前移）时略收。
 ({double x, double y}) superellipseWarp(double x, double y) {
@@ -794,6 +815,9 @@ class _SpherePainter extends CustomPainter {
     // 星云底景先画（球体尚未画任何名号时也保留一片星空，不显得空荡）。
     _paintNebulaBackdrop(canvas, size, cx, cy, r, stretch);
     if (layout.n == 0 || names.isEmpty) return;
+    // 球面明暗 + 经纬网格：让「虚空中的球」显形，转动时最直观。
+    _paintSphereShade(canvas, cx, cy, r, stretch);
+    _paintSphereGrid(canvas, cx, cy, r, stretch, size);
     final res = computeSphereRender(
       layout: layout,
       names: names,
@@ -833,6 +857,148 @@ class _SpherePainter extends CustomPainter {
     }
   }
 
+  /// 球面明暗：把球体剪影当作一个竖直拉伸的圆，铺一层
+  /// 「中心透明、近边缘渐暗」的径向渐变，再叠一圈内收轮廓微光与偏移高光，
+  /// 让「虚空中的球」显出体积与光源方向（不改动任何名号铺排）。
+  void _paintSphereShade(
+    Canvas canvas,
+    double cx,
+    double cy,
+    double r,
+    double stretch,
+  ) {
+    final accent = palette.accent;
+    final deep = palette.accentDeep;
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.scale(1.0, stretch);
+
+    // 1) 边缘暗化：中心透明，靠边渐暗，球面像有了「背光」的实体。
+    final edgeR = r * 1.0;
+    canvas.drawCircle(
+      Offset.zero,
+      edgeR,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            accent.withValues(alpha: 0),
+            accent.withValues(alpha: 0),
+            deep.withValues(alpha: kSphereEdgeShade * 0.55),
+            deep.withValues(alpha: kSphereEdgeShade),
+          ],
+          stops: const [0, 0.55, 0.85, 1],
+        ).createShader(Rect.fromCircle(center: Offset.zero, radius: edgeR)),
+    );
+
+    // 2) 轮廓内收微光：贴着剪影一圈，勾出椭球边界（不超出剪影）。
+    final rimR = r * kSphereRimScale;
+    canvas.drawCircle(
+      Offset.zero,
+      rimR,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            accent.withValues(alpha: 0),
+            accent.withValues(alpha: kSphereRimGlow),
+            accent.withValues(alpha: 0),
+          ],
+          stops: const [0.7, 0.96, 1],
+        ).createShader(Rect.fromCircle(center: Offset.zero, radius: rimR)),
+    );
+
+    // 3) 偏移高光：左上一小团柔光，暗示光源、托出球面弧度。
+    final hx = kSphereHighlightOffset * r * 0.85;
+    final hy = kSphereHighlightOffset * r * 0.85;
+    final hlR = r * 0.85;
+    canvas.drawCircle(
+      Offset(hx, hy),
+      hlR,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            accent.withValues(alpha: kSphereHighlight),
+            accent.withValues(alpha: 0),
+          ],
+        ).createShader(Rect.fromCircle(center: Offset(hx, hy), radius: hlR)),
+    );
+    canvas.restore();
+  }
+
+  /// 经纬网格：把球面经纬线按当前 yaw/pitch 投影成一组椭圆弧，
+  /// 只画正面半球（z>0）的部分，极淡地铺在名号之下——转动时最直观地「读出」球。
+  void _paintSphereGrid(
+    Canvas canvas,
+    double cx,
+    double cy,
+    double r,
+    double stretch,
+    Size size,
+  ) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = kSphereGridWidth
+      ..color = palette.accent.withValues(alpha: kSphereGridAlpha);
+
+    Offset project(double x, double y, double z) {
+      final q = rotateSpherePoint(x, y, z, yaw, pitch);
+      if (q.z <= 0.02) return const Offset(double.nan, double.nan);
+      final persp = _cameraDistFactor * r / (_cameraDistFactor * r - q.z * r);
+      final w = superellipseWarp(q.x * persp, q.y * persp);
+      return Offset(cx + w.x * r, cy - w.y * r * stretch);
+    }
+
+    // 纬线：从南极到北极等分若干圈，每圈采样一周。
+    for (var p = 1; p < kSphereGridParallels; p++) {
+      final lat = math.pi * (p / kSphereGridParallels) - math.pi / 2;
+      final cl = math.cos(lat);
+      final sl = math.sin(lat);
+      final path = Path();
+      var started = false;
+      const steps = 64;
+      for (var s = 0; s <= steps; s++) {
+        final lon = 2 * math.pi * s / steps;
+        final o = project(cl * math.cos(lon), sl, cl * math.sin(lon));
+        if (o.dx.isNaN) {
+          started = false;
+          continue;
+        }
+        if (!started) {
+          path.moveTo(o.dx, o.dy);
+          started = true;
+        } else {
+          path.lineTo(o.dx, o.dy);
+        }
+      }
+      canvas.drawPath(path, paint);
+    }
+
+    // 经线：整圈等分若干条，每条从南极到北极采样。
+    for (var m = 0; m < kSphereGridMeridians; m++) {
+      final lon = 2 * math.pi * m / kSphereGridMeridians;
+      final clon = math.cos(lon);
+      final slon = math.sin(lon);
+      final path = Path();
+      var started = false;
+      const steps = 48;
+      for (var s = 0; s <= steps; s++) {
+        final lat = math.pi * (s / steps) - math.pi / 2;
+        final cl = math.cos(lat);
+        final o = project(cl * clon, math.sin(lat), cl * slon);
+        if (o.dx.isNaN) {
+          started = false;
+          continue;
+        }
+        if (!started) {
+          path.moveTo(o.dx, o.dy);
+          started = true;
+        } else {
+          path.lineTo(o.dx, o.dy);
+        }
+      }
+      canvas.drawPath(path, paint);
+    }
+  }
+
   /// 一团径向渐变柔光（星云斑块 / 光晕共用）。
   void _glow(double x, double y, double radius, Color color, double alpha,
       Canvas canvas) {
@@ -867,6 +1033,22 @@ class _SpherePainter extends CustomPainter {
     final accent = palette.accent;
     final deep = palette.accentDeep;
     final primary = palette.primary;
+
+    // 0) 暗角：四周极淡压暗，把视线收拢到球心，衬出中间的球体。
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = RadialGradient(
+          center: Alignment.center,
+          radius: 0.85,
+          colors: [
+            deep.withValues(alpha: 0),
+            deep.withValues(alpha: 0),
+            palette.bg.withValues(alpha: 0.28),
+          ],
+          stops: const [0.55, 0.82, 1],
+        ).createShader(Offset.zero & size),
+    );
 
     // 1) 全幅底光：一大团极淡的暖色，把整个画面晕染进星云氛围。
     _glow(cx, cy * 0.92, math.max(size.width, size.height) * 0.72, accent,

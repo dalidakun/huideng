@@ -15,6 +15,7 @@ import 'reading_badges.dart';
 import 'record_index.dart';
 import 'reading_time_service.dart';
 import 'sutra_asset_path.dart';
+import 'recent_sutra_store.dart';
 
 /// 全量本地数据云同步：
 ///  - 收集所有 SharedPreferences 键 + 头像文件 + sutras_list.json，
@@ -889,7 +890,11 @@ class SyncService with WidgetsBindingObserver {
             v?.toString(), paired('last_read_title', 'last_read_title'));
       case 'recent_sutras':
         if (v is List) {
-          return v.map((e) => _canonicalRecentEntry(e.toString())).toList();
+          final list =
+              v.map((e) => _canonicalRecentEntry(e.toString())).toList();
+          // 同一部经在不同入口写入的经名写法不同，云端可能存着重复条目，
+          // 同步时按「同一部经」去重，避免重复记录在多设备间来回扩散。
+          return dedupeRecentSutraEntries(list);
         }
         return v;
       case 'daily_sutra_history':

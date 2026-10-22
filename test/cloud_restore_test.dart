@@ -19,7 +19,7 @@ void main() {
     test('首次种子在云端有名单时被覆盖，并清除临时标记', () async {
       final store = ShanZhiShiStore.instance;
       await store.load();
-      expect(store.length, 113);
+      expect(store.length, 208);
 
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getBool(ShanZhiShiStore.provisionalMarkerKey), isTrue);

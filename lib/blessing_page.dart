@@ -2307,6 +2307,9 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
   UserProfile? _author;
   bool _busy = false;
 
+  /// 本次会话内是否已成功分享过（分享后右上角图标转为淡金）。
+  bool _shared = false;
+
   @override
   void initState() {
     super.initState();
@@ -2407,7 +2410,10 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
     setState(() => _busy = true);
     try {
       await shareBlessingToBodhiSpace(d.project, remark: remark);
-      if (mounted) _toast(context, '已分享到菩提空间');
+      if (mounted) {
+        setState(() => _shared = true);
+        _toast(context, '已分享到菩提空间');
+      }
     } catch (e) {
       if (mounted) _toast(context, '分享失败：$e');
     } finally {
@@ -2475,7 +2481,19 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
             IconButton(
               tooltip: '分享',
               onPressed: _busy ? null : _share,
-              icon: Icon(Icons.share_outlined, size: 20, color: p.text),
+              padding: const EdgeInsets.fromLTRB(8, 8, 18, 8),
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
+              icon: Opacity(
+                opacity: _shared ? 0.5 : 1,
+                child: Image.asset(
+                  AppPalette.instance.isPlain
+                      ? 'assets/images/subai.png'
+                      : 'assets/images/jinse.png',
+                  width: 18,
+                  height: 18,
+                  fit: BoxFit.contain,
+                ),
+              ),
             ),
           if (d?.project.isOwner == true)
             PopupMenuButton<String>(

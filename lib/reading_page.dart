@@ -20,6 +20,7 @@ import 'sutra_edit_page.dart' show editedSutraFilePath, SutraEditPage;
 import 'sutra_edit_drafts.dart';
 import 'sutra_favorites.dart';
 import 'sutra_read_later.dart';
+import 'recent_sutra_store.dart';
 import 'app_state.dart';
 import 'reader_preferences.dart';
 import 'note_edit_page.dart';
@@ -324,11 +325,9 @@ class ReadingPageState extends State<ReadingPage>
     SharedPreferences.getInstance().then((prefs) async {
       await prefs.setString('current_sutra_title', widget.title);
       await prefs.setString('current_sutra_file_path', savePath);
-      final recent = prefs.getStringList('recent_sutras') ?? [];
-      recent.removeWhere((e) => e.startsWith('${widget.title}|||'));
-      recent.insert(0, '${widget.title}|||$savePath');
-      if (recent.length > 20) recent.removeRange(20, recent.length);
-      await prefs.setStringList('recent_sutras', recent);
+      // 最近阅读：同一部经去重置顶（不同入口的经名写法不同，按「同一部经」
+      // 归一，否则同一部经会在列表里重复出现）。
+      await recordRecentSutra(prefs, widget.title, savePath);
 
       final now = DateTime.now();
       final today =

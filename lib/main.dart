@@ -30,6 +30,7 @@ import 'notification_center.dart';
 import 'user_avatar_cache.dart';
 import 'update_service.dart';
 import 'reading_badges.dart';
+import 'recent_sutra_store.dart';
 import 'recent_sutras_page.dart';
 import 'reading_page.dart';
 import 'note_edit_page.dart';
@@ -383,8 +384,9 @@ class _AppEntryState extends State<_AppEntry> {
     var fp = prefs.getString('last_read_filePath');
     if (t == null || t.isEmpty) {
       final raw = prefs.getStringList('recent_sutras');
-      if (raw != null && raw.isNotEmpty) {
-        final parts = raw.first.split('|||');
+      final deduped = raw == null ? <String>[] : dedupeRecentSutraEntries(raw);
+      if (deduped.isNotEmpty) {
+        final parts = deduped.first.split('|||');
         if (parts.isNotEmpty && parts[0].isNotEmpty) {
           t = parts[0];
           fp = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : null;
@@ -961,8 +963,9 @@ class _MainPageState extends State<MainPage>
     var fp = prefs.getString('last_read_filePath');
     if (t == null || t.isEmpty) {
       final raw = prefs.getStringList('recent_sutras');
-      if (raw != null && raw.isNotEmpty) {
-        final parts = raw.first.split('|||');
+      final deduped = raw == null ? <String>[] : dedupeRecentSutraEntries(raw);
+      if (deduped.isNotEmpty) {
+        final parts = deduped.first.split('|||');
         if (parts.isNotEmpty && parts[0].isNotEmpty) {
           t = parts[0];
           fp = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : null;

@@ -2,7 +2,7 @@ name: my_flutter_app
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 2.0.0+14
+version: 3.0.0+15
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -142,6 +142,9 @@ flutter:
     - assets/images/beizhu.png
     - assets/images/yuedu.png
     - assets/images/bianji.png
+    # 祈福分享图标（金色外观 / 素白外观）。
+    - assets/images/jinse.png
+    - assets/images/subai.png
     # 宗门页行首图标（首字母缩写，1=素白外观，2=米黄外观；律宗暂无切图）。
     - assets/menpai/
     - assets/famen/

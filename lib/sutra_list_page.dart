@@ -16,6 +16,7 @@ import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_favorites.dart';
 import 'sutra_read_later.dart';
+import 'recent_sutra_store.dart';
 import 'favorite_sutras_page.dart';
 import 'popular_sutras_page.dart';
 import 'hot_ranking_page.dart';
@@ -361,8 +362,14 @@ Future<void> reconcileAllSutraRecords(SharedPreferences prefs) async {
       }
       return '${rec.title}|||$newPath$tail';
     }).toList();
+    // 同一部经在不同入口写入的经名写法不同（如目录原名与「卷X」展示名），
+    // 会留下重复条目，启动时按「同一部经」去重，只保留最新的一条。
+    final deduped = dedupeRecentSutraEntries(fixed);
+    if (deduped.length != fixed.length) {
+      changed = true;
+    }
     if (changed) {
-      await prefs.setStringList('recent_sutras', fixed);
+      await prefs.setStringList('recent_sutras', deduped);
     }
   }
 }
@@ -2480,7 +2487,8 @@ class SutraListPageState extends State<SutraListPage>
   Future<void> _loadRecentSutras() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList('recent_sutras') ?? [];
-    final list = raw.map((e) {
+    // 同一部经可能因不同入口的经名写法被重复记录，去重后只保留最新的一条。
+    final list = dedupeRecentSutraEntries(raw).map((e) {
       final parts = e.split('|||');
       return {'title': parts[0], 'filePath': parts.length > 1 ? parts[1] : ''};
     }).toList();
