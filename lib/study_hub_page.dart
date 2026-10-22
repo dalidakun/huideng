@@ -147,7 +147,13 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 另一条取我参与的其他祈福或社区「更多」中的推荐。
   List<_HomeBlessing> _blessings = const [];
   bool _blessingLoading = false;
-  bool _blessingBusy = false;
+
+  /// 正在打卡的祈福 id（只让当前那一条按钮进入忙碌态，避免另一条跟着闪）。
+  final Set<String> _blessingBusy = {};
+
+  /// 刚在主页打过卡的祈福：列表接口可能稍晚才反映，本地先记住今日已完成，
+  /// 免得按钮要再点一次才变成「今日已祈福」。
+  final Map<String, BlessingProgress> _blessedToday = {};
 
   /// 正在分享的祈福 id（只让当前分享按钮进入忙碌态，避免另一条跟着闪动）。
   final Set<String> _blessingSharing = {};
@@ -1789,11 +1795,24 @@ class StudyHubPageState extends State<StudyHubPage>
     }
 
     if (!mounted) return;
+    final shown = <_HomeBlessing>[
+      if (first != null)
+        _HomeBlessing(_mergeBlessedToday(first.item), mine: first.mine),
+      if (second != null)
+        _HomeBlessing(_mergeBlessedToday(second.item), mine: second.mine),
+    ];
+    // 还是同两条祈福时保持原位置，别让打卡后上下两条互换。
+    final prevIds = _blessings.map((e) => e.item.project.id).toList();
+    final shownIds = shown.map((e) => e.item.project.id).toSet();
+    if (prevIds.length == shown.length &&
+        prevIds.toSet().length == prevIds.length &&
+        shownIds.containsAll(prevIds)) {
+      shown.sort((a, b) => prevIds
+          .indexOf(a.item.project.id)
+          .compareTo(prevIds.indexOf(b.item.project.id)));
+    }
     setState(() {
-      _blessings = [
-        if (first != null) first,
-        if (second != null) second,
-      ];
+      _blessings = shown;
       _blessingLoading = false;
     });
   }
@@ -1812,19 +1831,61 @@ class StudyHubPageState extends State<StudyHubPage>
 
   /// 主页快捷「今日祈福」。
   Future<void> _blessCurrent(BlessingItem item) async {
-    if (_blessingBusy) return;
-    setState(() => _blessingBusy = true);
+    final id = item.project.id;
+    if (_blessingBusy.contains(id)) return;
+    setState(() => _blessingBusy.add(id));
     try {
-      final res = await BlessingService.instance.blessToday(item.project.id);
-      if (mounted) {
-        _showToast(res.isDone ? '祈福圆满，随喜功德' : '今日祈福，功德已记');
-      }
+      final res = await BlessingService.instance.blessToday(id);
+      if (!mounted) return;
+      final today = BlessingService.today();
+      setState(() {
+        _blessedToday[id] = BlessingProgress(
+          joined: true,
+          doneCount: res.doneCount,
+          status: res.status,
+          joinedAt: item.progress?.joinedAt ?? 0,
+          lastDate: today,
+          doneDates: <String>{...?item.progress?.doneDates, today}.toList()
+            ..sort(),
+        );
+        // 先就地切到「今日已祈福」，不等列表接口回来，避免要再点一次。
+        _blessings = [
+          for (final e in _blessings)
+            if (e.item.project.id == id)
+              _HomeBlessing(_mergeBlessedToday(e.item), mine: e.mine)
+            else
+              e,
+        ];
+      });
+      _showToast(res.isDone ? '祈福圆满，随喜功德' : '今日祈福，功德已记');
     } catch (e) {
       if (mounted) _showToast(e.toString());
     } finally {
-      if (mounted) setState(() => _blessingBusy = false);
-      _loadBlessing();
+      if (mounted) setState(() => _blessingBusy.remove(id));
+      if (mounted) _loadBlessing();
     }
+  }
+
+  /// 把本次会话里已打卡的进度合并到列表数据上（列表数据落后时不回退）。
+  BlessingItem _mergeBlessedToday(BlessingItem item) {
+    final local = _blessedToday[item.project.id];
+    final today = BlessingService.today();
+    if (local == null || local.lastDate != today) return item;
+    final p = item.progress;
+    if (p != null && p.doneToday(today)) return item;
+    return BlessingItem(
+      item.project,
+      BlessingProgress(
+        joined: true,
+        doneCount: p != null && p.doneCount > local.doneCount
+            ? p.doneCount
+            : local.doneCount,
+        status: p?.status ?? local.status,
+        joinedAt: p?.joinedAt ?? local.joinedAt,
+        lastDate: today,
+        doneDates: <String>{...?p?.doneDates, today}.toList()..sort(),
+      ),
+    );
   }
 
   /// 分享一条祈福到菩提空间：先填写备注并确认。
@@ -2003,8 +2064,9 @@ class StudyHubPageState extends State<StudyHubPage>
         ),
         if (proj.target.isNotEmpty) ...[
           const SizedBox(height: 4),
+          // 与功课打卡项同一深浅的文字色。
           Text('回向：${proj.target}',
-              style: TextStyle(fontSize: 12.5, color: _textSec)),
+              style: TextStyle(fontSize: 12.5, color: _text)),
         ],
         const SizedBox(height: 10),
         if (entry.mine)
@@ -2036,7 +2098,7 @@ class StudyHubPageState extends State<StudyHubPage>
               Icon(Icons.groups_outlined, size: 15, color: _textSec),
               const SizedBox(width: 5),
               Text('已有 ${proj.joinerCount} 人祈福',
-                  style: TextStyle(fontSize: 12.5, color: _textSec)),
+                  style: TextStyle(fontSize: 12.5, color: _text)),
             ],
           ),
         const SizedBox(height: 10),
@@ -2048,7 +2110,7 @@ class StudyHubPageState extends State<StudyHubPage>
             if (mineJoined && !done)
               _blessingAction(
                 blessedToday ? '今日已祈福' : '今日祈福',
-                enabled: !blessedToday && !_blessingBusy,
+                enabled: !blessedToday && !_blessingBusy.contains(proj.id),
                 muted: blessedToday,
                 dense: true,
                 onTap: () => _blessCurrent(item),

@@ -1818,6 +1818,11 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     String text,
     _MxSelectionMap? map,
   ) {
+    // 梵音 / 备注小字是额外插入的文本，不是咒文原文：在它们上面长按不弹
+    // 菜单，只有长按咒文正文才会出现「复制 / 梵音 / 备注 / 全选」。
+    if (_mxSelectedRange(text.length, map) == null) {
+      return const SizedBox.shrink();
+    }
     final custom = <ContextMenuButtonItem>[
       ContextMenuButtonItem(
         label: '梵音',
@@ -1898,16 +1903,23 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     if (ce <= cs) return;
     final line = _mxLineRangeOf(text, cs);
     final annotations = _mxStore.annotationsOfKey(key);
-    // 这一行已有的批注：整行批注优先作初始值；与这一行有交叠的旧批注
-    // （早先按字 / 跨行标的梵音、备注）也一并并进初始值，保存后统一由
-    // 整行批注接管，长按这一行就能看到并修改之前写的梵音。
+    // 梵音/备注都按「行」显示：批注起点落在哪一行，就画在那一行的行首。
+    // 因此这一行已有的批注 = 起点落在这一行的所有批注。整行批注优先作
+    // 初始值；旧式按字 / 跨行的批注也一并并进初始值，保存后由整行批注
+    // 统一接管，长按这一行就能看到并修改之前写的梵音。
+    final lineStart = line.$1;
+    bool belongsHere(MantraAnnotation a) {
+      final s = a.start.clamp(0, text.length);
+      if (a.end.clamp(0, text.length) <= s) return false;
+      return _mxLineRangeOf(text, s).$1 == lineStart;
+    }
+
     MantraAnnotation? exact;
     final overlapping = <MantraAnnotation>[];
     for (final a in annotations) {
+      if (!belongsHere(a)) continue;
       final s = a.start.clamp(0, text.length);
       final e = a.end.clamp(0, text.length);
-      if (e <= s) continue;
-      if (e <= line.$1 || s >= line.$2) continue;
       if (s == line.$1 && e == line.$2) {
         exact = a;
       } else {
@@ -1943,19 +1955,13 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
     if (result == null || !mounted) return;
     final current = _mxStore.annotationsOfKey(key);
-    // 与这一行交叠的批注都让位给本次保存的整行批注：行内部分删掉，跨行
-    // 批注落在行外的部分保留（仍按各自的行显示），两项都删空时这行就
-    // 没有批注了。
+    // 这一行显示的批注（起点落在这一行）整体让位给本次保存的整行批注，
+    // 不保留拆出来的残片——否则旧梵音会继续挂在别的行上同时显示。
+    // 两项都删空时这行就没有批注了。
     final next = <MantraAnnotation>[];
     for (final a in current) {
-      final s = a.start.clamp(0, text.length);
-      final e = a.end.clamp(0, text.length);
-      if (e <= s || e <= line.$1 || s >= line.$2) {
-        next.add(a);
-        continue;
-      }
-      if (s < line.$1) next.add(a.copyWith(start: s, end: line.$1));
-      if (e > line.$2) next.add(a.copyWith(start: line.$2, end: e));
+      if (belongsHere(a)) continue;
+      next.add(a);
     }
     if (result.ruby.isNotEmpty || result.note.isNotEmpty) {
       next.add(MantraAnnotation(
@@ -2337,50 +2343,50 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     );
     final noteEnds =
         <int, List<({String label, String note, bool collapsed})>>{};
-    if (showNotes) {
-      final textScaler = MediaQuery.textScalerOf(context);
-      final pending = <({int end, String note, bool collapsed})>[];
-      for (final ann in annotations) {
-        if (!ann.hasNote) continue;
-        var s = ann.start.clamp(0, text.length);
-        var e = ann.end.clamp(0, text.length);
-        while (s < e && (text[s] == '\n' || text[s] == '\r')) {
-          s++;
-        }
-        while (e > s && (text[e - 1] == '\n' || text[e - 1] == '\r')) {
-          e--;
-        }
-        if (e <= s) continue;
-        pending.add((
-          end: _mxSentenceEnd(text, e),
-          note: ann.note,
-          collapsed: ann.note.contains(RegExp(r'[\r\n]')) ||
-              ann.note.trim().runes.length > _mxNoteCollapseAfter,
-        ));
+    // 备注小字始终参与排版，只靠颜色隐藏：关掉备注时正文不能重排、晃动。
+    final hiddenNoteStyle = noteStyle.copyWith(color: Colors.transparent);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final pending = <({int end, String note, bool collapsed})>[];
+    for (final ann in annotations) {
+      if (!ann.hasNote) continue;
+      var s = ann.start.clamp(0, text.length);
+      var e = ann.end.clamp(0, text.length);
+      while (s < e && (text[s] == '\n' || text[s] == '\r')) {
+        s++;
       }
-      // 按句末位置顺序插，后面算行尾宽度时才能把前面的备注也算进去。
-      pending.sort((a, b) => a.end.compareTo(b.end));
-      final priorNotes = <({int pos, String label})>[];
-      for (final item in pending) {
-        final remaining = _mxNoteRemainingWidth(
-          text,
-          item.end,
-          priorNotes,
-          body,
-          noteStyle,
-          maxWidth,
-          textScaler,
-        );
-        final label = item.collapsed
-            ? _mxCollapsedNoteLabel(item.note, remaining, noteStyle)
-            : '[${item.note}]';
-        priorNotes.add((pos: item.end, label: label));
-        noteEnds.putIfAbsent(item.end, () => []).add((
-          label: label,
-          note: item.note,
-          collapsed: item.collapsed,
-        ));
+      while (e > s && (text[e - 1] == '\n' || text[e - 1] == '\r')) {
+        e--;
       }
+      if (e <= s) continue;
+      pending.add((
+        end: _mxSentenceEnd(text, e),
+        note: ann.note,
+        collapsed: ann.note.contains(RegExp(r'[\r\n]')) ||
+            ann.note.trim().runes.length > _mxNoteCollapseAfter,
+      ));
+    }
+    // 按句末位置顺序插，后面算行尾宽度时才能把前面的备注也算进去。
+    pending.sort((a, b) => a.end.compareTo(b.end));
+    final priorNotes = <({int pos, String label})>[];
+    for (final item in pending) {
+      final remaining = _mxNoteRemainingWidth(
+        text,
+        item.end,
+        priorNotes,
+        body,
+        noteStyle,
+        maxWidth,
+        textScaler,
+      );
+      final label = item.collapsed
+          ? _mxCollapsedNoteLabel(item.note, remaining, noteStyle)
+          : '[${item.note}]';
+      priorNotes.add((pos: item.end, label: label));
+      noteEnds.putIfAbsent(item.end, () => []).add((
+        label: label,
+        note: item.note,
+        collapsed: item.collapsed,
+      ));
     }
     final noteBoundaries = noteEnds.keys.toSet();
     // 梵音一律按「行」显示：批注起点落在哪一行，就把梵音画在那一行的
@@ -2441,18 +2447,26 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             child: SelectionContainer.disabled(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: () => _showMxNotePopup(p, item.note),
-                child: Text(
-                  item.label,
-                  style: noteStyle,
-                  textScaler: TextScaler.noScaling,
+                onTap: showNotes
+                    ? () => _showMxNotePopup(p, item.note)
+                    : null,
+                child: Opacity(
+                  opacity: showNotes ? 1 : 0,
+                  child: Text(
+                    item.label,
+                    style: noteStyle,
+                    textScaler: TextScaler.noScaling,
+                  ),
                 ),
               ),
             ),
           ));
           addInserted(pos, 1);
         } else {
-          spans.add(TextSpan(text: item.label, style: noteStyle));
+          spans.add(TextSpan(
+            text: item.label,
+            style: showNotes ? noteStyle : hiddenNoteStyle,
+          ));
           addInserted(pos, item.label.length);
         }
       }
@@ -2461,11 +2475,17 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     var i = 0;
     while (i < text.length) {
       // 行首有梵音批注：先画梵音行（自带换行，不占原文偏移），
-      // 再继续本行正文。
-      final rubyTexts = showRuby ? lineRubyAt[i] : null;
+      // 再继续本行正文。关掉梵音时只把字变透明、保留整行高度，
+      // 正文位置不动（不重排、不跳动）。
+      final rubyTexts = lineRubyAt[i];
       if (rubyTexts != null && rubyTexts.isNotEmpty) {
         final lineRuby = rubyTexts.join(' ');
-        spans.add(TextSpan(text: '$lineRuby\n', style: rubyLineStyle));
+        spans.add(TextSpan(
+          text: '$lineRuby\n',
+          style: showRuby
+              ? rubyLineStyle
+              : rubyLineStyle.copyWith(color: Colors.transparent),
+        ));
         addInserted(i, lineRuby.length + 1);
       }
       addNotesAt(i);
