@@ -822,6 +822,16 @@ class CloudNotesService {
   /// 仅存内存，重启后服务端早已一致，无需持久化。
   final Set<String> locallyDeletedNoteIds = {};
 
+  /// 管理员身份缓存（按登录 uid）：关于页等入口直接复用，避免每次进入
+  /// 都先渲染普通选项、等云端返回后再把管理员入口补出来。
+  String? _adminCacheUid;
+  bool? _cachedIsAdmin;
+
+  bool? get cachedIsAdmin {
+    final uid = AuthService.instance.currentUser.value?.id ?? '';
+    return _adminCacheUid == uid ? _cachedIsAdmin : null;
+  }
+
   /// 笔记详情缓存：noteId → PlazaNote。避免通知页/回复卡等场景
   /// 重复调用 getNoteById（每次都是独立云函数调用，弱网下极慢）。
   /// 仅存内存，不持久化；写操作（编辑/删除）后主动清除对应条目。
@@ -860,6 +870,12 @@ class CloudNotesService {
   List<PlazaNote> _withoutDeleted(Iterable<PlazaNote> notes) => notes
       .where((n) => !locallyDeletedNoteIds.contains(n.id))
       .toList(growable: true);
+
+  /// 广场/空间信息流只保留普通帖子：公告只在公告入口展示，不能混进帖子流。
+  List<PlazaNote> _feedNotesOnly(Iterable<PlazaNote> notes) =>
+      _withoutDeleted(notes)
+          .where((n) => n.kind != 'announcement')
+          .toList(growable: true);
 
   /// 拉取被管理员删除的话题（未登录也返回，用于内容隐藏）。
   Future<void> refreshBannedTopics() async {
@@ -1485,7 +1501,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (_withoutDeleted(list), hasMore);
+    return (_feedNotesOnly(list), hasMore);
   }
 
   /// 拉取某个栏目社区的帖子：按 [PlazaNote.community] 字段精确过滤。
@@ -1510,7 +1526,7 @@ class CloudNotesService {
         .whereType<Map<String, dynamic>>()
         .map(PlazaNote.fromJson)
         .toList();
-    return (_withoutDeleted(list), res['hasMore'] == true);
+    return (_feedNotesOnly(list), res['hasMore'] == true);
   }
 
   /// 拉取某话题下的帖子（服务端按 #话题 边界精确过滤，不再客户端截断前100条）。
@@ -1535,7 +1551,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     return (
-      _withoutDeleted(list),
+      _feedNotesOnly(list),
       res['hasMore'] == true,
       res['firstNoteId']?.toString() ?? '',
       (res['total'] as num?)?.toInt() ?? list.length,
@@ -1558,7 +1574,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (_withoutDeleted(list), hasMore);
+    return (_feedNotesOnly(list), hasMore);
   }
 
   /// 兜底补齐笔记列表的作者展示信息（@账号/认证/阅藏进度）。
@@ -1814,7 +1830,7 @@ class CloudNotesService {
         .map(PlazaNote.fromJson)
         .toList();
     final hasMore = res['hasMore'] == true;
-    return (_withoutDeleted(notes), hasMore);
+    return (_feedNotesOnly(notes), hasMore);
   }
 
   /// 最近一次关注/屏蔽列表刷新是否失败（登录失效/网络异常）。
@@ -2165,7 +2181,7 @@ class CloudNotesService {
             .map((e) => PlazaNote.fromJson(e as Map<String, dynamic>))
             .toList()
         : <PlazaNote>[];
-    return (_withoutDeleted(items), res['hasMore'] == true);
+    return (_feedNotesOnly(items), res['hasMore'] == true);
   }
 
   // ==================== 消息中心 ====================
@@ -2263,12 +2279,20 @@ class CloudNotesService {
   }
 
   /// 当前登录用户是否为管理员（admins 集合中登记了 uid）。
-  Future<bool> isAdmin() async {
+  /// [force] 为 false 时优先复用本次会话结果，避免每次进入页面都等待网络。
+  Future<bool> isAdmin({bool force = false}) async {
+    final uid = AuthService.instance.currentUser.value?.id ?? '';
+    if (!force && _adminCacheUid == uid && _cachedIsAdmin != null) {
+      return _cachedIsAdmin!;
+    }
     try {
       final res = await _call('isAdmin');
-      return res['isAdmin'] == true;
+      final ok = res['isAdmin'] == true;
+      _adminCacheUid = uid;
+      _cachedIsAdmin = ok;
+      return ok;
     } catch (_) {
-      return false;
+      return _cachedIsAdmin ?? false;
     }
   }
 
@@ -2378,15 +2402,16 @@ class CloudNotesService {
         .toList();
   }
 
-  /// 管理员发布公告。
-  Future<void> addAnnouncement({
+  /// 管理员发布公告，返回新公告的云端 id。
+  Future<String> addAnnouncement({
     required String title,
     required String content,
   }) async {
-    await _call('addAnnouncement', params: {
+    final res = await _call('addAnnouncement', params: {
       'title': title,
       'content': content,
     });
+    return res['id']?.toString() ?? '';
   }
 
   /// 管理员删除公告。

@@ -12,13 +12,18 @@ import 'my_page.dart';
 import 'note_stats_center.dart';
 import 'note_store.dart';
 import 'note_sutra_links.dart';
+import 'ownership.dart';
+import 'pinned_notes_store.dart';
 import 'quote_box.dart';
 import 'reading_badges.dart';
 import 'reading_note_post.dart';
 import 'reading_sutra_notes_page.dart';
+import 'benefit_share_post.dart';
 import 'blessing_share_post.dart';
+import 'shanzhishi_page.dart';
 import 'reply_thread.dart';
 import 'text_input_sheet.dart';
+import 'post_share.dart';
 import 'post_time_link.dart';
 import 'post_rich_content.dart';
 import 'user_avatar.dart';
@@ -187,20 +192,23 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
 
   /// 置顶帖/回复的 id 集合（与「我的」页共用同一份本地记录）。
   final Set<String> _pinnedIds = {};
-  static const String _pinnedKey = 'my_pinned_note_ids';
 
   @override
   void initState() {
     super.initState();
     _loadPinnedIds();
     _load();
+    PinnedNotesStore.revision.addListener(_onPinnedStoreChanged);
   }
 
   @override
   void dispose() {
+    PinnedNotesStore.revision.removeListener(_onPinnedStoreChanged);
     _detailScroll.dispose();
     super.dispose();
   }
+
+  void _onPinnedStoreChanged() => _loadPinnedIds();
 
   /// 是否按「回复连贴」布局渲染：正常回复帖；或父帖被删后
   /// 携带 tombstoneAncestorIds 的帖子（repostKind 已被改为 quote 但
@@ -578,47 +586,32 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
   }
 
-  /// 是否自己的内容：优先用 currentUser，会话恢复竞态窗口（currentUser 暂为 null）
-  /// 时用本地缓存 uid 兜底，避免自己的帖子误显示「关注/屏蔽」菜单。
-  bool _isOwn(String? ownerUserId) {
-    if (ownerUserId == null || ownerUserId.isEmpty) return false;
-    final me = AuthService.instance.currentUser.value;
-    if (me != null && ownerUserId == me.id) return true;
-    final cachedUid = AuthService.instance.cachedUserId;
-    return cachedUid != null && ownerUserId == cachedUid;
-  }
+  /// 是否自己的内容：统一走 [isOwnContent]，保证「置顶 / 编辑 / 删除」只出现
+  /// 在自己的帖子上，他人帖子只给「关注 / 屏蔽」。
+  bool _isOwn(String? ownerUserId) => isOwnContent(ownerUserId);
 
-  /// 从本地读取置顶帖/回复 id 列表（与「我的」页共用同一份记录）。
+  /// 从本地读取置顶帖/回复 id（全局同时只保留一条）。
   Future<void> _loadPinnedIds() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (!mounted) return;
-      setState(() {
-        _pinnedIds
-          ..clear()
-          ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
-      });
-    } catch (_) {}
+    await PinnedNotesStore.ensureLoaded();
+    if (!mounted) return;
+    setState(() {
+      _pinnedIds.clear();
+      final id = PinnedNotesStore.currentId;
+      if (id.isNotEmpty) _pinnedIds.add(id);
+    });
   }
 
   /// 置顶/取消置顶（本地保存，重启后仍生效）。
+  /// 置顶新内容会替换掉之前的置顶，始终只保留一条。
   Future<void> _togglePin(PlazaNote note) async {
-    final wasPinned = _pinnedIds.contains(note.id);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = prefs.getStringList(_pinnedKey) ?? [];
-      if (wasPinned) {
-        list.remove(note.id);
-        _pinnedIds.remove(note.id);
-      } else {
-        list.add(note.id);
-        _pinnedIds.add(note.id);
-      }
-      await prefs.setStringList(_pinnedKey, list);
-    } catch (_) {}
+    if (!_isOwn(note.ownerUserId)) return;
+    final wasPinned = await PinnedNotesStore.toggle(note.id);
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
     if (!mounted) return;
     setState(() {});
-    _showToast(wasPinned ? '已取消置顶' : '已置顶');
+    _showToast(wasPinned ? '已置顶' : '已取消置顶');
   }
 
   Future<void> _repost() async {
@@ -755,15 +748,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   Future<void> _share() async {
     final note = _note;
     if (note == null) return;
-    final plain = NoteSutraLinks.plainText(note.content);
-    final text =
-        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
-        '———来自【燃灯】App · ${note.authorName} 的笔记分享\n'
-        '燃一盏灯，看见自己，照亮别人\n'
-        '点击进入八千大藏经世界\n'
-        '下载链接：';
     try {
-      await SharePlus.instance.share(ShareParams(text: text));
+      await SharePlus.instance.share(ShareParams(text: postShareText(note.id)));
     } catch (e) {
       if (!mounted) return;
       _showToast('分享失败：$e');
@@ -825,9 +811,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                 color: _text, fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: _buildBody(),
-      // 右下角评论浮动按钮：与主页「新建」同款尺寸（素白为黑底），白色评论图标。
+      // 右下角评论浮动按钮：与主页「新建」同款尺寸、同距离底部（素白为黑底），
+      // 白色评论图标。
       floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 62),
+        padding: const EdgeInsets.only(bottom: 12),
         child: SizedBox(
           width: 42,
           height: 42,
@@ -988,6 +975,19 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                                     post:
                                         BlessingSharePost.parse(note.content)!,
                                   )
+                                else if (BenefitSharePost.isBenefitShare(
+                                    note.content))
+                                  Builder(builder: (context) {
+                                    final post =
+                                        BenefitSharePost.parse(note.content)!;
+                                    return BenefitSharePostView(
+                                      post: post,
+                                      onTap: post.paragraph.trim().isNotEmpty
+                                          ? () => openBenefitShareTarget(
+                                              context, post)
+                                          : null,
+                                    );
+                                  })
                                 else
                                   // 根帖长内容折叠：默认 8 行，超长时「显示更多」展开。
                                   LayoutBuilder(
@@ -1879,7 +1879,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     });
   }
 
-  /// 回复节点三点菜单：添加到书签/分享笔记（作用于该回复）；自己可置顶/编辑/删除，他人可关注/屏蔽。
+  /// 回复节点三点菜单：添加到书签/分享笔记（作用于该回复）；自己的回复只有
+  /// 编辑/删除（回复不提供置顶），他人可关注/屏蔽。
   Future<void> _showReplyNodeMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
     // 展示昵称优先用预取资料（存储的 authorName 可能是"同修"或已过期）。
@@ -1929,8 +1930,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     : Icons.bookmark_border_rounded,
                 favorited ? '取消收藏' : '添加到书签'),
             postMenuItem(ctx, 'share', Icons.share_rounded, '分享笔记'),
-            postMenuItem(
-                ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
+            // 回复帖不提供置顶（只有帖子能置顶）；历史遗留的已置顶回复仍可取消。
+            if (PinnedNotesStore.showsPinEntry(note.id,
+                isReply: note.repostKind == 'reply'))
+              postMenuItem(
+                  ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -2011,6 +2015,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
+      _pinnedIds.remove(note.id);
       if (!mounted) return;
       _showToast('已删除');
       Navigator.pop(context);
@@ -2033,17 +2039,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     } catch (_) {}
   }
 
-  /// 分享回复帖内容。
+  /// 分享回复帖内容：分享该回复的详情页链接，点开即见正文。
   Future<void> _shareReply(PlazaNote reply) async {
-    final plain = NoteSutraLinks.plainText(reply.content);
-    final text =
-        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
-        '———来自【燃灯】App · ${reply.authorName} 的评论\n'
-        '燃一盏灯，看见自己，照亮别人\n'
-        '点击进入八千大藏经世界\n'
-        '下载链接：';
     try {
-      await SharePlus.instance.share(ShareParams(text: text));
+      await SharePlus.instance
+          .share(ShareParams(text: postShareText(reply.id)));
     } catch (e) {
       if (!mounted) return;
       _showToast('分享失败：$e');
@@ -2528,6 +2528,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
+      _pinnedIds.remove(note.id);
       if (!mounted) return;
       _showToast('已删除');
       Navigator.pop(context);

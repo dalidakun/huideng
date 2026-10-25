@@ -3,6 +3,23 @@ import 'dart:typed_data';
 
 import 'cloud_notes_service.dart';
 
+/// 解析 yyyy-MM-dd 为本地日期（当天 00:00）。
+DateTime? _parseBlessingYmd(String s) {
+  final parts = s.split('-');
+  if (parts.length != 3) return null;
+  final y = int.tryParse(parts[0]);
+  final m = int.tryParse(parts[1]);
+  final d = int.tryParse(parts[2]);
+  if (y == null || m == null || d == null) return null;
+  return DateTime(y, m, d);
+}
+
+String _formatBlessingYmd(DateTime d) {
+  return '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+}
+
 /// 祈福功课的一种方式，如「念佛 108声」。
 class BlessingMethod {
   final String category;
@@ -112,6 +129,42 @@ class BlessingProject {
       out.add(BlessingImage(id: id.isEmpty ? url : id, url: url));
     }
     return out;
+  }
+
+  /// 起始自然日（本地时区 00:00）。
+  DateTime? get startDateTime => _parseBlessingYmd(startDate);
+
+  /// 最后一个有效自然日（含当天），即「起始日 + 天数 - 1」。
+  DateTime? get endDateTime {
+    final start = startDateTime;
+    if (start == null || totalDays <= 0) return null;
+    return start.add(Duration(days: totalDays - 1));
+  }
+
+  /// 结束日期 yyyy-MM-dd（含当天），无法计算时返回空串。
+  String get endDate {
+    final end = endDateTime;
+    return end == null ? '' : _formatBlessingYmd(end);
+  }
+
+  /// 到 [today]（yyyy-MM-dd）时是否已过自然周期。
+  bool isExpiredAt(String today) {
+    final end = endDateTime;
+    final day = _parseBlessingYmd(today);
+    if (end == null || day == null) return false;
+    return day.isAfter(end);
+  }
+
+  /// 是否已过自然周期（按本地今天判断）。
+  bool get isExpired => isExpiredAt(BlessingService.today());
+
+  /// 剩余自然日（含今天）；已过期返回 0。
+  int get remainingDays {
+    final end = endDateTime;
+    final day = _parseBlessingYmd(BlessingService.today());
+    if (end == null || day == null || day.isAfter(end)) return 0;
+    final left = end.difference(day).inDays + 1;
+    return left > totalDays ? totalDays : left;
   }
 
   factory BlessingProject.fromJson(Map<String, dynamic> m) {

@@ -12,6 +12,9 @@ import 'loading_widgets.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'ownership.dart';
+import 'pinned_notes_store.dart';
+import 'pinned_order.dart';
 import 'post_rich_content.dart';
 import 'reading_badges.dart';
 import 'reading_time_service.dart';
@@ -21,6 +24,7 @@ import 'text_input_sheet.dart';
 import 'user_avatar.dart';
 
 import 'app_palette.dart';
+
 Color get _gold => AppPalette.p.accent;
 Color get _primary => AppPalette.p.primary;
 Color get _primaryLight => AppPalette.p.textSec;
@@ -57,17 +61,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
 
   /// 置顶帖/回复的 id 集合（与「我的」页/笔记详情页共用同一份本地记录）。
   final Set<String> _pinnedIds = {};
-  static const String _pinnedKey = 'my_pinned_note_ids';
 
-  /// 是否自己的内容：优先用 currentUser，会话恢复竞态窗口（currentUser 暂为 null）
-  /// 时用本地缓存 uid 兜底，避免自己的帖子误显示「关注/屏蔽」菜单。
-  bool _isOwn(String? ownerUserId) {
-    if (ownerUserId == null || ownerUserId.isEmpty) return false;
-    final me = AuthService.instance.currentUser.value;
-    if (me != null && ownerUserId == me.id) return true;
-    final cachedUid = AuthService.instance.cachedUserId;
-    return cachedUid != null && ownerUserId == cachedUid;
-  }
+  /// 是否自己的内容：统一走 [isOwnContent]（含会话恢复竞态的缓存 uid 兜底），
+  /// 保证「置顶 / 编辑 / 删除」只出现在自己的帖子上。
+  bool _isOwn(String? ownerUserId) => isOwnContent(ownerUserId);
+
   String _profileTagline = '';
   int _profileJoinTime = 0;
   String _profileAccount = '';
@@ -171,8 +169,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   children: [
                     Icon(Icons.block_outlined, size: 18, color: _textSec),
                     const SizedBox(width: 12),
-                    Text(label,
-                        style: TextStyle(fontSize: 15, color: _text)),
+                    Text(label, style: TextStyle(fontSize: 15, color: _text)),
                   ],
                 ),
               ),
@@ -240,8 +237,15 @@ class _UserSpacePageState extends State<UserSpacePage> {
   @override
   void initState() {
     super.initState();
-    _loadPinnedIds();
+    // 先预热内存里的置顶记录（同步可读），再拉列表：首帧就能把置顶帖排在最前。
+    PinnedNotesStore.ensureLoaded().then((_) {
+      if (!mounted) return;
+      _syncPinnedIds();
+      setState(() {});
+    });
+    _syncPinnedIds();
     _load();
+    PinnedNotesStore.revision.addListener(_onPinnedStoreChanged);
     // 经书目录未缓存时预加载：精读列表的「卷X」卷标渲染依赖多卷经名集合。
     if (NoteSutraCatalog.cachedTitleMap == null) {
       NoteSutraCatalog.load().then((_) {
@@ -250,37 +254,64 @@ class _UserSpacePageState extends State<UserSpacePage> {
     }
   }
 
-  /// 从本地读取置顶帖/回复 id 列表（与「我的」页共用同一份记录）。
-  Future<void> _loadPinnedIds() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (!mounted) return;
-      setState(() {
-        _pinnedIds
-          ..clear()
-          ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
-      });
-    } catch (_) {}
+  @override
+  void dispose() {
+    PinnedNotesStore.revision.removeListener(_onPinnedStoreChanged);
+    super.dispose();
+  }
+
+  /// 任意页面置顶/取消置顶后立即同步，保证回到本页时置顶帖已排在最前。
+  void _onPinnedStoreChanged() {
+    if (!mounted) return;
+    _syncPinnedIds();
+    setState(() {});
+  }
+
+  /// 把内存里的当前置顶 id 同步到本页状态（全局同时只保留一条）。
+  void _syncPinnedIds() {
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
   }
 
   /// 置顶/取消置顶（本地保存，重启后仍生效）。
+  /// 置顶新内容会替换掉之前的置顶，始终只保留一条。
   Future<void> _togglePin(PlazaNote note) async {
-    final wasPinned = _pinnedIds.contains(note.id);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = prefs.getStringList(_pinnedKey) ?? [];
-      if (wasPinned) {
-        list.remove(note.id);
-        _pinnedIds.remove(note.id);
-      } else {
-        list.add(note.id);
-        _pinnedIds.add(note.id);
-      }
-      await prefs.setStringList(_pinnedKey, list);
-    } catch (_) {}
+    if (!_isOwn(note.ownerUserId)) return;
+    final wasPinned = await PinnedNotesStore.toggle(note.id);
+    _syncPinnedIds();
     if (!mounted) return;
     setState(() {});
-    _showToast(context, wasPinned ? '已取消置顶' : '已置顶');
+    _showToast(context, wasPinned ? '已置顶' : '已取消置顶');
+  }
+
+  /// 置顶帖不在已加载的笔记里（帖子很旧、不在服务端返回的分页范围内）时，
+  /// 单独按 id 补拉一条插到最前——否则「置顶了但个人主页看不到」。
+  Future<void> _ensurePinnedNoteVisible() async {
+    final id = PinnedNotesStore.currentId;
+    if (id.isEmpty || !_isOwn(widget.userId)) return;
+    if (_notes.any((n) => n.id == id)) return;
+    try {
+      final n = await CloudNotesService.instance.getNoteById(id);
+      if (!mounted) return;
+      // 已删除 / 不可见：清理失效的置顶记录，避免一直指向不存在的帖子。
+      final ghost = n.id.isEmpty ||
+          n.ownerUserId.isEmpty ||
+          (n.content.isEmpty && n.repostOf.isEmpty);
+      if (ghost) {
+        await PinnedNotesStore.remove(id);
+        _syncPinnedIds();
+        if (mounted) setState(() {});
+        return;
+      }
+      if (!_isOwn(n.ownerUserId)) {
+        await PinnedNotesStore.remove(id);
+        _syncPinnedIds();
+        if (mounted) setState(() {});
+        return;
+      }
+      setState(() => _notes.insert(0, n));
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -295,9 +326,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
       String avatar = '';
       String banner = '';
       try {
-        final profiles = await CloudNotesService.instance
-            .getUserProfiles([widget.userId],
-                timeout: const Duration(seconds: 25));
+        final profiles = await CloudNotesService.instance.getUserProfiles(
+            [widget.userId],
+            timeout: const Duration(seconds: 25));
         if (profiles.isNotEmpty) {
           tagline = profiles.first.tagline;
           joinTime = profiles.first.joinTime;
@@ -346,8 +377,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
       // 进入他人主页前先刷新关注/屏蔽列表，避免 _following 读到旧值误显「关注」。
       // 自己主页同样刷新（首屏头部也要用关注数）。
       try {
-        final followOk =
-            await CloudNotesService.instance.refreshFollowStates();
+        final followOk = await CloudNotesService.instance.refreshFollowStates();
         if (!mounted) return;
         _followStateOk = followOk;
       } catch (_) {
@@ -469,9 +499,9 @@ class _UserSpacePageState extends State<UserSpacePage> {
       } else {
         // 他人主页：正常 getUserProfiles + 笔记兜底
         try {
-          final profiles = await CloudNotesService.instance
-              .getUserProfiles([widget.userId],
-                  timeout: const Duration(seconds: 25));
+          final profiles = await CloudNotesService.instance.getUserProfiles(
+              [widget.userId],
+              timeout: const Duration(seconds: 25));
           if (profiles.isNotEmpty) {
             tagline = profiles.first.tagline;
             joinTime = profiles.first.joinTime;
@@ -496,8 +526,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
       var hasMore = true;
       final allNotes = <PlazaNote>[];
       while (p <= maxPages && hasMore) {
-        final (list, more) =
-            await CloudNotesService.instance.getUserNotes(widget.userId, page: p);
+        final (list, more) = await CloudNotesService.instance
+            .getUserNotes(widget.userId, page: p);
         allNotes.addAll(list);
         hasMore = more;
         if (!hasMore) break;
@@ -523,6 +553,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
         _hasMore = hasMore;
         _loading = false;
       });
+      // 置顶帖可能不在服务端返回的分页范围内：单独补拉，保证个人主页最上方能看到。
+      await _ensurePinnedNoteVisible();
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -823,8 +855,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
                         child: Text('@$_account',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                fontSize: 13, color: _textHint)),
+                            style: TextStyle(fontSize: 13, color: _textHint)),
                       ),
                       // 累积读经时长：位于原阅藏百分比位置（@账号行最右侧）。
                       const SizedBox(width: 8),
@@ -847,8 +878,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   const SizedBox(height: 6),
                   Text(
                     _displayTagline,
-                    style: TextStyle(
-                        fontSize: 14, color: _textSec, height: 1.4),
+                    style:
+                        TextStyle(fontSize: 14, color: _textSec, height: 1.4),
                   ),
                 ],
                 // 注册加入时间。
@@ -923,12 +954,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
   Widget _buildPostsTab() {
     final posts = List<PlazaNote>.of(_posts);
     if (_isOwn(widget.userId)) {
-      posts.sort((a, b) {
-        final ap = _pinnedIds.contains(a.id);
-        final bp = _pinnedIds.contains(b.id);
-        if (ap != bp) return ap ? -1 : 1;
-        return 0;
-      });
+      // 稳定排序：置顶帖固定最前，其余保持服务端原顺序（不因重建乱跳）。
+      sortPinnedFirst(
+        posts,
+        isPinned: (n) => _pinnedIds.contains(n.id),
+        compareRest: (a, b) => b.updatedAt.compareTo(a.updatedAt),
+      );
     }
     if (posts.isEmpty) {
       return Center(
@@ -950,6 +981,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
   }
 
   /// 回复 Tab：按原贴分组，原贴一次 + 头像连线串起所有回复（与「我的菜单页 → 回复」一致）。
+  /// 自己的置顶回复单独作为卡片放在最上方；他人的主页不读取本机置顶记录。
   Widget _buildRepliesTab() {
     final replies = _replies;
     if (replies.isEmpty) {
@@ -957,7 +989,19 @@ class _UserSpacePageState extends State<UserSpacePage> {
         child: Text('还没有回复', style: TextStyle(fontSize: 14, color: _textHint)),
       );
     }
-    final groups = _buildReplyGroups(replies);
+    final pinnedReplies = _isOwn(widget.userId)
+        ? replies.where((n) => _pinnedIds.contains(n.id)).toList()
+        : const <PlazaNote>[];
+    final pinnedIds = pinnedReplies.map((n) => n.id).toSet();
+    final groups = _buildReplyGroups(
+      replies.where((n) => !pinnedIds.contains(n.id)).toList(),
+    );
+    final itemCount = pinnedReplies.length + groups.length;
+    if (itemCount == 0) {
+      return Center(
+        child: Text('还没有回复', style: TextStyle(fontSize: 14, color: _textHint)),
+      );
+    }
     return RefreshIndicator(
       color: _gold,
       onRefresh: _load,
@@ -966,9 +1010,15 @@ class _UserSpacePageState extends State<UserSpacePage> {
           physics: const AlwaysScrollableScrollPhysics(),
           // 横向内边距放在列表层：分割线随内容缩进 16px、不贴手机边缘（与首页一致）。
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-          itemCount: groups.length,
+          itemCount: itemCount,
           itemBuilder: (context, index) {
-            final g = groups[index];
+            final Widget body;
+            if (index < pinnedReplies.length) {
+              body = _buildNoteRow(pinnedReplies[index], _notes);
+            } else {
+              final g = groups[index - pinnedReplies.length];
+              body = _buildReplyGroupCard(g.$1, g.$2);
+            }
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -976,12 +1026,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
                 if (index > 0) ...[
                   const SizedBox(height: 8),
                   Divider(
-                      height: 1,
-                      thickness: 0.5,
-                      color: AppPalette.p.divider),
+                      height: 1, thickness: 0.5, color: AppPalette.p.divider),
                   const SizedBox(height: 8),
                 ],
-                _buildReplyGroupCard(g.$1, g.$2),
+                body,
               ],
             );
           },
@@ -1294,8 +1342,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
       final amt = double.tryParse((r['amount'] ?? 1).toString()) ?? 1;
       totals[key] = (totals[key] ?? 0) + amt;
     }
-    final goalsMap = _decodeMap(checkin['checkin_goals']).map(
-        (k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
+    final goalsMap = _decodeMap(checkin['checkin_goals'])
+        .map((k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
     final customs = _decodeCustomTypes(checkin['custom_checkin_types']);
     final typeInfo = <String, ({String label, String unit})>{
       'meditation': (label: '静坐', unit: '分钟'),
@@ -1377,8 +1425,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
               size: 16, color: Color(0xFF71867A)),
           const SizedBox(width: 8),
           Expanded(
-            child:
-                Text(line, style: TextStyle(fontSize: 14, color: _text)),
+            child: Text(line, style: TextStyle(fontSize: 14, color: _text)),
           ),
         ],
       ),
@@ -1628,7 +1675,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
       while (topId.isNotEmpty && poolById.containsKey(topId) && guard < 30) {
         final parent = poolById[topId]!;
         // 父节点还有 repostOf 且池中能查到，继续向上
-        if (parent.repostOf.isNotEmpty && poolById.containsKey(parent.repostOf)) {
+        if (parent.repostOf.isNotEmpty &&
+            poolById.containsKey(parent.repostOf)) {
           topId = parent.repostOf;
         } else {
           break;
@@ -1670,8 +1718,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
 
     return [
       for (final rid in rootIds)
-        (poolById[rid] ?? replies.firstWhere((r) => r.id == rid),
-         collect(rid, {}))
+        (
+          poolById[rid] ?? replies.firstWhere((r) => r.id == rid),
+          collect(rid, {})
+        )
     ];
   }
 
@@ -1689,19 +1739,32 @@ class _UserSpacePageState extends State<UserSpacePage> {
             if (idx >= 0) {
               final orig = _notes[idx];
               _notes[idx] = PlazaNote(
-                id: orig.id, ownerUserId: orig.ownerUserId, title: orig.title,
-                content: orig.content, authorName: orig.authorName,
-                authorAccount: orig.authorAccount, authorVerified: orig.authorVerified,
-                canonRead: orig.canonRead, canonTotal: orig.canonTotal,
-                visibility: orig.visibility, status: orig.status,
-                likeCount: orig.likeCount, commentCount: orig.commentCount + 1,
-                viewCount: orig.viewCount, repostCount: orig.repostCount,
-                repostOf: orig.repostOf, repostSourceAuthor: orig.repostSourceAuthor,
-                repostSourceUserId: orig.repostSourceUserId, repostKind: orig.repostKind,
-                tombstoneAncestorIds: orig.tombstoneAncestorIds, kind: orig.kind,
-                quoteContent: orig.quoteContent, quoteOfTitle: orig.quoteOfTitle,
+                id: orig.id,
+                ownerUserId: orig.ownerUserId,
+                title: orig.title,
+                content: orig.content,
+                authorName: orig.authorName,
+                authorAccount: orig.authorAccount,
+                authorVerified: orig.authorVerified,
+                canonRead: orig.canonRead,
+                canonTotal: orig.canonTotal,
+                visibility: orig.visibility,
+                status: orig.status,
+                likeCount: orig.likeCount,
+                commentCount: orig.commentCount + 1,
+                viewCount: orig.viewCount,
+                repostCount: orig.repostCount,
+                repostOf: orig.repostOf,
+                repostSourceAuthor: orig.repostSourceAuthor,
+                repostSourceUserId: orig.repostSourceUserId,
+                repostKind: orig.repostKind,
+                tombstoneAncestorIds: orig.tombstoneAncestorIds,
+                kind: orig.kind,
+                quoteContent: orig.quoteContent,
+                quoteOfTitle: orig.quoteOfTitle,
                 quoteOfContent: orig.quoteOfContent,
-                createdAt: orig.createdAt, updatedAt: orig.updatedAt,
+                createdAt: orig.createdAt,
+                updatedAt: orig.updatedAt,
               );
             }
           });
@@ -1759,23 +1822,37 @@ class _UserSpacePageState extends State<UserSpacePage> {
             if (replyNote.id.isNotEmpty) {
               setState(() {
                 _notes.insert(0, replyNote);
-                final idx = _notes.indexWhere((m) => m.id == replyNote.repostOf);
+                final idx =
+                    _notes.indexWhere((m) => m.id == replyNote.repostOf);
                 if (idx >= 0) {
                   final orig = _notes[idx];
                   _notes[idx] = PlazaNote(
-                    id: orig.id, ownerUserId: orig.ownerUserId, title: orig.title,
-                    content: orig.content, authorName: orig.authorName,
-                    authorAccount: orig.authorAccount, authorVerified: orig.authorVerified,
-                    canonRead: orig.canonRead, canonTotal: orig.canonTotal,
-                    visibility: orig.visibility, status: orig.status,
-                    likeCount: orig.likeCount, commentCount: orig.commentCount + 1,
-                    viewCount: orig.viewCount, repostCount: orig.repostCount,
-                    repostOf: orig.repostOf, repostSourceAuthor: orig.repostSourceAuthor,
-                    repostSourceUserId: orig.repostSourceUserId, repostKind: orig.repostKind,
-                    tombstoneAncestorIds: orig.tombstoneAncestorIds, kind: orig.kind,
-                    quoteContent: orig.quoteContent, quoteOfTitle: orig.quoteOfTitle,
+                    id: orig.id,
+                    ownerUserId: orig.ownerUserId,
+                    title: orig.title,
+                    content: orig.content,
+                    authorName: orig.authorName,
+                    authorAccount: orig.authorAccount,
+                    authorVerified: orig.authorVerified,
+                    canonRead: orig.canonRead,
+                    canonTotal: orig.canonTotal,
+                    visibility: orig.visibility,
+                    status: orig.status,
+                    likeCount: orig.likeCount,
+                    commentCount: orig.commentCount + 1,
+                    viewCount: orig.viewCount,
+                    repostCount: orig.repostCount,
+                    repostOf: orig.repostOf,
+                    repostSourceAuthor: orig.repostSourceAuthor,
+                    repostSourceUserId: orig.repostSourceUserId,
+                    repostKind: orig.repostKind,
+                    tombstoneAncestorIds: orig.tombstoneAncestorIds,
+                    kind: orig.kind,
+                    quoteContent: orig.quoteContent,
+                    quoteOfTitle: orig.quoteOfTitle,
                     quoteOfContent: orig.quoteOfContent,
-                    createdAt: orig.createdAt, updatedAt: orig.updatedAt,
+                    createdAt: orig.createdAt,
+                    updatedAt: orig.updatedAt,
                   );
                 }
               });
@@ -1789,7 +1866,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
     );
   }
 
-  /// 笔记三点菜单：自己的显示置顶/编辑/删除，他人显示关注/屏蔽。
+  /// 笔记三点菜单：自己的帖子显示置顶/编辑/删除（回复帖只有编辑/删除），
+  /// 他人显示关注/屏蔽。
   Future<void> _showNoteMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
     if (!_isOwn(note.ownerUserId)) {
@@ -1817,8 +1895,11 @@ class _UserSpacePageState extends State<UserSpacePage> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             Divider(height: 1, color: _border),
-            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
-                pinned ? '取消置顶' : '置顶'),
+            // 回复帖不提供置顶（只有帖子能置顶）；历史遗留的已置顶回复仍可取消。
+            if (PinnedNotesStore.showsPinEntry(note.id,
+                isReply: note.repostKind == 'reply'))
+              postMenuItem(
+                  ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -1893,6 +1974,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
+      _pinnedIds.remove(note.id);
       if (!mounted) return;
       // 先乐观移除，让界面立即响应删除动作。
       // 然后调用 _load() 从云端重新拉取全量笔记——对「回复的回复」多级链，

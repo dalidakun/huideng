@@ -122,6 +122,12 @@ class NotificationService {
     return true;
   }
 
+  /// 申请系统通知权限（供更新下载完成提示等使用）。
+  Future<bool> requestPermission() async {
+    await ensureInitialized();
+    return _requestPermission();
+  }
+
   Future<bool> _requestPermission() async {
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();

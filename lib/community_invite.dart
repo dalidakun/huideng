@@ -9,8 +9,7 @@ import 'sect_community_texts.dart';
 
 /// 静态站 baseUrl：与 site/site.config.json 的 `baseUrl` 逐字一致，
 /// 由 test/community_invite_test.dart 对照校验（改站点地址两处一起动）。
-const String kCommunityInviteBase =
-    'https://randeng-d8gs968w22a3d98e8-1461892767.tcloudbaseapp.com/huideng';
+const String kCommunityInviteBase = 'https://aibuilder.top';
 
 /// 20 个栏目社区的落地页 slug：键 = `SectInfo.name`，值 = 页面文件名。
 ///

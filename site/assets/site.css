@@ -203,6 +203,11 @@ a:hover {
   background: var(--accent-deep);
 }
 
+/* 导航右侧直接放一个「立即下载」按钮时，靠右对齐 */
+.nav__inner > .nav__cta {
+  margin-left: auto;
+}
+
 .nav__toggle {
   display: none;
   margin-left: auto;

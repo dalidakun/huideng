@@ -10,6 +10,8 @@ import 'user_avatar_cache.dart';
 import 'cloud_notes_service.dart';
 import 'note_detail_page.dart';
 import 'note_stats_center.dart';
+import 'ownership.dart';
+import 'pinned_notes_store.dart';
 import 'reply_chain.dart';
 import 'my_page.dart';
 import 'user_space_page.dart';
@@ -83,11 +85,6 @@ bool _isBlockedContent(PlazaNote n) {
       blocked.contains(n.repostSourceUserId);
 }
 
-/// 转发/回复的来源作者是否被屏蔽（用于把被屏蔽原帖替换为占位，保留自己的评论）。
-bool _repostSourceBlocked(PlazaNote n) =>
-    n.repostSourceUserId.isNotEmpty &&
-    CloudNotesService.instance.blockedUserIds.contains(n.repostSourceUserId);
-
 /// 「菩提空间」页面：承载广场栏目（热门/推荐/关注）及其内容流；
 /// 公告不在栏目里，由右上角公告图标进入独立公告列表页。
 class BodhiSpacePage extends StatefulWidget {
@@ -144,7 +141,18 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   final Map<String, int> _customCounts = {};
   final Map<String, _PlazaFeedCache> _tabCaches = {};
   final List<PlazaNote> _feedNotes = [];
+
+  /// 推荐页按「直接父子一对」分组时，父帖可能不在当前已加载的广场分页里
+  /// （如父帖较早、超出热门池时间窗）。按 id 补拉到后放这里参与分组，
+  /// 不混入 _feedNotes，避免影响分页/缓存/排序。
+  final Map<String, PlazaNote> _fetchedParentNotes = {};
+  final Set<String> _parentFetching = {};
+  final Set<String> _missingParentNotes = {};
+  final Set<String> _announcementNoteIds = {};
   final Set<String> _followedIds = {};
+
+  /// 本机置顶的帖子/回复 id（全局最多一条，与「我的」页共用）。
+  final Set<String> _pinnedIds = {};
   final ScrollController _feedScroll = ScrollController();
   int _feedPage = 1;
   bool _feedHasMore = true;
@@ -254,6 +262,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     // 列表可能在别处被改（社区页的星标），改完立刻重读，本页永远是新列表。
     CustomTabStore.revision.addListener(_onCustomTabRevision);
     _loadFeed();
+    unawaited(_loadPinnedIds());
+    PinnedNotesStore.revision.addListener(_onPinnedStoreChanged);
     // 静默拉取公告列表：只用于右上角公告图标的「新公告」角标判定。
     unawaited(_loadAnnouncements());
     // 等栏目顺序就绪后，并行预取其余栏目：热门加载的同时，
@@ -304,6 +314,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   void didPopNext() {
     _appActive = true;
     _refreshCurrentSmooth();
+    // 从个人主页/详情页返回时同步置顶状态（置顶记录可能在别处被修改）。
+    unawaited(_loadPinnedIds());
     // 返回本页时顺带刷新公告角标（不阻塞界面）。
     unawaited(_loadAnnouncements());
   }
@@ -327,6 +339,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
         .removeListener(_onLocalReplyPosted);
     WidgetsBinding.instance.removeObserver(this);
     CustomTabStore.revision.removeListener(_onCustomTabRevision);
+    PinnedNotesStore.revision.removeListener(_onPinnedStoreChanged);
     _newPostTimer?.cancel();
     _newPostTimer = null;
     // 页面销毁时移除自定义悬浮面板，避免 OverlayEntry 泄漏。
@@ -659,6 +672,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       ..addAll(c.notes.where((n) =>
           !_isBlockedContent(n) &&
           !_isBannedNote(n) &&
+          n.kind != 'announcement' &&
           !deleted.contains(n.id)));
     _mergePendingLocalReplies();
     _feedPage = c.page;
@@ -2546,115 +2560,190 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     );
   }
 
-  /// 分组：非回复为根，回复（含回复的回复）递归挂到对应父帖下面，根只显示一次。
-  /// 与「我的 → 回复」页一致，原贴一次展示、下面用头像连线串起所有评论。
-  /// 广场列表只保留自己发出的回复以及自己关注的用户发出的回复：头像连线挂到原帖下；
-  /// 其余他人回复一律不展示，统一在笔记详情页按帖查看，
-  /// 避免热门帖上百条回复的头像连线刷屏。
+  /// 推荐页分组：每张卡片只连接「直接父子」两篇帖子。
+  /// p → a → b 显示为两组：p+a、a+b；不会把 b 直接挂到 p 上。
+  /// 父帖是回复时作为卡片顶帖渲染，但不再带出更上层（详情页仍可上滑看祖先）。
+  /// 列表仍只把「自己/关注用户发出的回复」当作种子；种子链上需要的中间父帖
+  /// 即使作者未被关注也会一并展示，否则会出现 p→b 跳级连线。
   List<_FeedChainGroup> get _feedGroups {
     final me = AuthService.instance.currentUser.value;
     final followed = CloudNotesService.instance.followingUserIds;
-    final byId = {for (final n in _feedNotes) n.id: n};
-    final groups = <String, _FeedChainGroup>{};
-    final order = <String>[];
+    final byId = <String, PlazaNote>{
+      for (final n in _feedNotes) n.id: n,
+      ..._fetchedParentNotes,
+    };
+    final feedIndex = <String, int>{
+      for (var i = 0; i < _feedNotes.length; i++) _feedNotes[i].id: i,
+    };
+    final seenChildren = <String>{};
+    final entries = <_FeedCardEntry>[];
+    final locallyDeleted = CloudNotesService.instance.locallyDeletedNoteIds;
 
-    _FeedChainGroup groupFor(String attachId,
-        {PlazaNote? note, bool deletedRoot = false}) {
-      return groups.putIfAbsent(attachId, () {
-        order.add(attachId);
-        return _FeedChainGroup(note: note, deletedRoot: deletedRoot);
-      });
+    void addCard({
+      required String childId,
+      PlazaNote? parent,
+      List<String> tombs = const [],
+      PlazaNote? reply,
+      required int rootIndex,
+      required int depth,
+    }) {
+      if (!seenChildren.add(childId)) return;
+      final g = _FeedChainGroup(note: parent);
+      g.tombs.addAll(tombs);
+      if (reply != null) g.replies.add(reply);
+      entries.add(_FeedCardEntry(g, rootIndex, depth, entries.length));
     }
 
+    // 种子：自己发出的回复 + 关注用户发出的回复（他人回复仍折叠在详情页）。
+    final seeds = <PlazaNote>[];
     for (final n in _feedNotes) {
-      // 被屏蔽用户的内容（含原贴与被转发来源）一律不展示，避免缓存中残留数据仍可见；
-      // 含被管理员删除话题的帖子同样隐藏。
       if (_isBlockedContent(n) || _isBannedNote(n)) continue;
-      // 带墓碑记录的帖子（父帖被删后服务端转为 quote）仍按回复处理，
-      // 以便在链中插入「这个帖子已删除」占位。
-      if (n.repostKind != 'reply' && n.tombstoneAncestorIds.isEmpty) {
-        groupFor(n.id, note: n);
-        continue;
-      }
-      // 只展示自己发出的回复、以及自己关注的用户发出的回复；他人回复折叠在详情页。
+      if (n.repostKind != 'reply' && n.tombstoneAncestorIds.isEmpty) continue;
       final isMine = n.ownerUserId == me?.id;
       final isFollowed = me != null &&
           n.ownerUserId.isNotEmpty &&
           followed.contains(n.ownerUserId);
-      if (!isMine && !isFollowed) continue;
-      final parentId = _visibleReplyParent(n, byId, me?.id, followed);
-      if (parentId != null) {
-        // 挂到可见祖先下。其墓碑记录（自上而下）即「祖先与本回复之间」
-        // 被删掉的节点——如 b 删除后 c 重挂到 a：a → [b占位] → c。
-        final g = groupFor(parentId, note: byId[parentId]);
-        for (final t in n.tombstoneAncestorIds.reversed) {
-          if (!g.tombs.contains(t)) g.tombs.add(t);
+      if (isMine || isFollowed) seeds.add(n);
+    }
+
+    for (final seed in seeds) {
+      // 公告只从右上角公告入口进入，评论公告产生的回复也不混进帖子流。
+      if (seed.kind == 'announcement' ||
+          _announcementNoteIds.contains(seed.repostOf)) {
+        continue;
+      }
+      // 父帖已被删（服务端墓碑或本机刚删）：只显示「a 占位 + b」这一组。
+      final seedTombs = seed.tombstoneAncestorIds.isNotEmpty
+          ? List<String>.of(seed.tombstoneAncestorIds)
+          : (locallyDeleted.contains(seed.repostOf) && seed.repostOf.isNotEmpty
+              ? <String>[seed.repostOf]
+              : const <String>[]);
+      if (seedTombs.isNotEmpty) {
+        addCard(
+          childId: seed.id,
+          tombs: seedTombs,
+          reply: seed,
+          rootIndex: feedIndex[seed.id] ?? _feedNotes.length,
+          depth: 0,
+        );
+        continue;
+      }
+      if (seed.repostKind != 'reply' || seed.repostOf.isEmpty) continue;
+
+      // 自下而上收集真实父链，直到根帖或已删除父帖。
+      final pathBottomUp = <({PlazaNote? note, String id})>[
+        (note: seed, id: seed.id),
+      ];
+      var cursor = seed;
+      final visited = <String>{seed.id};
+      while (cursor.repostKind == 'reply' &&
+          cursor.tombstoneAncestorIds.isEmpty &&
+          cursor.repostOf.isNotEmpty &&
+          visited.add(cursor.repostOf)) {
+        final pid = cursor.repostOf;
+        final parent = byId[pid];
+        if (parent == null) {
+          pathBottomUp.add((note: null, id: pid));
+          if (!_missingParentNotes.contains(pid)) _scheduleParentFetch(pid);
+          break;
         }
-        g.replies.add(n);
-      } else if (_repostSourceBlocked(n)) {
-        // 评论的原帖作者已被屏蔽：生成「已屏蔽用户」占位根帖，保留自己这条评论。
-        final id = n.repostOf;
-        final g = groupFor(id,
-            note: PlazaNote(
-              id: id,
-              ownerUserId: n.repostSourceUserId,
-              title: '',
-              content: '',
-              authorName: n.repostSourceAuthor,
-              visibility: 'public',
-              status: 'normal',
-              likeCount: 0,
-              commentCount: 0,
-              createdAt: 0,
-              updatedAt: 0,
-            ));
-        g.replies.add(n);
-      } else if (n.tombstoneAncestorIds.isNotEmpty ||
-          CloudNotesService.instance.locallyDeletedNoteIds
-              .contains(n.repostOf)) {
-        // 挂靠点已删除（服务端墓碑记录，或本机刚删除）：纯占位组，
-        // 墓碑全列自上而下展示（a、b 都删时为 a占位 → b占位 → c）。
-        final attachId = n.tombstoneAncestorIds.isNotEmpty
-            ? n.tombstoneAncestorIds.first
-            : n.repostOf;
-        final g = groupFor(attachId, deletedRoot: true);
-        for (final t in n.tombstoneAncestorIds.reversed) {
-          if (!g.tombs.contains(t)) g.tombs.add(t);
+        pathBottomUp.add((note: parent, id: parent.id));
+        cursor = parent;
+        if (_isBlockedContent(parent) || _isBannedNote(parent)) break;
+      }
+      final path = pathBottomUp.reversed.toList(growable: false);
+      final announcementAncestors =
+          path.where((node) => node.note?.kind == 'announcement');
+      if (announcementAncestors.isNotEmpty) {
+        _announcementNoteIds.addAll(announcementAncestors.map((e) => e.id));
+        continue;
+      }
+
+      var rootIndex = feedIndex[seed.id] ?? _feedNotes.length;
+      for (final node in path) {
+        final idx = feedIndex[node.id];
+        if (idx != null) {
+          rootIndex = idx;
+          break;
         }
-        if (g.tombs.isEmpty) g.tombs.add(attachId);
-        g.replies.add(n);
-      } else {
-        groupFor(n.id, note: n);
+      }
+
+      for (var i = 0; i < path.length - 1; i++) {
+        final parent = path[i];
+        final child = path[i + 1];
+        addCard(
+          childId: child.id,
+          parent: parent.note,
+          tombs: [
+            if (parent.note == null) parent.id,
+            if (child.note == null) child.id,
+          ],
+          reply: child.note,
+          rootIndex: rootIndex,
+          depth: i + 1,
+        );
       }
     }
-    return [for (final id in order) groups[id]!];
-  }
 
-  /// 回复帖往上找在列表内可见的最近祖先（根帖、自己的回复或关注用户的回复）：
-  /// 中间经过的他人回复不可见时继续向上，最终挂到可见祖先下。
-  String? _visibleReplyParent(PlazaNote n, Map<String, PlazaNote> byId,
-      String? meId, Set<String> followed) {
-    var cur = n;
-    final visited = <String>{};
-    while (cur.repostOf.isNotEmpty && visited.add(cur.repostOf)) {
-      final parent = byId[cur.repostOf];
-      if (parent == null) return null;
-      if (parent.repostKind != 'reply' ||
-          parent.ownerUserId == meId ||
-          followed.contains(parent.ownerUserId)) {
-        return parent.id;
+    // 没有任何可见回复链的根帖：单独成卡（保持原有广场内容）。
+    final parentIds = <String>{
+      for (final e in entries)
+        if (e.group.note != null) e.group.note!.id,
+    };
+    for (var i = 0; i < _feedNotes.length; i++) {
+      final n = _feedNotes[i];
+      if (_isBlockedContent(n) || _isBannedNote(n)) continue;
+      if (n.kind == 'announcement') continue;
+      if (n.repostKind == 'reply' || n.tombstoneAncestorIds.isNotEmpty) {
+        continue;
       }
-      cur = parent;
+      if (parentIds.contains(n.id)) continue;
+      entries
+          .add(_FeedCardEntry(_FeedChainGroup(note: n), i, 0, entries.length));
     }
-    return null;
+
+    // 按根帖在流中的位置排序；同一根帖内父级在前（p+a 在 a+b 之上）。
+    entries.sort((a, b) {
+      final byRoot = a.rootIndex.compareTo(b.rootIndex);
+      if (byRoot != 0) return byRoot;
+      final byDepth = a.depth.compareTo(b.depth);
+      if (byDepth != 0) return byDepth;
+      return a.seq.compareTo(b.seq);
+    });
+    return [for (final e in entries) e.group];
   }
 
-  /// 分组卡片：根帖用「帖子」页同款样式（头像+昵称+指标+三点菜单），其下按
-  /// 「『这个帖子已删除』占位行 → 回复链」顺序串起（占位行对应根与回复之间
-  /// 被删掉的中间节点）；挂靠点已删除时整组只有占位行与回复。
-  /// 所有连线下端到下一级头像统一留 6px。
+  /// 父帖不在当前分页里时按 id 补拉；失败/已删除记入 [_missingParentNotes]，
+  /// 下次分组直接渲染「已删除」占位，不再重复请求。
+  void _scheduleParentFetch(String id) {
+    if (id.isEmpty || !_parentFetching.add(id)) return;
+    unawaited(() async {
+      try {
+        final n = await CloudNotesService.instance.getNoteById(id);
+        if (!mounted) return;
+        final ghost = n.ownerUserId.isEmpty && n.content.isEmpty;
+        setState(() {
+          if (n.kind == 'announcement') {
+            _fetchedParentNotes[id] = n;
+            _announcementNoteIds.add(id);
+          } else if (n.status != 'normal' || ghost) {
+            _missingParentNotes.add(id);
+          } else {
+            _fetchedParentNotes[id] = n;
+          }
+        });
+      } catch (_) {
+        if (mounted) setState(() => _missingParentNotes.add(id));
+      } finally {
+        _parentFetching.remove(id);
+      }
+    }());
+  }
+
+  /// 分组卡片：父帖用「帖子」页同款样式（头像+昵称+指标+三点菜单），其下按
+  /// 「『这个帖子已删除』占位行 → 回复链」串起直接子回复；父帖已删除时整组
+  /// 只有占位行与回复。所有连线下端到下一级头像统一留 6px。
   Widget _buildFeedGroupCard(_FeedChainGroup g) {
-    final me = AuthService.instance.currentUser.value;
     // 根帖作者被屏蔽：上方显示「已屏蔽用户」占位，自己的评论仍连线在下方。
     if (g.note != null && _isBlockedContent(g.note!)) {
       return _buildBlockedGroupCard(g.note!, g.replies);
@@ -2676,16 +2765,20 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     }
     final root = g.note!;
     final hasBelow = g.tombs.isNotEmpty || g.replies.isNotEmpty;
-    final isMine = me != null && root.ownerUserId == me.id;
+    final isMine = _isOwnNote(root.ownerUserId);
     final rootWidget = PostFeedRow(
       note: root,
       onReplyPosted: (_) => _refreshCurrentSmooth(),
       onTap: () => _openPlazaNote(root),
+      pinned: _pinnedIds.contains(root.id),
+      onTogglePin: isMine ? () => _togglePin(root) : null,
       onEdit: isMine ? () => _editFeedNote(root) : null,
       onDelete: isMine ? () => _deleteFeedNote(root) : null,
       onMore: (n) => _showFeedReplyMenu(n),
       // 广场以浏览为主：他人帖子不显示关注按钮，关注/屏蔽收进三点菜单。
       showFollowButton: false,
+      // 回复帖也可能作为父子卡片的顶帖：按普通帖子渲染，不自动带出它的父帖。
+      asRoot: true,
       // 点击自己的头像/昵称：打开「我的」页。
       onOpenSelf: widget.onOpenMyPage,
     );
@@ -2727,6 +2820,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
   Widget _groupReplyChain(List<PlazaNote> replies, {PlazaNote? root}) {
     return ReplyChain(
       replies: replies,
+      pinnedIds: _pinnedIds,
       parentAccounts: {
         if (root != null) root.id: root.authorAccount,
         for (final r in replies) r.id: r.authorAccount,
@@ -2854,10 +2948,42 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     );
   }
 
-  /// 回复节点更多菜单：自己的回复显示编辑/删除，他人回复显示关注/屏蔽。
+  /// 是否自己的内容：统一走 [isOwnContent]（含会话恢复竞态的缓存 uid 兜底），
+  /// 保证「置顶 / 编辑 / 删除」只出现在自己的帖子上。
+  bool _isOwnNote(String? ownerUserId) => isOwnContent(ownerUserId);
+
+  /// 从本地读取置顶 id（全局同时只保留一条）。
+  Future<void> _loadPinnedIds() async {
+    await PinnedNotesStore.ensureLoaded();
+    if (!mounted) return;
+    setState(() {
+      _pinnedIds.clear();
+      final id = PinnedNotesStore.currentId;
+      if (id.isNotEmpty) _pinnedIds.add(id);
+    });
+  }
+
+  /// 任意页面置顶/取消置顶后同步广场里的「已置顶」标记。
+  void _onPinnedStoreChanged() => _loadPinnedIds();
+
+  /// 置顶/取消置顶：置顶新内容会替换掉之前的置顶，始终只保留一条。
+  /// 置顶只改变个人主页的展示顺序，不改变菩提空间广场流本身的排序。
+  Future<void> _togglePin(PlazaNote note) async {
+    if (!_isOwnNote(note.ownerUserId)) return;
+    final wasPinned = await PinnedNotesStore.toggle(note.id);
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
+    if (!mounted) return;
+    setState(() {});
+    _showTopToast(wasPinned ? '已置顶，个人主页最上方可见' : '已取消置顶');
+  }
+
+  /// 回复节点更多菜单：自己的回复只显示编辑/删除（回复不提供置顶），
+  /// 他人回复显示关注/屏蔽。
   Future<void> _showFeedReplyMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || note.ownerUserId != me.id) {
+    if (!_isOwnNote(note.ownerUserId)) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
         // 屏蔽/关注后刷新当前栏目，让被屏蔽用户的帖子立即消失。
@@ -2865,6 +2991,7 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       }
       return;
     }
+    final pinned = _pinnedIds.contains(note.id);
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: _card,
@@ -2881,6 +3008,11 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             Divider(height: 1, color: _border),
+            // 回复帖不提供置顶（只有帖子能置顶）；历史遗留的已置顶回复仍可取消。
+            if (PinnedNotesStore.showsPinEntry(note.id,
+                isReply: note.repostKind == 'reply'))
+              postMenuItem(
+                  ctx, 'pin', Icons.push_pin_outlined, pinned ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -2889,7 +3021,9 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
       ),
     );
     if (choice == null || !mounted) return;
-    if (choice == 'edit') {
+    if (choice == 'pin') {
+      await _togglePin(note);
+    } else if (choice == 'edit') {
       _editFeedNote(note);
     } else if (choice == 'delete') {
       _deleteFeedNote(note);
@@ -2955,6 +3089,8 @@ class BodhiSpacePageState extends State<BodhiSpacePage>
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
+      _pinnedIds.remove(note.id);
       if (!mounted) return;
       setState(() => _feedNotes.removeWhere((n) => n.id == note.id));
       // 同步当前栏目缓存：否则切走再切回时 _restoreFeedFromCache 会把
@@ -3123,16 +3259,23 @@ class _PlazaHeaderDelegate extends SliverPersistentHeaderDelegate {
       oldDelegate.tabs.join(',') != tabs.join(',');
 }
 
-/// 菩提空间信息流分组视图模型：一个「根帖 + 其下回复链」的挂靠单元。
-/// [note] 为空表示挂靠点本身已删除（纯占位组：只有占位行与回复）；
-/// [tombs] 为根/挂靠点与回复之间被删节点 id（自上而下，渲染为占位行，
-/// 如 b 删除后 c 重挂到 a：a → b占位 → c）；[deletedRoot] 仅作渲染分支标记。
+/// 菩提空间信息流分组视图模型：一张「直接父子」卡片（父帖 + 其下一条回复）。
+/// [note] 为空表示父帖本身已删除（占位行 + 回复）；
+/// [tombs] 为父帖与回复之间被删节点 id（自上而下，渲染为占位行）。
 class _FeedChainGroup {
-  _FeedChainGroup({this.note, this.deletedRoot = false});
+  _FeedChainGroup({this.note});
   final PlazaNote? note;
-  final bool deletedRoot;
   final List<String> tombs = [];
   final List<PlazaNote> replies = [];
+}
+
+/// 推荐页一张「直接父子」卡片的排序信息：按根帖在流中的位置、层级、生成序排列。
+class _FeedCardEntry {
+  _FeedCardEntry(this.group, this.rootIndex, this.depth, this.seq);
+  final _FeedChainGroup group;
+  final int rootIndex;
+  final int depth;
+  final int seq;
 }
 
 /// 公告列表页：菩提空间右上角公告图标进入，展示管理员公告（最新在前），

@@ -451,6 +451,23 @@ def _read_lib(name: str) -> str:
     return (LIB / name).read_text(encoding="utf-8")
 
 
+def cloud_api() -> tuple[str, str]:
+    """云函数网关地址与匿名凭证。
+
+    社区邀请页、帖子分享页（site/post.html）都由浏览器直接调公开接口，
+    这里从 cloudbase_config.dart 取同一份配置，避免两处写死。
+    """
+    cfg_src = _read_lib("cloudbase_config.dart")
+    env_id = re.search(r"envId\s*=\s*'([^']+)'", cfg_src)
+    api_key = re.search(r"accessKey\s*=\s*'([^']+)'", cfg_src)
+    if not env_id or not api_key:
+        raise SystemExit("cloudbase_config.dart 里读不到 envId / accessKey")
+    return (
+        f"https://{env_id.group(1)}.api.tcloudbasegateway.com/v1/functions/api",
+        api_key.group(1),
+    )
+
+
 def _dart_map(src: str, map_name: str) -> str:
     """取出 `const Map<...> <map_name> = { ... };` 的花括号正文。"""
     m = re.search(rf"{map_name}\s*(?::\s*[^=]+)?=\s*\{{(.*?)\n\}};", src, re.S)
@@ -530,13 +547,6 @@ def load_communities() -> list[dict]:
 
 def build_communities(common: dict) -> int:
     """渲染 20 页邀请页到 dist/community/，并把各自图标复制到 dist/assets/sect/。"""
-    cfg_src = _read_lib("cloudbase_config.dart")
-    env_id = re.search(r"envId\s*=\s*'([^']+)'", cfg_src)
-    api_key = re.search(r"accessKey\s*=\s*'([^']+)'", cfg_src)
-    if not env_id or not api_key:
-        raise SystemExit("cloudbase_config.dart 里读不到 envId / accessKey")
-    api_url = f"https://{env_id.group(1)}.api.tcloudbasegateway.com/v1/functions/api"
-
     communities = load_communities()
     tpl = COMMUNITY_TPL.read_text(encoding="utf-8")
 
@@ -557,8 +567,6 @@ def build_communities(common: dict) -> int:
             "ICON": f"../assets/sect/{c['slug']}.png",
             "DOWNLOAD_HREF": "../download.html",
             "COMMUNITY_KEY": f"{c['name']}社区",
-            "API_URL": api_url,
-            "API_KEY": api_key.group(1),
         }
         out = tpl
         for key, value in values.items():
@@ -580,6 +588,7 @@ def build_communities(common: dict) -> int:
 
 def build(args: argparse.Namespace) -> pathlib.Path:
     config = load_config()
+    api_url, api_key = cloud_api()
     version, version_code = read_pubspec_version()
     today = _dt.date.today().isoformat()
 
@@ -666,6 +675,8 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         "CHANGELOG_PREVIEW": render_log(releases[:3], version),
         "CHANGELOG_ALL": render_log(releases, version),
         "BEIAN_HTML": beian_html(config),
+        "API_URL": api_url,
+        "API_KEY": api_key,
     }
 
     DIST.mkdir(parents=True, exist_ok=True)

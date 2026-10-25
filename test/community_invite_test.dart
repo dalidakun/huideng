@@ -58,8 +58,7 @@ void main() {
   });
 
   test('净土宗分享文案与产品要求逐字一致', () {
-    const base = 'https://randeng-d8gs968w22a3d98e8-1461892767'
-        '.tcloudbaseapp.com/huideng';
+    const base = 'https://aibuilder.top';
     expect(
       communityShareText('净土宗'),
       '我发现了一个「净土宗」社区：以信愿念佛、求生净土为主要修行方向，'

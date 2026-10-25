@@ -31,6 +31,9 @@ import 'reply_chain.dart';
 import 'certification_page.dart';
 import 'note_stats_center.dart';
 import 'note_store.dart';
+import 'ownership.dart';
+import 'pinned_notes_store.dart';
+import 'pinned_order.dart';
 import 'reading_badges.dart';
 import 'sync_service.dart';
 import 'reading_time_service.dart';
@@ -39,7 +42,9 @@ import 'loading_widgets.dart';
 import 'sutra_list_page.dart';
 import 'ui_sound.dart';
 import 'reading_note_post.dart';
+import 'benefit_share_post.dart';
 import 'blessing_share_post.dart';
+import 'shanzhishi_page.dart';
 
 import 'app_palette.dart';
 
@@ -1089,11 +1094,7 @@ class _PostBlockState extends State<PostBlock> {
     final uid = useOriginal ? rn.ownerUserId : widget.ownerUserId;
     final uname = useOriginal ? rn.authorName : widget.nickname;
     if (uid == null || uid.isEmpty) return;
-    final me = AuthService.instance.currentUser.value;
-    final cachedUid = AuthService.instance.cachedUserId;
-    final isSelf =
-        (me != null && uid == me.id) || (cachedUid != null && uid == cachedUid);
-    if (isSelf && widget.onOpenSelf != null) {
+    if (isOwnContent(uid) && widget.onOpenSelf != null) {
       widget.onOpenSelf!();
       return;
     }
@@ -1345,7 +1346,6 @@ class _PostBlockState extends State<PostBlock> {
   @override
   Widget build(BuildContext context) {
     final me = AuthService.instance.currentUser.value;
-    final cachedUid = AuthService.instance.cachedUserId;
     // X 式转发：isRepost 时用 repostNote（被转发的原帖）数据替代转发者的数据，
     // 直接展示原帖头像/昵称/内容/指标，转发者引言（quoteContent）单独展示。
     final rn = widget.repostNote;
@@ -1364,14 +1364,13 @@ class _PostBlockState extends State<PostBlock> {
     final displayCanonTotal = showOriginal ? rn.canonTotal : widget.canonTotal;
     final displayNoteId = showOriginal ? rn.id : widget.noteId;
     final displayCommunity = showOriginal ? rn.community : widget.community;
-    final isSelf = (me != null && displayUserId == me.id) ||
-        (cachedUid != null && displayUserId == cachedUid);
+    final isSelf = isOwnContent(displayUserId);
     final showMore = !isSelf &&
         me != null &&
         displayUserId != null &&
         displayUserId.isNotEmpty;
-    // 使用 isSelf（含 cachedUid 兜底）判断，避免会话恢复竞态时 me 为 null
-    // 导致自己的帖子显示屏蔽菜单而非编辑/删除/置顶菜单。
+    // isSelf 内含会话恢复竞态的缓存 uid 兜底：自己的帖子不会因为 me 暂时为
+    // null 而显示成「关注/屏蔽」菜单，他人的帖子也绝不会出现「置顶/编辑/删除」。
     final canManage = isSelf &&
         displayUserId != null &&
         displayUserId.isNotEmpty &&
@@ -1463,15 +1462,7 @@ class _PostBlockState extends State<PostBlock> {
                                       onTap: () {
                                         final uid = displayUserId;
                                         if (uid != null && uid.isNotEmpty) {
-                                          final me = AuthService
-                                              .instance.currentUser.value;
-                                          final cachedUid =
-                                              AuthService.instance.cachedUserId;
-                                          final isSelf =
-                                              (me != null && uid == me.id) ||
-                                                  (cachedUid != null &&
-                                                      uid == cachedUid);
-                                          if (isSelf &&
+                                          if (isOwnContent(uid) &&
                                               widget.onOpenSelf != null) {
                                             widget.onOpenSelf!();
                                             return;
@@ -1619,6 +1610,17 @@ class _PostBlockState extends State<PostBlock> {
                           BlessingSharePostView(
                             post: BlessingSharePost.parse(content)!,
                           ),
+                        ] else if (BenefitSharePost.isBenefitShare(
+                            content)) ...[
+                          Builder(builder: (context) {
+                            final post = BenefitSharePost.parse(content)!;
+                            return BenefitSharePostView(
+                              post: post,
+                              onTap: post.paragraph.trim().isNotEmpty
+                                  ? () => openBenefitShareTarget(context, post)
+                                  : null,
+                            );
+                          }),
                         ] else
                           LayoutBuilder(
                             builder: (context, constraints) {
@@ -2118,6 +2120,10 @@ class PostFeedRow extends StatefulWidget {
 
   /// 点击自己的头像/昵称时的回调（如切换到「我的」页）；为空时仍进入个人主页空间。
   final VoidCallback? onOpenSelf;
+
+  /// 作为父子卡片组里的「顶帖」展示时置 true：即使是回复帖也按普通帖子渲染，
+  /// 不在头像连线里自动带出它的父帖（菩提空间等广场列表用）。
+  final bool asRoot;
   const PostFeedRow({
     required this.note,
     this.onReplyPosted,
@@ -2130,6 +2136,7 @@ class PostFeedRow extends StatefulWidget {
     this.showFollowButton = true,
     this.showCommunityTag = true,
     this.onOpenSelf,
+    this.asRoot = false,
   });
 
   static String plainContent(PlazaNote note) =>
@@ -2178,10 +2185,8 @@ class _PostFeedRowState extends State<PostFeedRow> {
   Widget build(BuildContext context) {
     final note = widget.note;
     final me = AuthService.instance.currentUser.value;
-    final cachedUid = AuthService.instance.cachedUserId;
-    final isMine = (me != null && note.ownerUserId == me.id) ||
-        (cachedUid != null && note.ownerUserId == cachedUid);
-    if (note.repostKind == 'reply') {
+    final isMine = isOwnContent(note.ownerUserId);
+    if (!widget.asRoot && note.repostKind == 'reply') {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: GestureDetector(
@@ -2219,12 +2224,20 @@ class _PostFeedRowState extends State<PostFeedRow> {
       onReplyPosted: widget.onReplyPosted,
       onTap: widget.onTap ?? () => _openDetail(context),
       pinned: widget.pinned,
-      onTogglePin: widget.onTogglePin,
+      // 回复帖不提供置顶入口（只有帖子能置顶），菜单里只剩编辑/删除；
+      // 历史遗留的已置顶回复仍放行，便于取消。
+      onTogglePin: PinnedNotesStore.showsPinEntry(note.id,
+              isReply: note.repostKind == 'reply')
+          ? widget.onTogglePin
+          : null,
       onEdit: widget.onEdit,
       onDelete: widget.onDelete,
       showFollowButton: widget.showFollowButton && !isMine,
+      // 回复帖按顶帖渲染（asRoot）时不挂引用框，否则会把父帖又带出来。
       quoteBox:
-          !isRepost && note.repostOf.isNotEmpty ? QuoteBox(note: note) : null,
+          !isRepost && note.repostKind != 'reply' && note.repostOf.isNotEmpty
+              ? QuoteBox(note: note)
+              : null,
       isRepost: isRepost,
       isQuoteRepost: note.quoteContent.isNotEmpty,
       repostNote: _repostNote,
@@ -2335,20 +2348,31 @@ class _MyPostsTabState extends State<_MyPostsTab> {
   int _page = 1;
   String? _error;
   static const int _pageSize = 20;
-  static const String _pinnedKey = 'my_pinned_note_ids';
 
   @override
   void initState() {
     super.initState();
 
     _load();
+    PinnedNotesStore.revision.addListener(_onPinnedStoreChanged);
     widget.reloadNotifier.addListener(_onReload);
   }
 
   @override
   void dispose() {
+    PinnedNotesStore.revision.removeListener(_onPinnedStoreChanged);
     widget.reloadNotifier.removeListener(_onReload);
     super.dispose();
+  }
+
+  /// 任意页面置顶/取消置顶后立即同步本列表（含从详情页返回的场景）。
+  void _onPinnedStoreChanged() {
+    _loadPinnedIds().then((_) async {
+      if (!mounted) return;
+      _sortNotes(_notes);
+      setState(() {});
+      await _ensurePinnedNoteVisible();
+    });
   }
 
   void _onReload() => _load();
@@ -2436,47 +2460,67 @@ class _MyPostsTabState extends State<_MyPostsTab> {
       _error = errorText;
       _loading = false;
     });
+    // 置顶帖不在首页分页里时补拉一条，保证置顶后个人主页最上方就能看到。
+    await _ensurePinnedNoteVisible();
   }
 
-  /// 从本地读取置顶帖子 id 列表。
+  /// 从本地读取置顶帖子 id（全局同时只保留一条）。
   Future<void> _loadPinnedIds() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _pinnedIds
-        ..clear()
-        ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
-    } catch (_) {}
+    await PinnedNotesStore.ensureLoaded();
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
   }
 
-  /// 排序：置顶的帖子在最前，其余按更新时间倒序。
+  /// 排序：置顶的帖子在最前，其余按更新时间倒序（稳定排序，列表不跳动）。
   void _sortNotes(List<PlazaNote> notes) {
-    notes.sort((a, b) {
-      final ap = _pinnedIds.contains(a.id);
-      final bp = _pinnedIds.contains(b.id);
-      if (ap != bp) return ap ? -1 : 1;
-      return b.updatedAt.compareTo(a.updatedAt);
-    });
+    sortPinnedFirst(
+      notes,
+      isPinned: (n) => _pinnedIds.contains(n.id),
+      compareRest: (a, b) => b.updatedAt.compareTo(a.updatedAt),
+    );
+  }
+
+  /// 置顶帖可能不在首页 20 条之内（用户置顶的往往是较早的重要帖子）：
+  /// 单独按 id 补拉一条插到最前，否则「置顶了但个人主页看不到」。
+  Future<void> _ensurePinnedNoteVisible() async {
+    final id = PinnedNotesStore.currentId;
+    if (id.isEmpty) return;
+    if (_notes.any((n) => n.id == id)) return;
+    try {
+      final n = await CloudNotesService.instance.getNoteById(id);
+      if (!mounted) return;
+      // 已删除 / 不可见 / 非本人内容：清理失效的置顶记录。
+      final ghost = n.id.isEmpty ||
+          n.ownerUserId.isEmpty ||
+          (n.content.isEmpty && n.repostOf.isEmpty);
+      if (ghost || !isOwnContent(n.ownerUserId)) {
+        await PinnedNotesStore.remove(id);
+        _pinnedIds.remove(id);
+        if (mounted) setState(() {});
+        return;
+      }
+      // 回复帖/转发帖属于「回复」「转发」Tab：置顶仍然有效，只是不在本 Tab 展示，
+      // 不能因为这里找不到就把置顶清掉。
+      if (n.repostKind.isNotEmpty || n.repostOf.isNotEmpty) return;
+      setState(() {
+        _notes.insert(0, n);
+        _sortNotes(_notes);
+      });
+    } catch (_) {}
   }
 
   /// 置顶/取消置顶帖子（本地保存，重启后仍生效）。
+  /// 置顶新帖子会替换掉之前的置顶，始终只保留一条。
   Future<void> _togglePin(PlazaNote note) async {
-    final wasPinned = _pinnedIds.contains(note.id);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = prefs.getStringList(_pinnedKey) ?? [];
-      if (wasPinned) {
-        list.remove(note.id);
-        _pinnedIds.remove(note.id);
-      } else {
-        list.add(note.id);
-        _pinnedIds.add(note.id);
-      }
-      await prefs.setStringList(_pinnedKey, list);
-    } catch (_) {}
+    final wasPinned = await PinnedNotesStore.toggle(note.id);
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
     if (!mounted) return;
     _sortNotes(_notes);
     setState(() {});
-    showPostToast(context, wasPinned ? '已取消置顶' : '已置顶');
+    showPostToast(context, wasPinned ? '已置顶' : '已取消置顶');
   }
 
   /// 编辑帖子内容：更新云端后重新加载列表。
@@ -2538,6 +2582,7 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
       _pinnedIds.remove(note.id);
       if (!mounted) return;
       setState(() => _notes.removeWhere((n) => n.id == note.id));
@@ -2733,10 +2778,11 @@ class _MyPostsTabState extends State<_MyPostsTab> {
     );
   }
 
-  /// 回复节点更多菜单：自己的回复显示置顶/编辑/删除，他人回复显示关注/屏蔽。
+  /// 回复节点更多菜单：自己的回复只显示编辑/删除（回复不提供置顶），
+  /// 他人回复显示关注/屏蔽。
   Future<void> _showReplyMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || note.ownerUserId != me.id) {
+    if (!isOwnContent(note.ownerUserId)) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
       }
@@ -2758,8 +2804,11 @@ class _MyPostsTabState extends State<_MyPostsTab> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             Divider(height: 1, color: _border),
-            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
-                _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
+            // 回复帖不提供置顶（只有帖子能置顶）；历史遗留的已置顶回复仍可取消。
+            if (PinnedNotesStore.showsPinEntry(note.id,
+                isReply: note.repostKind == 'reply'))
+              postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
+                  _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -2830,7 +2879,6 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   int _page = 1;
   String? _error;
   static const int _pageSize = 20;
-  static const String _pinnedKey = 'my_pinned_note_ids';
 
   @override
   void initState() {
@@ -2838,13 +2886,21 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     _loadPinnedIds();
     // initState 时：用实时登录态判断（创建时已是新属性，无过时问题，但统一风格）。
     if (AuthService.instance.isLoggedIn) _load();
+    PinnedNotesStore.revision.addListener(_onPinnedStoreChanged);
     widget.reloadNotifier.addListener(_onReload);
   }
 
   @override
   void dispose() {
+    PinnedNotesStore.revision.removeListener(_onPinnedStoreChanged);
     widget.reloadNotifier.removeListener(_onReload);
     super.dispose();
+  }
+
+  /// 任意页面置顶/取消置顶后立即重建置顶卡片与回复链。
+  void _onPinnedStoreChanged() {
+    if (!mounted) return;
+    _buildGroups();
   }
 
   void _onReload() {
@@ -3058,8 +3114,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 
   /// 按最顶层原贴分组：沿 repostOf 逐级向上找到根原贴，
-  /// 同一根下的所有回复（含置顶的）归入一组；组内按时间正序成链。
-  /// 置顶的回复额外单独作为「置顶帖子」展示在列表顶部。
+  /// 同一根下的所有回复归入一组；组内按时间正序成链。
+  /// 置顶的回复从回复链移出，单独作为「置顶帖子」展示在列表顶部。
   Future<void> _buildGroups() async {
     await _loadPinnedIds();
     final pinned = _replies.where((n) => _pinnedIds.contains(n.id)).toList();
@@ -3071,6 +3127,8 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     final children = <String, List<PlazaNote>>{};
     final rootIds = <String>[];
     for (final n in _replies) {
+      // 置顶回复已单独成卡片，不再参与分组（否则同一条会显示两次）。
+      if (_pinnedIds.contains(n.id)) continue;
       var top = n.repostOf;
       var guard = 0;
       while (top.isNotEmpty && allById.containsKey(top) && guard < 30) {
@@ -3201,33 +3259,22 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
   }
 
   Future<void> _loadPinnedIds() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _pinnedIds
-        ..clear()
-        ..addAll(prefs.getStringList(_pinnedKey) ?? const []);
-    } catch (_) {}
+    await PinnedNotesStore.ensureLoaded();
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
   }
 
-  /// 置顶/取消置顶回复（本地保存，与帖子 Tab 共用同一份置顶记录）。
-  /// 置顶后立即重建分组：被置顶的评论移出回复链，生成独立置顶帖子。
+  /// 取消「历史遗留的已置顶回复」：回复帖已不再提供置顶入口，
+  /// 但旧版本置顶过的回复仍需要在三点菜单里能取消掉。
+  /// 取消后立即重建分组，把该回复放回原回复链。
   Future<void> _togglePin(PlazaNote note) async {
-    final wasPinned = _pinnedIds.contains(note.id);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = prefs.getStringList(_pinnedKey) ?? [];
-      if (wasPinned) {
-        list.remove(note.id);
-        _pinnedIds.remove(note.id);
-      } else {
-        list.add(note.id);
-        _pinnedIds.add(note.id);
-      }
-      await prefs.setStringList(_pinnedKey, list);
-    } catch (_) {}
+    final wasPinned = await PinnedNotesStore.toggle(note.id);
+    _pinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _pinnedIds.add(id);
     if (!mounted) return;
-    setState(() {});
-    showPostToast(context, wasPinned ? '已取消置顶' : '已置顶');
+    showPostToast(context, wasPinned ? '已置顶' : '已取消置顶');
     await _buildGroups();
   }
 
@@ -3290,6 +3337,7 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
       _pinnedIds.remove(note.id);
       if (!mounted) return;
       setState(() => _replies.removeWhere((n) => n.id == note.id));
@@ -3302,10 +3350,11 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
     }
   }
 
-  /// 回复节点更多菜单：自己的回复显示置顶/编辑/删除，他人回复显示关注/屏蔽。
+  /// 回复节点更多菜单：自己的回复只显示编辑/删除（回复不提供置顶），
+  /// 他人回复显示关注/屏蔽。
   Future<void> _showReplyMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || note.ownerUserId != me.id) {
+    if (!isOwnContent(note.ownerUserId)) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
       }
@@ -3327,8 +3376,11 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
                       fontSize: 16, fontWeight: FontWeight.w600, color: _text)),
             ),
             Divider(height: 1, color: _border),
-            postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
-                _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
+            // 回复帖不提供置顶（只有帖子能置顶）；历史遗留的已置顶回复仍可取消。
+            if (PinnedNotesStore.showsPinEntry(note.id,
+                isReply: note.repostKind == 'reply'))
+              postMenuItem(ctx, 'pin', Icons.push_pin_outlined,
+                  _pinnedIds.contains(note.id) ? '取消置顶' : '置顶'),
             postMenuItem(ctx, 'edit', Icons.edit_outlined, '编辑'),
             postMenuItem(ctx, 'delete', Icons.delete_outline, '删除'),
             const SizedBox(height: 8),
@@ -3750,7 +3802,6 @@ class _MyRepliesTabState extends State<_MyRepliesTab> {
 /// （本人 → 置顶/编辑/删除，他人 → 关注/屏蔽）。
 mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
   final Set<String> _sharedPinnedIds = {};
-  static const String _sharedPinnedKey = 'my_pinned_note_ids';
 
   /// 编辑等操作成功后由 Tab 自行刷新列表。
   void onSharedNotesChanged();
@@ -3758,32 +3809,22 @@ mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
   bool isSharedPinned(PlazaNote note) => _sharedPinnedIds.contains(note.id);
 
   Future<void> loadSharedPinnedIds() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _sharedPinnedIds
-        ..clear()
-        ..addAll(prefs.getStringList(_sharedPinnedKey) ?? const []);
-    } catch (_) {}
+    await PinnedNotesStore.ensureLoaded();
+    _sharedPinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _sharedPinnedIds.add(id);
   }
 
   /// 置顶/取消置顶（本地保存，与帖子/回复 Tab 共用同一份置顶记录）。
+  /// 置顶新内容会替换掉之前的置顶，始终只保留一条。
   Future<void> toggleSharedPin(PlazaNote note) async {
-    final wasPinned = _sharedPinnedIds.contains(note.id);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = prefs.getStringList(_sharedPinnedKey) ?? [];
-      if (wasPinned) {
-        list.remove(note.id);
-        _sharedPinnedIds.remove(note.id);
-      } else {
-        list.add(note.id);
-        _sharedPinnedIds.add(note.id);
-      }
-      await prefs.setStringList(_sharedPinnedKey, list);
-    } catch (_) {}
+    final wasPinned = await PinnedNotesStore.toggle(note.id);
+    _sharedPinnedIds.clear();
+    final id = PinnedNotesStore.currentId;
+    if (id.isNotEmpty) _sharedPinnedIds.add(id);
     if (!mounted) return;
     setState(() {});
-    showPostToast(context, wasPinned ? '已取消置顶' : '已置顶');
+    showPostToast(context, wasPinned ? '已置顶' : '已取消置顶');
   }
 
   /// 编辑帖子内容：更新云端后通知 Tab 刷新。
@@ -3848,6 +3889,7 @@ mixin _SharedNoteActions<T extends StatefulWidget> on State<T> {
     if (ok != true || !mounted) return;
     try {
       await CloudNotesService.instance.deleteCloudNote(note.id);
+      await PinnedNotesStore.remove(note.id);
       _sharedPinnedIds.remove(note.id);
       if (!mounted) return;
       setState(onRemoved);
@@ -3881,13 +3923,34 @@ class _MyRepostsTabState extends State<_MyRepostsTab>
   void initState() {
     super.initState();
     if (AuthService.instance.isLoggedIn) _load();
+    PinnedNotesStore.revision.addListener(_onPinnedStoreChanged);
     widget.reloadNotifier.addListener(_onReload);
   }
 
   @override
   void dispose() {
+    PinnedNotesStore.revision.removeListener(_onPinnedStoreChanged);
     widget.reloadNotifier.removeListener(_onReload);
     super.dispose();
+  }
+
+  /// 置顶记录变化后立即同步置顶标记，并把置顶帖移到列表最前。
+  void _onPinnedStoreChanged() {
+    loadSharedPinnedIds().then((_) {
+      if (!mounted) return;
+      final notes = _notes;
+      if (notes != null) _sortSharedNotes(notes);
+      setState(() {});
+    });
+  }
+
+  /// 置顶优先 + 稳定排序（转发时间倒序），避免列表重建时顺序乱跳。
+  void _sortSharedNotes(List<PlazaNote> notes) {
+    sortPinnedFirst(
+      notes,
+      isPinned: isSharedPinned,
+      compareRest: (a, b) => b.createdAt.compareTo(a.createdAt),
+    );
   }
 
   void _onReload() {
@@ -3970,8 +4033,8 @@ class _MyRepostsTabState extends State<_MyRepostsTab>
         final owner = sourceOwners[i];
         if (owner.isEmpty || owner != myUid) notes.add(all[i]);
       }
-      // 两路合并后按转发时间倒序（最新在前）。
-      notes.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      // 两路合并后置顶帖在最前，其余按转发时间倒序（最新在前，稳定排序）。
+      _sortSharedNotes(notes);
       if (!mounted) return;
       setState(() {
         _notes = notes;
@@ -4341,6 +4404,12 @@ class _BookmarksPageState extends State<BookmarksPage>
       // 置顶记录与「帖子」Tab 共用，每次加载时同步一次。
       await loadSharedPinnedIds();
       final notes = await CloudNotesService.instance.getFavoriteNotes();
+      // 书签里如果有自己的置顶帖，同样排在最前（其余按收藏时间倒序）。
+      sortPinnedFirst(
+        notes,
+        isPinned: isSharedPinned,
+        compareRest: (a, b) => b.createdAt.compareTo(a.createdAt),
+      );
       if (!mounted) return;
       setState(() {
         _notes = notes;

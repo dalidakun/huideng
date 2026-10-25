@@ -186,12 +186,16 @@ class ReadingNotePostView extends StatelessWidget {
   // 帖子作者昵称，用于在经文色块顶部标注「xxx的感想·经文」（选择性文字分享）。
   final String? authorName;
 
+  /// 是否在正文开头显示 $经名：经文讨论页已在外层展示经名，可关掉。
+  final bool showSutraTitle;
+
   const ReadingNotePostView({
     super.key,
     required this.note,
     required this.noteId,
     required this.sutraLibrary,
     this.authorName,
+    this.showSutraTitle = true,
   });
 
   void _openDetail(BuildContext context) async {
@@ -236,7 +240,8 @@ class ReadingNotePostView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // $经文名 链接（点击进入讨论页，无书本图标）
-          GestureDetector(
+          if (showSutraTitle)
+            GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openDiscussion(context),
             child: Padding(
@@ -323,6 +328,9 @@ class SutraNotesPostView extends StatefulWidget {
   final String? authorName;
   final String ownerUserId;
 
+  /// 是否在正文开头显示 $经名：经文讨论页已在外层展示经名，可关掉。
+  final bool showSutraTitle;
+
   const SutraNotesPostView({
     super.key,
     required this.post,
@@ -330,6 +338,7 @@ class SutraNotesPostView extends StatefulWidget {
     required this.sutraLibrary,
     this.authorName,
     this.ownerUserId = '',
+    this.showSutraTitle = true,
   });
 
   @override
@@ -416,7 +425,8 @@ class _SutraNotesPostViewState extends State<SutraNotesPostView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // $经文名 链接（点击进入讨论页）
-          GestureDetector(
+          if (widget.showSutraTitle)
+            GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openDiscussion(context),
             child: Padding(
@@ -594,6 +604,9 @@ class SutraHighlightsPostView extends StatefulWidget {
   /// 帖子作者 userId：作者本人查看自己的分享帖时，画线页加载实时数据而非快照。
   final String ownerUserId;
 
+  /// 是否在正文开头显示 $经名：经文讨论页已在外层展示经名，可关掉。
+  final bool showSutraTitle;
+
   const SutraHighlightsPostView({
     super.key,
     required this.post,
@@ -601,6 +614,7 @@ class SutraHighlightsPostView extends StatefulWidget {
     required this.sutraLibrary,
     this.authorName,
     this.ownerUserId = '',
+    this.showSutraTitle = true,
   });
 
   @override
@@ -762,7 +776,8 @@ class _SutraHighlightsPostViewState extends State<SutraHighlightsPostView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
+          if (widget.showSutraTitle)
+            GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openDiscussion(context),
             child: Padding(
@@ -1001,6 +1016,9 @@ class SutraThoughtsPostView extends StatefulWidget {
   /// 帖子作者 userId：作者本人查看自己的分享帖时，感想页加载实时数据而非快照。
   final String ownerUserId;
 
+  /// 是否在正文开头显示 $经名：经文讨论页已在外层展示经名，可关掉。
+  final bool showSutraTitle;
+
   const SutraThoughtsPostView({
     super.key,
     required this.post,
@@ -1008,6 +1026,7 @@ class SutraThoughtsPostView extends StatefulWidget {
     required this.sutraLibrary,
     this.authorName,
     this.ownerUserId = '',
+    this.showSutraTitle = true,
   });
 
   @override
@@ -1179,7 +1198,8 @@ class _SutraThoughtsPostViewState extends State<SutraThoughtsPostView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
+          if (widget.showSutraTitle)
+            GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openDiscussion(context),
             child: Padding(

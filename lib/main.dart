@@ -310,9 +310,11 @@ class _MyAppState extends State<MyApp> {
                   SystemNavigator.pop();
                 }
               },
-              child: _AppEntry(
-                mainPageKey: _mainPageKey,
-                startupAction: widget.startupAction,
+              child: UpdateInstallPrompt(
+                child: _AppEntry(
+                  mainPageKey: _mainPageKey,
+                  startupAction: widget.startupAction,
+                ),
               ),
             ),
     );
@@ -365,7 +367,7 @@ class _AppEntryState extends State<_AppEntry> {
     _afterStartup();
   }
 
-  /// 启动后静默检查更新（不阻塞使用，失败静默忽略）。
+  /// 启动后按「约一周一次」的节奏静默检查更新（不阻塞使用，失败静默忽略）。
   void _afterStartup() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -876,6 +878,11 @@ class _MainPageState extends State<MainPage>
       NotificationCenter.instance.refreshUnread();
       // 回到前台检查 20:00 打卡提醒。
       _checkDailyCheckInReminder();
+      // 距上次更新检查满一周时补一次自动检查（主页在最上层时再提示，
+      // 避免弹窗盖在阅读页/设置页等子页面上）。
+      if (ModalRoute.of(context)?.isCurrent ?? true) {
+        unawaited(UpdateService.checkAndPrompt(context));
+      }
     }
   }
 

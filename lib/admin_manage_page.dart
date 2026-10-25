@@ -7,6 +7,7 @@ import 'settings_widgets.dart';
 import 'text_input_sheet.dart';
 
 import 'app_palette.dart';
+
 /// 管理员页（仅管理员可见入口，云端也会校验权限）：
 /// 添加 / 移除管理员、发布 / 删除 App 公告。
 class AdminManagePage extends StatefulWidget {
@@ -148,13 +149,26 @@ class _AdminManagePageState extends State<AdminManagePage> {
     );
     if (result == null || !mounted) return;
     try {
-      await CloudNotesService.instance.addAnnouncement(
+      final id = await CloudNotesService.instance.addAnnouncement(
         title: result.$1,
         content: result.$2,
       );
       if (!mounted) return;
+      // 本地先插入刚发布的公告：云端列表存在短暂索引延迟，
+      // 等重新拉取再显示会让用户以为「没发出去」，需要手动刷新。
+      final item = AnnouncementItem(
+        id: id,
+        title: result.$1,
+        content: result.$2,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      setState(() {
+        _announcements = [
+          item,
+          ..._announcements.where((a) => a.id != id),
+        ];
+      });
       _showToast('公告已发布');
-      await _reload();
     } catch (e) {
       if (!mounted) return;
       _showToast(_friendlyError(e));
@@ -253,16 +267,16 @@ class _AdminManagePageState extends State<AdminManagePage> {
           children: [
             Text('公告管理',
                 style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: sText)),
+                    fontSize: 16, fontWeight: FontWeight.w600, color: sText)),
             const Spacer(),
             SizedBox(
               height: 36,
               child: FilledButton.icon(
                 onPressed: _publishAnnouncement,
                 icon: const Icon(Icons.campaign_outlined, size: 16),
-                label: const Text('发布公告', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                label: const Text('发布公告',
+                    style:
+                        TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 style: FilledButton.styleFrom(
                   backgroundColor: sGold,
                   foregroundColor: Colors.white,
@@ -285,11 +299,9 @@ class _AdminManagePageState extends State<AdminManagePage> {
             ),
             child: Column(
               children: [
-                Icon(Icons.campaign_outlined,
-                    size: 36, color: sTextHint),
+                Icon(Icons.campaign_outlined, size: 36, color: sTextHint),
                 SizedBox(height: 8),
-                Text('暂无公告',
-                    style: TextStyle(fontSize: 14, color: sTextSec)),
+                Text('暂无公告', style: TextStyle(fontSize: 14, color: sTextSec)),
               ],
             ),
           )
@@ -318,9 +330,8 @@ class _AdminManagePageState extends State<AdminManagePage> {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-                builder: (_) => NoteDetailPage(
-                    noteId: item.id,
-                    isAnnouncement: true)),
+                builder: (_) =>
+                    NoteDetailPage(noteId: item.id, isAnnouncement: true)),
           ),
           borderRadius: BorderRadius.circular(16),
           child: Padding(
@@ -406,9 +417,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                 shape: BoxShape.circle,
               ),
               child: Text(
-                item.username.isNotEmpty
-                    ? item.username.characters.first
-                    : '?',
+                item.username.isNotEmpty ? item.username.characters.first : '?',
                 style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: sGold),
               ),
@@ -441,8 +450,7 @@ class _AdminManagePageState extends State<AdminManagePage> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text('我',
-                              style: TextStyle(
-                                  fontSize: 10, color: sTextSec)),
+                              style: TextStyle(fontSize: 10, color: sTextSec)),
                         ),
                       ],
                     ],
@@ -502,7 +510,8 @@ class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SafeArea(
         top: false,
         child: Padding(
@@ -513,9 +522,7 @@ class _AnnouncementComposeSheetState extends State<_AnnouncementComposeSheet> {
             children: [
               Text('发布公告',
                   style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: sText)),
+                      fontSize: 16, fontWeight: FontWeight.w600, color: sText)),
               const SizedBox(height: 14),
               TextField(
                 controller: _titleController,

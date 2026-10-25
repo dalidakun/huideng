@@ -19,6 +19,8 @@
 const cloudbase = require("@cloudbase/node-sdk");
 const crypto = require("crypto");
 const https = require("https");
+// 帖子分享页（服务端渲染，微信链接卡片读的是首字节 HTML 里的 og 标签）。
+const postPage = require("./post_page");
 
 /**
  * 用 access token 调 CloudBase auth/v1/user/me 解析真实用户 ID。
@@ -523,6 +525,15 @@ function githubDeleteFile({ repo, path, message }) {
 }
 
 exports.main = async (event, context) => {
+  // 分享页：/post/<id>.html 由 HTTP 网关路由到本函数（路由配置见
+  // docs/帖子分享链接卡片方案.md）。微信等抓取方不执行 JavaScript，og 标签必须
+  // 出现在首字节 HTML 里，所以这条路自己渲染 HTML，不走下面的 {action} JSON 协议。
+  // 返回空表示不是分享页请求，继续走原有分支。
+  if (event && event.httpMethod) {
+    const page = await postPage.handleHttp(event, app);
+    if (page) return page;
+  }
+
   const uid = await resolveUid(event, context);
 
   // 诊断日志：观察调用者身份从哪个渠道进来（首次部署时查看）
@@ -669,6 +680,23 @@ exports.main = async (event, context) => {
     return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   }
 
+  // 祈福的自然周期：起始日 + 天数 - 1 为最后一个有效日（含当天）。
+  // 到期即结束，不等待参与者打卡满总天数。
+  function blessingEndDateStr(p) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(p.startDate || ""));
+    const days = Number(p.totalDays) || 0;
+    if (!m || days <= 0) return "";
+    const start = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return new Date(start + (days - 1) * 86400000).toISOString().slice(0, 10);
+  }
+
+  // 按自然日判断祈福是否已过期；today 缺省取东八区今天。
+  function blessingExpired(p, today) {
+    const end = blessingEndDateStr(p);
+    if (!end) return false;
+    return String(today || blessingTodayStr()) > end;
+  }
+
   // 归一化祈福方式列表：[{category,name,count,unit}]，最多 20 条。
   function normalizeBlessingMethods(arr) {
     if (!Array.isArray(arr)) return [];
@@ -766,6 +794,7 @@ exports.main = async (event, context) => {
       dedication: p.dedication || "",
       totalDays: p.totalDays || 0,
       startDate: p.startDate || "",
+      endDate: blessingEndDateStr(p),
       methods: Array.isArray(p.methods) ? p.methods : [],
       imageCount: Array.isArray(p.images) ? p.images.length : 0,
       visibility: p.visibility || "public",
@@ -5134,7 +5163,7 @@ exports.main = async (event, context) => {
             .skip((page - 1) * pageSize)
             .limit(pageSize)
             .get();
-          const list = res.data || [];
+          const list = (res.data || []).filter((p) => !blessingExpired(p));
           // 一次性取出我对本页各祈福的参与状态，避免逐条 get（N+1）。
           const joinMap = {};
           if (uid && list.length) {
@@ -5220,6 +5249,7 @@ exports.main = async (event, context) => {
           const p = data && data[0];
           if (!p) return fail("not_found");
           if (p.visibility === "private" && p.ownerUserId !== uid) return fail("forbidden");
+          if (p.status === "closed" || blessingExpired(p)) return fail("祈福已结束");
           const existing = await findBlessingJoin(uid, id);
           if (existing) return ok({ joined: true, joinerCount: p.joinerCount || 0 });
           await blessingParticipants
@@ -5275,6 +5305,17 @@ exports.main = async (event, context) => {
           const { data } = await blessingProjects.doc(id).get();
           const p = data && data[0];
           if (!p) return fail("not_found");
+          const endDate = blessingEndDateStr(p);
+          const startDate = String(p.startDate || "");
+          if (
+            p.status === "closed" ||
+            !endDate ||
+            blessingExpired(p) ||
+            date < startDate ||
+            date > endDate
+          ) {
+            return fail("祈福已结束");
+          }
           const join = await findBlessingJoin(uid, id);
           if (!join) return fail("not_joined");
           const dates = Array.isArray(join.doneDates) ? join.doneDates.slice() : [];
@@ -5287,20 +5328,18 @@ exports.main = async (event, context) => {
           }
           dates.push(date);
           const doneCount = dates.length;
-          const totalDays = Number(p.totalDays) || 0;
-          const finished = totalDays > 0 && doneCount >= totalDays;
           await blessingParticipants.doc(join._id).update({
             doneDates: dates,
             doneCount,
             lastDate: date,
-            status: finished ? "done" : "active",
-            completedAt: finished ? now() : 0,
+            status: "active",
+            completedAt: 0,
           });
           return ok({
             already: false,
             doneCount,
-            status: finished ? "done" : "active",
-            finished,
+            status: "active",
+            finished: false,
           });
         } catch (e) {
           console.error("[api] blessToday error:", e && e.message ? e.message : e);

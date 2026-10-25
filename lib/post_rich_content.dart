@@ -10,6 +10,8 @@ import 'login_page.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
 import 'note_sutra_links.dart';
+import 'ownership.dart';
+import 'post_share.dart';
 import 'post_time_link.dart';
 import 'reading_badges.dart';
 import 'reading_note_post.dart';
@@ -489,9 +491,11 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
               style: TextStyle(
                   color: _text, fontSize: 17, fontWeight: FontWeight.w600)),
         ),
+        // 右上角：进入本经阅读页（只保留按钮中的阅读图标）。
+        actions: [_buildReadAction()],
       ),
-      // 右下角：进入本经阅读页（未下载时先下载并在按钮上转圈）。
-      floatingActionButton: _buildReadFab(),
+      // 右下角：新建笔记（与菩提空间右下角按钮同款样式与位置）。
+      floatingActionButton: _buildComposeFab(),
       // 左右滑动切换「笔记 / 备注 / 画线」。
       body: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -554,44 +558,138 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
     }
   }
 
-  /// 右下角按钮：进入本经阅读页。样式与「消息」菜单右下角的「继续阅读」按钮一致
-  /// （素白黑底 / 米黄绿底 + yt.png 图标，42 圆）；未下载时先下载并在按钮上转圈。
-  Widget _buildReadFab() {
+  /// 顶部栏右侧的阅读入口：只显示 yt.png 图标，未下载时先下载并转圈。
+  Widget _buildReadAction() {
     final busy = _loading || _downloading;
-    final isPlain = AppPalette.instance.isPlain;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: FloatingActionButton(
-          heroTag: 'sutra_discuss_read_fab',
-          backgroundColor:
-              isPlain ? const Color(0xFF1A1A1A) : const Color(0xFF71867A),
-          elevation: 8,
-          highlightElevation: 12,
-          shape: const CircleBorder(),
-          onPressed: _onTapReadFab,
-          child: busy
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2.5, color: Colors.white),
-                )
-              : Image.asset('assets/images/yt.png', width: 21, height: 21),
-        ),
+      padding: const EdgeInsets.only(right: 12),
+      child: IconButton(
+        tooltip: '阅读',
+        onPressed: _onTapRead,
+        icon: busy
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2.5, color: Color(0xFF70867A)),
+              )
+            : Image.asset('assets/images/yt.png',
+                width: 21,
+                height: 21,
+                color: _text,
+                colorBlendMode: BlendMode.srcIn),
       ),
     );
   }
 
-  void _onTapReadFab() {
+  void _onTapRead() {
     if (_loading || _downloading) return;
     if (_downloaded) {
       _openRead();
     } else {
       _downloadSutra(thenRead: true);
     }
+  }
+
+  /// 右下角「新建笔记」：样式、尺寸与位置同菩提空间右下角按钮；
+  /// 在正文里预置本经名，发布后同时出现在菩提空间与本页「笔记」。
+  Widget _buildComposeFab() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 28),
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: FloatingActionButton(
+          heroTag: 'sutra_discuss_compose_fab',
+          backgroundColor: AppPalette.instance.isPlain
+              ? const Color(0xFF1A1A1A)
+              : const Color(0xFF71867A),
+          elevation: 8,
+          highlightElevation: 12,
+          shape: const CircleBorder(),
+          onPressed: _openComposeSheet,
+          child: Image.asset('assets/images/write.png', width: 21, height: 21),
+        ),
+      ),
+    );
+  }
+
+  /// 打开与社区 / 话题页同款的发帖输入框（底部弹层）。
+  /// 提交后正文顶部补上本经名，因此菩提空间照常显示「$经名」，
+  /// 本页展示时再把它隐藏。
+  void _openComposeSheet() {
+    if (!AuthService.instance.isLoggedIn) {
+      _promptLogin();
+      return;
+    }
+    showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SheetTextInput(
+        title: '发布帖子',
+        hint: '写点什么…',
+        maxLength: 500,
+        minLines: 3,
+        maxLines: 10,
+        confirmText: '发表',
+      ),
+    ).then((content) {
+      if (content != null && content.trim().isNotEmpty) {
+        _publishCompose(content.trim());
+      }
+    });
+  }
+
+  Future<void> _publishCompose(String body) async {
+    try {
+      final content = '${String.fromCharCode(36)}$_displayTitle\n$body';
+      final id = await CloudNotesService.instance
+          .publishNote(title: '', content: content);
+      if (!mounted) return;
+      final me = AuthService.instance.currentUser.value;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final created = PlazaNote(
+        id: id,
+        ownerUserId: me?.id ?? '',
+        title: '',
+        content: content,
+        authorName: me?.displayName ?? '同修',
+        visibility: 'public',
+        status: 'normal',
+        likeCount: 0,
+        commentCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      );
+      setState(() {
+        _currentTab = 0;
+        _relatedNotes = [
+          created,
+          ..._relatedNotes.where((n) => n.id != id),
+        ];
+      });
+      _showToast('已发布');
+    } catch (e) {
+      if (mounted) _showToast('发布失败：$e');
+    }
+  }
+
+  /// 本页展示的帖子正文：去掉开头重复的「$本经名」，经文名已在顶部栏。
+  String _contentWithoutSutraTitle(String content) {
+    final text = content.trimLeft();
+    final m = RegExp(r'^\$([^\s\n]+)[ \t]*(?:\r?\n)?').firstMatch(text);
+    if (m == null) return content;
+    final title = m.group(1)!;
+    final base = sutraBaseTitle(widget.title);
+    final matched = title == widget.title ||
+        title == _displayTitle ||
+        title == base ||
+        title.startsWith(base) ||
+        base.startsWith(title);
+    return matched ? text.substring(m.end).trimLeft() : content;
   }
 
   /// 本经相关帖子里的「笔记」中最热的一条（互动量与时间衰减口径同广场热榜）。
@@ -805,8 +903,9 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
   String _hottestExcerpt(PlazaNote n) {
     final title = n.title.trim();
     final raw = title.isNotEmpty && title != '无标题' ? title : n.content;
-    final text =
-        NoteSutraLinks.plainText(raw).replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = NoteSutraLinks.plainText(_contentWithoutSutraTitle(raw))
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     return text.isEmpty ? '（无正文）' : text;
   }
 
@@ -916,6 +1015,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
                       sutraLibrary: _sutraLibrary,
                       authorName: n.authorName,
                       ownerUserId: n.ownerUserId,
+                      showSutraTitle: false,
                     )
                   else if (SutraHighlightsPost.isHighlightsPost(n.content))
                     SutraHighlightsPostView(
@@ -924,6 +1024,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
                       sutraLibrary: _sutraLibrary,
                       authorName: n.authorName,
                       ownerUserId: n.ownerUserId,
+                      showSutraTitle: false,
                     )
                   else if (SutraNotesPost.isSutraNotesPost(n.content))
                     SutraNotesPostView(
@@ -932,6 +1033,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
                       sutraLibrary: _sutraLibrary,
                       authorName: n.authorName,
                       ownerUserId: n.ownerUserId,
+                      showSutraTitle: false,
                     )
                   else if (ReadingNotePost.isReadingNote(n.content))
                     ReadingNotePostView(
@@ -939,10 +1041,11 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
                       noteId: n.id,
                       sutraLibrary: _sutraLibrary,
                       authorName: n.authorName,
+                      showSutraTitle: false,
                     )
                   else
                     buildPostRichText(
-                      n.content,
+                      _contentWithoutSutraTitle(n.content),
                       style: TextStyle(fontSize: 15, color: _text, height: 1.6),
                       library: _sutraLibrary,
                       multiVolumeBases: NoteSutraCatalog.cachedMultiVolumeBases,
@@ -1087,7 +1190,7 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
       return;
     }
     final favorited = _relatedFavIds.contains(n.id);
-    if (me.id == n.ownerUserId) {
+    if (isOwnContent(n.ownerUserId)) {
       final choice = await showModalBottomSheet<String>(
         context: context,
         backgroundColor: _card,
@@ -1301,17 +1404,10 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
       ));
   }
 
-  /// 分享一条广场相关帖子到系统分享面板。
+  /// 分享一条广场相关帖子：只分享帖子详情页链接，点开即见正文。
   Future<void> _shareNote(PlazaNote n) async {
-    final plain = NoteSutraLinks.plainText(n.content);
-    final text =
-        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
-        '———来自【燃灯】App · ${n.authorName} 的笔记分享\n'
-        '燃一盏灯，看见自己，照亮别人\n'
-        '点击进入八千大藏经世界\n'
-        '下载链接：';
     try {
-      await SharePlus.instance.share(ShareParams(text: text));
+      await SharePlus.instance.share(ShareParams(text: postShareText(n.id)));
     } catch (e) {
       if (!mounted) return;
       _showToast('分享失败：$e');
@@ -1780,7 +1876,30 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                 fontSize: 18,
                 fontWeight: FontWeight.w600)),
       ),
-      // 底部输入框：直接发布带 #话题 的帖子（与经书讨论页同款）。
+      // 右下角「发表帖子」按钮：与 $经文讨论页按钮同款样式与位置。
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 28),
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: FloatingActionButton(
+            onPressed: _openComposeSheet,
+            heroTag: 'topic_fab',
+            // 素白外观下改黑色底 + 白色图标；暖黄保持青绿。
+            backgroundColor: AppPalette.instance.isPlain
+                ? const Color(0xFF1A1A1A)
+                : const Color(0xFF71867A),
+            elevation: 8,
+            highlightElevation: 12,
+            shape: const CircleBorder(),
+            child: Image.asset(
+              'assets/images/write.png',
+              width: 21,
+              height: 21,
+            ),
+          ),
+        ),
+      ),
       body: Column(
         children: [
           Expanded(
@@ -1798,7 +1917,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                 controller: _scroll,
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 padding:
-                                    const EdgeInsets.fromLTRB(16, 40, 16, 16),
+                                    const EdgeInsets.fromLTRB(16, 40, 16, 72),
                                 children: [
                                   if (_newPostCount > 0)
                                     _buildNewPostBanner(key: _topSectionKey),
@@ -1814,7 +1933,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
                                 controller: _scroll,
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 padding:
-                                    const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                                    const EdgeInsets.fromLTRB(16, 10, 16, 72),
                                 itemCount:
                                     _notes.length + (_newPostCount > 0 ? 1 : 0),
                                 separatorBuilder: (_, index) {
@@ -2354,31 +2473,6 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          // 底部输入：点击打开与笔记详情页同款大输入框（500 字），直接发布带 #话题 的帖子。
-          Container(
-            color: _card,
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: SafeArea(
-              top: false,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _openComposeSheet,
-                child: Container(
-                  height: 42,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.circular(21),
-                  ),
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '发布帖子……',
-                    style: TextStyle(color: _textHint, fontSize: 14),
-                  ),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -2418,17 +2512,10 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
     });
   }
 
-  /// 分享一条帖子到系统分享面板（与笔记详情页 _share 同款文案模板）。
+  /// 分享一条帖子：只分享帖子详情页链接，点开即见正文。
   Future<void> _shareNote(PlazaNote n) async {
-    final plain = NoteSutraLinks.plainText(n.content);
-    final text =
-        '${plain.length > 120 ? '${plain.substring(0, 120)}…' : plain}\n'
-        '———来自【燃灯】App · ${n.authorName} 的笔记分享\n'
-        '燃一盏灯，看见自己，照亮别人\n'
-        '点击进入八千大藏经世界\n'
-        '下载链接：';
     try {
-      await SharePlus.instance.share(ShareParams(text: text));
+      await SharePlus.instance.share(ShareParams(text: postShareText(n.id)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2566,7 +2653,7 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
       return;
     }
     final favorited = CloudNotesService.instance.favoriteNoteIds.contains(n.id);
-    if (me.id == n.ownerUserId) {
+    if (isOwnContent(n.ownerUserId)) {
       final choice = await showModalBottomSheet<String>(
         context: context,
         backgroundColor: _card,

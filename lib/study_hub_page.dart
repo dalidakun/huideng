@@ -72,7 +72,7 @@ class StudyHubPage extends StatefulWidget {
 }
 
 class StudyHubPageState extends State<StudyHubPage>
-    with TickerProviderStateMixin, RouteAware {
+    with TickerProviderStateMixin, RouteAware, WidgetsBindingObserver {
   static SharedPreferences? _warmPrefs;
 
   /// DeepSeek 下拉露出手势：跟手擦洗，松手按进度决定展开/收回。
@@ -100,6 +100,26 @@ class StudyHubPageState extends State<StudyHubPage>
   String? _currentFilePath;
   double _progress = 0.0;
   List<Map<String, String>> _todayCheckIns = [];
+
+  /// [_todayCheckIns] 对应的日期（yyyy-MM-dd）。应用长时间不关闭时用它判断是否
+  /// 已跨天，避免主页打卡状态停留在昨天。
+  String _todayCheckInsDate = '';
+
+  /// 跨天刷新定时器：到次日零点自动重载今日打卡状态。
+  Timer? _midnightTimer;
+
+  /// 跨天看门狗：每个周期比对一次本地日期（见 [_scheduleMidnightRefresh]）。
+  ///
+  /// 只挂一个「一次性定时到零点」并不可靠：Dart 定时器按单调时钟计时，设备深度
+  /// 休眠、应用被系统冻结的时长并不计入，一次性定时器会比真实零点晚很多才触发；
+  /// 用户改系统时间、跨时区时也会失准。周期性地比对 `DateTime.now()` 的日期，
+  /// 可以在唤醒后一个周期内纠正，保证第二天是未打卡状态。
+  Timer? _dayWatchdogTimer;
+  static const Duration _dayWatchdogInterval = Duration(seconds: 30);
+
+  /// 跨天刷新是否正在进行，避免看门狗与一次性定时器重复触发加载。
+  bool _dayRolloverBusy = false;
+
   int _checkinTotalDays = 0;
 
   /// 历史统计的自定义顺序（类型 key），空表示未自定义。
@@ -155,11 +175,6 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 免得按钮要再点一次才变成「今日已祈福」。
   final Map<String, BlessingProgress> _blessedToday = {};
 
-  /// 正在分享的祈福 id（只让当前分享按钮进入忙碌态，避免另一条跟着闪动）。
-  final Set<String> _blessingSharing = {};
-
-  /// 本次会话中已成功分享过的祈福 id（分享后按钮转为淡金）。
-  final Set<String> _blessingShared = {};
   final ScrollController _scrollController = ScrollController();
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
@@ -172,6 +187,8 @@ class StudyHubPageState extends State<StudyHubPage>
   @override
   void initState() {
     super.initState();
+    // 监听前后台切换：后台跨天后回到前台立即刷新（见 didChangeAppLifecycleState）。
+    WidgetsBinding.instance.addObserver(this);
     // 列表滚到最顶部（offset <= 0）才允许下拉露出 DeepSeek，
     // 避免页面还有上方内容时下拉就被 DeepSeek 页接管。
     _pullReveal = PullRevealTracker(
@@ -195,12 +212,18 @@ class StudyHubPageState extends State<StudyHubPage>
   Future<void> _tryShowZhaiBanner() async {
     if (!isTodayZhaiRi()) return;
     final prefs = await SharedPreferences.getInstance();
+    // 读盘期间页面可能已被销毁（跨天刷新也会调到这里）：不能在 dispose 之后
+    // 再驱动动画或挂定时器。
+    if (!mounted) return;
     final lastShownDate = prefs.getString('zhai_banner_shown_date') ?? '';
     final today = _today();
     if (lastShownDate == today) return;
     _zhaiLunarText = todayLunarMonthDay();
     _zhaiCtrl.forward();
+    // 跨天刷新时会再走一次这里：先取消上一个隐藏定时器，避免旧定时器残留。
+    _zhaiHideTimer?.cancel();
     _zhaiHideTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
       _zhaiCtrl.reverse();
     });
     await prefs.setString('zhai_banner_shown_date', today);
@@ -220,8 +243,21 @@ class StudyHubPageState extends State<StudyHubPage>
     _loadBlessing();
   }
 
+  /// 前后台切换：应用在后台跨过零点时定时器可能被系统冻结，回到前台先按本地
+  /// 日期比对一次，跨天则立即刷新，避免主页打卡项停留在昨天的已打卡状态。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_handleDayRollover());
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _midnightTimer?.cancel();
+    _dayWatchdogTimer?.cancel();
     routeObserver.unsubscribe(this);
     _zhaiHideTimer?.cancel();
     _zhaiCtrl.dispose();
@@ -370,6 +406,7 @@ class StudyHubPageState extends State<StudyHubPage>
       _currentReadLater = readLater;
       _allowReadingShare = prefs.getBool('privacy_show_reading') ?? false;
       _todayCheckIns = _loadTodayCheckIns(prefs);
+      _todayCheckInsDate = _today();
       _checkinTotalDays = _calcTotalDays(prefs);
       _historyStatsOrder = prefs.getStringList('history_stats_order') ?? [];
       _dedication = DedicationStore.effective(prefs);
@@ -378,6 +415,7 @@ class StudyHubPageState extends State<StudyHubPage>
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
       _checkInTypesList = _buildConfiguredCheckInTypes(prefs);
     });
+    _scheduleMidnightRefresh();
     // 把当前配置的具体功课项写入 prefs，供桌面「一键打卡」快捷方式在无 Flutter
     // 引擎时由原生直接读取并补打卡（见 QuickCheckinActivity）。
     await _writeQuickCheckinPayload(prefs);
@@ -396,6 +434,13 @@ class StudyHubPageState extends State<StudyHubPage>
     try {
       await prefs.reload();
     } catch (_) {}
+    // 应用在后台跨天时定时器可能被系统挂起：回到前台先按日期补一次刷新，
+    // 保证第二天的打卡项是未勾选状态。
+    if (_todayCheckInsDate.isNotEmpty && _todayCheckInsDate != _today()) {
+      if (!mounted) return;
+      await _loadData();
+      return;
+    }
     if (!(prefs.getBool('shortcut_checkin_needs_share') ?? false)) return;
     if (!mounted) return;
     await _loadData();
@@ -777,9 +822,62 @@ class StudyHubPageState extends State<StudyHubPage>
     return records.map((r) => r['date'].toString()).toSet().length;
   }
 
+  /// 「今天」的唯一取值入口。默认取系统时间；测试可通过 [debugNow] 注入时钟
+  /// 模拟「应用一直开着跨过零点」，生产代码从不设置它。
+  @visibleForTesting
+  static DateTime Function()? debugNow;
+
+  DateTime _now() => debugNow?.call() ?? DateTime.now();
+
   String _today() {
-    final now = DateTime.now();
+    final now = _now();
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 安排跨天刷新：应用一直开着不关闭时，到次日零点自动重载今日打卡状态，
+  /// 让昨天已勾选的功课项在第二天恢复为未打卡，可以直接开始新一天的打卡。
+  ///
+  /// 双保险：
+  ///  - 一次性定时到次日 00:00:01，应用常亮在前台时准点刷新；
+  ///  - 每 [_dayWatchdogInterval] 的看门狗比对本地日期，兜住设备休眠、应用被
+  ///    冻结、系统时间被修改等导致一次性定时器失准的情况。
+  void _scheduleMidnightRefresh() {
+    _midnightTimer?.cancel();
+    final now = _now();
+    // 多加 1 秒，避免定时器比系统时间早一点点触发而仍落在昨天。
+    final nextMidnight = DateTime(now.year, now.month, now.day + 1)
+        .add(const Duration(seconds: 1));
+    _midnightTimer =
+        Timer(nextMidnight.difference(now), () => unawaited(_handleDayRollover()));
+    // 看门狗只创建一次；其回调自带日期比对，未跨天时是空操作。
+    _dayWatchdogTimer ??= Timer.periodic(_dayWatchdogInterval,
+        (_) => unawaited(_handleDayRollover()));
+  }
+
+  /// 跨天处理：本地日期已不是 [_todayCheckInsDate] 时刷新主页。
+  ///
+  /// 只刷新内存里的展示状态，不动 `checkin_records`——打卡记录按 date 字段区分
+  /// 日期，昨天的记录仍保留在打卡日历与统计里，不会因为跨天被删掉。
+  Future<void> _handleDayRollover() async {
+    if (!mounted || _dayRolloverBusy) return;
+    final today = _today();
+    if (_todayCheckInsDate == today) return;
+    _dayRolloverBusy = true;
+    // 先立即重建一帧：_isItemCheckedToday 会按日期判断，昨天的勾选（以及
+    // 打卡进度条）马上消失，不必等异步重载完成。祈福的「今日已祈福」
+    // 只对当天有效，一并清掉。
+    setState(() {
+      _blessedToday.clear();
+    });
+    try {
+      await _loadData();
+      if (!mounted) return;
+      unawaited(_loadBlessing());
+      // 新的一天若是十斋日，提醒条也应能再次出现（内部按日期去重）。
+      unawaited(_tryShowZhaiBanner());
+    } finally {
+      _dayRolloverBusy = false;
+    }
   }
 
   String _displayTitle(String title, {String? filePath}) => sutraDisplayName(
@@ -1071,9 +1169,9 @@ class StudyHubPageState extends State<StudyHubPage>
                   16,
                   4,
                   16,
-                  // 底部额外留白：让出右下角「继续阅读」悬浮按钮的高度
-                  // （按钮高 42 + 距菜单 28），否则会遮住历史统计的数据。
-                  MediaQuery.of(context).padding.bottom + 78),
+                  // 底部留白：只需让出右下角「继续阅读」悬浮按钮的安全距离，
+                  // 末尾另有到底提示，留白过大会显空。
+                  MediaQuery.of(context).padding.bottom + 48),
               children: [
                 _buildCurrentSutraCard(),
                 const SizedBox(height: 14),
@@ -1082,6 +1180,7 @@ class StudyHubPageState extends State<StudyHubPage>
                 _buildHistoryStatsCard(),
                 const SizedBox(height: 14),
                 _buildBlessingBlock(),
+                _buildEndOfListHint(),
               ],
             ),
           ),
@@ -1731,24 +1830,12 @@ class StudyHubPageState extends State<StudyHubPage>
 
   // ---------- 祈福共修 ----------
 
-  /// 祈福是否仍在进行中：已完成、已关闭或已过期的归入归档。
+  /// 祈福是否仍在进行中：已完成、已关闭或已过自然周期的归入归档。
   bool _isBlessingActive(BlessingItem item) {
     if (item.progress?.isDone == true) return false;
     final proj = item.project;
     if (proj.status == 'closed') return false;
-    final parts = proj.startDate.split('-');
-    if (parts.length == 3 && proj.totalDays > 0) {
-      final y = int.tryParse(parts[0]);
-      final m = int.tryParse(parts[1]);
-      final d = int.tryParse(parts[2]);
-      if (y != null && m != null && d != null) {
-        final end = DateTime(y, m, d).add(Duration(days: proj.totalDays));
-        final now = DateTime.now();
-        final today = DateTime(now.year, now.month, now.day);
-        if (!today.isBefore(end)) return false;
-      }
-    }
-    return true;
+    return !proj.isExpired;
   }
 
   /// 拉取两条祈福：第一条以我发起的为主（否则我参与的），
@@ -1888,33 +1975,6 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 分享一条祈福到菩提空间：先填写备注并确认。
-  Future<void> _shareBlessing(BlessingItem item) async {
-    final id = item.project.id;
-    if (_blessingSharing.contains(id)) return;
-    if (!AuthService.instance.isLoggedIn) {
-      _showToast('分享到菩提空间需要先登录');
-      return;
-    }
-    final remark = await showBlessingShareDialog(
-      context,
-      blessingTitle: item.project.title,
-    );
-    if (remark == null || !mounted) return;
-    setState(() => _blessingSharing.add(id));
-    try {
-      await shareBlessingToBodhiSpace(item.project, remark: remark);
-      if (mounted) {
-        setState(() => _blessingShared.add(id));
-        _showTopToast('已分享到菩提空间');
-      }
-    } catch (e) {
-      if (mounted) _showTopToast('分享失败：$e', isError: true);
-    } finally {
-      if (mounted) setState(() => _blessingSharing.remove(id));
-    }
-  }
-
   /// 祈福共修区块：主页最下方，展示两条祈福与进入详情页的入口。
   Widget _buildBlessingBlock() {
     return Container(
@@ -1960,6 +2020,19 @@ class StudyHubPageState extends State<StudyHubPage>
             child: _buildBlessingMoreButton(),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 主页列表到底提示：与菩提空间、广场的列表底部样式保持一致。
+  Widget _buildEndOfListHint() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 14, bottom: 0),
+      child: Center(
+        child: Text(
+          '~ 已到尽头了 ~',
+          style: TextStyle(fontSize: 12, color: _textHint),
+        ),
       ),
     );
   }
@@ -2104,9 +2177,13 @@ class StudyHubPageState extends State<StudyHubPage>
         const SizedBox(height: 10),
         Row(
           children: [
+            if (entry.mine && !proj.isExpired)
+              Text('剩 ${proj.remainingDays} 天',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _textHint)),
             const Spacer(),
-            _blessingShareButton(proj.id, onTap: () => _shareBlessing(item)),
-            const SizedBox(width: 8),
             if (mineJoined && !done)
               _blessingAction(
                 blessedToday ? '今日已祈福' : '今日祈福',
@@ -2120,32 +2197,6 @@ class StudyHubPageState extends State<StudyHubPage>
           ],
         ),
       ],
-    );
-  }
-
-  Widget _blessingShareButton(String id, {required VoidCallback onTap}) {
-    final busy = _blessingSharing.contains(id);
-    final shared = _blessingShared.contains(id);
-    return Opacity(
-      opacity: busy ? 0.5 : 1,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: busy ? null : onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-          child: Opacity(
-            opacity: shared ? 0.5 : 1,
-            child: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/subai.png'
-                  : 'assets/images/jinse.png',
-              width: 18,
-              height: 18,
-              fit: BoxFit.contain,
-            ),
-          ),
-        ),
-      ),
     );
   }
 
@@ -3033,6 +3084,9 @@ class StudyHubPageState extends State<StudyHubPage>
 
   /// 检查某个具体功课项目今天是否已打卡。
   bool _isItemCheckedToday(String typeKey, String itemName) {
+    // 缓存仍停留在昨天（跨天定时器被系统挂起等极端情况）时不显示昨天的勾选，
+    // 避免第二天打开看到「已完成」却无法再打卡。
+    if (_todayCheckInsDate != _today()) return false;
     return _todayCheckIns
         .any((r) => r['type'] == typeKey && r['name'] == itemName);
   }

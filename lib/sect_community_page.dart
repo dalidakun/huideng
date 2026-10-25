@@ -12,6 +12,7 @@ import 'loading_widgets.dart';
 import 'login_page.dart';
 import 'my_page.dart';
 import 'note_detail_page.dart';
+import 'ownership.dart';
 import 'sect_community_texts.dart';
 import 'sect_detail_page.dart';
 import 'sect_page.dart';
@@ -568,18 +569,13 @@ class CommunitySectionState extends State<CommunitySection> {
   }
 
   /// 这条帖子是不是本机这个人发的：决定三点菜单走「编辑/删除」还是「关注/屏蔽」。
-  bool _isMine(PlazaNote note) {
-    final me = AuthService.instance.currentUser.value;
-    final cached = AuthService.instance.cachedUserId;
-    return (me != null && note.ownerUserId == me.id) ||
-        (cached != null && note.ownerUserId == cached);
-  }
+  bool _isMine(PlazaNote note) => isOwnContent(note.ownerUserId);
 
   /// 行内三点菜单，与菩提空间同款：他人走 [showMoreMenu]（关注/屏蔽），
   /// 自己走「编辑 / 删除」。回复行（[ReplyThread]）由它兜底。
   Future<void> _showRowMenu(PlazaNote note) async {
     final me = AuthService.instance.currentUser.value;
-    if (me == null || note.ownerUserId != me.id) {
+    if (!_isMine(note)) {
       if (me != null && note.ownerUserId.isNotEmpty) {
         await showMoreMenu(context, note.ownerUserId, note.authorName);
         // 屏蔽/关注后刷新，让被屏蔽用户的帖子立刻从社区消失。

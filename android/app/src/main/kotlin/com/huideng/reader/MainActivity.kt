@@ -3,8 +3,15 @@ package com.huideng.reader
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.AlarmClock
+import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
 import java.io.File
 
@@ -105,6 +112,197 @@ class MainActivity : FlutterActivity() {
                         result.success(info.lastUpdateTime)
                     } catch (e: Exception) {
                         result.error("GET_UPDATE_TIME_FAILED", "Failed to get lastUpdateTime", e.message)
+                    }
+                }
+                "canInstallApk" -> {
+                    // Android 8.0+ 需要用户逐应用开启「安装未知应用」；提前问一句，
+                    // 好在拉起安装器之前就把用户引导到设置页，而不是报一个看不懂的错。
+                    try {
+                        val can = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            packageManager.canRequestPackageInstalls()
+                        } else {
+                            true
+                        }
+                        result.success(can)
+                    } catch (e: Exception) {
+                        result.success(true)
+                    }
+                }
+                "openInstallSettings" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                                .setData(Uri.parse("package:$packageName"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(intent)
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        // 部分定制系统没有这个设置页：退而打开本应用详情页。
+                        try {
+                            val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                .setData(Uri.parse("package:$packageName"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(fallback)
+                            result.success(true)
+                        } catch (e2: Exception) {
+                            result.error("SETTINGS_FAILED", "Failed to open settings", e2.message)
+                        }
+                    }
+                }
+                "installApk" -> {
+                    // App 内下载完成后调起系统安装器。APK 位于应用外部文件目录，
+                    // 通过已声明的 FileProvider 生成 content:// URI 授予安装器读取权限。
+                    try {
+                        NotificationManagerCompat.from(this)
+                            .cancel(DownloadCompleteReceiver.NOTIFICATION_ID)
+                        val filePath = call.argument<String>("filePath")
+                        if (filePath.isNullOrEmpty()) {
+                            result.error("INVALID_PATH", "File path is null", null)
+                            return@setMethodCallHandler
+                        }
+                        val file = File(filePath)
+                        if (!file.exists()) {
+                            result.error("FILE_NOT_FOUND", "File does not exist", null)
+                            return@setMethodCallHandler
+                        }
+                        val uri = FileProvider.getUriForFile(
+                            this,
+                            "${packageName}.fileprovider",
+                            file
+                        )
+                        val install = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(install)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("INSTALL_FAILED", "Failed to open installer", e.message)
+                    }
+                }
+                "startApkDownload" -> {
+                    // 用系统 DownloadManager 下载：即使退出 App 也会在后台继续，
+                    // 并在通知栏显示进度；完成后由 DownloadCompleteReceiver 提示安装。
+                    try {
+                        val url = call.argument<String>("url")
+                        val version = call.argument<String>("version") ?: ""
+                        val sha256 = call.argument<String>("sha256") ?: ""
+                        val notifyCompleted =
+                            call.argument<Boolean>("notifyCompleted") ?: false
+                        if (url.isNullOrEmpty()) {
+                            result.error("INVALID_URL", "Download url is empty", null)
+                            return@setMethodCallHandler
+                        }
+                        val fileName = if (version.isNotEmpty()) {
+                            "huideng_v$version.apk"
+                        } else {
+                            "huideng_update.apk"
+                        }
+                        val manager =
+                            getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                        val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                            ?: filesDir
+                        // 覆盖同名旧包，并清理更早版本下载的安装包。
+                        dir.listFiles()?.forEach { old ->
+                            if (old.isFile && old.name.startsWith("huideng_") &&
+                                old.name.endsWith(".apk") && old.name != fileName
+                            ) {
+                                old.delete()
+                            }
+                        }
+                        val target = File(dir, fileName)
+                        if (target.exists()) target.delete()
+                        val request = DownloadManager.Request(Uri.parse(url)).apply {
+                            setTitle("燃灯新版本${if (version.isNotEmpty()) " v$version" else ""}")
+                            setDescription("正在下载安装包…")
+                            setMimeType("application/vnd.android.package-archive")
+                            setNotificationVisibility(
+                                if (notifyCompleted) {
+                                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                                } else {
+                                    DownloadManager.Request.VISIBILITY_VISIBLE
+                                }
+                            )
+                            setDestinationInExternalFilesDir(
+                                this@MainActivity,
+                                Environment.DIRECTORY_DOWNLOADS,
+                                fileName
+                            )
+                            setAllowedOverMetered(true)
+                            setAllowedOverRoaming(false)
+                        }
+                        val id = manager.enqueue(request)
+                        val path = target.absolutePath
+                        // 记录文件名/校验值，供轮询与完成广播读取。
+                        getSharedPreferences(DownloadCompleteReceiver.PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("path_$id", path)
+                            .putString("version_$id", version)
+                            .putString("sha_$id", sha256)
+                            .apply()
+                        result.success(id)
+                    } catch (e: Exception) {
+                        result.error("DOWNLOAD_FAILED", "Failed to start download", e.message)
+                    }
+                }
+                "queryApkDownload" -> {
+                    try {
+                        val id = call.argument<Number>("downloadId")?.toLong() ?: -1L
+                        val manager =
+                            getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                        val cursor = manager.query(
+                            DownloadManager.Query().setFilterById(id)
+                        )
+                        if (cursor == null || !cursor.moveToFirst()) {
+                            cursor?.close()
+                            result.success(null)
+                            return@setMethodCallHandler
+                        }
+                        val status = cursor.getInt(
+                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+                        )
+                        val downloaded = cursor.getLong(
+                            cursor.getColumnIndexOrThrow(
+                                DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR
+                            )
+                        )
+                        val total = cursor.getLong(
+                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                        )
+                        val reason = cursor.getInt(
+                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)
+                        )
+                        cursor.close()
+                        val prefs = getSharedPreferences(
+                            DownloadCompleteReceiver.PREFS,
+                            Context.MODE_PRIVATE
+                        )
+                        result.success(
+                            mapOf(
+                                "status" to status,
+                                "downloaded" to downloaded,
+                                "total" to total,
+                                "reason" to reason,
+                                "path" to (prefs.getString("path_$id", "") ?: ""),
+                                "version" to (prefs.getString("version_$id", "") ?: ""),
+                                "sha256" to (prefs.getString("sha_$id", "") ?: "")
+                            )
+                        )
+                    } catch (e: Exception) {
+                        result.error("QUERY_FAILED", "Failed to query download", e.message)
+                    }
+                }
+                "cancelApkDownload" -> {
+                    try {
+                        val id = call.argument<Number>("downloadId")?.toLong() ?: -1L
+                        val manager =
+                            getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                        manager.remove(id)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("CANCEL_FAILED", "Failed to cancel download", e.message)
                     }
                 }
                 "setSystemAlarm" -> {

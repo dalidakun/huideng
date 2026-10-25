@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'app_palette.dart';
 import 'auth_service.dart';
@@ -14,6 +15,7 @@ import 'blessing_service.dart';
 import 'blessing_templates.dart';
 import 'cloud_notes_service.dart';
 import 'post_time_link.dart';
+import 'post_share.dart';
 import 'user_space_page.dart';
 
 // ─────────────────────────── 通用小组件 ───────────────────────────
@@ -97,6 +99,7 @@ void _toast(BuildContext context, String msg) {
 Future<String?> showBlessingShareDialog(
   BuildContext context, {
   String blessingTitle = '',
+  String? hintText,
 }) async {
   final p = AppPalette.p;
   var remark = '';
@@ -131,7 +134,7 @@ Future<String?> showBlessingShareDialog(
                 null,
             style: TextStyle(fontSize: 13.5, color: p.text),
             decoration: InputDecoration(
-              hintText: '写下备注信息，与同修分享此刻的心愿…',
+              hintText: hintText ?? '写下备注信息，与同修分享此刻的心愿…',
               hintStyle: TextStyle(fontSize: 13, color: p.textHint),
               filled: true,
               fillColor: AppPalette.instance.isPlain
@@ -185,17 +188,20 @@ DateTime? _parseYmd(String s) {
   return DateTime(y, m, d);
 }
 
+/// 按自然日计算结束日期：起始日 + 天数 - 1（含当天）。
+String _endDateLabel(String start, String daysText) {
+  final s = _parseYmd(start);
+  final days = int.tryParse(daysText.trim()) ?? 0;
+  if (s == null || days <= 0) return '';
+  return _fmtYmd(s.add(Duration(days: days - 1)));
+}
+
 /// 祈福是否已完成或已过期（归入「已完成」列表）。
 bool _isBlessingOver(BlessingItem item) {
   if (item.progress?.isDone == true) return true;
   final proj = item.project;
   if (proj.status == 'closed') return true;
-  final start = _parseYmd(proj.startDate);
-  if (start == null || proj.totalDays <= 0) return false;
-  final end = start.add(Duration(days: proj.totalDays));
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  return !today.isBefore(end);
+  return proj.isExpired;
 }
 
 /// 后台线程压缩祈福图片：最长边 1280、JPEG 80，返回 null 表示无法解码。
@@ -713,7 +719,8 @@ class _BlessingEditorState extends State<_BlessingEditor> {
                 _fold(
                   p,
                   title: '祈福天数',
-                  summary: '${_daysCtrl.text.trim()} 天 · 起于 $_startDate',
+                  summary:
+                      '${_daysCtrl.text.trim()} 天 · $_startDate ~ ${_endDateLabel(_startDate, _daysCtrl.text)}',
                   open: _secDays,
                   onToggle: () => setState(() => _secDays = !_secDays),
                   child: _daysContent(p),
@@ -1049,6 +1056,11 @@ class _BlessingEditorState extends State<_BlessingEditor> {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        _hint(
+            p,
+            '按自然日计算：$_startDate 至 ${_endDateLabel(_startDate, _daysCtrl.text)}，'
+            '到期自动结束，不等待打卡满天数。'),
       ],
     );
   }
@@ -1277,7 +1289,7 @@ class _BlessingEditorState extends State<_BlessingEditor> {
                   )
                 else
                   Text(m.name, style: TextStyle(fontSize: 13.5, color: p.text)),
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
                 if (!m.isCustom && m.names.isNotEmpty)
                   Expanded(child: _methodDetailField(p, m))
                 else
@@ -1712,7 +1724,8 @@ class _BlessingPageState extends State<BlessingPage>
   Widget _mineCard(PaletteData p, BlessingItem it) {
     final proj = it.project;
     final prog = it.progress ?? const BlessingProgress();
-    final done = prog.isDone;
+    final expired = proj.isExpired;
+    final done = prog.isDone && !expired;
     final blessedToday = prog.doneToday();
     return _cardShell(
       p,
@@ -1731,9 +1744,10 @@ class _BlessingPageState extends State<BlessingPage>
                         fontWeight: FontWeight.w600,
                         color: p.text)),
               ),
-              if (done) ...[
-                const SizedBox(width: 6),
-                _tag(p, '已圆满'),
+              if (done || expired) ...[
+                const SizedBox(width: 4),
+                _tag(p, expired ? '已过期' : '已圆满',
+                    color: expired ? p.textHint : p.accent),
               ],
             ],
           ),
@@ -1747,10 +1761,15 @@ class _BlessingPageState extends State<BlessingPage>
           const SizedBox(height: 12),
           Row(
             children: [
-              Text('已祈福 ${prog.doneCount} 天 / 共 ${proj.totalDays} 天',
-                  style: TextStyle(fontSize: 12.5, color: p.textSec)),
-              const Spacer(),
-              if (!done)
+              Expanded(
+                child: Text(
+                  expired
+                      ? '已于 ${proj.endDate} 结束 · 已祈福 ${prog.doneCount} 天 / 共 ${proj.totalDays} 天'
+                      : '已祈福 ${prog.doneCount} 天 / 共 ${proj.totalDays} 天 · 剩 ${proj.remainingDays} 天',
+                  style: TextStyle(fontSize: 12.5, color: p.textSec),
+                ),
+              ),
+              if (!done && !expired)
                 _actionButton(
                   p,
                   blessedToday ? '今日已祈福' : '今日祈福',
@@ -1767,7 +1786,8 @@ class _BlessingPageState extends State<BlessingPage>
   Widget _commCard(PaletteData p, BlessingItem it) {
     final proj = it.project;
     final joined = it.progress?.joined == true;
-    final done = it.progress?.isDone == true;
+    final expired = proj.isExpired;
+    final done = it.progress?.isDone == true && !expired;
     return _cardShell(
       p,
       onTap: () => _openDetail(proj.id),
@@ -1785,7 +1805,9 @@ class _BlessingPageState extends State<BlessingPage>
                         fontWeight: FontWeight.w600,
                         color: p.text)),
               ),
-              if (done) _tag(p, '已圆满'),
+              if (done || expired)
+                _tag(p, expired ? '已过期' : '已圆满',
+                    color: expired ? p.textHint : p.accent),
             ],
           ),
           if (proj.target.isNotEmpty) ...[
@@ -1801,13 +1823,14 @@ class _BlessingPageState extends State<BlessingPage>
               Text('已有 ${proj.joinerCount} 人祈福',
                   style: TextStyle(fontSize: 12.5, color: p.textSec)),
               const Spacer(),
-              _actionButton(
-                p,
-                joined ? '已参与' : '参与祈福',
-                outline: !joined,
-                enabled: !_busy.contains(proj.id),
-                onTap: () => _toggleJoin(it),
-              ),
+              if (!expired)
+                _actionButton(
+                  p,
+                  joined ? '已参与' : '参与祈福',
+                  outline: !joined,
+                  enabled: !_busy.contains(proj.id),
+                  onTap: () => _toggleJoin(it),
+                ),
             ],
           ),
         ],
@@ -1953,7 +1976,8 @@ class _BlessingArchivePageState extends State<_BlessingArchivePage> {
   Widget _card(PaletteData p, BlessingItem it) {
     final proj = it.project;
     final prog = it.progress;
-    final done = prog?.isDone == true;
+    final expired = proj.isExpired;
+    final done = prog?.isDone == true && !expired;
     return Material(
       color: p.card,
       borderRadius: BorderRadius.circular(16),
@@ -1982,8 +2006,8 @@ class _BlessingArchivePageState extends State<_BlessingArchivePage> {
                             fontWeight: FontWeight.w600,
                             color: p.text)),
                   ),
-                  const SizedBox(width: 6),
-                  _tag(p, done ? '已圆满' : '已过期',
+                  const SizedBox(width: 4),
+                  _tag(p, expired ? '已过期' : (done ? '已圆满' : '已结束'),
                       color: done ? p.accent : p.textHint),
                 ],
               ),
@@ -1994,7 +2018,7 @@ class _BlessingArchivePageState extends State<_BlessingArchivePage> {
               ],
               const SizedBox(height: 10),
               Text(
-                '${proj.startDate} 起 · ${proj.totalDays} 天'
+                '${proj.startDate} ~ ${proj.endDate} · ${proj.totalDays} 天'
                 '${prog != null ? ' · 已祈福 ${prog.doneCount} 天' : ''}',
                 style: TextStyle(fontSize: 12.5, color: p.textSec),
               ),
@@ -2307,7 +2331,7 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
   UserProfile? _author;
   bool _busy = false;
 
-  /// 本次会话内是否已成功分享过（分享后右上角图标转为淡金）。
+  /// 本次会话内是否已成功分享到菩提空间（三点菜单里显示「已分享」）。
   bool _shared = false;
 
   @override
@@ -2395,6 +2419,23 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
     }
   }
 
+  /// 右上角分享：调系统分享面板（微信等），和菩提空间帖子的「分享笔记」一致。
+  ///
+  /// 分享出去的是这条祈福的落地页 `https://aibuilder.top/post/<祈福id>.html`：
+  /// 云函数现场渲染祈福内容并写 og 标签，微信里就是「缩略图 + 标题 + 摘要」的
+  /// 链接卡片，点开即见回向对象、回向文、共修天数与功课项。
+  Future<void> _shareToPlatforms() async {
+    final d = _detail;
+    if (d == null) return;
+    try {
+      await SharePlus.instance.share(ShareParams(text: blessingShareText(widget.id)));
+    } catch (e) {
+      if (!mounted) return;
+      _toast(context, '分享失败：$e');
+    }
+  }
+
+  /// 转发到菩提空间（在广场里生成一条祈福帖，需要登录）。
   Future<void> _share() async {
     final d = _detail;
     if (d == null || _busy) return;
@@ -2478,34 +2519,55 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
         ),
         actions: [
           if (d != null)
-            IconButton(
-              tooltip: '分享',
-              onPressed: _busy ? null : _share,
-              padding: const EdgeInsets.fromLTRB(8, 8, 18, 8),
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
-              icon: Opacity(
-                opacity: _shared ? 0.5 : 1,
-                child: Image.asset(
-                  AppPalette.instance.isPlain
-                      ? 'assets/images/subai.png'
-                      : 'assets/images/jinse.png',
-                  width: 18,
-                  height: 18,
-                  fit: BoxFit.contain,
+            Padding(
+              // 别让三个点贴着屏幕右缘（默认 8 内边距 + 这里 12）。
+              padding: const EdgeInsets.only(right: 12),
+              child: PopupMenuButton<String>(
+                icon: Icon(Icons.more_horiz, color: p.text),
+                tooltip: '更多操作',
+                // 默认的 over 会让菜单顶部与按钮顶部齐平，看起来像顶着屏幕。
+                // 这里改为在按钮下方展开，并留一点间距，整体往下移动。
+                position: PopupMenuPosition.under,
+                offset: const Offset(0, 12),
+                color: p.card,
+                surfaceTintColor: Colors.transparent,
+                elevation: 4,
+                shadowColor: Colors.black.withValues(alpha: 0.10),
+                menuPadding: const EdgeInsets.symmetric(vertical: 6),
+                constraints: const BoxConstraints(minWidth: 178, maxWidth: 240),
+                // 与页面卡片同款圆角 + 极淡描边，避免默认 Material 弹层的生硬感。
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(color: p.borderSoft),
                 ),
+                onSelected: (v) {
+                  if (v == 'platforms') _shareToPlatforms();
+                  if (v == 'space') _share();
+                  if (v == 'edit') _edit();
+                  if (v == 'delete') _delete();
+                },
+                itemBuilder: (_) => [
+                  _menuEntry(p, 'platforms', Icons.share_rounded, '分享到……'),
+                  _menuEntry(
+                    p,
+                    'space',
+                    Icons.forum_outlined,
+                    _shared ? '已转发到菩提空间' : '转发到菩提空间',
+                    // 本次已转发过就置灰，避免手滑连发两条一样的祈福帖。
+                    enabled: !_shared,
+                  ),
+                  if (d.project.isOwner == true) ...[
+                    PopupMenuDivider(
+                      height: 12,
+                      color: p.divider,
+                      indent: 14,
+                      endIndent: 14,
+                    ),
+                    _menuEntry(p, 'edit', Icons.edit_outlined, '编辑'),
+                    _menuEntry(p, 'delete', Icons.delete_outline, '删除'),
+                  ],
+                ],
               ),
-            ),
-          if (d?.project.isOwner == true)
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_horiz, color: p.text),
-              onSelected: (v) {
-                if (v == 'edit') _edit();
-                if (v == 'delete') _delete();
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'edit', child: Text('编辑')),
-                PopupMenuItem(value: 'delete', child: Text('删除')),
-              ],
             ),
         ],
       ),
@@ -2534,11 +2596,48 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
     );
   }
 
+  /// 三点菜单的单行样式：图标与文字颜色统一由调色板控制，
+  /// 弹层内部不再使用默认 Material 文本色，保证与暖黄/素白两套外观一致。
+  PopupMenuItem<String> _menuEntry(
+    PaletteData p,
+    String value,
+    IconData icon,
+    String label, {
+    bool enabled = true,
+  }) {
+    final color = enabled ? p.text : p.textHint;
+    return PopupMenuItem<String>(
+      value: value,
+      enabled: enabled,
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: enabled ? p.textSec : p.textHint),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.2,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _body(PaletteData p, BlessingDetail d) {
     final proj = d.project;
     final prog = d.progress;
     final joined = prog?.joined == true;
-    final done = prog?.isDone == true;
+    final expired = proj.isExpired;
+    final done = prog?.isDone == true && !expired;
     final blessedToday = prog?.doneToday() ?? false;
     final doneCount = prog?.doneCount ?? 0;
     final images =
@@ -2572,7 +2671,7 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
                 _kv(p, Icons.person_outline, '回向', proj.target),
               _kv(p, Icons.groups_outlined, '祈福', '已有 ${d.joinerCount} 人祈福'),
               _kv(p, Icons.event_outlined, '周期',
-                  '${proj.totalDays} 天 · 起于 ${proj.startDate}'),
+                  '${proj.totalDays} 天 · ${proj.startDate} ~ ${proj.endDate}'),
             ],
           ),
         ),
@@ -2595,11 +2694,15 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
                       children: [
                         _detailSectionTitle(p, '我的祈福'),
                         const Spacer(),
-                        if (done) _tag(p, '已圆满'),
+                        if (done || expired)
+                          _tag(p, expired ? '已过期' : '已圆满',
+                              color: expired ? p.textHint : p.accent),
                       ],
                     ),
                     const SizedBox(height: 10),
-                    if (!joined) ...[
+                    if (!joined && expired) ...[
+                      _hint(p, '该祈福已到结束日期，不再接受参与。'),
+                    ] else if (!joined) ...[
                       _hint(p, '参与后即可每日祈福，与大家一同回向。'),
                       const SizedBox(height: 10),
                       Align(
@@ -2618,16 +2721,23 @@ class _BlessingDetailPageState extends State<BlessingDetailPage> {
                           valueColor: AlwaysStoppedAnimation<Color>(p.primary),
                         ),
                       ),
+                      if (!expired) ...[
+                        const SizedBox(height: 4),
+                        Text('剩 ${proj.remainingDays} 天',
+                            style: TextStyle(fontSize: 11, color: p.textHint)),
+                      ],
                       const SizedBox(height: 8),
                       Row(
                         children: [
                           Expanded(
                             child: Text(
-                                '已祈福 $doneCount 天 / 共 ${proj.totalDays} 天',
+                                expired
+                                    ? '已于 ${proj.endDate} 结束 · 已祈福 $doneCount 天 / 共 ${proj.totalDays} 天'
+                                    : '已祈福 $doneCount 天 / 共 ${proj.totalDays} 天',
                                 style:
                                     TextStyle(fontSize: 12, color: p.textSec)),
                           ),
-                          if (!done) ...[
+                          if (!done && !expired) ...[
                             const SizedBox(width: 8),
                             _compactBlessButton(p, blessedToday),
                           ],

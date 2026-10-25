@@ -4,7 +4,11 @@ import 'dart:math' show cos, exp, max, min, pi, sin;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'ai_translate_page.dart';
 import 'app_palette.dart';
+import 'auth_service.dart';
+import 'benefit_share_post.dart';
+import 'blessing_page.dart';
 import 'note_sutra_links.dart';
 import 'reading_page.dart';
 import 'shanzhishi_edit_sheet.dart';
@@ -33,7 +37,21 @@ class ShanZhiShiPage extends StatefulWidget {
   /// 本页在主页页面列表里的索引（善知识 = 7）。
   final int tabIndex;
 
-  const ShanZhiShiPage({super.key, this.activeTab, this.tabIndex = 7});
+  /// 从人天利益分享卡片进入时，自动打开对应佛号的面板。
+  final String? initialEntryName;
+
+  /// 从人天利益分享卡片进入时，自动打开对应神咒的详情与阅读抽屉。
+  final String? initialMantraName;
+  final String? initialMantraKey;
+
+  const ShanZhiShiPage({
+    super.key,
+    this.activeTab,
+    this.tabIndex = 7,
+    this.initialEntryName,
+    this.initialMantraName,
+    this.initialMantraKey,
+  });
 
   @override
   State<ShanZhiShiPage> createState() => ShanZhiShiPageState();
@@ -170,9 +188,54 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     _store.addListener(_onStoreChanged);
     _mxStore.addListener(_onMxStoreChanged);
     widget.activeTab?.addListener(_onTabChanged);
-    unawaited(_store.load());
-    unawaited(_mxStore.load());
+    unawaited(_store.load().then((_) {
+      if (!mounted) return;
+      final name = widget.initialEntryName;
+      if (name != null) unawaited(_applyInitialEntryTarget(name));
+    }));
+    unawaited(_mxStore.load().then((_) {
+      if (!mounted) return;
+      final name = widget.initialMantraName;
+      final key = widget.initialMantraKey;
+      if (name != null || key != null) {
+        unawaited(_applyInitialMantraTarget(key: key, name: name));
+      }
+    }));
     unawaited(NoteSutraCatalog.load());
+  }
+
+  /// 分享卡片带佛号来源：载入后选中该佛号并展开它的面板。
+  Future<void> _applyInitialEntryTarget(String name) async {
+    await _store.load();
+    if (!mounted) return;
+    final idx = _store.entries.indexWhere((e) => e.name == name);
+    if (idx < 0) return;
+    setState(() {
+      _pageIdx = 0;
+      _selected = idx;
+    });
+    _rememberLastTapped(idx);
+    _openShelf();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _sphereCtrl.animateToIndex(idx);
+    });
+  }
+
+  /// 分享卡片带神咒来源：载入后打开该神咒详情，并展开它的阅读抽屉。
+  Future<void> _applyInitialMantraTarget({
+    String? key,
+    String? name,
+  }) async {
+    await _mxStore.load();
+    if (!mounted) return;
+    var resolvedKey = key;
+    if (resolvedKey == null || _mxStore.nameOfKey(resolvedKey) == null) {
+      final idx = _mxStore.mantras.indexOf((name ?? '').trim());
+      resolvedKey = idx >= 0 ? _mxStore.keyAt(idx) : null;
+    }
+    if (resolvedKey == null) return;
+    setState(() => _pageIdx = 1);
+    _openMantraDetail(resolvedKey, openReading: true);
   }
 
   /// 云端数据恢复后重读两套 store，并按名号恢复当前选中项，
@@ -331,7 +394,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
   /// 抽屉与点佛号弹出的面板同款（上滑动画、圆角、阴影、同底色）。
   /// 详情里的经文出处与佛号页一样，点一下进入阅读。
   /// [key] 是密咒的内部键（同名条目也能各看各的）。
-  void _openMantraDetail(String key) {
+  void _openMantraDetail(String key, {bool openReading = false}) {
     final name = _mxStore.nameOfKey(key) ?? '';
     setState(() {
       _mxDetailKey = key;
@@ -348,7 +411,12 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       // 面板占了右下角：悬浮球先收起，免得压住面板。
       _showFabMenu = false;
     });
-    _mxShelfController.forward();
+    final opening = _mxShelfController.forward();
+    if (openReading) {
+      opening.whenComplete(() {
+        if (mounted && _mxDetailKey == key) _openMxDrawer('reading');
+      });
+    }
   }
 
   /// 点密咒面板 header 收起：整块滑出屏幕下沿后卸载（动画中重开则不卸载）。
@@ -1551,14 +1619,25 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
                   _sutraLinkRow(p, entry.sutras[i]),
                   for (final t
                       in entry.quotes[entry.sutras[i]] ?? const <String>[])
-                    _paragraphBlock(p, t),
+                    _paragraphBlock(
+                      p,
+                      t,
+                      targetType: 'entry',
+                      targetName: entry.name,
+                    ),
                 ],
               if (_looseParagraphs(entry).isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Container(height: 1, color: p.divider),
                 const SizedBox(height: 12),
                 // 没挂到任何经文下的人天利益（旧数据）：仍平铺在下面。
-                for (final t in _looseParagraphs(entry)) _paragraphBlock(p, t),
+                for (final t in _looseParagraphs(entry))
+                  _paragraphBlock(
+                    p,
+                    t,
+                    targetType: 'entry',
+                    targetName: entry.name,
+                  ),
               ],
             ],
           ),
@@ -2080,6 +2159,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     ];
     final flatUnderSingle = sources.length == 1 ? flatOrphan : const <String>[];
     final looseTail = sources.length == 1 ? const <String>[] : flatOrphan;
+    final mantraName = _mxStore.nameOfKey(key ?? '') ?? _mxDetailName ?? '';
     return ListView(
       key: const ValueKey('shanzhishi_mx_reading_drawer'),
       padding: const EdgeInsets.fromLTRB(_shelfSidePad, 8, _shelfSidePad, 24),
@@ -2102,12 +2182,32 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
               borderColor: p.borderSoft,
             ),
             for (final t in bySutra[sources[i]] ?? const <String>[])
-              _paragraphBlock(p, t),
+              _paragraphBlock(
+                p,
+                t,
+                targetType: 'mantra',
+                targetName: mantraName,
+                targetKey: key ?? '',
+              ),
             if (sources.length == 1)
-              for (final t in flatUnderSingle) _paragraphBlock(p, t),
+              for (final t in flatUnderSingle)
+                _paragraphBlock(
+                  p,
+                  t,
+                  targetType: 'mantra',
+                  targetName: mantraName,
+                  targetKey: key ?? '',
+                ),
           ],
         // 没挂到任何经文下的人天利益（旧数据）：平铺在下面。
-        for (final t in looseTail) _paragraphBlock(p, t),
+        for (final t in looseTail)
+          _paragraphBlock(
+            p,
+            t,
+            targetType: 'mantra',
+            targetName: mantraName,
+            targetKey: key ?? '',
+          ),
       ],
     );
   }
@@ -2447,9 +2547,7 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
             child: SelectionContainer.disabled(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: showNotes
-                    ? () => _showMxNotePopup(p, item.note)
-                    : null,
+                onTap: showNotes ? () => _showMxNotePopup(p, item.note) : null,
                 child: Opacity(
                   opacity: showNotes ? 1 : 0,
                   child: Text(
@@ -2544,9 +2642,53 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     });
   }
 
+  /// 分享一段人天利益到菩提空间：先填写备注并确认。
+  Future<void> _shareBenefitParagraph(
+    String text, {
+    String targetType = '',
+    String targetName = '',
+    String targetKey = '',
+  }) async {
+    if (!AuthService.instance.isLoggedIn) {
+      _toast('分享到菩提空间需要先登录');
+      return;
+    }
+    final remark = await showBlessingShareDialog(
+      context,
+      blessingTitle: '人天利益',
+      hintText: '写下备注信息，与同修分享这段人天利益…',
+    );
+    if (remark == null || !mounted) return;
+    try {
+      await shareBenefitToBodhiSpace(
+        text,
+        remark: remark,
+        targetType: targetType,
+        targetName: targetName,
+        targetKey: targetKey,
+      );
+      if (mounted) _toast('已分享到菩提空间');
+    } catch (e) {
+      if (mounted) _toast('分享失败：$e');
+    }
+  }
+
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+    );
+  }
+
   /// 一段人天利益：「人天利益」四个字作为段落开头，正文紧接其后。
   /// 整段不再裹色块，只有开头那四个字带一枚小色标，避免和经文行糊成一块。
-  Widget _paragraphBlock(PaletteData p, String text) {
+  /// 段落左下角带「AI译 / 分享」操作，样式与阅读页段落操作一致。
+  Widget _paragraphBlock(
+    PaletteData p,
+    String text, {
+    String targetType = '',
+    String targetName = '',
+    String targetKey = '',
+  }) {
     final paragraph = Text.rich(
       TextSpan(
         children: [
@@ -2582,7 +2724,62 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
     return Padding(
       // 与上面经文色块拉开一点：两者贴太近，会看成同一条。
       padding: const EdgeInsets.only(top: 4, bottom: 12),
-      child: paragraph,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: double.infinity, child: paragraph),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _paragraphAction(
+                icon: Icons.auto_awesome,
+                label: 'AI译',
+                onTap: () => AiTranslatePage.open(
+                  context,
+                  paragraph: text,
+                  fontSize: 15,
+                  lineHeight: 1.8,
+                ),
+              ),
+              const SizedBox(width: 14),
+              _paragraphAction(
+                icon: Icons.share_outlined,
+                label: '分享',
+                onTap: () => _shareBenefitParagraph(
+                  text,
+                  targetType: targetType,
+                  targetName: targetName,
+                  targetKey: targetKey,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _paragraphAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    const color = Color(0xFF9A9A9A);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 2),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: color),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2638,6 +2835,69 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       ),
     );
   }
+}
+
+/// 从菩提空间的人天利益分享卡片跳转：打开对应佛号面板或神咒详情 + 阅读抽屉。
+///
+/// 旧分享帖没有来源元数据，退回到按段落文本在本机善知识库中查找。
+Future<void> openBenefitShareTarget(
+  BuildContext context,
+  BenefitSharePost post,
+) async {
+  var type = post.targetType;
+  var name = post.targetName;
+  var key = post.targetKey;
+  var hasTarget = post.hasTarget;
+
+  if (!hasTarget) {
+    final paragraph = post.paragraph.trim();
+    if (paragraph.isNotEmpty) {
+      final store = ShanZhiShiStore.instance;
+      final mxStore = ShanZhiShiMantraStore.instance;
+      await Future.wait([store.load(), mxStore.load()]);
+      if (!context.mounted) return;
+
+      for (final entry in store.entries) {
+        if (entry.paragraphs.any((p) => p.trim() == paragraph)) {
+          type = 'entry';
+          name = entry.name;
+          key = '';
+          hasTarget = true;
+          break;
+        }
+      }
+      if (!hasTarget) {
+        for (var i = 0; i < mxStore.mantras.length; i++) {
+          final mxName = mxStore.mantras[i];
+          final mxKey = mxStore.keyAt(i);
+          if (mxStore.benefitOfKey(mxKey).any((b) => b.trim() == paragraph)) {
+            type = 'mantra';
+            name = mxName;
+            key = mxKey ?? '';
+            hasTarget = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (!hasTarget) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('未找到对应的佛号或神咒')),
+    );
+    return;
+  }
+
+  await Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => ShanZhiShiPage(
+        initialEntryName: type == 'entry' ? name : null,
+        initialMantraName: type == 'mantra' ? name : null,
+        initialMantraKey: type == 'mantra' ? key : null,
+      ),
+    ),
+  );
 }
 
 /// 面板右下角的圆形编辑按钮：只有一支笔，淡色底、细描边，刻意压低存在感

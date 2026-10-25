@@ -33,10 +33,6 @@
   "contactEmail": "liyankun007@gmail.com",
 
   "nav": [
-    { "label": "首页", "href": "index.html" },
-    { "label": "下载", "href": "download.html" },
-    { "label": "更新日志", "href": "changelog.html" },
-    { "label": "隐私政策", "href": "privacy.html" },
-    { "label": "用户协议", "href": "terms.html" }
+    { "label": "立即下载", "href": "download.html" }
   ]
 }

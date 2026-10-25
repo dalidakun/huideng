@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<!-- 旧版分享页（?id=<帖子id>），纯前端渲染，保留给已经发出去的旧链接。
+     新分享一律用 https://aibuilder.top/post/<id>.html：那条路径由 HTTP 网关
+     路由到 api 云函数做服务端渲染，og 标签写在首字节 HTML 里，微信才会出链接
+     卡片。见 docs/帖子分享链接卡片方案.md 与 cloudfunctions/api/post_page.js。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="format-detection" content="telephone=no">
+<title>菩提空间 · {{SITE_NAME}}</title>
+<meta name="description" content="菩提空间 · 同修的读经笔记与分享。">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="{{SITE_NAME}}">
+<meta property="og:title" content="菩提空间 · {{SITE_NAME}}">
+<meta property="og:description" content="燃一盏灯，看见自己，照亮别人">
+<meta property="og:image" content="{{BASE_URL}}/assets/share-cover.png">
+<meta property="og:image:width" content="640">
+<meta property="og:image:height" content="640">
+<meta property="og:url" content="{{BASE_URL}}/post.html">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#F7F3EC">
+<link rel="canonical" href="{{BASE_URL}}/post.html">
+<link rel="icon" type="image/png" href="assets/icon.png">
+<link rel="apple-touch-icon" href="assets/icon.png">
+<style>
+:root {
+  --bg: #F7F3EC;
+  --paper: #FFFDF9;
+  --text: #24211D;
+  --text-soft: #4A453E;
+  --muted: #8B8378;
+  --line: #E7DFD2;
+  --accent: #8A6A3B;
+  --accent-soft: #F1E6D4;
+  --green: #556B5E;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; color-scheme: light; }
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue",
+    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(247, 243, 236, 0.92);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.topbar__inner {
+  max-width: 680px;
+  margin: 0 auto;
+  height: 48px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand {
+  font-size: 13.5px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+.brand b { color: var(--text); font-weight: 600; }
+.topbar__open {
+  font-size: 12.5px;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 11px;
+  background: var(--paper);
+}
+main {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 22px 20px calc(32px + env(safe-area-inset-bottom));
+}
+.eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  letter-spacing: 0.5px;
+}
+h1.title {
+  margin: 12px 0 4px;
+  font-size: 22px;
+  line-height: 1.45;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  word-break: break-word;
+}
+.author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 22px;
+}
+.avatar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #E8DECC;
+  color: #7A5A2E;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+  user-select: none;
+}
+.author__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.verified {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: var(--green);
+}
+.author__sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.body {
+  font-size: 17px;
+  line-height: 1.95;
+  letter-spacing: 0.3px;
+  color: var(--text-soft);
+  word-break: break-word;
+}
+.body p { margin: 0 0 1.05em; white-space: pre-wrap; }
+.body p:last-child { margin-bottom: 0; }
+.chip-line { margin: 0 0 14px; }
+.chip {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  padding: 3px 8px;
+  margin-right: 6px;
+}
+.share-card {
+  margin: 16px 0 4px;
+  padding: 14px 15px;
+  background: #FFF9EF;
+  border: 1px solid #EADFCB;
+  border-radius: 12px;
+}
+.share-card__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+.share-card__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: #F3E9D8;
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+.share-card__state {
+  font-size: 10.5px;
+  color: var(--accent);
+  background: #F1E6D4;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.share-card__count {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.share-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text);
+}
+.share-card__text {
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+}
+.share-card__sub {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.share-card__chips { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cta {
+  display: block;
+  margin-top: 26px;
+  height: 48px;
+  line-height: 48px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.cta:active { opacity: 0.86; }
+.foot {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: #A79E90;
+}
+.foot a { color: #8B8378; text-decoration: none; }
+.beian { margin-top: 6px; }
+.loading, .error {
+  padding: 72px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.spinner {
+  width: 26px;
+  height: 26px;
+  margin: 0 auto 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.error__title { font-size: 16px; color: var(--text); margin-bottom: 8px; }
+.error__retry {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 7px 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <span class="brand"><b>{{SITE_NAME}}</b> · 菩提空间</span>
+    <a class="topbar__open" href="{{BASE_URL}}/">打开 App</a>
+  </div>
+</header>
+
+<main id="app">
+  <div class="loading">
+    <div class="spinner"></div>
+    正在加载笔记…
+  </div>
+</main>
+
+<script>
+(function () {
+  var API_URL = '{{API_URL}}';
+  var API_KEY = '{{API_KEY}}';
+  var app = document.getElementById('app');
+
+  function call(body) {
+    return fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + API_KEY,
+        'x-device-id': 'web'
+      },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    });
+  }
+
+  function make(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function showError(title, hint, retry) {
+    app.textContent = '';
+    var box = make('div', 'error');
+    box.appendChild(make('div', 'error__title', title));
+    if (hint) box.appendChild(make('div', null, hint));
+    if (retry) {
+      var a = make('a', 'error__retry', '重新加载');
+      a.href = location.href;
+      box.appendChild(a);
+    }
+    app.appendChild(box);
+  }
+
+  function formatDate(ms) {
+    var n = Number(ms);
+    if (!isFinite(n) || n <= 0) return '';
+    var d = new Date(n);
+    if (isNaN(d.getTime())) return '';
+    function pad(v) { return v < 10 ? '0' + v : String(v); }
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function decodeBase64Utf8(b64) {
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (typeof TextDecoder !== 'undefined') {
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+    return decodeURIComponent(escape(bin));
+  }
+
+  // 结构化分享帖（人天利益 / 为众祈福）的元数据：
+  //   <正文>\n§§XX§§<base64(JSON)>\n[备注]
+  function takeMeta(text, prefix) {
+    var idx = text.indexOf(prefix);
+    if (idx < 0) return null;
+    var rest = text.slice(idx + prefix.length);
+    var nl = rest.indexOf('\n');
+    var b64 = (nl >= 0 ? rest.slice(0, nl) : rest).trim();
+    var remark = nl >= 0 ? rest.slice(nl + 1).trim() : '';
+    var before = text.slice(0, idx).replace(/[ \t]+$/g, '').trim();
+    try {
+      return {
+        data: JSON.parse(decodeBase64Utf8(b64)),
+        remark: remark,
+        before: before
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function appendParagraphs(box, text) {
+    text = String(text || '').replace(/\r\n?/g, '\n').trim();
+    if (!text) return;
+    text.split(/\n{2,}/).forEach(function (block) {
+      var t = block.replace(/^[ \t]+|[ \t]+$/g, '');
+      if (t) box.appendChild(make('p', null, t));
+    });
+  }
+
+  function renderBenefit(box, meta) {
+    var data = meta.data || {};
+    appendParagraphs(box, meta.remark);
+    var card = make('div', 'share-card');
+    var head = make('div', 'share-card__head');
+    head.appendChild(make('span', 'share-card__label', '人天利益'));
+    card.appendChild(head);
+    var paragraph = String(data.paragraph || meta.before || '')
+      .replace(/^【人天利益】\s*/, '')
+      .trim();
+    if (paragraph) card.appendChild(make('div', 'share-card__text', paragraph));
+    var target = String(data.targetName || '').trim();
+    if (target) {
+      var type = data.targetType === 'mantra' ? '神咒' : '佛号';
+      card.appendChild(make('div', 'share-card__sub', type + ' · ' + target));
+    }
+    box.appendChild(card);
+  }
+
+  function renderBlessing(box, meta) {
+    var data = meta.data || {};
+    appendParagraphs(box, meta.remark);
+    var card = make('div', 'share-card');
+    var head = make('div', 'share-card__head');
+    head.appendChild(make('span', 'share-card__label', '为众祈福'));
+    if (data.status === 'closed') {
+      head.appendChild(make('span', 'share-card__state', '已圆满'));
+    }
+    var joiners = Number(data.joinerCount) || 0;
+    if (joiners > 0) {
+      head.appendChild(make('span', 'share-card__count', joiners + ' 人祈福'));
+    }
+    card.appendChild(head);
+    var title = String(data.title || '').trim();
+    if (title) card.appendChild(make('div', 'share-card__title', title));
+    var target = String(data.target || '').trim();
+    if (target) card.appendChild(make('div', 'share-card__sub', '回向：' + target));
+    var chips = make('div', 'share-card__chips');
+    var days = Number(data.totalDays) || 0;
+    if (days > 0) chips.appendChild(make('span', 'chip', '共修 ' + days + ' 天'));
+    var methods = data.methods;
+    if (Object.prototype.toString.call(methods) === '[object Array]') {
+      methods.slice(0, 3).forEach(function (m) {
+        var text = String(m || '').trim();
+        if (text) chips.appendChild(make('span', 'chip', text));
+      });
+    }
+    if (chips.childNodes.length) card.appendChild(chips);
+    box.appendChild(card);
+  }
+
+  function renderPlain(box, raw) {
+    var text = String(raw || '');
+    // 旧式 [@经名](路径) / [@账号](user:id) 标记：统一退化成 @名字。
+    text = text.replace(/\[@([^\]]+)\]\([^)]*\)/g, '@$1');
+    // 只读笔记的元数据（§§TS§§ / §§SN§§ / §§HS§§ 等）：连内容一起去掉。
+    text = text.replace(/§§[A-Za-z0-9]{1,4}§§[^\s]*/g, '');
+    text = text.replace(/§§[^§\n]{0,8}§§[^\s]*/g, '');
+    text = text.replace(/\r\n?/g, '\n');
+
+    var lines = text.split('\n');
+    while (lines.length && !lines[0].trim()) lines.shift();
+    var sutra = '';
+    if (lines.length && lines[0].trim().charAt(0) === '$') {
+      sutra = lines[0].trim().slice(1).trim();
+      lines.shift();
+      while (lines.length && !lines[0].trim()) lines.shift();
+    }
+
+    if (sutra) {
+      var line = make('div', 'chip-line');
+      line.appendChild(make('span', 'chip', '经藏 · ' + sutra));
+      box.appendChild(line);
+    }
+    appendParagraphs(box, lines.join('\n'));
+  }
+
+  function renderNote(note) {
+    var raw = String(note.content || '');
+    var rawTitle = String(note.title || '').trim();
+    var title = rawTitle === '无标题' ? '' : rawTitle;
+
+    var benefit = takeMeta(raw, '§§BT§§');
+    var blessing = takeMeta(raw, '§§BL§§');
+    var kind = '';
+    if (benefit && benefit.data) kind = '人天利益';
+    else if (blessing && blessing.data) kind = '为众祈福';
+
+    if (!title || title === kind) title = '';
+    document.title = (title || kind || '菩提空间') + ' · {{SITE_NAME}}';
+
+    app.textContent = '';
+
+    app.appendChild(make('span', 'eyebrow', kind || '菩提空间'));
+    if (title) app.appendChild(make('h1', 'title', title));
+
+    var author = make('div', 'author');
+    var avatar = make('div', 'avatar');
+    avatar.textContent = (String(note.authorName || '同修').trim().charAt(0) || '同');
+    author.appendChild(avatar);
+    var info = make('div');
+    var nameRow = make('div', 'author__name');
+    nameRow.appendChild(document.createTextNode(String(note.authorName || '同修')));
+    if (note.authorVerified) {
+      var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'verified');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('aria-label', '已认证');
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M12 2l2.4 2.1 3.2-.3 1 3.1 2.8 1.6-1.2 3 1.2 3-2.8 1.6-1 3.1-3.2-.3L12 22l-2.4-2.1-3.2.3-1-3.1L2.6 15.5l1.2-3-1.2-3 2.8-1.6 1-3.1 3.2.3L12 2zm-1.2 13.6l5-5-1.4-1.4-3.6 3.6-1.6-1.6-1.4 1.4 3 3z');
+      svg.appendChild(path);
+      nameRow.appendChild(svg);
+    }
+    info.appendChild(nameRow);
+    var subParts = [];
+    var date = formatDate(note.createdAt);
+    if (date) subParts.push(date);
+    var views = Number(note.viewCount) || 0;
+    if (views > 0) subParts.push('阅读 ' + views);
+    info.appendChild(make('div', 'author__sub', subParts.join(' · ')));
+    author.appendChild(info);
+    app.appendChild(author);
+
+    var body = make('div', 'body');
+    if (benefit && benefit.data) {
+      renderBenefit(body, benefit);
+    } else if (blessing && blessing.data) {
+      renderBlessing(body, blessing);
+    } else {
+      renderPlain(body, raw);
+    }
+    if (!body.childNodes.length) {
+      body.appendChild(make('p', null, '这条笔记没有正文，打开 App 查看完整内容。'));
+    }
+    app.appendChild(body);
+
+    var stats = make('div', 'stats');
+    stats.appendChild(make('span', null, '阅读 ' + views));
+    var likes = Number(note.likeCount) || 0;
+    if (likes > 0) stats.appendChild(make('span', null, '点赞 ' + likes));
+    var comments = Number(note.commentCount) || 0;
+    if (comments > 0) stats.appendChild(make('span', null, '评论 ' + comments));
+    app.appendChild(stats);
+
+    var cta = make('a', 'cta', '打开 {{SITE_NAME}}，查看更多笔记');
+    // 官网首页（首页自带下载入口），不再直接跳下载页。
+    cta.href = '{{BASE_URL}}/';
+    app.appendChild(cta);
+
+    app.appendChild(make('p', 'foot', '燃一盏灯，看见自己，照亮别人'));
+    var beian = make('p', 'foot beian');
+    beian.innerHTML = '{{BEIAN_HTML}}';
+    app.appendChild(beian);
+  }
+
+  var id = '';
+  try {
+    id = (new URLSearchParams(location.search).get('id') || '').trim();
+  } catch (e) {
+    var m = /[?&]id=([^&]+)/.exec(location.search);
+    if (m) id = decodeURIComponent(m[1]).trim();
+  }
+  if (!id || id.length > 128) {
+    showError('链接不完整', '缺少帖子编号，无法加载内容。', false);
+    return;
+  }
+
+  call({ action: 'getNoteById', id: id }).then(function (res) {
+    if (!res || !res.ok || !res.note) {
+      showError('笔记不存在', '该笔记可能已被删除，或仅作者本人可见。', false);
+      return;
+    }
+    renderNote(res.note);
+    // 打开分享页也算一次阅读；失败不影响页面展示。
+    call({ action: 'incView', id: id }).catch(function () {});
+  }).catch(function () {
+    showError('加载失败', '网络开小差了，请稍后重试。', true);
+  });
+})();
+</script>
+
+</body>
+</html>
