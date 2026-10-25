@@ -448,6 +448,15 @@ module.exports = function createTrade(deps) {
     return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   }
 
+  /** n 位随机小写字母：手机号注册自动建账号名时用，和 App 默认账号同一套规则。 */
+  function randomLower(n) {
+    const abc = "abcdefghijklmnopqrstuvwxyz";
+    const buf = crypto.randomBytes(n);
+    let s = "";
+    for (let i = 0; i < n; i++) s += abc[buf[i] % 26];
+    return s;
+  }
+
   function authField(json, key) {
     if (!json) return "";
     return String(json[key] || (json.data && json.data[key]) || "");
@@ -481,7 +490,8 @@ module.exports = function createTrade(deps) {
   }
 
   async function phoneCode(event, sessionUid) {
-    const scene = event.scene === "reset" ? "reset" : "bind";
+    const scene = event.scene === "reset" ? "reset"
+      : event.scene === "register" ? "register" : "bind";
     const phone = normalizePhone(event.phone);
     if (!phone) return fail("invalid_phone");
 
@@ -490,6 +500,12 @@ module.exports = function createTrade(deps) {
       const { data } = await phones().doc(phone.local).get();
       const owner = data && data[0];
       if (owner && owner.uid && owner.uid !== sessionUid) return fail("phone_taken");
+    }
+    // 拿已经绑过账号的号来注册：先拦下，别白花一条短信
+    if (scene === "register") {
+      const { data } = await phones().doc(phone.local).get();
+      const owner = data && data[0];
+      if (owner && owner.uid) return fail("phone_taken");
     }
 
     const now = Date.now();
@@ -524,7 +540,8 @@ module.exports = function createTrade(deps) {
   }
 
   async function phoneConfirm(event, sessionUid) {
-    const scene = event.scene === "reset" ? "reset" : "bind";
+    const scene = event.scene === "reset" ? "reset"
+      : event.scene === "register" ? "register" : "bind";
     const id = String(event.id || "").trim();
     const code = String(event.code || "").trim();
     if (!/^1[3-9]\d{9}$/.test(id)) return fail("invalid_phone");
@@ -577,6 +594,63 @@ module.exports = function createTrade(deps) {
         await phoneCodes().doc(id).remove();
       } catch (e) {}
       return ok({ phone: id.slice(0, 3) + "****" + id.slice(7) });
+    }
+
+    // scene === register：手机号 + 验证码直接建号（账号名可留空自动生成），
+    // 建完就把手机号绑上，之后忘了密码还能用同一个号找回。
+    if (scene === "register") {
+      const password = String(event.password || "");
+      if (password.length < 6 || password.length > 64) return fail("invalid_password");
+
+      const { data: boundData } = await phones().doc(id).get();
+      const bound = boundData && boundData[0];
+      if (bound && bound.uid) return fail("phone_taken");
+
+      const wantName = String(event.username || "").trim();
+      let username = "";
+      if (wantName) {
+        username = deps.normalizeUsername(wantName);
+        if (!username) return fail("invalid_username");
+        const exists = await findAccount(username.toLowerCase());
+        if (exists) return fail("username_taken");
+      } else {
+        // 和 App「手机号登录自动建号」同一套规则：4 位随机小写 + 手机号后四位
+        const tail = id.slice(7);
+        for (let i = 0; i < 6 && !username; i++) {
+          const cand = randomLower(4) + tail;
+          const exists = await findAccount(cand.toLowerCase());
+          if (!exists) username = cand;
+        }
+        if (!username) return fail("username_taken");
+      }
+
+      const newUid = "web_" + crypto.randomBytes(14).toString("hex");
+      const salt = crypto.randomBytes(16).toString("hex");
+      await db.collection("userAccounts").add({
+        username,
+        usernameKey: username.toLowerCase(),
+        salt,
+        passwordHash: deps.hashPassword(password, salt),
+        hasPassword: true,
+        uid: newUid,
+        phone: id,
+        phoneBoundAt: Date.now(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      await phones().doc(id).set({ uid: newUid, phone: id, createdAt: Date.now() });
+      await getOrCreateAccount(newUid);
+      const token = await createSession(newUid);
+      try {
+        await phoneCodes().doc(id).remove();
+      } catch (e) {}
+      return ok({
+        token,
+        uid: newUid,
+        username,
+        phone: id.slice(0, 3) + "****" + id.slice(7),
+        registered: true,
+      });
     }
 
     // scene === reset
@@ -689,7 +763,9 @@ module.exports = function createTrade(deps) {
       // 找回密码时用户还没登录，所以手机号相关动作先于会话校验；
       // 只有「绑定手机」这一路需要登录态。
       if (action === "tradePhoneCode" || action === "tradePhoneConfirm") {
-        const session = event.scene === "reset" ? null : await resolveSession(event.token);
+        // 找回密码 / 手机号注册都还没登录，只有「绑定手机」需要登录态
+        const needLogin = event.scene !== "reset" && event.scene !== "register";
+        const session = needLogin ? await resolveSession(event.token) : null;
         if (action === "tradePhoneCode") return await phoneCode(event, session && session.uid);
         return await phoneConfirm(event, session && session.uid);
       }
