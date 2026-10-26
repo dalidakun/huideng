@@ -26,9 +26,9 @@ const BASE_URL = 'https://aibuilder.top';
 const SITE_TAGLINE = '燃一盏灯，看见自己，照亮别人。';
 const ICP_NUMBER = '豫ICP备2026050494号';
 const SHARE_IMAGE = BASE_URL + '/assets/share-cover.png';
-// 页面上「打开 App」与底部「打开燃灯，查看更多笔记」都进官网首页
-// （首页自己带下载入口），不再直接跳到下载页那张单页。
-const SITE_HOME = BASE_URL + '/';
+// 页面上「打开 App」与底部「打开燃灯，查看更多笔记」都进燃灯 App 子页。
+// 站点首页现在是 BTC 行情页，不能再回 `/`，否则分享卡片点开会落在行情盘。
+const APP_HOME = BASE_URL + '/app/index.html';
 const COMMUNITY_NAME = '菩提空间';
 
 const HTML_HEADERS = {
@@ -497,7 +497,7 @@ function shell(opts) {
     '</style>\n</head>\n<body>\n' +
     '<header class="topbar"><div class="topbar__inner">' +
     '<span class="brand"><b>' + esc(SITE_NAME) + '</b> · ' + COMMUNITY_NAME + '</span>' +
-    '<a class="topbar__open" href="' + SITE_HOME + '">打开 App</a>' +
+    '<a class="topbar__open" href="' + APP_HOME + '">打开 App</a>' +
     '</div></header>\n' +
     '<main>\n' +
     opts.main +
@@ -588,7 +588,7 @@ function notePageHtml(note, id) {
   main += '<div class="stats">' + stats + '</div>';
 
   main +=
-    '<a class="cta" href="' + SITE_HOME + '">打开' +
+    '<a class="cta" href="' + APP_HOME + '">打开' +
     esc(SITE_NAME) + '，查看更多笔记</a>';
   main += footerHtml();
 
@@ -693,7 +693,7 @@ function blessingPageHtml(project, id) {
   if (stats) main += '<div class="stats">' + stats + '</div>';
 
   main +=
-    '<a class="cta" href="' + SITE_HOME + '">打开' +
+    '<a class="cta" href="' + APP_HOME + '">打开' +
     esc(SITE_NAME) + '，一起祈福</a>';
   main += footerHtml();
 
@@ -862,7 +862,7 @@ async function handleHttp(event, app) {
     if (!seg || seg.indexOf('/') >= 0) {
       return htmlResponse(
         404,
-        errorPageHtml('链接不完整', '缺少帖子编号，无法打开这条笔记。', SITE_HOME, '打开燃灯官网')
+        errorPageHtml('链接不完整', '缺少帖子编号，无法打开这条笔记。', APP_HOME, '打开燃灯 App')
       );
     }
     id = seg;
@@ -871,7 +871,7 @@ async function handleHttp(event, app) {
   if (!id || id.length > 128) {
     return htmlResponse(
       404,
-      errorPageHtml('链接不完整', '缺少帖子编号，无法打开这条笔记。', SITE_HOME, '打开燃灯官网')
+      errorPageHtml('链接不完整', '缺少帖子编号，无法打开这条笔记。', APP_HOME, '打开燃灯 App')
     );
   }
 
@@ -909,7 +909,7 @@ async function handleHttp(event, app) {
 
   return htmlResponse(
     404,
-    errorPageHtml('笔记不存在', '该内容可能已被删除，或仅作者本人可见。', SITE_HOME, '打开燃灯官网')
+    errorPageHtml('笔记不存在', '该内容可能已被删除，或仅作者本人可见。', APP_HOME, '打开燃灯 App')
   );
 }
 

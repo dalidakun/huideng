@@ -3,6 +3,11 @@
   "tagline": "一款面向现代人的佛学学习与修行 App。",
   "description": "燃灯 App：收录大正藏 8982 部经文，按八大宗派与十二法门归类。逐段精读、随手笔记、AI 助手答疑，经文可离线阅读。",
 
+  "brandName": "首页",
+  "brandLogo": "assets/czsc.png",
+  "brandLogoSrc": "assets/menpai/czsc.png",
+  "brandNote": "站点头部的品牌名与 logo（{{BRAND_NAME}} / {{BRAND_LOGO}}）。brandLogoSrc 是仓库里那张原图，构建时自动同步到 site/assets/ 并算内容指纹拼成 ?v=，换图后重跑构建就会刷掉 CDN 缓存，不用再手工 copy。siteName 仍是 App 的名字「燃灯」，App 相关文案、页面标题不受影响。",
+
   "icpNumber": "豫ICP备2026050494号",
   "icpNumberNote": "工信部 ICP 备案号（格式：省简称+ICP备+序列号，如 粤ICP备12345678号），构建后自动挂在全站页脚并链接至 beian.miit.gov.cn。公安联网备案通过后把公安备案号填到 policeRecordNumber。",
 
@@ -19,6 +24,12 @@
 
   "mirrors": ["https://randeng-d8gs968w22a3d98e8-1461892767.tcloudbaseapp.com/huideng"],
   "mirrorsNote": "主源不可用时，用户可依次尝试镜像。留空数组则下载页只显示官方源。备案通过后把 CloudBase 地址填进来作备用源。",
+
+  "market": {
+    "restBase": "",
+    "wsBase": "",
+    "note": "BTC 行情页的数据源。留空 = 直连 Binance（data-api / data-stream 的 .vision 域，国内可通）。如果以后自建了反代（Nginx 反代 REST + WebSocket 中继），把 https://… 和 wss://… 填进来，构建后会顶到数据源列表最前面，客户端代码不用改。"
+  },
 
   "packageName": "com.huideng.reader",
   "platform": "Android",

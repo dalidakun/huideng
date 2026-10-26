@@ -21,6 +21,8 @@ const crypto = require("crypto");
 const https = require("https");
 // 帖子分享页（服务端渲染，微信链接卡片读的是首字节 HTML 里的 og 标签）。
 const postPage = require("./post_page");
+// 模拟交易（网页端 BTC 模拟盘）：账号注册/登录、持仓、挂单、成交，见 trade.js
+const createTrade = require("./trade");
 
 /**
  * 用 access token 调 CloudBase auth/v1/user/me 解析真实用户 ID。
@@ -555,6 +557,15 @@ exports.main = async (event, context) => {
   }
 
   const db = app.database();
+  // 模拟交易：独立模块（trade.js），只认 trade* 开头的 action，见文件头注释。
+  // 创建失败时退化成「什么都不认」，保证 App 原有功能不受影响。
+  let tradeHandle;
+  try {
+    tradeHandle = createTrade({ db, ok, fail, hashPassword, normalizeUsername });
+  } catch (e) {
+    console.error("[api] createTrade failed:", e && e.stack ? e.stack : e);
+    tradeHandle = function () { return undefined; };
+  }
   const notes = db.collection("notes");
   const likes = db.collection("noteLikes");
   const commentLikes = db.collection("noteCommentLikes");
@@ -1190,6 +1201,17 @@ exports.main = async (event, context) => {
   console.log(`[api] action=${action} uid=${uid} tokenPresent=${!!(event.__accessToken)}`);
 
   try {
+    // 模拟交易走独立模块；不是 trade* action 就返回 undefined，继续下面的 switch。
+    // 这一段必须失败可降级：交易模块出任何问题都不能拖垮 App 原有的功能。
+    let tradeResult;
+    try {
+      tradeResult = await tradeHandle(action, event, uid);
+    } catch (e) {
+      console.error("[api] trade handle error:", e && e.stack ? e.stack : e);
+      tradeResult = undefined;
+    }
+    if (tradeResult !== undefined) return tradeResult;
+
     switch (action) {
       // 数据库连通性诊断：返回当前环境可用的凭证信息与一次真实查询结果
       case "dbProbe": {

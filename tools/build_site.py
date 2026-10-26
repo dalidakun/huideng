@@ -71,6 +71,22 @@ LEGAL_DOCS = {
 TEMPLATES = {"legal.template.html", "community.template.html"}
 
 
+def site_html_sources() -> list[pathlib.Path]:
+    """要渲染的页面源文件：site/ 及其子目录（app/、trade/），排除产物与模板。
+
+    dist/ 是构建输出，必须排除，否则会把自己当输入再渲染一遍。
+    """
+    out = []
+    for p in sorted(SITE.rglob("*.html")):
+        rel = p.relative_to(SITE)
+        if rel.parts[0] in {"dist", ".freebuff"}:
+            continue
+        if p.name in TEMPLATES:
+            continue
+        out.append(p)
+    return out
+
+
 # --------------------------------------------------------------------------
 # 读取
 # --------------------------------------------------------------------------
@@ -648,11 +664,36 @@ def build(args: argparse.Namespace) -> pathlib.Path:
 
     # 页面文案里的 APK 体积会随每次构建变，下载页/首页都要跟着更新，
     # 所以所有页面都吃同一份 common 变量。
-    # ASSET_VER = site.css 内容指纹，拼在 link 的查询串里。
-    # 没有它浏览器会长期缓存旧样式，改了 CSS 用户看不到（已实际踩过）。
-    css_ver = hashlib.md5((SITE / "assets" / "site.css").read_bytes()).hexdigest()[:8]
+    # ASSET_VER = assets 下全部 css/js 的内容指纹，拼在 link/script 的查询串里。
+    # 没有它浏览器会长期缓存旧样式和旧脚本，改了用户看不到（已实际踩过）。
+    # 取整目录而不是单个 site.css：trade.css / trade.js 改动同样要能刷掉缓存。
+    h = hashlib.md5()
+    for asset in sorted((SITE / "assets").rglob("*")):
+        if asset.is_file() and asset.suffix.lower() in {".css", ".js"}:
+            h.update(asset.read_bytes())
+    css_ver = h.hexdigest()[:8]
+
+    # 品牌 logo 单独给一个内容指纹：换图后文件名不变，只靠 CDN/浏览器缓存
+    # 就会一直显示旧图（已经踩过一次），拼在 src 的查询串上才能立刻刷新。
+    # 图直接从 App 仓库里那张取（config.brandLogoSrc），换图后重跑构建即可，
+    # 不必再手工 copy 到 site/assets——之前漏了这一步，线上一直挂着旧图。
+    brand_logo = config.get("brandLogo") or "assets/icon.png"
+    brand_src_rel = (config.get("brandLogoSrc") or "").strip()
+    brand_src = (ROOT / brand_src_rel) if brand_src_rel else None
+    brand_file = brand_src if (brand_src and brand_src.is_file()) else (SITE / brand_logo)
+    try:
+        logo_ver = hashlib.md5(brand_file.read_bytes()).hexdigest()[:8]
+    except OSError:
+        logo_ver = "0"
+
     common = {
         "SITE_NAME": config["siteName"],
+        # 站点品牌（头部 logo + 名字）与 App 名分开：App 叫「燃灯」，
+        # 站点对外叫「缠习社」。没配 brandName 时退回 siteName，
+        # 老的「燃灯」模板不用改也能照常渲染。
+        "BRAND_NAME": config.get("brandName") or config["siteName"],
+        "BRAND_LOGO": brand_logo,
+        "BRAND_LOGO_VER": logo_ver,
         "ASSET_VER": css_ver,
         "TAGLINE": config["tagline"],
         "DESCRIPTION": config["description"],
@@ -677,11 +718,23 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         "BEIAN_HTML": beian_html(config),
         "API_URL": api_url,
         "API_KEY": api_key,
+        # 行情页可选的自建反代（site.config.json 的 market 段）。
+        # 留空 = 直连 Binance；填了就会顶到数据源列表最前面。
+        "MARKET_REST": (config.get("market") or {}).get("restBase", ""),
+        "MARKET_WS": (config.get("market") or {}).get("wsBase", ""),
     }
 
     DIST.mkdir(parents=True, exist_ok=True)
 
     copy_assets()
+
+    # 品牌图以 config.brandLogoSrc 为准：同步进 dist，并回写 site/assets 里的副本，
+    # 页面引用的一直是 site/assets/<brandLogo>，这样换图只需重跑构建。
+    if brand_src and brand_src.is_file() and brand_src != SITE / brand_logo:
+        shutil.copy2(brand_src, DIST / brand_logo)
+        shutil.copy2(brand_src, SITE / brand_logo)
+        print(f"品牌图    {brand_src.relative_to(ROOT)} -> "
+              f"{(SITE / brand_logo).relative_to(ROOT)}   v={logo_ver}")
 
     # 按钮链到 /downloads/xxx.apk，这里必须把包也放进 dist，
     # 否则部署后点击 404——链接和文件要成对落地。
@@ -698,17 +751,29 @@ def build(args: argparse.Namespace) -> pathlib.Path:
     else:
         print("警告      未安装 segno，跳过二维码生成（pip install segno）")
 
+    # 顶层页面 REL=''，app/、trade/ 这类子目录页面 REL='../'。
+    # 子目录模板里所有指向站点根的相对链接/资源都写成 {{REL}}xxx，
+    # 顶层页面展开后就是原样，所以老页面一个字都不用改。
     pages = 0
-    for src in sorted(SITE.glob("*.html")):
-        if src.name in TEMPLATES:
-            continue
+    for src in site_html_sources():
+        rel_path = src.relative_to(SITE)
+        rel = "../" * (len(rel_path.parts) - 1)
+        page = dict(common)
+        page["REL"] = rel
+        # 安装包按钮用相对路径（见上面 apk_href 的说明）：子目录要多退一级，
+        # 否则部署后点下载会 404。
+        page["APK_HREF"] = rel + apk_href
+
         out = src.read_text(encoding="utf-8")
-        for key, value in common.items():
-            out = out.replace("{{" + key + "}}", value)
+        for key, value in page.items():
+            out = out.replace("{{" + key + "}}", str(value))
         left = sorted(set(re.findall(r"\{\{([A-Z_]+)\}\}", out)))
         if left:
-            raise SystemExit(f"{src.name} 还有未替换的占位符：{left}")
-        (DIST / src.name).write_text(out, encoding="utf-8")
+            raise SystemExit(f"{rel_path} 还有未替换的占位符：{left}")
+
+        target = DIST / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(out, encoding="utf-8")
         pages += 1
 
     # 协议页：由 assets/agreements/ 的原文生成，保证与 App 内展示一致。
@@ -718,6 +783,8 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         out = legal_tpl
         for key, value in {
             **common,
+            "REL": "",  # 协议页在站点根目录
+            "APK_HREF": apk_href,
             "LEGAL_TITLE": meta["title"],
             "LEGAL_SLUG": slug,
             "LEGAL_UPDATED": legal_updated(md),

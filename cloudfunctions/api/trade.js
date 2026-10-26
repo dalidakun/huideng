@@ -27,6 +27,7 @@ const https = require("https");
 
 /* 模拟交易，不收手续费：前端 trade.js 的 FEE 也是 0，两边必须一致。 */
 const FEE_RATE = 0;
+const PNL_MULT = 10; // 单子盈亏放大 10 倍（与 site/assets/js/trade.js 保持一致）
 const INITIAL_CASH = 100000; // 初始虚拟资金 10 万 USDT
 const MIN_NOTIONAL = 10; // 最小名义价值 10 USDT（对齐币安）
 const MAX_QTY = 1000; // 单笔数量上限
@@ -188,6 +189,7 @@ module.exports = function createTrade(deps) {
         price: f.price,
         fee: f.fee,
         pnl: f.pnl || 0,
+        posId: f.posId || "",
         at: f.at,
       })),
     };
@@ -225,7 +227,14 @@ module.exports = function createTrade(deps) {
 
   async function addFill(uid, entry) {
     const doc = { uid, at: Date.now(), fee: round(entry.fee, 6), pnl: round(entry.pnl || 0, 6) };
-    const { id } = await fills().add({ ...doc, type: entry.type, side: entry.side, qty: entry.qty, price: entry.price });
+    const { id } = await fills().add({
+      ...doc,
+      type: entry.type,
+      side: entry.side,
+      qty: entry.qty,
+      price: entry.price,
+      posId: entry.posId || "",
+    });
     // 只保留最近 MAX_FILLS 条，超出的老记录直接删
     const { data } = await fills().where({ uid }).orderBy("at", "desc").limit(MAX_FILLS + 20).get();
     const all = data || [];
@@ -240,9 +249,86 @@ module.exports = function createTrade(deps) {
   /**
    * 开仓：kind='market' 直接用 price 成交；kind='limit' 挂单等 tradeSync 触发。
    */
+  /**
+   * 同方向还没平仓的持仓合并成一单：数量、保证金、手续费相加，
+   * 开仓价按「总成本 / 总数量」算加权均价。返回持仓 id。
+   */
+  async function addOrMergePosition(uid, side, qty, price, margin, fee) {
+    const { data } = await positions().where({ uid, side }).limit(1).get();
+    const existing = data && data[0];
+    if (existing) {
+      const total = roundQty(existing.qty + qty);
+      const entry = total > 0
+        ? round((existing.entry * existing.qty + price * qty) / total, 8)
+        : price;
+      await positions().doc(existing._id).update({
+        qty: total,
+        entry,
+        margin: round((existing.margin || 0) + margin, 6),
+        openFee: round((existing.openFee || 0) + fee, 6),
+      });
+      return existing._id;
+    }
+    const { id } = await positions().add({
+      uid,
+      side,
+      qty,
+      entry: price,
+      margin,
+      openFee: fee,
+      createdAt: Date.now(),
+    });
+    return id;
+  }
+
+  /**
+   * 老数据迁移：同一方向曾经存成多笔的，合并成一笔。
+   * 每个云函数实例对每个用户只跑一次，开销可忽略。
+   */
+  const consolidatedUsers = new Set();
+  async function consolidatePositions(uid) {
+    if (consolidatedUsers.has(uid)) return;
+    consolidatedUsers.add(uid);
+    const { data } = await positions().where({ uid }).limit(50).get();
+    const groups = {};
+    for (const p of data || []) {
+      if (p.side !== "long" && p.side !== "short") continue;
+      if (!groups[p.side]) groups[p.side] = [];
+      groups[p.side].push(p);
+    }
+    for (const side of Object.keys(groups)) {
+      const list = groups[side].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      if (list.length < 2) continue;
+      const keep = list[0];
+      let qty = 0;
+      let cost = 0;
+      let margin = 0;
+      let fee = 0;
+      for (const p of list) {
+        const q = +p.qty || 0;
+        qty += q;
+        cost += (+p.entry || 0) * q;
+        margin += +p.margin || 0;
+        fee += +p.openFee || 0;
+      }
+      qty = roundQty(qty);
+      await positions().doc(keep._id).update({
+        qty,
+        entry: qty > 0 ? round(cost / qty, 8) : keep.entry,
+        margin: round(margin, 6),
+        openFee: round(fee, 6),
+      });
+      for (let i = 1; i < list.length; i++) {
+        try {
+          await positions().doc(list[i]._id).remove();
+        } catch (e) {}
+      }
+    }
+  }
+
   async function openPosition(uid, params, marketPrice) {
     const side = params.side === "short" ? "short" : "long";
-    const qty = roundQty(num(params.qty));
+    let qty = roundQty(num(params.qty));
     if (!Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) return fail("bad_qty");
 
     if (params.kind === "limit") {
@@ -259,38 +345,54 @@ module.exports = function createTrade(deps) {
     if (price * qty < MIN_NOTIONAL) return fail("min_notional");
     if (rateLimited("order:" + uid)) return fail("rate_limited");
 
-    const fee = price * qty * FEE_RATE;
-    const margin = price * qty;
     const acc = await getOrCreateAccount(uid);
+    let fee = price * qty * FEE_RATE;
+    let margin = price * qty;
+    // 100% 时价格可能跳了一点：差额在 0.5% 内按可用余额截一下，直接成交
+    if (acc.cash < margin + fee) {
+      const affordable = Math.floor((acc.cash / (price * (1 + FEE_RATE))) * 1e6) / 1e6;
+      if (affordable > 0 && qty <= affordable * 1.005 + 1e-6) {
+        qty = affordable;
+        fee = price * qty * FEE_RATE;
+        margin = price * qty;
+      }
+    }
+    if (price * qty < MIN_NOTIONAL) return fail("min_notional");
     if (acc.cash < margin + fee) return fail("insufficient_balance");
 
     await accounts().doc(uid).update({
       cash: round(acc.cash - margin - fee, 6),
       updatedAt: Date.now(),
     });
-    await positions().add({
-      uid,
-      side,
-      qty,
-      entry: price,
-      margin,
-      openFee: fee,
-      createdAt: Date.now(),
-    });
-    await addFill(uid, { type: "open", side, qty, price, fee, pnl: 0 });
+    const posId = await addOrMergePosition(uid, side, qty, price, margin, fee);
+    await addFill(uid, { type: "open", side, qty, price, fee, pnl: 0, posId });
     return ok({ account: await snapshot(uid) });
   }
 
   /**
    * 平仓 / 强平。price 为 mark，liquidated=true 时不再扣手续费、返还 0。
    */
-  async function closePosition(uid, pos, price, liquidated) {
-    const pnl = pos.side === "short" ? (pos.entry - price) * pos.qty : (price - pos.entry) * pos.qty;
-    const fee = liquidated ? 0 : price * pos.qty * FEE_RATE;
-    let proceeds = pos.margin + pnl - fee;
+  async function closePosition(uid, pos, price, liquidated, pct) {
+    const frac = pct == null || !(pct > 0) ? 1 : Math.min(1, pct);
+    const qtyPart = roundQty(pos.qty * frac);
+    if (!(qtyPart > 0)) return 0;
+    const diff = pos.side === "short" ? pos.entry - price : price - pos.entry;
+    const pnl = diff * qtyPart * PNL_MULT;
+    const fee = liquidated ? 0 : price * qtyPart * FEE_RATE;
+    const marginPart = pos.margin * frac;
+    let proceeds = marginPart + pnl - fee;
     if (proceeds < 0) proceeds = 0; // 不穿仓
     const acc = await getOrCreateAccount(uid);
-    await positions().doc(pos._id).remove();
+
+    if (frac >= 1 - 1e-9) {
+      await positions().doc(pos._id).remove();
+    } else {
+      await positions().doc(pos._id).update({
+        qty: roundQty(pos.qty - qtyPart),
+        margin: round(pos.margin - marginPart, 6),
+        openFee: round((pos.openFee || 0) * (1 - frac), 6),
+      });
+    }
     await accounts().doc(uid).update({
       cash: round(acc.cash + proceeds, 6),
       updatedAt: Date.now(),
@@ -298,10 +400,11 @@ module.exports = function createTrade(deps) {
     await addFill(uid, {
       type: liquidated ? "liquidated" : "close",
       side: pos.side,
-      qty: pos.qty,
+      qty: qtyPart,
       price,
       fee,
       pnl,
+      posId: pos._id,
     });
     return proceeds;
   }
@@ -331,14 +434,15 @@ module.exports = function createTrade(deps) {
       }
       await orders().doc(o._id).remove();
       await accounts().doc(uid).update({ cash: round(acc.cash - margin - fee, 6), updatedAt: Date.now() });
-      await positions().add({ uid, side: o.side, qty, entry: fillPrice, margin, openFee: fee, createdAt: Date.now() });
-      await addFill(uid, { type: "open", side: o.side, qty, price: fillPrice, fee, pnl: 0 });
+      const posId = await addOrMergePosition(uid, o.side, qty, fillPrice, margin, fee);
+      await addFill(uid, { type: "open", side: o.side, qty, price: fillPrice, fee, pnl: 0, posId });
       changed = true;
     }
 
     const posNow = await positions().where({ uid }).limit(50).get();
     for (const p of posNow.data || []) {
-      const pnl = p.side === "short" ? (p.entry - price) * p.qty : (price - p.entry) * p.qty;
+      const pdiff = p.side === "short" ? p.entry - price : price - p.entry;
+      const pnl = pdiff * p.qty * PNL_MULT;
       if (p.margin + pnl > 0) continue;
       await closePosition(uid, p, price, true);
       changed = true;
@@ -776,6 +880,8 @@ module.exports = function createTrade(deps) {
       await getOrCreateAccount(me);
 
       if (action === "tradeState") {
+        // 历史数据兼容：同方向的多笔持仓先并成一单，再返回给前端
+        await consolidatePositions(me);
         const account = await snapshot(me);
         // 带上绑定手机（脱敏），前端据此显示「已绑定 138****0000」
         try {
@@ -794,9 +900,9 @@ module.exports = function createTrade(deps) {
 
       if (action === "tradeReset") {
         if (rateLimited("reset:" + me)) return fail("rate_limited");
+        // 只重置资金和持仓；成交记录保留，胜率/当日单数不重新计算
         await removeWhere(positions(), me);
         await removeWhere(orders(), me);
-        await removeWhere(fills(), me);
         await touchAccount(me, { cash: INITIAL_CASH, lastPrice: 0 });
         return ok({ account: await snapshot(me) });
       }
@@ -821,7 +927,8 @@ module.exports = function createTrade(deps) {
         const p = data && data[0];
         if (!p || p.uid !== me) return fail("not_found");
         if (rateLimited("close:" + me)) return fail("rate_limited");
-        await closePosition(me, p, price, false);
+        const pct = Math.min(1, Math.max(0.01, num(event.pct) || 1));
+        await closePosition(me, p, price, false, pct);
         return ok({ account: await snapshot(me) });
       }
 

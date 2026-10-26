@@ -3,379 +3,376 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{SITE_NAME}} · {{TAGLINE}}</title>
-<meta name="description" content="{{DESCRIPTION}}">
-<meta name="theme-color" content="#FBFBFB">
+<title>BTC 行情 · 模拟交易</title>
+<meta name="description" content="BTC/USDT 实时行情：最新价、24 小时涨跌幅与成交量，1 分钟到 1 天六档 K 线，可自定义均线（MA）与 MACD、成交量副图，配一套虚拟资金的模拟交易盘。">
+<meta name="theme-color" content="#F4ECD9">
 <meta property="og:type" content="website">
-<meta property="og:title" content="{{SITE_NAME}} · {{TAGLINE}}">
-<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="BTC 行情 · 模拟交易">
+<meta property="og:description" content="实时价格与六档 K 线，虚拟资金按当前价开仓、平仓，持仓与盈亏统计。">
 <meta property="og:image" content="{{BASE_URL}}/assets/icon.png">
-<meta property="og:url" content="{{BASE_URL}}/">
+<meta property="og:url" content="{{BASE_URL}}/index.html">
 <meta name="twitter:card" content="summary">
-<link rel="icon" type="image/png" href="assets/icon.png">
-<link rel="apple-touch-icon" href="assets/icon.png">
-<link rel="canonical" href="{{BASE_URL}}/">
-<link rel="stylesheet" href="assets/site.css?v={{ASSET_VER}}">
+<link rel="icon" type="image/png" href="{{REL}}assets/icon-round.png">
+<link rel="apple-touch-icon" href="{{REL}}assets/icon.png">
+<link rel="canonical" href="{{BASE_URL}}/index.html">
+<link rel="stylesheet" href="{{REL}}assets/site.css?v={{ASSET_VER}}">
+<link rel="stylesheet" href="{{REL}}assets/trade.css?v={{ASSET_VER}}">
 </head>
-<body>
+<body class="page-trade">
 <a class="skip-link" href="#main">跳到主要内容</a>
 
 <header class="nav">
   <div class="nav__inner">
-    <a class="nav__brand" href="index.html">
-      <img class="nav__logo" src="assets/icon.png" alt="" width="26" height="26">
-      <span>{{SITE_NAME}}</span>
+    <a class="nav__brand" aria-label="首页" href="{{REL}}index.html">
+      <img class="nav__logo" src="{{REL}}{{BRAND_LOGO}}?v={{BRAND_LOGO_VER}}" alt="" width="24" height="24">
     </a>
-    <a class="nav__cta" href="download.html">立即下载</a>
+
+    <div class="nav__right">
+      <nav class="nav__menu" aria-label="主导航">
+        <a href="{{REL}}index.html" aria-current="page">BTC 行情</a>
+        <a href="{{REL}}app/index.html">燃灯 App</a>
+      </nav>
+
+      <button type="button" class="avatar-btn" id="btnMenu" aria-label="账户菜单" aria-haspopup="menu" aria-expanded="false" aria-controls="acctMenu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M5.2 20c1.2-3.5 3.9-5.3 6.8-5.3s5.6 1.8 6.8 5.3"/></svg>
+      </button>
+
+      <div class="acct-menu" id="acctMenu" role="menu" aria-label="账户" hidden>
+        <div class="acct-menu__who" id="menuWho">未登录 · 本机账户</div>
+        <button type="button" role="menuitem" data-act="login" id="menuLogin">登录 / 注册</button>
+        <button type="button" role="menuitem" data-act="phone" id="menuPhone" hidden>绑定手机号</button>
+        <button type="button" role="menuitem" data-act="reset" id="menuReset">重置资金</button>
+        <button type="button" role="menuitem" data-act="logout" id="menuLogout" hidden>退出登录</button>
+      </div>
+    </div>
   </div>
 </header>
 
-<main id="main">
+<main id="main" class="trade-main">
 
-  <section class="hero">
-    <div class="container hero__inner">
-      <div class="hero__col">
-        <div class="hero__lead">
-          <span class="hero__badge">v{{VERSION}} · {{RELEASE_DATE}}</span>
-          <h1 class="hero__title">燃灯，看见<em>自己</em>，照亮别人</h1>
-          <p class="hero__slogan">{{TAGLINE}}</p>
-          <div class="hero__desc">
-            <p>收录大藏经丰富经典内容，借助 AI 翻译与解读，让原本难懂的古文经书更容易阅读和理解。通过社区交流，与同修分享心得、讨论经典；通过功课打卡、日历记录，帮助建立持续的修行习惯。</p>
-            <p>同时整理八大宗派、十二大法门及核心经典，帮助初学者了解佛教不同的思想体系与修行方向。</p>
-            <p>无论是想读一部经、了解佛法，还是寻找适合自己的修行方式，都可以从这里开始。</p>
-          </div>
-        </div>
-        <div class="hero__foot">
-          <div class="hero__actions">
-            <a class="btn btn--primary btn--lg" href="download.html">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              下载 Android 版
-            </a>
-            <a class="btn btn--ghost btn--lg" href="#features">看看能做什么</a>
-          </div>
-          <p class="hero__meta">{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 完全免费</p>
-          <div class="stats">
-            <div class="stat"><div class="stat__num">8,982</div><div class="stat__label">部经文收录</div></div>
-            <div class="stat"><div class="stat__num">56</div><div class="stat__label">分卷 · 大正藏全藏</div></div>
-            <div class="stat"><div class="stat__num">8 + 12</div><div class="stat__label">宗派与法门</div></div>
-            <div class="stat"><div class="stat__num">0 元</div><div class="stat__label">无广告无内购</div></div>
-          </div>
-        </div>
+  <!-- 一整块：左边 K 线，右边下单 + 持仓 -->
+  <section class="panel desk-panel" id="deskPanel">
+    <div class="desk-chart">
+      <div class="chart-head">
+      <div class="tf" id="tf" role="tablist" aria-label="K 线周期">
+        <button type="button" data-iv="1m" class="is-on">1分</button>
+        <button type="button" data-iv="5m">5分</button>
+        <button type="button" data-iv="15m">15分</button>
+        <button type="button" data-iv="30m">30分</button>
+        <button type="button" data-iv="1h">1时</button>
+        <button type="button" data-iv="2h">2时</button>
+        <button type="button" data-iv="4h">4时</button>
+        <button type="button" data-iv="8h">8时</button>
+        <button type="button" data-iv="12h">12时</button>
+        <button type="button" data-iv="1d">1天</button>
+        <button type="button" data-iv="1w">1周</button>
+        <button type="button" data-iv="1M">1月</button>
       </div>
-      <div class="hero__art">
-        <div class="hero__phone">
-          <img src="assets/shot-home.jpg" alt="燃灯 App 首页" width="852" height="1846" loading="eager" data-zoom>
-        </div>
+
+      <div class="pane-tools">
+        <button type="button" class="toolbtn" id="btnHist" title="显示历史开平仓点">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+        </button>
+        <button type="button" class="toolbtn" id="btnDraw" aria-pressed="false" title="画线：拖动自由画，按住 Shift 画直线">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4.5-1L20 7.5 16.5 4 5 15.5 4 20z"/><path d="M14 6.5l3.5 3.5"/></svg>
+        </button>
+        <button type="button" class="toolbtn" id="btnErase" title="擦除全部画线（Ctrl+Z 可撤销）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15l8-8 5 5-8 8H7l-3-3z"/><path d="M9 21h11"/></svg>
+        </button>
       </div>
     </div>
-  </section>
 
-  <section class="section" id="features">
-    <div class="container">
-      <div class="section__head section__head--bar">
-        <div>
-          <span class="eyebrow">功能</span>
-          <h2 class="section__title">从选经到读懂，一条路走通</h2>
-          <p class="section__sub">不知道从哪部经开始？按宗派法门找；读不进去？逐段精读；读完记不住？随手笔记。</p>
-        </div>
-      </div>
-
-      <div class="features">
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
-          <h3 class="feature__title">经藏 · 八宗十二门</h3>
-          <p class="feature__desc">禅宗、净土、天台等八大宗派，观音、地藏等十二法门，各自的核心思想、历代祖师、修行方式与历史地位，先看懂脉络再读经。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></div>
-          <h3 class="feature__title">逐段精读</h3>
-          <p class="feature__desc">长文分段呈现，标注生僻字与难句，支持划线、批注、段落感想。读慢一点，才读得进去。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0-3 3v1a3 3 0 0 0 0 6v1a3 3 0 0 0 3 3v1a3 3 0 0 0 6 0v-1a3 3 0 0 0 3-3v-1a3 3 0 0 0 0-6V9a3 3 0 0 0-3-3V5a3 3 0 0 0-3-3z"/><path d="M12 8v8"/></svg></div>
-          <h3 class="feature__title">AI 助手</h3>
-          <p class="feature__desc">读不懂的段落直接问。AI 助手基于 DeepSeek 回答经文义理、白话翻译与修行指引，答完还能一键存成笔记。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></div>
-          <h3 class="feature__title">笔记与读后感</h3>
-          <p class="feature__desc">写笔记、草稿、回收站，笔记能关联到具体经文段落。日后回看，知道自己当时想到了什么。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10"/><polyline points="12 6 12 12 16 14"/><path d="M18.4 2.6A10 10 0 0 1 22 6.2"/></svg></div>
-          <h3 class="feature__title">打卡与坚持</h3>
-          <p class="feature__desc">记录每日阅读时长与进度，攒徽章、看得见的连续天数。读经是长跑，需要一点正反馈。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-          <h3 class="feature__title">讨论与同修</h3>
-          <p class="feature__desc">菩提空间里发读经心得、回复楼层、关注同修。也可以只看热门讨论，自己安静地读。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M12 14v4M10 16h4"/></svg></div>
-          <h3 class="feature__title">打卡日历</h3>
-          <p class="feature__desc">农历日期与十斋日一并标出，并记录你的每日阅读打卡。想知道今天是什么日子，看一眼就知道。</p>
-        </div>
-
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
-          <h3 class="feature__title">离线阅读</h3>
-          <p class="feature__desc">经文按需下载，地铁、山里、飞机上都没有信号也能读。笔记全部存在本地，登录后可跨设备同步。</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section section--alt">
-    <div class="container">
-      <div class="section__head section__head--bar">
-        <div>
-          <span class="eyebrow">界面</span>
-          <h2 class="section__title">看看实际界面</h2>
-          <p class="section__sub">从经藏检索到逐段精读，从菩提空间到功课打卡，App 里最常用的四个地方。</p>
-        </div>
-        <div class="shots__nav">
-          <button class="shots__btn" type="button" data-shots="prev" aria-label="向左滑动查看上一张">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-          <button class="shots__btn" type="button" data-shots="next" aria-label="向右滑动查看下一张">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>
-        </div>
-      </div>
-      <div class="shots" data-shots-track>
-        <figure class="shot">
-          <img src="assets/shot-reading.jpg" alt="精读界面" width="852" height="1846" loading="lazy" data-zoom>
-          <figcaption class="shot__cap">精读 · 逐段呈现</figcaption>
-        </figure>
-        <figure class="shot">
-          <img src="assets/shot-sect.jpg" alt="宗派法门" width="852" height="1846" loading="lazy" data-zoom>
-          <figcaption class="shot__cap">经藏 · 八宗十二门</figcaption>
-        </figure>
-        <figure class="shot">
-          <img src="assets/shot-note.jpg" alt="菩提空间" width="852" height="1846" loading="lazy" data-zoom>
-          <figcaption class="shot__cap">菩提空间 · 同修交流社区</figcaption>
-        </figure>
-        <figure class="shot">
-          <img src="assets/shot-duty.jpg" alt="功课打卡" width="852" height="1846" loading="lazy" data-zoom>
-          <figcaption class="shot__cap">功课 · 诵经持咒念佛记数</figcaption>
-        </figure>
-      </div>
-      <p class="shots__hint">左右滑动查看全部 · 点击图片看大图</p>
-    </div>
-  </section>
-
-  <section class="section" id="download">
-    <div class="container">
-      <div class="download">
-        <div>
-          <div class="download__head">
-            <img class="download__logo" src="assets/icon.png" alt="" width="60" height="60">
-            <div>
-              <div class="download__name">{{SITE_NAME}}</div>
-              <div class="download__ver">最新版本 <b>v{{VERSION}}</b> · {{APK_SIZE}} · {{MIN_ANDROID}}</div>
+    <div class="chartwrap" id="chartWrap">
+      <div class="pane pane--main">
+        <div class="chart" id="chart"></div>
+        <canvas class="draw-layer" id="drawLayer" aria-hidden="true"></canvas>
+        <div class="chart__inds" id="chartInds">
+          <div class="chart__ind chart__ind--ohlc">
+            <div class="chart__ind-row" id="legend">
+              <span>开 <b id="lgO">--</b></span>
+              <span>高 <b id="lgH">--</b></span>
+              <span>低 <b id="lgL">--</b></span>
+              <span>收 <b id="lgC">--</b></span>
+              <span>量 <b id="lgV">--</b></span>
             </div>
+            <button type="button" class="ma-toggle" id="maToggle" aria-expanded="false" aria-controls="maList" title="展开 / 收起均线数值">均线 ▾</button>
           </div>
-
-          <div class="download__notes">
-            <b>本次更新：</b>{{NOTES}}
-          </div>
-
-          <a class="btn btn--primary btn--lg btn--block" href="{{APK_HREF}}" download="{{APK_FILENAME}}">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            下载 {{APK_FILENAME}}
-          </a>
-        </div>
-
-        <div class="download__qr">
-          <img src="assets/qr-download.png" alt="扫码下载二维码" width="168" height="168" loading="lazy">
-          <p class="download__qr-tip">手机扫码，直接跳转下载</p>
-          <p class="download__qr-note">二维码指向下载页，页面永远是最新版</p>
+          <div class="ma-list" id="maList" hidden></div>
         </div>
       </div>
+
+      <div class="pane pane--macd" id="macdPane">
+        <div class="chart" id="chartMacd"></div>
+        <div class="chart__ind chart__ind--macd" id="macdLegend" aria-hidden="true"></div>
+      </div>
+
+      <button type="button" class="trade-tab" id="tradeTab" aria-expanded="true" aria-controls="deskSide" title="收起 / 展开右侧面板"><span>TRADE</span></button>
+      <div class="chart__msg" id="chartMsg">正在加载 K 线…</div>
+      </div>
     </div>
+
+    <aside class="desk-side" id="deskSide">
+    <section class="order-panel" id="orderPanel">
+      <div class="acct">
+        <div class="acct__cell"><span>总资产 (USDT)</span><b id="acctEquity">--</b></div>
+        <div class="acct__cell"><span>可用余额</span><b id="acctCash">--</b></div>
+        <div class="acct__cell"><span>整体盈亏</span><b id="acctPnl">--</b></div>
+        <div class="acct__cell"><span>当日单数</span><b id="statToday">0</b></div>
+        <div class="acct__cell"><span>胜率</span><b id="statWin">--</b></div>
+      </div>
+
+      <div class="order" id="orderForm">
+        <div class="seg seg--mode" id="segMode">
+          <button type="button" data-mode="open" class="is-on">开仓</button>
+          <button type="button" data-mode="close">平仓</button>
+        </div>
+
+        <div class="order__qtyrow" id="qtyRow">
+          <label class="field field--qty">
+            <span>数量 (BTC)</span>
+            <input type="text" inputmode="decimal" id="fQty" placeholder="0.000000" autocomplete="off">
+          </label>
+          <div class="pct">
+            <button type="button" data-pct="0.25">25%</button>
+            <button type="button" data-pct="0.5">50%</button>
+            <button type="button" data-pct="0.75">75%</button>
+            <button type="button" data-pct="1">100%</button>
+          </div>
+        </div>
+
+        <div class="order__pctrow" id="closePctRow" hidden>
+          <div class="order__pcthead">
+            <span>平仓比例</span>
+            <b id="closePctText">100%</b>
+          </div>
+          <div class="pct pct--close" id="closePctBtns">
+            <button type="button" data-close-pct="0.25">25%</button>
+            <button type="button" data-close-pct="0.5">50%</button>
+            <button type="button" data-close-pct="0.75">75%</button>
+            <button type="button" data-close-pct="1" class="is-on">100%</button>
+          </div>
+        </div>
+
+        <div class="order__hint" id="closeHint" hidden>暂无可平持仓</div>
+
+        <div class="order__actions" id="orderActions">
+          <button type="button" data-side="long" class="ord-act ord-act--long">
+            <svg class="seg__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18 18 6"/><path d="M9 6h9v9"/></svg>
+            <span class="ord-act__text">看多</span>
+          </button>
+          <button type="button" data-side="short" class="ord-act ord-act--short">
+            <svg class="seg__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 18 18"/><path d="M9 18h9V9"/></svg>
+            <span class="ord-act__text">看空</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="side-summary" id="sideSummary" aria-label="持仓概览">
+      <div class="side-summary__head">
+        <span>持仓概览</span>
+        <span class="side-summary__badge" id="sumCount">0 笔</span>
+      </div>
+      <div class="side-summary__grid">
+        <div class="side-summary__cell">
+          <span>持仓市值</span>
+          <b id="sumNotional">--</b>
+        </div>
+        <div class="side-summary__cell">
+          <span>未实现盈亏</span>
+          <b id="sumPnl">--</b>
+        </div>
+        <div class="side-summary__cell">
+          <span>占用保证金</span>
+          <b id="sumMargin">--</b>
+        </div>
+        <div class="side-summary__cell">
+          <span>可用余额</span>
+          <b id="sumCash">--</b>
+        </div>
+      </div>
+      <div class="side-summary__list" id="sidePos"></div>
+      <div class="side-summary__empty" id="sideEmpty" aria-hidden="true"></div>
+      <div class="side-summary__tips">
+        <p><b>同向合并</b>多次开仓自动并成一单，成本按加权均价。</p>
+        <p><b>分批平仓</b>可选 25% / 50% / 75% / 100%。</p>
+      </div>
+    </section>
+    </aside>
+
+    <div class="desk-split" id="deskSplit" role="separator" aria-orientation="vertical" aria-valuemin="270" aria-valuemax="720" aria-valuenow="288" aria-label="拖动调整走势图与右侧面板宽度" title="拖动调整宽度，双击恢复默认"></div>
   </section>
 
-  <section class="section section--alt">
-    <div class="container">
-      <div class="section__head">
-        <span class="eyebrow">安装</span>
-        <h2 class="section__title">四步装好</h2>
-        <p class="section__sub">燃灯不在应用商店上架，安装包由官方直接分发，因此需要手动允许一次安装权限。</p>
-      </div>
-      <div class="steps">
-        <div class="step">
-          <div class="step__title">下载 APK</div>
-          <p class="step__desc">点上方按钮，或用手机扫码下载。文件约 {{APK_SIZE}}。</p>
-        </div>
-        <div class="step">
-          <div class="step__title">点击安装</div>
-          <p class="step__desc">下载完成后系统会弹出安装提示，点「安装」。</p>
-        </div>
-        <div class="step">
-          <div class="step__title">允许未知来源</div>
-          <p class="step__desc">若提示「未知来源应用」，按提示允许本次安装即可，不需要长期授权。</p>
-        </div>
-        <div class="step">
-          <div class="step__title">风险提示选继续</div>
-          <p class="step__desc">部分系统会提示「存在风险」，选择「仍要安装」或「继续安装」。</p>
-        </div>
-      </div>
-      <div class="note">
-        <b>提示：</b>后续升级会直接覆盖安装，不会删除你的笔记与阅读记录。若系统提示安装包「解析失败」，多半是下载未完成，删掉重下一次即可。
-      </div>
+  <section class="panel pos-panel" id="posPanel">
+    <div class="tabs" id="tabs">
+      <button type="button" data-tab="pos" class="is-on">持仓 <span id="cntPos"></span></button>
+      <button type="button" data-tab="his">历史记录</button>
     </div>
-  </section>
 
-  <section class="section">
-    <div class="container">
-      <div class="section__head">
-        <h2 class="section__title">用得放心</h2>
-      </div>
-      <div class="features">
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
-          <h3 class="feature__title">隐私说清楚</h3>
-          <p class="feature__desc">不读取通讯录与短信，权限逐项说明。完整条款见<a href="privacy.html">隐私政策</a>。</p>
-        </div>
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg></div>
-          <h3 class="feature__title">无广告无内购</h3>
-          <p class="feature__desc">没有开屏广告，没有付费解锁，所有功能对所有人开放。</p>
-        </div>
-        <div class="feature">
-          <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-          <h3 class="feature__title">数据可带走</h3>
-          <p class="feature__desc">笔记支持导出为 PDF 与文本，不绑架你的记录。</p>
-        </div>
-      </div>
+    <div class="tbl-wrap" id="wrapPos">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>方向</th>
+            <th class="num">数量 (BTC)</th>
+            <th class="num">未实现盈亏</th>
+            <th class="num">开仓价</th>
+          </tr>
+        </thead>
+        <tbody id="tblPos"></tbody>
+      </table>
     </div>
+
+    <div class="tbl-wrap" id="wrapHis" hidden>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>方向</th>
+            <th class="num">盈亏</th>
+            <th class="num">开仓价</th>
+            <th class="num">平仓价</th>
+            <th class="num">数量 (BTC)</th>
+          </tr>
+        </thead>
+        <tbody id="tblHis"></tbody>
+      </table>
+    </div>
+
+    <div class="empty" id="tblEmpty">暂无持仓。在上方选择开仓方向与数量，下一单试试。</div>
   </section>
 
 </main>
 
-<footer class="footer">
-  <div class="container">
-    <div class="footer__inner">
-      <div>
-        <div class="footer__brand">
-          <img src="assets/icon.png" alt="" width="24" height="24">
-          <span>{{SITE_NAME}}</span>
-        </div>
-        <p class="footer__about">{{TAGLINE}}</p>
-      </div>
-      <ul class="footer__links">
-        <li><a href="download.html">下载</a></li>
-        <li><a href="privacy.html">隐私政策</a></li>
-        <li><a href="terms.html">用户协议</a></li>
-      </ul>
-      <div class="footer__contact">
-        <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
-        <div>邮箱：{{CONTACT_EMAIL}}</div>
-      </div>
-    </div>
-    <div class="footer__bottom">
-      <span>© {{YEAR}} {{SITE_NAME}} · 经文内容依据公开流通的《大正新修大藏经》整理</span>
-      <span>{{PACKAGE_NAME}} · v{{VERSION}} ({{VERSION_CODE}})</span>
-      <span class="footer__beian">{{BEIAN_HTML}}</span>
-    </div>
+<footer class="trade-foot">
+  <div class="trade-foot__line">
+    <span class="trade-foot__copy">© {{YEAR}} · 模拟交易为虚拟资金记账，不构成投资建议</span>
+    <span class="trade-foot__links">
+      <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
+    </span>
+    <span class="trade-foot__beian">{{BEIAN_HTML}}</span>
+    <span class="livebar" id="liveBar">
+      <i class="tick__dot" id="srcDot"></i>
+      <span id="srcText">连接中…</span>
+      <span class="livebar__sep" aria-hidden="true"></span>
+      <span class="livebar__vol">24h 成交额 <b id="vol24">--</b></span>
+    </span>
   </div>
 </footer>
 
+<!-- 均线编辑浮层 -->
+<div class="pop" id="maPop" hidden>
+  <div class="pop__head"><b id="maPopTitle">MA5</b><span>选择周期</span></div>
+  <div class="pop__chips" id="maChips"></div>
+  <div class="pop__color-wrap" id="maColorWrap" hidden>
+    <div class="pop__label">颜色</div>
+    <div class="pop__colors" id="maColors"></div>
+  </div>
+  <div class="pop__custom">
+    <input type="text" inputmode="numeric" id="maCustom" placeholder="自定义周期" maxlength="3" autocomplete="off">
+    <button type="button" id="maApply">应用</button>
+  </div>
+  <button type="button" class="pop__hide" id="maHide">隐藏这条均线</button>
+  <button type="button" class="pop__danger" id="maDelete">删除这条均线</button>
+  <p class="pop__tip">右键 K 线上的均线也可以删除</p>
+</div>
+
+<!-- 图表右键菜单 -->
+<div class="ctx" id="ctxMenu" hidden></div>
+
+<!-- 登录 / 注册 -->
+<div class="modal" id="authModal" hidden>
+  <div class="modal__box" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <h2 id="authTitle">同步模拟账户</h2>
+    <p>用燃灯 App 的账号登录，手机和电脑上的模拟账户就是同一份。还没有账号可以直接在这里注册，注册的账号在 App 里也能登录。</p>
+
+    <div class="seg" id="authSeg">
+      <button type="button" data-mode="login" class="is-on">登录</button>
+      <button type="button" data-mode="register">注册</button>
+    </div>
+
+    <div class="order" style="padding:14px 0 0">
+      <div class="regOnly" id="regOnly" hidden>
+        <label class="field">
+          <span>手机号 <em>建议填，忘了密码能找回</em></span>
+          <input type="tel" inputmode="numeric" id="aPhone" placeholder="11 位手机号" autocomplete="tel" maxlength="11">
+        </label>
+        <div class="field">
+          <span>短信验证码 <em id="aHint">先填手机号</em></span>
+          <div class="codeRow">
+            <input type="text" inputmode="numeric" id="aCode" placeholder="6 位验证码" autocomplete="one-time-code" maxlength="8">
+            <button type="button" class="btn btn--ghost btn--code" id="aSend">获取验证码</button>
+          </div>
+        </div>
+      </div>
+
+      <label class="field">
+        <span>账号</span>
+        <input type="text" id="aUser" placeholder="2-20 位中文、字母、数字或下划线" autocomplete="username">
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input type="password" id="aPass" placeholder="至少 6 位" autocomplete="current-password">
+      </label>
+      <button type="button" class="linkbtn linkbtn--left" id="btnForgot">忘记密码？</button>
+      <div class="modal__err" id="authErr"></div>
+    </div>
+
+    <div class="modal__actions">
+      <button type="button" class="btn btn--ghost" id="authCancel">取消</button>
+      <button type="button" class="btn btn--primary" id="authSubmit">登录</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 绑定手机 / 找回密码（短信验证码走云开发验证码服务） -->
+<div class="modal" id="phoneModal" hidden>
+  <div class="modal__box" role="dialog" aria-modal="true" aria-labelledby="phoneTitle">
+    <h2 id="phoneTitle">绑定手机号</h2>
+    <p id="phoneIntro">绑定后可以用短信验证码重置密码，忘了密码不至于找不回来。</p>
+
+    <div class="order" style="padding:14px 0 0">
+      <label class="field">
+        <span>手机号</span>
+        <input type="tel" inputmode="numeric" id="pPhone" placeholder="11 位手机号" autocomplete="tel" maxlength="11">
+      </label>
+
+      <div class="field">
+        <span>短信验证码 <em id="pHint">先填手机号</em></span>
+        <div class="codeRow">
+          <input type="text" inputmode="numeric" id="pCode" placeholder="6 位验证码" autocomplete="one-time-code" maxlength="8">
+          <button type="button" class="btn btn--ghost btn--code" id="pSend">获取验证码</button>
+        </div>
+      </div>
+
+      <label class="field" id="pPwdField" hidden>
+        <span>新密码</span>
+        <input type="password" id="pNewPwd" placeholder="至少 6 位" autocomplete="new-password">
+      </label>
+
+      <div class="modal__err" id="pErr"></div>
+    </div>
+
+    <div class="modal__actions">
+      <button type="button" class="btn btn--ghost" id="pCancel">取消</button>
+      <button type="button" class="btn btn--primary" id="pSubmit">绑定</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{REL}}assets/js/lightweight-charts.standalone.production.js?v={{ASSET_VER}}"></script>
+<script src="{{REL}}assets/js/trade.js?v={{ASSET_VER}}"></script>
 <script>
-// 看大图：点击首屏图或界面缩略图 → 全屏灯箱。
-// ESC、关闭按钮、点遮罩均可退出，打开时锁住页面滚动。
-(function () {
-  var box = document.createElement('div');
-  box.className = 'zoom';
-  box.setAttribute('role', 'dialog');
-  box.setAttribute('aria-modal', 'true');
-  box.innerHTML =
-    '<button class="zoom__close" type="button" aria-label="关闭大图">' +
-      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
-      '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
-    '</button>' +
-    '<img class="zoom__img" alt="">' +
-    '<div class="zoom__cap"></div>';
-  document.body.appendChild(box);
-
-  var pic = box.querySelector('.zoom__img');
-  var cap = box.querySelector('.zoom__cap');
-  var lastFocus = null;
-
-  function open(img) {
-    pic.src = img.currentSrc || img.src;
-    pic.alt = img.alt || '';
-    var fig = img.closest('figure');
-    var fc = fig && fig.querySelector('figcaption');
-    var text = fc ? fc.textContent.trim() : '';
-    cap.textContent = text;
-    cap.style.display = text ? '' : 'none';
-    lastFocus = document.activeElement;
-    box.classList.add('is-open');
-    document.documentElement.style.overflow = 'hidden';
-    box.querySelector('.zoom__close').focus();
-  }
-
-  function close() {
-    box.classList.remove('is-open');
-    document.documentElement.style.overflow = '';
-    pic.removeAttribute('src');
-    if (lastFocus && lastFocus.focus) lastFocus.focus();
-  }
-
-  document.addEventListener('click', function (e) {
-    var trigger = e.target.closest('[data-zoom]');
-    if (trigger) {
-      e.preventDefault();
-      open(trigger);
-      return;
-    }
-    if (e.target.closest('.zoom__close') || e.target === box) close();
+  TradePage.start({
+    api: "{{API_URL}}",
+    key: "{{API_KEY}}",
+    rel: "{{REL}}",
+    // 自建行情反代（site.config.json → market），留空就是直连交易所
+    restBase: "{{MARKET_REST}}",
+    wsBase: "{{MARKET_WS}}"
   });
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && box.classList.contains('is-open')) close();
-  });
-})();
-
-// 界面横滑：左右箭头按一张图的宽度滚动，到头自动禁用。
-(function () {
-  var track = document.querySelector('[data-shots-track]');
-  var prev = document.querySelector('[data-shots="prev"]');
-  var next = document.querySelector('[data-shots="next"]');
-  if (!track || !prev || !next) return;
-
-  function step(dir) {
-    var max = track.scrollWidth - track.clientWidth;
-    var card = track.querySelector('.shot');
-    var w = card ? card.getBoundingClientRect().width + 20 : track.clientWidth * 0.8;
-    var target = track.scrollLeft + dir * w;
-    if (target > max) target = max;
-    if (target < 0) target = 0;
-    // 末尾只剩一小截时直接滚到底，免得点了却几乎没动。
-    if (dir > 0 && target > 0 && max - target < 60) target = max;
-    track.scrollTo({ left: target, behavior: 'smooth' });
-  }
-
-  function sync() {
-    var max = track.scrollWidth - track.clientWidth;
-    prev.disabled = track.scrollLeft <= 2;
-    next.disabled = track.scrollLeft >= max - 2;
-  }
-
-  prev.addEventListener('click', function () { step(-1); });
-  next.addEventListener('click', function () { step(1); });
-  track.addEventListener('scroll', sync, { passive: true });
-  window.addEventListener('resize', sync);
-  sync();
-})();
 </script>
 </body>
 </html>

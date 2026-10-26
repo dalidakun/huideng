@@ -19,21 +19,22 @@
 <meta property="og:image:height" content="640">
 <meta property="og:url" content="{{BASE_URL}}/post.html">
 <meta name="twitter:card" content="summary">
-<meta name="theme-color" content="#F7F3EC">
+<meta name="theme-color" content="#F4ECD9">
 <link rel="canonical" href="{{BASE_URL}}/post.html">
 <link rel="icon" type="image/png" href="assets/icon.png">
 <link rel="apple-touch-icon" href="assets/icon.png">
 <style>
 :root {
-  --bg: #F7F3EC;
-  --paper: #FFFDF9;
+  /* 与主站同一套米黄：页面底 / 纸面 / 描边，避免分享页冒出一块白 */
+  --bg: #F4ECD9;
+  --paper: #F4EDDA;
   --text: #24211D;
   --text-soft: #4A453E;
   --muted: #8B8378;
-  --line: #E7DFD2;
+  --line: #E1D5B9;
   --accent: #8A6A3B;
   --accent-soft: #F1E6D4;
-  --green: #556B5E;
+  --green: #305C38;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; color-scheme: light; }
@@ -50,7 +51,7 @@ a { color: inherit; }
   position: sticky;
   top: 0;
   z-index: 10;
-  background: rgba(247, 243, 236, 0.92);
+  background: rgba(244, 236, 217, 0.92);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
@@ -280,7 +281,7 @@ h1.title {
 <header class="topbar">
   <div class="topbar__inner">
     <span class="brand"><b>{{SITE_NAME}}</b> · 菩提空间</span>
-    <a class="topbar__open" href="{{BASE_URL}}/">打开 App</a>
+    <a class="topbar__open" href="{{BASE_URL}}/app/index.html">打开 App</a>
   </div>
 </header>
 
@@ -526,8 +527,9 @@ h1.title {
     app.appendChild(stats);
 
     var cta = make('a', 'cta', '打开 {{SITE_NAME}}，查看更多笔记');
-    // 官网首页（首页自带下载入口），不再直接跳下载页。
-    cta.href = '{{BASE_URL}}/';
+    // 落到燃灯 App 页（自带下载入口）：站点首页现在是 BTC 行情页，
+    // 分享出去的笔记/祈福页要把人引到 App，而不是行情盘。
+    cta.href = '{{BASE_URL}}/app/index.html';
     app.appendChild(cta);
 
     app.appendChild(make('p', 'foot', '燃一盏灯，看见自己，照亮别人'));

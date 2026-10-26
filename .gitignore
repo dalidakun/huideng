@@ -52,3 +52,6 @@ site/dist/
 # IDE
 .vscode/
 __pycache__/
+
+# 本地截图用的浏览器配置缓存（体积大，不入库）
+.shots/

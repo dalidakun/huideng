@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>更新日志 · {{SITE_NAME}}</title>
 <meta name="description" content="{{SITE_NAME}} 全部历史版本的更新说明。当前最新 v{{VERSION}}，{{RELEASE_DATE}} 发布。">
-<meta name="theme-color" content="#FBFBFB">
+<meta name="theme-color" content="#F4ECD9">
 <meta property="og:type" content="website">
 <meta property="og:title" content="{{SITE_NAME}} 更新日志">
 <meta property="og:description" content="{{SITE_NAME}} 全部历史版本的更新说明。">
@@ -20,11 +20,13 @@
 
 <header class="nav">
   <div class="nav__inner">
-    <a class="nav__brand" href="index.html">
-      <img class="nav__logo" src="assets/icon.png" alt="" width="26" height="26">
-      <span>{{SITE_NAME}}</span>
+    <a class="nav__brand" aria-label="首页" href="index.html">
+      <img class="nav__logo" src="{{BRAND_LOGO}}?v={{BRAND_LOGO_VER}}" alt="" width="24" height="24">
     </a>
-    <a class="nav__cta" href="download.html">立即下载</a>
+    <nav class="nav__links" aria-label="主导航">
+      <a href="{{REL}}index.html">BTC 行情</a>
+      <a href="{{REL}}app/index.html">燃灯 App</a>
+    </nav>
   </div>
 </header>
 
