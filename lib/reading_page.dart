@@ -979,6 +979,14 @@ class ReadingPageState extends State<ReadingPage>
   }
 
   List<String> _parseParagraphs(String content) {
+    // 最后一道兜底：不论正文来自旧下载缓存、云端草稿还是编辑副本，
+    // 都先去掉文末 CBETA 说明块与重复经名，确保任何入口都不会把它排进正文。
+    // （调用方都在 `_content = content` 之后紧接着调用这里，顺手回写干净正文。）
+    final cleaned = _cleanSutraText(content);
+    if (cleaned != content) {
+      content = cleaned;
+      _content = cleaned;
+    }
     final out = <String>[];
     _rawLines = [];
     _hiddenActionParagraphs.clear();
