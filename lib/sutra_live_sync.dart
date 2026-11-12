@@ -9,6 +9,7 @@ import 'note_sutra_links.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
 import 'sutra_edit_page.dart' show editedSutraFilePath;
+import 'sutra_text_cleaner.dart';
 
 /// 菩提空间分享帖「画线 / 感想」页的实时数据同步工具。
 ///
@@ -138,12 +139,14 @@ Future<({List<String> paragraphs, Set<int> tight})?> loadSutraTight({
   required String filePath,
 }) async {
   String? content;
+  var fromEdited = false;
   // 1. 已编辑副本（读经页里编辑经文后保存的本地文件）。
   try {
     final editedPath = await editedSutraFilePath(filePath);
     final f = File(editedPath);
     if (await f.exists()) {
       content = await f.readAsString();
+      fromEdited = true;
       debugPrint('[loadTight] 1/编辑副本命中: ${editedPath.length > 80 ? editedPath.substring(editedPath.length - 80) : editedPath}');
     }
   } catch (_) {}
@@ -213,6 +216,10 @@ Future<({List<String> paragraphs, Set<int> tight})?> loadSutraTight({
   if (content == null) {
     debugPrint('[loadTight] 定位正文失败: title=$title, filePath=$filePath');
     return null;
+  }
+  // 原始版正文末尾带 CBETA 说明块：分享页重建时同样去掉，避免把说明当成正文段。
+  if (!fromEdited) {
+    content = SutraTextCleaner.strip(content, titleHints: [title]);
   }
   return parseSutraTight(content);
 }

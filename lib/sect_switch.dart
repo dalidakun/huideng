@@ -166,6 +166,7 @@ class SegmentedSwitch extends StatelessWidget {
     required this.onChanged,
     required this.tone,
     this.height = 44,
+    this.softSelected = false,
   });
 
   /// 当前选中段下标（0 起）。
@@ -182,12 +183,19 @@ class SegmentedSwitch extends StatelessWidget {
 
   final double height;
 
+  /// 选中态是否用「淡本色填充 + 本色字」的轻量样式。
+  ///
+  /// 默认 false 保持原来的实心本色 + 白字；经书讨论页三个入口改用 true，
+  /// 让被选中的那一段背景更淡、不再抢正文。
+  final bool softSelected;
+
   /// 滑动填充相对外框的内缩，留出一圈淡底的余地。
   static const double _inset = 3;
 
   @override
   Widget build(BuildContext context) {
     final n = labels.length;
+    final fill = softSelected ? tone.withValues(alpha: 0.28) : tone;
     return SizedBox(
       height: height,
       child: LayoutBuilder(
@@ -225,16 +233,18 @@ class SegmentedSwitch extends StatelessWidget {
                         padding: const EdgeInsets.all(_inset),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            color: tone,
+                            color: fill,
                             borderRadius:
                                 BorderRadius.circular((height - _inset * 2) / 2),
-                            boxShadow: [
-                              BoxShadow(
-                                color: tone.withValues(alpha: 0.28),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
+                            boxShadow: softSelected
+                                ? null
+                                : [
+                                    BoxShadow(
+                                      color: tone.withValues(alpha: 0.28),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
                           ),
                         ),
                       ),
@@ -251,10 +261,14 @@ class SegmentedSwitch extends StatelessWidget {
     );
   }
 
-  /// 一段文字：在自己那格居中，选中白字、未选中次级字色。
+  /// 一段文字：在自己那格居中，选中白字（轻量样式下用加深的本色字）、未选中次级字色。
   Widget _label(String text, bool active, double left, double slotW) {
     final p = AppPalette.p;
-    final fg = active ? Colors.white : p.textSec;
+    // 淡填充上白字看不清：选中态文字改用同色系加深的本色。
+    final activeFg = softSelected
+        ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), tone)
+        : Colors.white;
+    final fg = active ? activeFg : p.textSec;
     return Positioned(
       left: left,
       width: slotW,

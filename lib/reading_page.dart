@@ -16,6 +16,7 @@ import 'shanzhishi_edit_sheet.dart';
 import 'shanzhishi_mantra_edit_sheet.dart';
 import 'sutra_asset_path.dart';
 import 'sutra_downloader.dart';
+import 'sutra_text_cleaner.dart';
 import 'sutra_edit_page.dart' show editedSutraFilePath, SutraEditPage;
 import 'sutra_edit_drafts.dart';
 import 'sutra_favorites.dart';
@@ -671,7 +672,7 @@ class ReadingPageState extends State<ReadingPage>
       }
       if (localCopy != null) {
         try {
-          final content = await localCopy.readAsString();
+          final content = _cleanSutraText(await localCopy.readAsString());
           if (mounted) {
             setState(() {
               _content = content;
@@ -729,7 +730,7 @@ class ReadingPageState extends State<ReadingPage>
         try {
           File file = File(filePath);
           if (await file.exists()) {
-            String content = await file.readAsString();
+            String content = _cleanSutraText(await file.readAsString());
             if (mounted) {
               setState(() {
                 _content = content;
@@ -776,13 +777,20 @@ class ReadingPageState extends State<ReadingPage>
       final rel = assetPath.substring('assets/sutras_ascii/'.length);
       final edited = 'assets/sutras_edited/$rel';
       try {
-        return await rootBundle.loadString(edited);
+        return _cleanSutraText(await rootBundle.loadString(edited));
       } catch (_) {
         // 编辑版未打包进此安装包，回退原始版。
       }
     }
-    return rootBundle.loadString(assetPath);
+    return _cleanSutraText(await rootBundle.loadString(assetPath));
   }
+
+  /// 去掉正文末尾的 CBETA 说明块（【经文资讯】…【制作说明】）与重复经名。
+  /// 已下载到本机的旧正文仍带这些内容，读入时统一清理一遍。
+  String _cleanSutraText(String content) => SutraTextCleaner.strip(
+        content,
+        titleHints: [widget.title, _titleShown],
+      );
 
   /// 「秒开」：直接把本地已下载副本 / 打包资源展示出来（纯本地，无网络），
   /// 命中即 setState 显示并返回 true；本地与打包都没有则返回 false（不改 UI，
@@ -804,7 +812,7 @@ class ReadingPageState extends State<ReadingPage>
     }
     if (localCopy != null) {
       try {
-        _applyLoadedContent(await localCopy.readAsString());
+        _applyLoadedContent(_cleanSutraText(await localCopy.readAsString()));
         return true;
       } catch (_) {
         // 读取失败则回退打包资源
@@ -812,7 +820,8 @@ class ReadingPageState extends State<ReadingPage>
     }
     if (filePath.startsWith('assets/')) {
       try {
-        _applyLoadedContent(await _loadPackagedContent(filePath));
+        _applyLoadedContent(
+            _cleanSutraText(await _loadPackagedContent(filePath)));
         return true;
       } catch (_) {
         // 打包资源也没有：交由调用方走云端/下载提示
@@ -821,7 +830,7 @@ class ReadingPageState extends State<ReadingPage>
       try {
         final f = File(filePath);
         if (await f.exists()) {
-          _applyLoadedContent(await f.readAsString());
+          _applyLoadedContent(_cleanSutraText(await f.readAsString()));
           return true;
         }
       } catch (_) {}
@@ -953,7 +962,7 @@ class ReadingPageState extends State<ReadingPage>
       }
       // 云端无编辑版：回退到原始版下载（与下载按钮一致）。
       final file = await SutraDownloader.download(id);
-      final origContent = await file.readAsString();
+      final origContent = _cleanSutraText(await file.readAsString());
       if (!mounted) return false;
       setState(() {
         _content = origContent;

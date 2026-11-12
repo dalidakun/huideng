@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 
 import 'shanzhishi_store.dart';
 import 'sutra_downloader.dart';
+import 'sutra_text_cleaner.dart';
 
 /// 善知识「引用段落」：从经文正文里找出提到某位佛菩萨的句子。
 ///
@@ -16,26 +17,33 @@ class ShanZhiShiQuotes {
     final link = ShanZhiShiStore.resolveSutra(sutra);
     final filePath = link?.filePath ?? '';
     if (filePath.isEmpty) return null;
+    String? content;
     if (filePath.startsWith('assets/sutras_ascii/')) {
       final rel = filePath.substring('assets/sutras_ascii/'.length);
       try {
-        return await rootBundle.loadString('assets/sutras_edited/$rel');
+        content = await rootBundle.loadString('assets/sutras_edited/$rel');
       } catch (_) {
         // 没有编辑版就继续读原文。
       }
     }
-    try {
-      return await rootBundle.loadString(filePath);
-    } catch (_) {
-      // 打包里没有这份正文，再看本地下载副本。
+    if (content == null) {
+      try {
+        content = await rootBundle.loadString(filePath);
+      } catch (_) {
+        // 打包里没有这份正文，再看本地下载副本。
+      }
     }
-    try {
-      final f = await SutraDownloader.localFileForAssetPath(filePath);
-      if (f != null && await f.exists()) return await f.readAsString();
-    } catch (_) {
-      // 读取失败按「没有正文」处理。
+    if (content == null) {
+      try {
+        final f = await SutraDownloader.localFileForAssetPath(filePath);
+        if (f != null && await f.exists()) content = await f.readAsString();
+      } catch (_) {
+        // 读取失败按「没有正文」处理。
+      }
     }
-    return null;
+    if (content == null) return null;
+    // 旧下载副本末尾带 CBETA 说明块：引用段落时同样去掉。
+    return SutraTextCleaner.strip(content, titleHints: [sutra]);
   }
 
   /// 从正文中抽取提到 [name] 的段落（按行分段，去掉常见排版标记），最多 30 条。
