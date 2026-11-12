@@ -282,10 +282,10 @@ class SegmentedSwitch extends StatelessWidget {
               duration: const Duration(milliseconds: 240),
               curve: Curves.easeOut,
               style: TextStyle(
-                fontSize: 13.5,
+                fontSize: height <= 38 ? 13 : 13.5,
                 fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                 color: fg,
-                letterSpacing: 0.8,
+                letterSpacing: height <= 38 ? 0.5 : 0.8,
               ),
               child: Text(
                 text,

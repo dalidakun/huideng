@@ -519,23 +519,14 @@ class _SutraDiscussionPageState extends State<SutraDiscussionPage> {
                 const SizedBox(height: 16),
               ],
               // 三个入口：笔记 / 备注 / 画线（采用宗派法门页的连体切换条样式）。
-              // 胶囊收窄到内容宽度并居中，选中段的淡绿填充也随之变小、变淡。
-              LayoutBuilder(
-                builder: (context, c) {
-                  final width = c.maxWidth < 216 ? c.maxWidth : 216.0;
-                  return Center(
-                    child: SizedBox(
-                      width: width,
-                      child: SegmentedSwitch(
-                        index: _currentTab,
-                        labels: const ['笔记', '备注', '画线'],
-                        onChanged: (i) => setState(() => _currentTab = i),
-                        tone: communityTone(AppPalette.instance.isPlain),
-                        softSelected: true,
-                      ),
-                    ),
-                  );
-                },
+              // 整行铺满，只压低上下高度；选中段的淡绿填充也随高度一起收小。
+              SegmentedSwitch(
+                index: _currentTab,
+                labels: const ['笔记', '备注', '画线'],
+                onChanged: (i) => setState(() => _currentTab = i),
+                tone: communityTone(AppPalette.instance.isPlain),
+                height: 36,
+                softSelected: true,
               ),
               // 内容区域
               const SizedBox(height: 16),

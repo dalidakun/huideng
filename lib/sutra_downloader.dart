@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'sutra_asset_path.dart';
+import 'sutra_text_cleaner.dart';
 
 /// 从 GitHub 仓库按需下载经书正文到应用文档目录。
 ///
@@ -207,6 +208,7 @@ class SutraDownloader {
     final file = await localFile(id);
     // 本地已有完整文件时直接返回，避免不必要的重复下载。
     if (!force && await file.exists() && (await file.length()) > 0) {
+      await _stripMetadataInPlace(file);
       return file;
     }
     await file.parent.create(recursive: true);
@@ -244,6 +246,8 @@ class SutraDownloader {
         if (ok) {
           if (await file.exists()) await file.delete();
           await part.rename(file.path);
+          // 原始版落盘前去掉 CBETA 文末说明块；编辑版是管理员排好的，原样保留。
+          if (!src.edited) await _stripMetadataInPlace(file);
           if (!src.edited) await _rememberSource(src.base);
           return file;
         }
@@ -265,6 +269,18 @@ class SutraDownloader {
           : '下载失败，请检查网络后重试：${errors.first}',
       uri: Uri.parse(remoteUrl(id)),
     );
+  }
+
+  /// 把本地原文里的 CBETA 文末说明块去掉（只处理含标记的文件）。
+  /// 失败不影响下载/阅读结果。
+  static Future<void> _stripMetadataInPlace(File file) async {
+    try {
+      if (await file.length() > 2 * 1024 * 1024) return;
+      final text = await file.readAsString();
+      if (!text.contains('【经文资讯】')) return;
+      final cleaned = SutraTextCleaner.strip(text);
+      if (cleaned != text) await file.writeAsString(cleaned, flush: true);
+    } catch (_) {}
   }
 
   /// 从单个 URL 下载正文写入 [part]，成功返回 true。
