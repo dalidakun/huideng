@@ -1,0 +1,282 @@
+.reader {
+  min-height: 100vh;
+  background: #f7f3ea;
+  color: #2f2a24;
+}
+
+.reader.theme-white {
+  background: #ffffff;
+}
+
+.reader.theme-night {
+  background: #1b1b1b;
+  color: #c9c4ba;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22rpx 40rpx 6rpx;
+  font-size: 21rpx;
+  color: #a89e90;
+  letter-spacing: 0.5rpx;
+}
+
+.theme-night .meta {
+  color: #7d766c;
+}
+
+.meta-left {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.meta-pct {
+  flex: none;
+  margin-left: 20rpx;
+}
+
+.body {
+  padding: 20rpx 40rpx 280rpx;
+}
+
+.para {
+  position: relative;
+  margin: 0 0 30rpx;
+  line-height: 1.9;
+  letter-spacing: 0.5rpx;
+  text-indent: 2em;
+}
+
+.fs-0 {
+  font-size: 32rpx;
+}
+
+.fs-1 {
+  font-size: 36rpx;
+}
+
+.fs-2 {
+  font-size: 40rpx;
+}
+
+.fs-3 {
+  font-size: 44rpx;
+}
+
+.fs-4 {
+  font-size: 48rpx;
+}
+
+.para-text {
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  word-break: break-word;
+}
+
+.para.tight {
+  margin-bottom: 0;
+}
+
+.para.bold .para-text {
+  font-weight: 600;
+}
+
+.para.has-note {
+  color: #2f2a24;
+}
+
+.theme-night .para.has-note {
+  color: #d8d2c7;
+}
+
+.note-dot {
+  position: absolute;
+  left: -22rpx;
+  top: 16rpx;
+  width: 9rpx;
+  height: 9rpx;
+  border-radius: 50%;
+  background: #a8552f;
+  opacity: 0.85;
+}
+
+.theme-night .note-dot {
+  background: #c98a5e;
+}
+
+.note-block {
+  margin: 8rpx 0 30rpx;
+  padding: 18rpx 24rpx;
+  background: rgba(140, 106, 69, 0.08);
+  border-left: 4rpx solid rgba(140, 106, 69, 0.4);
+  border-radius: 6rpx;
+  font-size: 0.86em;
+  color: #6f665b;
+  text-indent: 0;
+  line-height: 1.8;
+}
+
+.theme-night .note-block {
+  background: rgba(201, 138, 94, 0.08);
+  border-left-color: rgba(201, 138, 94, 0.45);
+  color: #a9a196;
+}
+
+.load-more {
+  margin: 40rpx 0 10rpx;
+  padding: 22rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: #8c6a45;
+  border: 1rpx dashed rgba(140, 106, 69, 0.35);
+  border-radius: 12rpx;
+}
+
+.end {
+  margin: 50rpx 0 10rpx;
+  text-align: center;
+  font-size: 22rpx;
+  color: #b3a999;
+  letter-spacing: 2rpx;
+}
+
+.theme-night .end {
+  color: #5e5850;
+}
+
+.toolbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  height: 108rpx;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: rgba(251, 248, 241, 0.98);
+  border-top: 1rpx solid rgba(122, 92, 62, 0.1);
+}
+
+.theme-night .toolbar {
+  background: rgba(36, 36, 36, 0.98);
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.tool {
+  flex: 1;
+  height: 108rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #6f665b;
+}
+
+.theme-night .tool {
+  color: #b9b2a6;
+}
+
+.tool:active {
+  opacity: 0.55;
+}
+
+.tool-a {
+  font-size: 30rpx;
+  letter-spacing: 1rpx;
+}
+
+.tool-big {
+  font-size: 36rpx;
+}
+
+.tool-icon {
+  font-size: 34rpx;
+  line-height: 1;
+}
+
+.tool-label {
+  margin-top: 6rpx;
+  font-size: 18rpx;
+  color: #9a9186;
+}
+
+.theme-night .tool-label {
+  color: #7d766c;
+}
+
+.search-mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 100;
+  padding: 24rpx 32rpx;
+  background: rgba(30, 25, 20, 0.35);
+  border-bottom: 1rpx solid rgba(122, 92, 62, 0.1);
+}
+
+.search-panel {
+  display: flex;
+  align-items: center;
+  height: 76rpx;
+  border-radius: 38rpx;
+  background: #ffffff;
+  padding: 0 10rpx 0 28rpx;
+}
+
+.search-input {
+  flex: 1;
+  height: 76rpx;
+  font-size: 27rpx;
+  color: #2f2a24;
+}
+
+.search-ph {
+  color: #a89e90;
+}
+
+.search-go {
+  flex: none;
+  padding: 0 28rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  border-radius: 29rpx;
+  background: #8c6a45;
+  color: #fff;
+  font-size: 24rpx;
+}
+
+.search-row {
+  margin-top: 18rpx;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.search-count {
+  font-size: 22rpx;
+  color: #f0e8da;
+}
+
+.search-actions {
+  display: flex;
+  align-items: center;
+}
+
+.mini {
+  margin-left: 16rpx;
+  padding: 8rpx 20rpx;
+  border-radius: 24rpx;
+  font-size: 21rpx;
+  color: #3a3128;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.mini.ghost {
+  background: rgba(255, 255, 255, 0.16);
+  color: #f0e8da;
+}

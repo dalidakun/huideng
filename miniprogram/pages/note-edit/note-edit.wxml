@@ -1,0 +1,30 @@
+<view class="page editor">
+  <view class="book">{{title}}</view>
+
+  <view class="quote">
+    <view class="quote-label">原文</view>
+    <view class="quote-text">{{quote}}</view>
+  </view>
+
+  <view class="field">
+    <textarea
+      class="input"
+      value="{{value}}"
+      placeholder="写下这一段的想法…"
+      placeholder-class="ph"
+      maxlength="2000"
+      auto-height="{{false}}"
+      show-confirm-bar="{{false}}"
+      cursor-spacing="40"
+      bindinput="onInput"
+    ></textarea>
+    <view class="counter">{{value.length}} / 2000</view>
+  </view>
+
+  <view wx:if="{{updatedText}}" class="updated">{{updatedText}}</view>
+
+  <view class="actions">
+    <view wx:if="{{existing}}" class="btn ghost" bindtap="onRemove">删除</view>
+    <view class="btn primary" bindtap="save">保存</view>
+  </view>
+</view>

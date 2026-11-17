@@ -1,0 +1,62 @@
+<view class="page shelf">
+  <view class="hero">
+    <view class="hero-row">
+      <view class="brand">古籍阅读</view>
+      <view class="seal">藏</view>
+    </view>
+    <view class="hero-sub">大正藏汉文文献 · 本地阅读</view>
+    <view class="hero-line"></view>
+  </view>
+
+  <view class="search">
+    <input
+      class="search-input"
+      value="{{q}}"
+      placeholder="搜索书名、部类或译者"
+      placeholder-class="search-ph"
+      confirm-type="search"
+      bindinput="onSearch"
+    />
+    <view wx:if="{{q}}" class="search-clear" bindtap="clearSearch">×</view>
+  </view>
+
+  <view class="stat">
+    <text>首批 {{books.length}} 部</text>
+    <text class="sep">·</text>
+    <text>{{totalCharsText}}</text>
+    <text class="sep">·</text>
+    <text>离线可读</text>
+  </view>
+
+  <view class="list">
+    <view
+      class="book"
+      wx:for="{{filtered}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="openBook"
+    >
+      <view class="book-head">
+        <text class="tag">{{item.tag}}</text>
+        <text class="book-title">{{item.title}}</text>
+      </view>
+      <view class="book-meta">{{item.volume}} · {{item.dynasty}} · {{item.translator}}</view>
+      <view class="book-intro">{{item.intro}}</view>
+      <view class="book-foot">
+        <text class="chars">{{item.charsText}}</text>
+        <view wx:if="{{item.percent > 0}}" class="progress">
+          <view class="bar"><view class="bar-in" style="width:{{item.percent}}%"></view></view>
+          <text class="pct">已读 {{item.percent}}%</text>
+        </view>
+        <text wx:else class="read">阅读 ›</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{!filtered.length}}" class="empty">
+    <view class="empty-title">没有匹配的书</view>
+    <view class="empty-sub">试试书名中的两个字，或清空搜索</view>
+  </view>
+
+  <view class="foot">内容为公版古籍原文，仅供阅读与研究；不含宗教活动或付费服务。</view>
+</view>

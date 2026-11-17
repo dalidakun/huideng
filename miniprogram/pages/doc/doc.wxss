@@ -1,0 +1,43 @@
+.doc {
+  padding: 40rpx 40rpx 80rpx;
+}
+
+.title {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 44rpx;
+  letter-spacing: 2rpx;
+  color: #2f2a24;
+}
+
+.updated {
+  margin-top: 10rpx;
+  font-size: 21rpx;
+  color: #a89e90;
+}
+
+.intro {
+  margin-top: 26rpx;
+  padding: 22rpx 24rpx;
+  background: #f1ebdf;
+  border-radius: 12rpx;
+  font-size: 26rpx;
+  line-height: 1.8;
+  color: #6f665b;
+}
+
+.section {
+  margin-top: 34rpx;
+}
+
+.h {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 31rpx;
+  color: #3a3128;
+}
+
+.p {
+  margin-top: 14rpx;
+  font-size: 27rpx;
+  line-height: 1.85;
+  color: #5c544a;
+}

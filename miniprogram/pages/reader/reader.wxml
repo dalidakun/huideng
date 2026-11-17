@@ -1,0 +1,71 @@
+<view class="reader theme-{{theme}}">
+  <view class="meta">
+    <text class="meta-left">{{book.volume}} · {{book.translator}}</text>
+    <text class="meta-pct">已读 {{percent}}%</text>
+  </view>
+
+  <view class="body">
+    <block wx:for="{{paras}}" wx:key="i">
+      <view
+        id="p{{item.i}}"
+        class="para fs-{{fsIndex}} {{item.cls}}"
+        data-i="{{item.i}}"
+        bindtap="onParaTap"
+        bindlongpress="onParaLongPress"
+      >
+        <text class="para-text">{{item.t}}</text>
+        <view wx:if="{{item.n}}" class="note-dot"></view>
+      </view>
+    </block>
+
+    <view wx:if="{{loaded < total}}" class="load-more" bindtap="loadMore">
+      加载更多（{{loaded}} / {{total}} 段）
+    </view>
+    <view wx:else class="end">— 全文完 —</view>
+  </view>
+
+  <view class="toolbar">
+    <view class="tool" data-delta="-1" bindtap="changeFont">
+      <text class="tool-a">A−</text>
+    </view>
+    <view class="tool" data-delta="1" bindtap="changeFont">
+      <text class="tool-a tool-big">A+</text>
+    </view>
+    <view class="tool" bindtap="switchTheme">
+      <text class="tool-icon">◐</text>
+      <text class="tool-label">{{theme == 'night' ? '夜间' : '背景'}}</text>
+    </view>
+    <view class="tool" bindtap="openNotes">
+      <text class="tool-icon">✎</text>
+      <text class="tool-label">笔记</text>
+    </view>
+    <view class="tool" bindtap="openSearch">
+      <text class="tool-icon">⌕</text>
+      <text class="tool-label">检索</text>
+    </view>
+  </view>
+
+  <view wx:if="{{searchOpen}}" class="search-mask">
+    <view class="search-panel">
+      <input
+        class="search-input"
+        focus="{{searchOpen}}"
+        value="{{keyword}}"
+        placeholder="在本书中检索"
+        placeholder-class="search-ph"
+        confirm-type="search"
+        bindinput="onKeyword"
+        bindconfirm="doSearch"
+      />
+      <view class="search-go" bindtap="doSearch">查找</view>
+    </view>
+    <view class="search-row">
+      <text class="search-count">{{matchCount ? (matchPos + ' / ' + matchCount) : '未检索'}}</text>
+      <view class="search-actions">
+        <view class="mini" bindtap="prevHit">上一处</view>
+        <view class="mini" bindtap="nextHit">下一处</view>
+        <view class="mini ghost" bindtap="closeSearch">关闭</view>
+      </view>
+    </view>
+  </view>
+</view>

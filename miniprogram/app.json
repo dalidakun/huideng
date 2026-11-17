@@ -1,0 +1,41 @@
+{
+  "pages": [
+    "pages/shelf/shelf",
+    "pages/reader/reader",
+    "pages/notes/notes",
+    "pages/note-edit/note-edit",
+    "pages/about/about",
+    "pages/doc/doc"
+  ],
+  "window": {
+    "navigationBarTitleText": "古籍阅读",
+    "navigationBarBackgroundColor": "#F7F3EA",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F7F3EA",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#8A8378",
+    "selectedColor": "#7A5C3E",
+    "backgroundColor": "#FBF8F1",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/shelf/shelf",
+        "text": "书架",
+        "iconPath": "assets/tab/shelf.png",
+        "selectedIconPath": "assets/tab/shelf-active.png"
+      },
+      {
+        "pagePath": "pages/about/about",
+        "text": "我的",
+        "iconPath": "assets/tab/about.png",
+        "selectedIconPath": "assets/tab/about-active.png"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents",
+  "__usePrivacyCheck__": true
+}

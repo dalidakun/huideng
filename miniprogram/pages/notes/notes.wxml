@@ -1,0 +1,39 @@
+<view class="page notes">
+  <view class="head">
+    <view class="head-title">笔记</view>
+    <view class="head-sub">共 {{notes.length}} 条 · 仅保存在本机</view>
+  </view>
+
+  <view wx:if="{{notes.length}}" class="list">
+    <view
+      class="note"
+      wx:for="{{notes}}"
+      wx:key="key"
+      data-id="{{item.bookId}}"
+      data-index="{{item.index}}"
+      bindtap="openNote"
+    >
+      <view class="note-top">
+        <text class="note-book">{{item.bookTitle}}</text>
+        <text class="note-date">{{item.date}}</text>
+      </view>
+      <view wx:if="{{item.quoteShort}}" class="note-quote">{{item.quoteShort}}</view>
+      <view class="note-text">{{item.text}}</view>
+      <view class="note-foot">
+        <text class="note-pos">第 {{item.index + 1}} 段</text>
+        <view
+          class="note-del"
+          catchtap="removeNote"
+          data-id="{{item.bookId}}"
+          data-index="{{item.index}}"
+        >删除</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:else class="empty">
+    <view class="empty-mark">✎</view>
+    <view class="empty-title">还没有笔记</view>
+    <view class="empty-sub">阅读时按住任意段落，即可写下想法</view>
+  </view>
+</view>

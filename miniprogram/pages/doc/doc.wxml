@@ -1,0 +1,10 @@
+<view class="page doc">
+  <view class="title">{{doc.title}}</view>
+  <view class="updated">更新日期：{{doc.updated}}</view>
+  <view class="intro">{{doc.intro}}</view>
+
+  <view class="section" wx:for="{{doc.sections}}" wx:key="h" wx:for-item="sec">
+    <view class="h">{{sec.h}}</view>
+    <view class="p" wx:for="{{sec.p}}" wx:key="*this" wx:for-item="para">{{para}}</view>
+  </view>
+</view>

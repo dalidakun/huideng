@@ -1,0 +1,128 @@
+.about {
+  padding: 40rpx 36rpx 70rpx;
+}
+
+.profile {
+  display: flex;
+  align-items: center;
+  padding: 10rpx 6rpx 30rpx;
+}
+
+.avatar {
+  width: 104rpx;
+  height: 104rpx;
+  border-radius: 16rpx;
+  background: #7a5c3e;
+  color: #f7f3ea;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 52rpx;
+  line-height: 104rpx;
+  text-align: center;
+  box-shadow: 0 8rpx 20rpx rgba(122, 92, 62, 0.18);
+}
+
+.profile-main {
+  margin-left: 26rpx;
+}
+
+.name {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 40rpx;
+  letter-spacing: 3rpx;
+}
+
+.ver {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #9a9186;
+}
+
+.stats {
+  display: flex;
+  align-items: center;
+  padding: 30rpx 0;
+  background: #fbf8f1;
+  border-radius: 18rpx;
+  border: 1rpx solid rgba(122, 92, 62, 0.09);
+}
+
+.stat-item {
+  flex: 1;
+  text-align: center;
+}
+
+.n {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 36rpx;
+  color: #3a3128;
+}
+
+.l {
+  margin-top: 6rpx;
+  font-size: 20rpx;
+  color: #a89e90;
+}
+
+.vline {
+  width: 1rpx;
+  height: 48rpx;
+  background: rgba(122, 92, 62, 0.12);
+}
+
+.group {
+  margin-top: 28rpx;
+  background: #fbf8f1;
+  border-radius: 18rpx;
+  border: 1rpx solid rgba(122, 92, 62, 0.09);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 30rpx 30rpx;
+  font-size: 29rpx;
+  color: #2f2a24;
+  background: #fbf8f1;
+  border-bottom: 1rpx solid rgba(122, 92, 62, 0.07);
+  border-radius: 0;
+  text-align: left;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:active {
+  background: #f4eee2;
+}
+
+.contact {
+  width: 100%;
+  line-height: 1.6;
+}
+
+.arrow {
+  font-size: 34rpx;
+  color: #c0b6a6;
+}
+
+.danger {
+  color: #a8552f;
+}
+
+.notice {
+  margin-top: 36rpx;
+  padding: 0 8rpx;
+  font-size: 22rpx;
+  line-height: 1.7;
+  color: #9a9186;
+}
+
+.foot {
+  margin-top: 22rpx;
+  text-align: center;
+  font-size: 20rpx;
+  color: #b3a999;
+}
