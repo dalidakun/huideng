@@ -1,7 +1,17 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="page-app">
 <head>
 <meta charset="UTF-8">
+<script>
+/* 这个页面只作为首页 #app 视图的 iframe 内容存在。
+   直接打开 /app/index.html 时合并回 /index.html#app，避免一个页面两个地址。 */
+(function () {
+  if (window.self === window.top) {
+    location.replace('../index.html#app');
+  }
+})();
+</script>
+<script>if(window.self!==window.top)document.documentElement.classList.add('is-embedded');</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{SITE_NAME}} · {{TAGLINE}}</title>
 <meta name="description" content="{{DESCRIPTION}}">
@@ -10,28 +20,17 @@
 <meta property="og:title" content="{{SITE_NAME}} · {{TAGLINE}}">
 <meta property="og:description" content="{{DESCRIPTION}}">
 <meta property="og:image" content="{{BASE_URL}}/assets/icon.png">
-<meta property="og:url" content="{{BASE_URL}}/app/index.html">
+<meta property="og:url" content="{{BASE_URL}}/index.html#app">
 <meta name="twitter:card" content="summary">
 <link rel="icon" type="image/png" href="{{REL}}assets/icon.png">
 <link rel="apple-touch-icon" href="{{REL}}assets/icon.png">
-<link rel="canonical" href="{{BASE_URL}}/app/index.html">
+<link rel="canonical" href="{{BASE_URL}}/index.html#app">
 <link rel="stylesheet" href="{{REL}}assets/site.css?v={{ASSET_VER}}">
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
 
-<header class="nav">
-  <div class="nav__inner">
-    <a class="nav__brand" aria-label="首页" href="{{REL}}index.html">
-      <img class="nav__logo" src="{{REL}}{{BRAND_LOGO}}?v={{BRAND_LOGO_VER}}" alt="" width="24" height="24">
-    </a>
-    <nav class="nav__links" aria-label="主导航">
-      <a href="{{REL}}index.html">BTC 行情</a>
-      <a href="{{REL}}app/index.html" aria-current="page">燃灯 App</a>
-    </nav>
-    <a class="nav__cta" href="download.html">立即下载</a>
-  </div>
-</header>
+{{SITE_NAV}}
 
 <main id="main">
 
@@ -56,12 +55,12 @@
             </a>
             <a class="btn btn--ghost btn--lg" href="#features">看看能做什么</a>
           </div>
-          <p class="hero__meta">{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 完全免费</p>
+          <p class="hero__meta">{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 支持离线阅读</p>
           <div class="stats">
             <div class="stat"><div class="stat__num">8,982</div><div class="stat__label">部经文收录</div></div>
             <div class="stat"><div class="stat__num">56</div><div class="stat__label">分卷 · 大正藏全藏</div></div>
             <div class="stat"><div class="stat__num">8 + 12</div><div class="stat__label">宗派与法门</div></div>
-            <div class="stat"><div class="stat__num">0 元</div><div class="stat__label">无广告无内购</div></div>
+            <div class="stat"><div class="stat__num">AI</div><div class="stat__label">白话翻译与解读</div></div>
           </div>
         </div>
       </div>
@@ -79,7 +78,7 @@
         <div>
           <span class="eyebrow">功能</span>
           <h2 class="section__title">从选经到读懂，一条路走通</h2>
-          <p class="section__sub">不知道从哪部经开始？按宗派法门找；读不进去？逐段精读；读完记不住？随手笔记。</p>
+          <p class="section__sub">不知道从哪部经开始？宗派经典，锁定榜，讨论榜等等选择。</p>
         </div>
       </div>
 
@@ -249,8 +248,8 @@
         </div>
         <div class="feature">
           <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg></div>
-          <h3 class="feature__title">无广告无内购</h3>
-          <p class="feature__desc">没有开屏广告，没有付费解锁，所有功能对所有人开放。</p>
+          <h3 class="feature__title">内容有出处</h3>
+          <p class="feature__desc">经文依据公开流通的《大正新修大藏经》整理。</p>
         </div>
         <div class="feature">
           <div class="feature__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
@@ -263,31 +262,12 @@
 
 </main>
 
-<footer class="footer">
-  <div class="container">
-    <div class="footer__inner">
-      <div>
-        <div class="footer__brand">
-          <img src="{{REL}}assets/icon.png" alt="" width="24" height="24">
-          <span>{{SITE_NAME}}</span>
-        </div>
-        <p class="footer__about">{{TAGLINE}}</p>
-      </div>
-      <ul class="footer__links">
-        <li><a href="download.html">下载</a></li>
-        <li><a href="{{REL}}privacy.html">隐私政策</a></li>
-        <li><a href="{{REL}}terms.html">用户协议</a></li>
-      </ul>
-      <div class="footer__contact">
-        <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
-        <div>邮箱：{{CONTACT_EMAIL}}</div>
-      </div>
-    </div>
-    <div class="footer__bottom">
-      <span>© {{YEAR}} {{SITE_NAME}} · 经文内容依据公开流通的《大正新修大藏经》整理</span>
-      <span>{{PACKAGE_NAME}} · v{{VERSION}} ({{VERSION_CODE}})</span>
-      <span class="footer__beian">{{BEIAN_HTML}}</span>
-    </div>
+<footer class="lite-foot">
+  <div class="lite-foot__inner">
+    <a href="{{REL}}privacy.html">隐私政策</a>
+    <a href="{{REL}}terms.html">用户协议</a>
+    <a href="mailto:{{CONTACT_EMAIL}}">联系我们</a>
+    <span class="lite-foot__beian">{{BEIAN_HTML}}</span>
   </div>
 </footer>
 
@@ -380,5 +360,6 @@
   sync();
 })();
 </script>
+<script src="{{REL}}assets/js/contact.js?v={{ASSET_VER}}" defer></script>
 </body>
 </html>

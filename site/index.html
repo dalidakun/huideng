@@ -17,229 +17,258 @@
 <link rel="canonical" href="{{BASE_URL}}/index.html">
 <link rel="stylesheet" href="{{REL}}assets/site.css?v={{ASSET_VER}}">
 <link rel="stylesheet" href="{{REL}}assets/trade.css?v={{ASSET_VER}}">
+<style>
+  /* TRADE 竖排：T 在最下、E 在最上（整词旋转 90°），内联一份防旧 CSS 缓存 */
+  .trade-tab,
+  .trade-tab span {
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+    white-space: nowrap !important;
+  }
+  .trade-tab {
+    width: 22px !important;
+    height: 32px !important;
+    padding: 0 !important;
+    font-size: 8px !important;
+  }
+  .trade-tab span {
+    display: inline-block !important;
+    transform: rotate(-90deg) !important;
+    font-size: 8px !important;
+    letter-spacing: 1px !important;
+  }
+</style>
 </head>
 <body class="page-trade">
 <a class="skip-link" href="#main">跳到主要内容</a>
 
-<header class="nav">
-  <div class="nav__inner">
-    <a class="nav__brand" aria-label="首页" href="{{REL}}index.html">
-      <img class="nav__logo" src="{{REL}}{{BRAND_LOGO}}?v={{BRAND_LOGO_VER}}" alt="" width="24" height="24">
-    </a>
+{{SITE_NAV}}
 
-    <div class="nav__right">
-      <nav class="nav__menu" aria-label="主导航">
-        <a href="{{REL}}index.html" aria-current="page">BTC 行情</a>
-        <a href="{{REL}}app/index.html">燃灯 App</a>
-      </nav>
-
-      <button type="button" class="avatar-btn" id="btnMenu" aria-label="账户菜单" aria-haspopup="menu" aria-expanded="false" aria-controls="acctMenu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M5.2 20c1.2-3.5 3.9-5.3 6.8-5.3s5.6 1.8 6.8 5.3"/></svg>
-      </button>
-
-      <div class="acct-menu" id="acctMenu" role="menu" aria-label="账户" hidden>
-        <div class="acct-menu__who" id="menuWho">未登录 · 本机账户</div>
-        <button type="button" role="menuitem" data-act="login" id="menuLogin">登录 / 注册</button>
-        <button type="button" role="menuitem" data-act="phone" id="menuPhone" hidden>绑定手机号</button>
-        <button type="button" role="menuitem" data-act="reset" id="menuReset">重置资金</button>
-        <button type="button" role="menuitem" data-act="logout" id="menuLogout" hidden>退出登录</button>
-      </div>
-    </div>
-  </div>
-</header>
+<div class="page-viewport" id="pageViewport">
+  <div class="page-track" id="pageTrack">
+    <section class="page-pane page-pane--trade" id="tradePane">
 
 <main id="main" class="trade-main">
 
-  <!-- 一整块：左边 K 线，右边下单 + 持仓 -->
+  <!-- 一整块：左列 = K 线 + 持仓 / 历史记录（两者同宽），
+       右列 = 下单、持仓明细、仓位计算、自选，从顶一直铺到底部边缘 -->
   <section class="panel desk-panel" id="deskPanel">
-    <div class="desk-chart">
-      <div class="chart-head">
-      <div class="tf" id="tf" role="tablist" aria-label="K 线周期">
-        <button type="button" data-iv="1m" class="is-on">1分</button>
-        <button type="button" data-iv="5m">5分</button>
-        <button type="button" data-iv="15m">15分</button>
-        <button type="button" data-iv="30m">30分</button>
-        <button type="button" data-iv="1h">1时</button>
-        <button type="button" data-iv="2h">2时</button>
-        <button type="button" data-iv="4h">4时</button>
-        <button type="button" data-iv="8h">8时</button>
-        <button type="button" data-iv="12h">12时</button>
-        <button type="button" data-iv="1d">1天</button>
-        <button type="button" data-iv="1w">1周</button>
-        <button type="button" data-iv="1M">1月</button>
-      </div>
-
-      <div class="pane-tools">
-        <button type="button" class="toolbtn" id="btnHist" title="显示历史开平仓点">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
-        </button>
-        <button type="button" class="toolbtn" id="btnDraw" aria-pressed="false" title="画线：拖动自由画，按住 Shift 画直线">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4.5-1L20 7.5 16.5 4 5 15.5 4 20z"/><path d="M14 6.5l3.5 3.5"/></svg>
-        </button>
-        <button type="button" class="toolbtn" id="btnErase" title="擦除全部画线（Ctrl+Z 可撤销）">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15l8-8 5 5-8 8H7l-3-3z"/><path d="M9 21h11"/></svg>
-        </button>
-      </div>
-    </div>
-
-    <div class="chartwrap" id="chartWrap">
-      <div class="pane pane--main">
-        <div class="chart" id="chart"></div>
-        <canvas class="draw-layer" id="drawLayer" aria-hidden="true"></canvas>
-        <div class="chart__inds" id="chartInds">
-          <div class="chart__ind chart__ind--ohlc">
-            <div class="chart__ind-row" id="legend">
-              <span>开 <b id="lgO">--</b></span>
-              <span>高 <b id="lgH">--</b></span>
-              <span>低 <b id="lgL">--</b></span>
-              <span>收 <b id="lgC">--</b></span>
-              <span>量 <b id="lgV">--</b></span>
-            </div>
-            <button type="button" class="ma-toggle" id="maToggle" aria-expanded="false" aria-controls="maList" title="展开 / 收起均线数值">均线 ▾</button>
-          </div>
-          <div class="ma-list" id="maList" hidden></div>
+    <div class="desk-main">
+      <div class="desk-chart">
+        <div class="chart-head">
+        <div class="tf" id="tf" role="tablist" aria-label="K 线周期">
+          <button type="button" data-iv="1m" class="is-on">1分</button>
+          <button type="button" data-iv="3m">3分</button>
+          <button type="button" data-iv="5m">5分</button>
+          <button type="button" data-iv="15m">15分</button>
+          <button type="button" data-iv="30m">30分</button>
+          <button type="button" data-iv="1h">1时</button>
+          <button type="button" data-iv="2h">2时</button>
+          <button type="button" data-iv="4h">4时</button>
+          <button type="button" data-iv="6h">6时</button>
+          <button type="button" data-iv="8h">8时</button>
+          <button type="button" data-iv="10h">10时</button>
+          <button type="button" data-iv="12h">12时</button>
+          <button type="button" data-iv="1d">1天</button>
+          <button type="button" data-iv="3d">3天</button>
+          <button type="button" data-iv="5d">5天</button>
+          <button type="button" data-iv="1w">1周</button>
+          <button type="button" data-iv="1M">1月</button>
         </div>
+        <button type="button" class="trade-tab" id="tradeTab" aria-expanded="true" aria-controls="deskSide" title="收起 / 展开右侧面板"><span>TRADE</span></button>
       </div>
 
-      <div class="pane pane--macd" id="macdPane">
-        <div class="chart" id="chartMacd"></div>
-        <div class="chart__ind chart__ind--macd" id="macdLegend" aria-hidden="true"></div>
-      </div>
+      <div class="chartwrap" id="chartWrap">
+        <div class="pane pane--main">
+          <div class="chart" id="chart"></div>
+          <canvas class="axis-layer" id="axisLayer" aria-hidden="true"></canvas>
+          <div class="chart-price-tag" id="priceTag" hidden></div>
+          <div class="chart-price-tag chart-price-tag--hover" id="hoverTag" hidden></div>
+          <canvas class="draw-layer" id="drawLayer" aria-hidden="true"></canvas>
+          <div class="line-handles" id="lineHandles" aria-hidden="true"></div>
+          <div class="chart__inds" id="chartInds">
+            <div class="chart__ind chart__ind--ohlc">
+              <div class="chart__ind-row" id="legend">
+                <span class="chart__sym" id="chartSym">BTCUSDT</span>
+                <!-- 均线数值放在原来开高低收的位置，隐藏的均线也在，只是按下线样式显示 -->
+                <span class="ma-strip" id="maLegend"></span>
+                <span>涨跌 <b id="lgChg">--</b></span>
+                <span class="lg-vol">量 <b id="lgV">--</b></span>
+              </div>
+              <button type="button" class="ma-toggle" id="maToggle" aria-haspopup="true" title="添加一条均线">＋ 添加均线</button>
+              <button type="button" class="ma-toggle chart-reset" id="btnReset" title="重置当前周期走势（撤销右侧压扁/拉伸，恢复默认视图）">重置</button>
+            </div>
+          </div>
 
-      <button type="button" class="trade-tab" id="tradeTab" aria-expanded="true" aria-controls="deskSide" title="收起 / 展开右侧面板"><span>TRADE</span></button>
-      <div class="chart__msg" id="chartMsg">正在加载 K 线…</div>
+          <div class="pane-tools">
+            <button type="button" class="toolbtn" id="btnHist" title="显示历史开平仓点">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+            </button>
+            <button type="button" class="toolbtn" id="btnDraw" aria-pressed="false" title="画线：拖动自由画，按住 Shift 画直线">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4.5-1L20 7.5 16.5 4 5 15.5 4 20z"/><path d="M14 6.5l3.5 3.5"/></svg>
+            </button>
+            <button type="button" class="toolbtn" id="btnLine" aria-pressed="false" title="直线：点两下画一条；再点此按钮清掉重画；拖动两端点可调整">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 21.5L21.5 2.5"/></svg>
+            </button>
+            <button type="button" class="toolbtn" id="btnMeasure" aria-pressed="false" title="测距：按住从起点拖到终点，显示涨跌幅">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 16.6L16.6 3.2l4.2 4.2L7.4 20.8z"/><path d="M7 13l2 2M9.6 10.4l2 2M12.2 7.8l2 2M14.8 5.2l2 2"/></svg>
+            </button>
+            <button type="button" class="toolbtn" id="btnErase" title="擦除全部画线（Ctrl+Z 可撤销）">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15l8-8 5 5-8 8H7l-3-3z"/><path d="M9 21h11"/></svg>
+            </button>
+            <button type="button" class="toolbtn" id="btnShot" title="截图当前走势图（含画线和交易记录）">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5h3l1.4-2h8.2l1.4 2h3v10h-17z"/><circle cx="12" cy="13" r="3.2"/></svg>
+            </button>
+          </div>
+
+          <!-- 手机：右边缘长按后上下拖，压扁 / 拉伸走势（顶替原来那条看不见的价格轴） -->
+          <div class="scale-strip" id="scaleStrip" aria-hidden="true"><i></i></div>
+
+          <!-- 手机：右下角全屏看盘 -->
+          <button type="button" class="chart-fs" id="btnFs" aria-label="全屏查看走势图" title="全屏查看走势图" aria-pressed="false">
+            <svg class="fs-ico fs-ico--open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H4v5"/><path d="M15 4h5v5"/><path d="M20 15v5h-5"/><path d="M4 15v5h5"/></svg>
+            <svg class="fs-ico fs-ico--close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h5V4"/><path d="M20 9h-5V4"/><path d="M15 20v-5h5"/><path d="M9 20v-5H4"/></svg>
+          </button>
+        </div>
+
+        <div class="pane pane--macd" id="macdPane">
+          <div class="chart" id="chartMacd"></div>
+          <div class="chart__ind chart__ind--macd" id="macdLegend" aria-hidden="true"></div>
+        </div>
+
+        <div class="chart__msg" id="chartMsg">正在加载 K 线…</div>
+        </div>
+
+        <!-- 走势图右下角的「历史」悬浮按钮：点开从右侧滑出历史记录 -->
+        <button type="button" class="hist-fab" id="btnHisSlide" aria-label="历史记录" title="历史记录（平仓单）" aria-expanded="false" aria-controls="hisSlide">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+        </button>
       </div>
-    </div>
+    </div><!-- /.desk-main -->
 
     <aside class="desk-side" id="deskSide">
     <section class="order-panel" id="orderPanel">
       <div class="acct">
-        <div class="acct__cell"><span>总资产 (USDT)</span><b id="acctEquity">--</b></div>
+        <div class="acct__cell"><span>总资产</span><b id="acctEquity">--</b></div>
         <div class="acct__cell"><span>可用余额</span><b id="acctCash">--</b></div>
         <div class="acct__cell"><span>整体盈亏</span><b id="acctPnl">--</b></div>
-        <div class="acct__cell"><span>当日单数</span><b id="statToday">0</b></div>
+        <div class="acct__cell"><span>操作次数</span><b id="statOps">0/0</b></div>
+        <div class="acct__cell"><span>最近回撤</span><b id="statDD">--</b></div>
         <div class="acct__cell"><span>胜率</span><b id="statWin">--</b></div>
       </div>
 
       <div class="order" id="orderForm">
-        <div class="seg seg--mode" id="segMode">
-          <button type="button" data-mode="open" class="is-on">开仓</button>
-          <button type="button" data-mode="close">平仓</button>
+        <!-- 方向：背景偏白，点或左右滑动切换看多（红 ↗）/ 看空（绿 ↘），选中的一侧是浅色 -->
+        <div class="dir-seg" id="dirSeg" data-side="long" role="radiogroup" aria-label="选择方向">
+          <span class="dir-seg__thumb" aria-hidden="true"></span>
+          <button type="button" class="dir-seg__btn is-on" data-side="long" role="radio" aria-checked="true">
+            <svg class="dir-seg__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18 18 6"/><path d="M9 6h9v9"/></svg>
+            <span>看多</span>
+          </button>
+          <button type="button" class="dir-seg__btn" data-side="short" role="radio" aria-checked="false">
+            <svg class="dir-seg__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 18 18"/><path d="M9 18h9V9"/></svg>
+            <span>看空</span>
+          </button>
         </div>
 
         <div class="order__qtyrow" id="qtyRow">
           <label class="field field--qty">
-            <span>数量 (BTC)</span>
-            <input type="text" inputmode="decimal" id="fQty" placeholder="0.000000" autocomplete="off">
+            <em class="field__prefix">数量</em>
+            <input type="text" inputmode="decimal" id="fAmount" placeholder="0.00" autocomplete="off" aria-label="数量">
+            <i class="field__unit">USDT</i>
           </label>
-          <div class="pct">
-            <button type="button" data-pct="0.25">25%</button>
-            <button type="button" data-pct="0.5">50%</button>
-            <button type="button" data-pct="0.75">75%</button>
-            <button type="button" data-pct="1">100%</button>
+          <div class="pct-slider" id="openPctSlider" role="slider" aria-label="开仓比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+            <div class="pct-slider__track">
+              <i class="pct-slider__line"></i>
+              <button type="button" class="pct-slider__dot" data-pct="0" style="left:0%" title="0%"></button>
+              <button type="button" class="pct-slider__dot" data-pct="25" style="left:25%" title="25%"></button>
+              <button type="button" class="pct-slider__dot" data-pct="50" style="left:50%" title="50%"></button>
+              <button type="button" class="pct-slider__dot" data-pct="75" style="left:75%" title="75%"></button>
+              <button type="button" class="pct-slider__dot" data-pct="100" style="left:100%" title="100%"></button>
+              <span class="pct-slider__thumb" style="left:0%"><b class="pct-slider__bubble">0%</b></span>
+            </div>
           </div>
         </div>
 
-        <div class="order__pctrow" id="closePctRow" hidden>
-          <div class="order__pcthead">
-            <span>平仓比例</span>
-            <b id="closePctText">100%</b>
-          </div>
-          <div class="pct pct--close" id="closePctBtns">
-            <button type="button" data-close-pct="0.25">25%</button>
-            <button type="button" data-close-pct="0.5">50%</button>
-            <button type="button" data-close-pct="0.75">75%</button>
-            <button type="button" data-close-pct="1" class="is-on">100%</button>
-          </div>
-        </div>
-
-        <div class="order__hint" id="closeHint" hidden>暂无可平持仓</div>
-
-        <div class="order__actions" id="orderActions">
-          <button type="button" data-side="long" class="ord-act ord-act--long">
-            <svg class="seg__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18 18 6"/><path d="M9 6h9v9"/></svg>
-            <span class="ord-act__text">看多</span>
-          </button>
-          <button type="button" data-side="short" class="ord-act ord-act--short">
-            <svg class="seg__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 18 18"/><path d="M9 18h9V9"/></svg>
-            <span class="ord-act__text">看空</span>
-          </button>
-        </div>
+        <button type="button" class="ord-open" id="btnOpen">开仓</button>
       </div>
     </section>
 
-    <section class="side-summary" id="sideSummary" aria-label="持仓概览">
-      <div class="side-summary__head">
-        <span>持仓概览</span>
-        <span class="side-summary__badge" id="sumCount">0 笔</span>
-      </div>
-      <div class="side-summary__grid">
-        <div class="side-summary__cell">
-          <span>持仓市值</span>
-          <b id="sumNotional">--</b>
-        </div>
-        <div class="side-summary__cell">
-          <span>未实现盈亏</span>
-          <b id="sumPnl">--</b>
-        </div>
-        <div class="side-summary__cell">
-          <span>占用保证金</span>
-          <b id="sumMargin">--</b>
-        </div>
-        <div class="side-summary__cell">
-          <span>可用余额</span>
-          <b id="sumCash">--</b>
-        </div>
-      </div>
+    <!-- 持仓明细：有持仓时列开仓金额 + 仓位大小，右侧一颗「平仓」按钮；
+         没持仓时整块不显示 -->
+    <section class="side-summary" id="sideSummary" aria-label="持仓" hidden>
       <div class="side-summary__list" id="sidePos"></div>
-      <div class="side-summary__empty" id="sideEmpty" aria-hidden="true"></div>
-      <div class="side-summary__tips">
-        <p><b>同向合并</b>多次开仓自动并成一单，成本按加权均价。</p>
-        <p><b>分批平仓</b>可选 25% / 50% / 75% / 100%。</p>
+      <div class="side-summary__foot">
+        <button type="button" class="close-all" id="btnCloseAll" title="按市价把全部持仓一次平掉">平仓</button>
       </div>
     </section>
+
+    <!-- 仓位计算：初始资金 × 单笔风险R ÷ 止损距离 = 仓位，杠杆 = 仓位 ÷ 初始资金
+         初始资金跟随顶部「总资产」自动更新，不用手填；单笔风险R 填一次就记住；
+         止损距离每单都不一样，每次自己填。 -->
+    <section class="pos-calc" id="posCalc" aria-label="仓位计算">
+      <div class="pos-calc__head">
+        <span>仓位计算</span>
+        <span class="pos-calc__qty" id="calcQty"></span>
+      </div>
+      <div class="pos-calc__row">
+        <span class="pos-calc__label">初始资金<em class="pos-calc__auto" id="calcAutoTag">自动</em></span>
+        <span class="pos-calc__field">
+          <input type="text" inputmode="decimal" id="calcCapital" autocomplete="off" spellcheck="false" placeholder="0" aria-label="初始资金（USDT）" title="默认跟随顶部总资产，也可以自己改来当计算器用；有持仓时锁死跟随总资产">
+          <i>USDT</i>
+        </span>
+      </div>
+      <label class="pos-calc__row">
+        <span class="pos-calc__label">单笔风险R</span>
+        <span class="pos-calc__field">
+          <input type="text" inputmode="decimal" id="calcRisk" autocomplete="off" spellcheck="false" placeholder="0" aria-label="单笔风险 R（百分比）">
+          <i>%</i>
+        </span>
+      </label>
+      <label class="pos-calc__row">
+        <span class="pos-calc__label">止损距离</span>
+        <span class="pos-calc__field">
+          <input type="text" inputmode="decimal" id="calcStop" autocomplete="off" spellcheck="false" placeholder="0" aria-label="止损距离（百分比）">
+          <i>%</i>
+        </span>
+      </label>
+      <div class="pos-calc__grid">
+        <div class="pos-calc__cell" title="仓位 = 初始资金 × 单笔风险R ÷ 止损距离">
+          <span>仓位 (USDT)</span>
+          <b id="calcPosition">0</b>
+        </div>
+        <div class="pos-calc__cell" title="杠杆 = 仓位 ÷ 初始资金">
+          <span>杠杆</span>
+          <b id="calcLeverage">--</b>
+        </div>
+      </div>
+      <p class="pos-calc__note">仓位 = 初始资金 × 风险R ÷ 止损距离<br>杠杆 = 仓位 ÷ 初始资金</p>
+    </section>
+
+    <div class="watch-dock">
+      <div class="watch-head" id="watchHead">
+        <button type="button" class="watch-toggle" id="watchToggle" aria-expanded="true" aria-controls="watchBox">
+          <span>自选</span>
+        </button>
+        <button type="button" class="watch-search-btn" id="watchSearchBtn" aria-label="搜索币种" title="搜索币种">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        </button>
+        <div class="watch-search" id="watchSearch" hidden>
+          <svg class="watch-search__ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input type="search" id="symInput" placeholder="搜索币种，看走势 / 加自选" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="搜索币种">
+          <button type="button" class="watch-search__close" id="symClose" aria-label="收起搜索">×</button>
+        </div>
+        <div class="symsearch__list" id="symList" role="listbox" hidden></div>
+      </div>
+
+      <section class="watch-box" id="watchBox" aria-label="自选标的">
+        <div class="watch-list" id="watchList"></div>
+        <p class="watch-empty" id="watchEmpty">搜索后点 ☆ 加入自选</p>
+      </section>
+    </div>
     </aside>
 
     <div class="desk-split" id="deskSplit" role="separator" aria-orientation="vertical" aria-valuemin="270" aria-valuemax="720" aria-valuenow="288" aria-label="拖动调整走势图与右侧面板宽度" title="拖动调整宽度，双击恢复默认"></div>
-  </section>
-
-  <section class="panel pos-panel" id="posPanel">
-    <div class="tabs" id="tabs">
-      <button type="button" data-tab="pos" class="is-on">持仓 <span id="cntPos"></span></button>
-      <button type="button" data-tab="his">历史记录</button>
-    </div>
-
-    <div class="tbl-wrap" id="wrapPos">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>方向</th>
-            <th class="num">数量 (BTC)</th>
-            <th class="num">未实现盈亏</th>
-            <th class="num">开仓价</th>
-          </tr>
-        </thead>
-        <tbody id="tblPos"></tbody>
-      </table>
-    </div>
-
-    <div class="tbl-wrap" id="wrapHis" hidden>
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>方向</th>
-            <th class="num">盈亏</th>
-            <th class="num">开仓价</th>
-            <th class="num">平仓价</th>
-            <th class="num">数量 (BTC)</th>
-          </tr>
-        </thead>
-        <tbody id="tblHis"></tbody>
-      </table>
-    </div>
-
-    <div class="empty" id="tblEmpty">暂无持仓。在上方选择开仓方向与数量，下一单试试。</div>
   </section>
 
 </main>
@@ -259,6 +288,56 @@
     </span>
   </div>
 </footer>
+    </section>
+
+    <!-- 交易复盘页：和行情页并排，整页左右推拉；iframe 内隐藏重复导航 -->
+    <section class="page-pane page-pane--review" id="reviewPane" aria-hidden="true" inert>
+      <iframe id="reviewFrame" title="交易复盘"></iframe>
+    </section>
+
+    <!-- 缠论读书会页：同上 -->
+    <section class="page-pane page-pane--chan" id="chanPane" aria-hidden="true" inert>
+      <iframe id="chanFrame" title="缠论读书会"></iframe>
+    </section>
+
+    <!-- 燃灯页：和行情页并排，整页左右推拉；iframe 内隐藏重复导航 -->
+    <section class="page-pane page-pane--app" id="appPane" aria-hidden="true" inert>
+      <iframe id="appFrame" title="燃灯"></iframe>
+      <div class="app-pane__loading" id="appLoading">正在加载…</div>
+    </section>
+  </div>
+</div>
+
+<aside class="notes-slide" id="notesSlide" aria-label="交易笔记" aria-hidden="true">
+  <iframe class="notes-slide__frame" id="notesFrame" title="交易笔记"></iframe>
+  <button type="button" class="notes-slide__close" id="notesSlideClose" aria-label="关闭交易笔记" title="关闭">×</button>
+</aside>
+
+<!-- 历史记录：走势图右下角悬浮按钮点开，从右侧滑出（样式照笔记子页面） -->
+<aside class="his-slide" id="hisSlide" aria-label="历史记录" aria-hidden="true">
+  <div class="his-slide__head">
+    <b>历史记录</b>
+    <span class="his-slide__tip">平仓单，点一行可在走势图上闪一下</span>
+    <button type="button" class="his-slide__close" id="hisSlideClose" aria-label="关闭历史记录" title="关闭">×</button>
+  </div>
+  <div class="his-slide__body">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>方向</th>
+          <th class="num">盈亏</th>
+          <th class="num">开仓价</th>
+          <th class="num">平仓价</th>
+          <th class="num">数量 (BTC)</th>
+        </tr>
+      </thead>
+      <tbody id="tblHis"></tbody>
+    </table>
+    <p class="his-slide__empty" id="hisEmpty">还没有平仓记录。开一单、平一单就会出现在这里。</p>
+  </div>
+</aside>
+
 
 <!-- 均线编辑浮层 -->
 <div class="pop" id="maPop" hidden>
@@ -279,8 +358,34 @@
 
 <!-- 图表右键菜单 -->
 <div class="ctx" id="ctxMenu" hidden></div>
+<div class="ctx line-ctx" id="lineMenu" hidden></div>
+
+<!-- 直线的价位 / 可见周期 -->
+<div class="modal" id="lineDlg" hidden>
+  <div class="modal__box" role="dialog" aria-modal="true" aria-labelledby="lineDlgTitle">
+    <h2 id="lineDlgTitle">输入价位</h2>
+    <p id="lineDlgHint"></p>
+    <div class="line-dlg__field" id="lineDlgField">
+      <input id="lineDlgInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="价位">
+    </div>
+    <div class="line-dlg__field line-dlg__note" id="lineDlgNoteWrap">
+      <input id="lineDlgNote" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="备注（可选，只保存，不显示在图上）" aria-label="备注">
+    </div>
+    <div class="line-dlg__tfs" id="lineDlgTfs" hidden></div>
+    <div class="line-dlg__quick" id="lineDlgQuick" hidden>
+      <button type="button" class="line-dlg__quickbtn" data-tfq="all">全部</button>
+      <button type="button" class="line-dlg__quickbtn" data-tfq="cur">仅当前</button>
+    </div>
+    <div class="modal__actions">
+      <button type="button" class="btn btn--ghost" id="lineDlgCancel">取消</button>
+      <button type="button" class="btn btn--primary" id="lineDlgOk">确定</button>
+    </div>
+  </div>
+</div>
 
 <!-- 登录 / 注册 -->
+<input type="file" id="avatarInput" accept="image/jpeg,image/png,image/webp" hidden>
+
 <div class="modal" id="authModal" hidden>
   <div class="modal__box" role="dialog" aria-modal="true" aria-labelledby="authTitle">
     <h2 id="authTitle">同步模拟账户</h2>
@@ -358,6 +463,34 @@
     <div class="modal__actions">
       <button type="button" class="btn btn--ghost" id="pCancel">取消</button>
       <button type="button" class="btn btn--primary" id="pSubmit">绑定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 重置资金：默认 10 万，可自定义金额 -->
+<div class="modal" id="resetModal" hidden>
+  <div class="modal__box" role="dialog" aria-modal="true" aria-labelledby="resetTitle">
+    <h2 id="resetTitle">重置资金</h2>
+    <p>现金回到指定额度，清空持仓和挂单；历史成交、总单数和胜率保留。</p>
+
+    <div class="order" style="padding:14px 0 0">
+      <label class="field">
+        <span>重置金额 (USDT)</span>
+        <input type="text" inputmode="decimal" id="resetAmount" value="100000" placeholder="100000" autocomplete="off">
+      </label>
+      <div class="pct reset-quick" id="resetQuick">
+        <button type="button" data-amount="10000">1 万</button>
+        <button type="button" data-amount="50000">5 万</button>
+        <button type="button" data-amount="100000">10 万</button>
+        <button type="button" data-amount="200000">20 万</button>
+        <button type="button" data-amount="500000">50 万</button>
+      </div>
+      <div class="modal__err" id="resetErr"></div>
+    </div>
+
+    <div class="modal__actions">
+      <button type="button" class="btn btn--ghost" id="resetCancel">取消</button>
+      <button type="button" class="btn btn--primary" id="resetSubmit">确认重置</button>
     </div>
   </div>
 </div>

@@ -30,6 +30,7 @@
    窄屏（<=980px）退回普通文档流，允许页面滚动。 */
 
 body.page-trade {
+  --trade-nav-h: 40px;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -42,6 +43,8 @@ body.page-trade {
   position: relative;
   flex: none;
   z-index: 80;
+  /* 收窄到菜单下划线的高度，下划线与导航底边正好贴合 */
+  height: var(--trade-nav-h);
 }
 
 .page-trade .nav__inner {
@@ -55,15 +58,29 @@ body.page-trade {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 18px;
 }
 
-/* 右上角的两个站点菜单 */
-/* 右上角两个入口：分段胶囊，和周期切换一个风格 */
+.page-trade .nav__right,
+.page-trade .nav__menu {
+  height: 100%;
+}
+
+.page-trade .nav__menu {
+  align-items: stretch;
+}
+
+.page-trade .nav__menu a {
+  display: flex;
+  align-items: center;
+  padding: 0 1px;
+}
+
+/* 右上角两个入口：颜色恒定，只有下划线跟着当前页走 */
 .nav__menu {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 22px;
   padding: 0;
   border-radius: 0;
   background: transparent;
@@ -75,7 +92,7 @@ body.page-trade {
   border-radius: 0;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-hint);
+  color: var(--text-sec);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -84,16 +101,107 @@ body.page-trade {
   color: #2c2c2c;
 }
 
+/* 悬停、当前页都不改颜色 / 字重，免得整行字色跳一下；只让下划线动 */
 .nav__menu a:hover {
-  color: var(--text);
+  color: var(--text-sec);
+  /* 站点通用的 a:hover 下划线在这里会跟「当前页」的下划线混在一起 */
+  text-decoration: none;
 }
 
 .nav__menu a[aria-current="page"] {
-  color: var(--text);
-  font-weight: 600;
+  color: var(--text-sec);
+  font-weight: 500;
   background: transparent;
   border-bottom-color: var(--accent);
   box-shadow: none;
+}
+
+/* 行情 / 燃灯：导航下面是一条双页轨道，整页左右推拉，而不是浮层盖上来 */
+.page-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.page-track {
+  display: flex;
+  width: 400%;
+  height: 100%;
+  transition: transform 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+
+/* 四页轨道：交易练习 → 交易复盘 → 缠论读书会 → 大正藏经 */
+.page-track[data-pane="review"] {
+  transform: translateX(-25%);
+}
+
+.page-track[data-pane="chan"] {
+  transform: translateX(-50%);
+}
+
+.page-track[data-pane="app"] {
+  transform: translateX(-75%);
+}
+
+.page-pane {
+  flex: 0 0 25%;
+  min-width: 0;
+  height: 100%;
+}
+
+.page-pane--review,
+.page-pane--chan {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.page-pane--review iframe,
+.page-pane--chan iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
+.page-pane--trade {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.page-pane--app {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.page-pane--app iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
+.app-pane__loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text-hint);
+  font-size: 13px;
+}
+
+.app-pane__loading[hidden] {
+  display: none;
 }
 
 /* 行情状态：放在页脚这一行的最右侧，小尺寸、不压分隔线 */
@@ -157,7 +265,9 @@ body.page-trade {
   box-shadow: 0 0 0 3px var(--up-soft);
 }
 
-/* 右上角默认头像：登录 / 绑定手机 / 退出都收在这里 */
+/* 右上角默认头像：登录 / 绑定手机 / 退出都收在这里。
+   实心人像 + 浅色圆底，比原来那条细线图标显眼得多；
+   悬停 / 展开都不换色，和菜单一样保持同一个颜色。 */
 .avatar-btn {
   width: 32px;
   height: 32px;
@@ -165,29 +275,20 @@ body.page-trade {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 50%;
   background: transparent;
-  color: var(--text-hint);
+  color: var(--text);
   cursor: pointer;
   flex: none;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  overflow: hidden;
 }
 
-.avatar-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-.avatar-btn:hover {
-  background: var(--tint-bg);
-  border-color: var(--border-soft);
-  color: var(--text);
-}
-
-.avatar-btn[aria-expanded="true"] {
-  background: var(--tint-bg);
-  color: var(--text);
+.avatar-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .acct-menu {
@@ -271,9 +372,19 @@ body.page-trade {
   flex-direction: column;
 }
 
-/* 右侧留 22px 给 TRADE 竖条，价格轴刻度不会被它盖住 */
+/* 图表铺满到右侧面板边界，不再给 TRADE 竖条留空色条 */
 .desk-chart .chartwrap {
-  border-right: 22px solid #F4ECD9;
+  border-right: 0;
+}
+
+/* 左列：走势图 + 持仓 / 历史记录。两块的右边界都停在右侧面板的左边缘，
+   也就是走势图的右边界；腾出来的右边整列从顶部一直铺到页面底部。 */
+.desk-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .desk-panel {
@@ -291,7 +402,27 @@ body.page-trade {
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--card);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* 滚动条：交易页统一不显示 ------------------------------------------------
+   .desk-side 是走势图右侧那一列（下单 + 持仓概览），窗口高度不够时内部要能滚，
+   窄屏整页轨道同理。内容照常可滚动（滚轮 / 触摸 / 键盘），但不画系统滚动条。
+   Windows 的「自动隐藏滚动条」系统设置会让同一个页面在不同电脑上表现不同：
+   有的机器露出竖条、有的不露，这里显式关掉，任何机器观感一致。 */
+.desk-side,
+.desk-side .side-summary__list,
+.page-pane--trade {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 旧 Edge / IE */
+}
+
+.desk-side::-webkit-scrollbar,
+.desk-side .side-summary__list::-webkit-scrollbar,
+.page-pane--trade::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .desk-side .order-panel {
@@ -301,32 +432,52 @@ body.page-trade {
   border-bottom: 0;
 }
 
-/* 下单区左边界外侧的 TRADE 小竖条：点一下把整个右侧面板收起 / 展开 */
+/* 右侧面板收起 / 展开：贴在持仓概览面板的右下角；收起后仍留在页面右下角可再点开 */
+/* 周期栏最右侧的 TRADE：竖排（整词旋转 90°），收起 / 展开右侧面板 */
 .trade-tab {
-  position: absolute;
-  right: -22px;
-  top: 8px;
-  z-index: 5;
-  width: 22px;
-  height: 54px;
-  padding: 0;
+  position: static;
+  flex: 0 0 auto;
+  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 0;
+  width: 22px;
+  height: 32px;
+  margin-left: auto;
+  margin-right: -12px;
+  padding: 0;
   border: 1px solid var(--border-soft);
   border-right: 0;
-  border-radius: 6px 0 0 6px;
+  border-radius: 5px 0 0 5px;
   background: var(--bg);
   color: var(--text-hint);
+  font: inherit;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  line-height: 1;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
 .trade-tab span {
+  display: inline-block;
   transform: rotate(-90deg);
-  font-size: 10px;
+  font-size: 8px;
   font-weight: 600;
-  letter-spacing: 2px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.trade-tab__chev {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .trade-tab:hover {
@@ -338,9 +489,11 @@ body.page-trade {
   display: none;
 }
 
-/* 下单卡片下方的持仓概览：把面板剩余高度用起来，常驻显示合计浮盈与成本 */
+/* 下单卡片下方的持仓明细：有持仓才显示（JS 里 hidden）。
+   上半部分是「开仓金额 + 仓位百分比」一行，下面两个小格子是未实现收益的绝对值 / 收益率，
+   最下面一条满宽的「平仓」按钮（和开仓按钮同款，只是颜色不同）。 */
 .side-summary {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -348,127 +501,130 @@ body.page-trade {
   background: var(--card);
 }
 
-.side-summary__head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 14px 6px;
-  font-size: 12px;
-  color: var(--text-sec);
-}
-
-.side-summary__badge {
-  font-size: 10.5px;
-  color: var(--text-hint);
-  background: var(--tint-bg);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-variant-numeric: tabular-nums;
-}
-
-.side-summary__grid {
-  flex: none;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 0 14px 10px;
-}
-
-.side-summary__cell {
-  min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--tint-bg);
-}
-
-.side-summary__cell span {
-  display: block;
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--text-hint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.side-summary__cell b {
-  display: block;
-  font-size: 12px;
-  line-height: 1.4;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .side-summary__list {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 0 14px 8px;
+  gap: 6px;
+  padding: 10px 14px 0;
 }
 
 .side-summary__list:empty {
   display: none;
 }
 
-.side-summary__empty {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 64px;
-  padding: 12px 18px;
-  color: var(--text-hint);
-  font-size: 11.5px;
-  line-height: 1.7;
-  text-align: center;
-}
-
-.side-summary__tips {
+.side-summary__foot {
   flex: none;
-  display: grid;
-  gap: 2px;
-  margin: 0 14px 10px;
-  padding: 7px 9px;
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: var(--tint-bg);
-  color: var(--text-hint);
-  font-size: 10px;
-  line-height: 1.55;
+  padding: 10px 14px 12px;
 }
 
-.side-summary__tips b {
-  color: var(--text-sec);
-  margin-right: 4px;
+.close-all {
+  border: 1px solid #8A5A44;
+  background: #8A5A44;
 }
 
+.close-all:hover:not(:disabled) {
+  border-color: #7A4E3A;
+  background: #7A4E3A;
+}
+
+.close-all:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* 一笔持仓：第一行（方向 + 开仓金额 + 仓位%），第二行两个小格子（收益绝对值 / 收益率） */
 .side-pos {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--tint-bg);
+}
+
+.side-pos__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.side-pos__main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.side-pos__main b {
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.side-pos__main em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-hint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.side-pos__stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.side-pos__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+}
+
+.side-pos__stat span {
+  font-size: 9.5px;
+  color: var(--text-hint);
+  white-space: nowrap;
+}
+
+.side-pos__stat b {
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.side-pos__stat b.is-up {
+  color: var(--up);
+}
+
+.side-pos__stat b.is-down {
+  color: var(--down);
 }
 
 .side-pos__tag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  flex: none;
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
   font-size: 11px;
   font-weight: 700;
@@ -484,13 +640,137 @@ body.page-trade {
   background: var(--down-soft);
 }
 
-.side-pos__main {
+/* 仓位计算：钉在右侧这一列的下面（自选上面），和自选留一点距离。
+   margin-top:auto 把这一组压到底部，开仓后上面多出持仓明细也不会把它顶下去。 */
+.pos-calc {
+  flex: none;
+  margin-top: auto;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+}
+
+.pos-calc__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-sec);
+}
+
+.pos-calc__qty {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--text-hint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pos-calc__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
-.side-pos__main b {
+.pos-calc__label {
+  flex: 0 0 58px;
+  font-size: 11px;
+  color: var(--text-hint);
+  white-space: nowrap;
+}
+
+.pos-calc__field {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.pos-calc__field input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 34px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--tint-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.pos-calc__field input:focus {
+  border-color: var(--accent);
+  background: var(--card);
+}
+
+.pos-calc__field i {
+  position: absolute;
+  right: 8px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-hint);
+  pointer-events: none;
+}
+
+/* 初始资金默认跟随顶部总资产；手改过就当计算器用（标签上的「自动」会消失）；
+   有持仓时锁死成总资产，输入框变只读 */
+.pos-calc__field input.is-locked {
+  background: var(--card);
+  border-style: dashed;
+  color: var(--text-sec);
+  cursor: default;
+}
+
+.pos-calc__auto {
+  margin-left: 3px;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--text-hint);
+}
+
+.pos-calc__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.pos-calc__cell {
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--tint-bg);
+}
+
+.pos-calc__cell span {
   display: block;
-  font-size: 11.5px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-hint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pos-calc__cell b {
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -498,27 +778,15 @@ body.page-trade {
   text-overflow: ellipsis;
 }
 
-.side-pos__main em {
-  display: block;
-  font-style: normal;
+.pos-calc__cell b.has-result {
+  color: var(--accent);
+}
+
+.pos-calc__note {
+  margin: 0;
   font-size: 10px;
+  line-height: 1.5;
   color: var(--text-hint);
-  font-variant-numeric: tabular-nums;
-}
-
-.side-pos__pnl {
-  font-size: 11.5px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.side-pos__pnl.is-up {
-  color: var(--up);
-}
-
-.side-pos__pnl.is-down {
-  color: var(--down);
 }
 
 /* 走势图 / 右侧面板之间的可拖动分隔条 */
@@ -556,16 +824,33 @@ body.page-trade {
   display: none;
 }
 
-/* 持仓 / 历史记录：整宽放在走势图 + 下单区下方，桌面上固定一块高度，行多了在表内滚动 */
-.page-trade .pos-panel {
-  flex: 0 0 clamp(120px, 20vh, 200px);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0;
-  background: var(--card);
+/* 走势图与持仓区之间的横向分隔条：上下拖动改走势图高度 */
+.desk-hsplit {
+  flex: 0 0 8px;
+  margin: -4px 0;
+  position: relative;
+  z-index: 7;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.desk-hsplit::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  margin-top: -0.5px;
+  background: transparent;
+  transition: background 0.15s, height 0.15s, margin-top 0.15s;
+}
+
+.desk-hsplit:hover::after,
+.desk-hsplit.is-drag::after {
+  height: 2px;
+  margin-top: -1px;
+  background: var(--accent);
 }
 
 .panel {
@@ -705,11 +990,16 @@ body.page-trade {
   border-color: var(--accent);
 }
 
+/* 图表右上角工具条（画线 / 擦除 / 历史开平仓）：
+   贴着主图右上角浮着，和左侧图例同一水平线；不要底色块，少挡 K 线 */
 .pane-tools {
-  margin-left: auto;
+  position: absolute;
+  right: 2px;
+  top: 0;
+  z-index: 4;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 1px;
 }
 
 .iconbtn {
@@ -744,8 +1034,8 @@ body.page-trade {
 
 /* ---------------------------- 图表（主图 + 副图） ----------------------------
    主图和 MACD 各建一个 Lightweight Charts 实例：v4 没有多窗格 API，
-   两个图共用一条时间轴（主图隐藏时间轴，副图显示），左右用相同的
-   右轴最小宽度保证绘图区对齐。 */
+   两个图共用一条时间轴（主图隐藏时间轴，副图显示）。右侧价格轴全部隐藏，
+   两图绘图区自然对齐，横向空间也更大；当前价/十字线价格用图表内浮标显示。 */
 
 .chartwrap {
   position: relative;
@@ -780,6 +1070,49 @@ body.page-trade {
   height: 100%;
 }
 
+/* 右侧价格刻度：自己画（虚线 + 价格数字），层在 K 线之上、画线层之下 */
+.axis-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 右侧价格轴隐藏后，当前价 / 十字线价格用图表内的小浮标显示，不占绘图宽度 */
+.chart-price-tag {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  z-index: 3;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #6B6250;
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(36, 31, 22, 0.2);
+}
+
+.chart-price-tag.is-up {
+  background: var(--up);
+}
+
+.chart-price-tag.is-down {
+  background: var(--down);
+}
+
+.chart-price-tag--hover {
+  background: #3A3A3A;
+  font-weight: 600;
+}
+
 /* 画线层：平时不吃鼠标事件，激活画线后接管拖拽 */
 .draw-layer {
   position: absolute;
@@ -794,6 +1127,28 @@ body.page-trade {
 .pane--main.is-drawing .draw-layer {
   pointer-events: auto;
   cursor: crosshair;
+}
+
+/* 直线的两个定位点：DOM 热区，鼠标移上去是小手，随时可拖 */
+.line-handles {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.line-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.line-handle.is-locked {
+  pointer-events: none;
 }
 
 .toolbtn {
@@ -839,16 +1194,149 @@ body.page-trade {
   background: var(--up);
 }
 
-/* 图内数值：OHLC 一行、均线一行，贴在左上角 */
+/* ---------------------------- 手机专属：全屏 / 压扁手势 ----------------------------
+   .mob 由 trade.js 在检测到手机时挂到 <html> 上：横屏全屏后宽度会超过 760px，
+   单靠媒体查询会失效，所以这几条按设备而不是按宽度走。 */
+
+/* 右下角全屏按钮 */
+.chart-fs {
+  display: none;
+}
+
+.mob .chart-fs {
+  position: absolute;
+  right: 6px;
+  bottom: 8px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: rgba(244, 237, 218, 0.9);
+  color: var(--text-sec);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mob .chart-fs svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+.mob .chart-fs .fs-ico--close,
+.mob .chart-fs.is-on .fs-ico--open {
+  display: none;
+}
+
+.mob .chart-fs.is-on .fs-ico--close {
+  display: block;
+}
+
+.mob .chart-fs.is-on {
+  background: var(--tint-bg);
+  color: var(--text);
+}
+
+/* 右边缘：长按后上下拖，压扁 / 拉伸走势 */
+.scale-strip {
+  display: none;
+}
+
+.mob .scale-strip {
+  position: absolute;
+  right: 0;
+  top: 44px;
+  bottom: 48px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mob .scale-strip i {
+  width: 3px;
+  height: 34px;
+  border-radius: 3px;
+  background: rgba(107, 98, 80, 0.28);
+  transition: background 0.15s ease;
+}
+
+.mob .scale-strip.is-active i {
+  background: var(--accent);
+}
+
+/* 全屏看盘：整块 .desk-chart（顶部周期栏 + 走势图）一起铺满。
+   窄屏（≤980px）普通布局里 .desk-chart 是 block，这里要改回 flex 列，
+   否则 .chartwrap 撑不满，K 线会被压成一条。 */
+.desk-chart.is-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  background: var(--card);
+}
+
+/* 平时图高被媒体查询写死，全屏时改回随剩余空间伸缩 */
+.desk-chart.is-fs .chartwrap {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.desk-chart.is-fs .pane--macd {
+  flex-basis: 30vh;
+}
+
+/* 全屏里没有右侧面板，TRADE 竖条没用 */
+.desk-chart.is-fs .trade-tab {
+  display: none;
+}
+
+/* 周期栏始终占一行，横屏放不下就横向滑 */
+.desk-chart.is-fs .chart-head {
+  flex-wrap: nowrap;
+  padding: 4px 10px;
+}
+
+.desk-chart.is-fs .tf {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+body.is-fs {
+  overflow: hidden;
+}
+
+/* 手机上图例只留币种和涨跌，成交量数值不显示 */
+.mob .lg-vol {
+  display: none;
+}
+
+/* 图内数值：币种 + 均线 + 涨跌 / 量，贴在左上角 */
 .chart__inds {
   position: absolute;
   left: 10px;
-  right: 100px;
+  /* 右边给画线工具条让出位置，图例和均线下拉不会压到按钮 */
+  right: 222px;
   top: 6px;
   z-index: 3;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  /* 撑满可用宽度：均线读数多了要在自己的宽度里换行，不能超出右边界被裁掉 */
+  align-items: stretch;
   gap: 2px;
   pointer-events: none;
 }
@@ -859,6 +1347,7 @@ body.page-trade {
   flex-wrap: wrap;
   align-items: center;
   gap: 2px 6px;
+  width: 100%;
   pointer-events: none;
 }
 
@@ -867,6 +1356,8 @@ body.page-trade {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 12px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .ma-toggle {
@@ -888,68 +1379,51 @@ body.page-trade {
   border-color: var(--border);
 }
 
-.ma-list {
+/* 图例里的均线读数：接在币种后面，占原来开高低收的位置。
+   display:contents 让每条均线直接参与图例那一行的排版，
+   能跟币种 / 涨跌 / 量混排换行，不会整块掉到下一行留白。
+   隐藏的均线不删除，只按下线样式（变淡 + 删除线）显示。 */
+/* .chart__ind span 会把它变成 inline-flex，这里用更高的优先级改回 contents */
+.chart__ind .ma-strip {
+  display: contents;
+}
+
+.ma-chip {
   pointer-events: auto;
-  min-width: 156px;
-  padding: 5px;
-  background: rgba(244, 237, 218, 0.97);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 10px 24px rgba(36, 31, 22, 0.14);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.ma-list[hidden] {
-  display: none;
-}
-
-.ma-row {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 3px 6px;
+  gap: 4px;
+  padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: none;
   font: inherit;
-  font-size: 12px;
-  color: var(--text);
-  text-align: left;
+  color: inherit;
   cursor: pointer;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-.ma-row:hover {
-  background: var(--tint-bg);
-}
-
-.ma-row i {
+.ma-chip i {
   font-style: normal;
 }
 
-.ma-row b {
+.ma-chip b {
   font-weight: 600;
 }
 
-.ma-row.is-off {
+.ma-chip:hover i,
+.ma-chip:hover b {
+  text-decoration: underline;
+}
+
+.ma-chip.is-off {
   opacity: 0.38;
   text-decoration: line-through;
 }
 
-.ma-row.is-open {
-  background: var(--tint-bg);
-}
-
-.ma-row--add {
-  justify-content: flex-start;
-  margin-top: 3px;
-  padding-top: 5px;
-  border-top: 1px dashed var(--border-soft);
-  border-radius: 0;
-  color: var(--text-hint);
+.ma-chip.is-open {
+  text-decoration: underline;
 }
 
 .chart__ind {
@@ -1084,8 +1558,8 @@ body.page-trade {
 /* 下单表单压扁：方向 / 数量 / 快捷比例 + 开仓 */
 .order {
   display: grid;
-  gap: 8px;
-  padding: 10px 14px 12px;
+  gap: 16px;
+  padding: 14px 14px 16px;
 }
 
 .order-panel .order {
@@ -1119,90 +1593,126 @@ body.page-trade {
   box-shadow: 0 1px 3px rgba(26, 26, 26, 0.1);
 }
 
-/* 开仓 / 平仓：顶部模式切换 */
-.seg--mode {
-  background: var(--tint-bg);
-}
-
-.seg--mode button {
-  padding: 7px 8px;
-  font-weight: 600;
-}
-
-/* 底部的两个方向 / 平仓按钮：开仓时是看多、看空；平仓时左右互换为平空、平多 */
-.order__actions {
+/* 方向：偏白底（#FBF7EE），外壳比按钮大一圈，里面的选项四边留 3px 间隔、不贴边。
+   选中一侧是浅红（看多 ↗）/ 加深一点的浅绿（看空 ↘） */
+.dir-seg {
+  position: relative;
   display: flex;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #FBF7EE;
+  touch-action: pan-y;
 }
 
-.ord-act {
+.dir-seg__thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 6px;
+  background: var(--up-soft);
+  transition: transform 0.22s cubic-bezier(0.3, 0.8, 0.4, 1), background 0.22s;
+  pointer-events: none;
+}
+
+.dir-seg[data-side="short"] .dir-seg__thumb {
+  transform: translateX(100%);
+  background: rgba(48, 92, 56, 0.2);
+}
+
+.dir-seg__btn {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0.5; /* 没选中的一侧淡一点，颜色还是它自己的 */
+  transition: opacity 0.18s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dir-seg__btn.is-on {
+  font-weight: 700;
+  opacity: 1;
+}
+
+/* 有持仓时反向那一侧被禁掉：多单在只能看多，空单在只能看空 */
+.dir-seg__btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.dir-seg.is-locked .dir-seg__btn:not(:disabled) {
+  cursor: default;
+}
+
+.dir-seg__btn[data-side="long"] {
+  color: var(--up);
+}
+
+.dir-seg__btn[data-side="short"] {
+  color: var(--down);
+}
+
+.dir-seg__ico {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+/* 开仓 / 平仓：同一套尺寸（通栏、高 38px、同字号同字重），只有颜色不一样 */
+.ord-open,
+.close-all {
+  width: 100%;
   height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid transparent;
+  padding: 0 10px;
   border-radius: var(--radius);
+  color: #FFF8EA;
   font: inherit;
   font-size: 14px;
   font-weight: 650;
+  letter-spacing: 0.04em;
   cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
 }
 
-.ord-act:disabled {
-  opacity: 0.55;
-  cursor: wait;
+.ord-open {
+  border: 1px solid #7B6337;
+  background: #7B6337;
 }
 
-.ord-act--long {
-  background: rgba(126, 19, 25, 0.1);
-  border-color: rgba(126, 19, 25, 0.18);
-  color: var(--up);
+.ord-open:hover:not(:disabled) {
+  border-color: #6A5530;
+  background: #6A5530;
 }
 
-.ord-act--long:hover:not(:disabled) {
-  background: rgba(126, 19, 25, 0.18);
-  border-color: rgba(126, 19, 25, 0.34);
+.ord-open:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.ord-act--short {
-  background: rgba(48, 92, 56, 0.1);
-  border-color: rgba(48, 92, 56, 0.18);
-  color: var(--down);
-}
-
-.ord-act--short:hover:not(:disabled) {
-  background: rgba(48, 92, 56, 0.18);
-  border-color: rgba(48, 92, 56, 0.34);
-}
-
-/* 平仓模式：平空在左、平多在右 */
-.order.is-close .order__actions {
-  flex-direction: row-reverse;
-}
-
-.order__hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 30px;
-  min-height: 30px;
-  padding: 5px 8px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  background: var(--tint-bg);
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text-sec);
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-}
+/* 平仓模式：已去掉开仓 / 平仓切换，底部不再有第二排按钮 */
 
 .seg__ico {
   width: 13px;
@@ -1246,28 +1756,47 @@ body.page-trade {
   border-color: var(--accent);
 }
 
+/* 金额框在上、百分比滑杆在下，都铺满整行（框拉长，滑杆也拉长好拖） */
 .order__qtyrow {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
 }
 
 .order__qtyrow .field--qty {
-  flex: 0.9 1 0;
+  position: relative;
+  width: 100%;
   min-width: 0;
-}
-
-/* 数量标签区用页面底色，和右侧卡片拉开一点层次 */
-.order__qtyrow .field--qty > span {
-  display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  background: #F4EDDA;
 }
 
 .order__qtyrow .field--qty input {
   height: 30px;
-  padding: 0 8px;
+  padding: 0 46px 0 38px;
+  text-align: right; /* 数值靠右，左边留「数量」 */
+}
+
+/* 输入框左边的「数量」小字：静态前缀，点不到，跟着框一起走 */
+.order__qtyrow .field__prefix {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-hint);
+  pointer-events: none;
+}
+
+/* 数值右边的单位：灰色，比数字小一号；稍微往下一点，和数字的基线更齐 */
+.order__qtyrow .field__unit {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(calc(-50% + 2px));
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--text-hint);
+  pointer-events: none;
 }
 
 .order__qtyrow .pct {
@@ -1330,6 +1859,131 @@ body.page-trade {
   background: var(--tint-bg);
   color: var(--accent-deep);
   font-weight: 650;
+}
+
+/* 任意仓位比例：一条横线 + 5 个节点 + 可拖动圆点。
+   放在金额框下面时铺满整行、高 30px，横线 / 圆点居中，百分比气泡收在里面 */
+.order__qtyrow .pct-slider {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+}
+
+.order__qtyrow .pct-slider__track {
+  height: 30px;
+}
+
+.order__qtyrow .pct-slider__line {
+  top: 21px;
+}
+
+.order__qtyrow .pct-slider__dot {
+  top: 16px;
+}
+
+.order__qtyrow .pct-slider__thumb {
+  top: 13px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+}
+
+.order__qtyrow .pct-slider__bubble {
+  bottom: calc(100% + 1px);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 9px;
+}
+
+.pct-slider {
+  padding: 8px 12px 0;
+  touch-action: none;
+  user-select: none;
+}
+
+.pct-slider__track {
+  position: relative;
+  height: 38px;
+}
+
+.pct-slider__line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 24px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.pct-slider__dot {
+  position: absolute;
+  top: 20px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.pct-slider__dot:hover {
+  border-color: var(--accent);
+}
+
+.pct-slider__dot.is-on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.pct-slider__thumb {
+  position: absolute;
+  top: 16px;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 5px rgba(36, 31, 22, 0.28);
+  cursor: grab;
+  z-index: 2;
+}
+
+.pct-slider__thumb:active {
+  cursor: grabbing;
+}
+
+.pct-slider__bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--accent-deep);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 重置资金弹窗里的快捷额度 */
+.reset-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reset-quick button {
+  flex: 1 1 52px;
+  font-size: 11px;
 }
 
 .linkbtn {
@@ -1395,6 +2049,216 @@ body.page-trade {
   color: var(--text);
   font-weight: 600;
   border-bottom-color: var(--accent);
+}
+
+/* 走势图右下角悬浮的「历史」按钮：小圆钮、淡淡的，点开历史记录 */
+.hist-fab {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 8;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(36, 31, 22, 0.42);
+  color: #F7F0DE;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(36, 31, 22, 0.16);
+  transition: background 0.15s, transform 0.15s;
+}
+
+.hist-fab svg {
+  width: 15px;
+  height: 15px;
+}
+
+.hist-fab:hover {
+  background: rgba(36, 31, 22, 0.62);
+}
+
+.hist-fab.is-on {
+  background: rgba(36, 31, 22, 0.62);
+}
+
+/* 历史记录子页面：右边界钉在走势图右边界（right 由 JS 按走势图算），
+   展开 / 折叠都是从这里往左揭开，任何时候都不会越过走势图右边 */
+.his-slide {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  width: min(560px, calc(100% - 180px));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-radius: 14px 0 0 14px;
+  box-shadow: -14px 0 40px rgba(36, 31, 22, 0.18);
+  clip-path: inset(0 0 0 100%);
+  visibility: hidden;
+  transition: clip-path 0.32s cubic-bezier(0.22, 0.7, 0.24, 1), visibility 0s linear 0.32s;
+  pointer-events: none;
+}
+
+.his-slide.is-open {
+  clip-path: inset(0 0 0 0);
+  visibility: visible;
+  transition: clip-path 0.32s cubic-bezier(0.22, 0.7, 0.24, 1), visibility 0s linear 0s;
+  pointer-events: auto;
+}
+
+.his-slide__head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.his-slide__head b {
+  font-size: 15px;
+}
+
+.his-slide__tip {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-hint);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.his-slide__close {
+  margin-left: auto;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--text-sec);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.his-slide__close:hover {
+  color: var(--text);
+  background: #fff;
+}
+
+.his-slide__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 8px 18px;
+  /* 面板里不画滚动条（照交易页其他区域的习惯），照样能滚 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.his-slide__body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.his-slide__empty {
+  margin: 26px 0;
+  color: var(--text-hint);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.his-slide__empty[hidden] {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .his-slide {
+    right: 0 !important;
+    width: 100%;
+    border-radius: 0;
+  }
+}
+
+/* 交易笔记子页面：从右侧滑入，顶到页面最上方，左侧留一段走势图 */
+.notes-slide {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  width: calc(100% - 180px);
+  background: var(--bg);
+  border-radius: 14px 0 0 14px;
+  box-shadow: -14px 0 40px rgba(36, 31, 22, 0.22);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.32s cubic-bezier(0.22, 0.7, 0.24, 1), visibility 0s linear 0.32s;
+  pointer-events: none;
+}
+
+.notes-slide.is-open {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform 0.32s cubic-bezier(0.22, 0.7, 0.24, 1), visibility 0s linear 0s;
+  pointer-events: auto;
+}
+
+.notes-slide__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 14px 0 0 14px;
+  background: var(--bg);
+}
+
+.notes-slide__close {
+  position: absolute;
+  left: -34px;
+  top: 14px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--text-sec);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgba(36, 31, 22, 0.12);
+}
+
+.notes-slide__close:hover {
+  color: var(--text);
+  background: #fff;
+}
+
+@media (max-width: 900px) {
+  .notes-slide {
+    width: 100%;
+    top: 0;
+    border-radius: 0;
+  }
+
+  .notes-slide__frame {
+    border-radius: 0;
+  }
+
+  .notes-slide__close {
+    left: 8px;
+    top: 8px;
+  }
 }
 
 .pos-panel .tbl-wrap {
@@ -1800,6 +2664,108 @@ body.page-trade {
   background: var(--tint-bg);
 }
 
+.line-ctx__colors {
+  display: flex;
+  gap: 7px;
+  padding: 6px 9px 7px;
+}
+
+.line-ctx__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+}
+
+.line-ctx__swatch.is-on {
+  border-color: var(--text);
+}
+
+/* 直线弹窗：价位 / 可见周期 */
+.line-dlg__field {
+  margin: 14px 0 4px;
+}
+
+.line-dlg__field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--tint-bg);
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.line-dlg__field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--card);
+}
+
+.line-dlg__note input {
+  font-size: 13px;
+  padding: 8px 11px;
+}
+
+.line-dlg__tfs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 14px 0 6px;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.line-dlg__tf {
+  padding: 7px 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-hint);
+  cursor: pointer;
+}
+
+.line-dlg__tf:hover {
+  border-color: var(--accent);
+}
+
+.line-dlg__tf.is-on {
+  border-color: var(--accent);
+  background: var(--tint-bg);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.line-dlg__quick {
+  display: flex;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.line-dlg__quickbtn {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-sec);
+  cursor: pointer;
+}
+
+.line-dlg__quickbtn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .ctx button:disabled {
   opacity: 0.35;
   cursor: not-allowed;
@@ -1952,41 +2918,30 @@ body.page-trade {
   }
 
   .order {
-    gap: 6px;
-    padding: 8px 12px 10px;
+    gap: 9px;
+    padding: 9px 12px 11px;
   }
 
-  .seg--mode button {
-    padding: 5px 6px;
-    font-size: 13px;
-  }
-
-  .ord-act {
+  /* 矮屏：开仓 / 平仓一起缩，别只缩一个（否则平仓会显得比开仓高） */
+  .ord-open,
+  .close-all {
     height: 32px;
     font-size: 13px;
   }
 
-  .order__hint {
-    min-height: 26px;
-    padding: 4px 6px;
+  /* 矮屏：仓位计算只留输入 + 仓位 / 杠杆，公式收进标题提示，给走势图让高度 */
+  .pos-calc {
+    gap: 5px;
+    padding: 6px 14px 8px;
   }
 
-  /* 矮屏优先保住 K 线高度，概览只留数值，说明卡收起 */
-  .side-summary__tips {
+  .pos-calc__field input {
+    padding-top: 3px;
+    padding-bottom: 3px;
+  }
+
+  .pos-calc__note {
     display: none;
-  }
-
-  .side-summary__head {
-    padding-top: 7px;
-    padding-bottom: 4px;
-  }
-
-  .side-summary__grid {
-    padding-bottom: 7px;
-  }
-
-  .side-summary__cell {
-    padding: 5px 8px;
   }
 
   .field > span {
@@ -2010,12 +2965,30 @@ body.page-trade {
 
 @media (max-width: 980px) {
   body.page-trade {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  /* 窄屏改成整页轨道：行情页在轨道内滚动，燃灯仍是一整页 */
+  .page-pane--trade {
     display: block;
-    height: auto;
-    overflow: auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .desk-split {
+    display: none;
+  }
+
+  .desk-hsplit {
+    display: none;
+  }
+
+  /* 手机上右侧栏是上下叠放的，不显示收起按钮，避免压住画线工具 */
+  .trade-tab {
     display: none;
   }
 
@@ -2028,14 +3001,22 @@ body.page-trade {
     padding: 0 12px 16px;
   }
 
+  /* 桌面把左列（走势图 + 持仓表）包在 .desk-main 里，窄屏要退回原来的上下顺序：
+     走势图 → 下单区 → 持仓表。用 display:contents 把左列拆开，再按 order 排。 */
   .page-trade .desk-panel {
-    display: block;
+    display: flex;
+    flex-direction: column;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
   }
 
+  .desk-main {
+    display: contents;
+  }
+
   .desk-chart {
     display: block;
+    order: 1;
   }
 
   .page-trade .chartwrap {
@@ -2044,24 +3025,42 @@ body.page-trade {
   }
 
   .desk-side {
+    flex: 0 0 auto;
+    order: 2;
     border-left: 0;
     border-top: 1px solid var(--border);
   }
 
-  /* 手机上下单区在文档流里，持仓概览与下面的持仓表重复，收起来省空间 */
+  /* 手机：逐笔持仓在下面的大表里已经有了，这里只留「平仓」按钮（按市价全平），
+     列表收起、按钮铺满一行，省下那点高度 */
   .side-summary {
+    display: flex;
+  }
+
+  .side-summary__list {
     display: none;
   }
 
-  .page-trade .pos-panel {
-    margin-top: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
+  .side-summary__foot {
+    flex: 1 1 auto;
+    padding: 8px 14px 10px;
   }
 
-  .page-trade .pos-panel .tbl-wrap {
-    max-height: 300px;
+  .close-all {
+    width: 100%;
+  }
+
+  /* 手机上右下角还有全屏按钮，历史按钮挪到它左边，别叠在一起 */
+  .hist-fab {
+    right: 46px;
+    bottom: 8px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .hist-fab svg {
+    width: 16px;
+    height: 16px;
   }
 
   .page-trade .trade-foot__line {
@@ -2110,13 +3109,46 @@ body.page-trade {
   }
 
   .chart__inds {
-    right: 84px;
+    /* 右边让出手机工具条的实际宽度（4 × 30px + 间距），否则图例会压到图标上 */
+    right: 192px;
     font-size: 11px;
+  }
+
+  /* 窄屏：图例独占一行，均线读数在自己宽度里换行，按钮换到下一行 */
+  .chart__ind-row {
+    flex: 1 1 100%;
+    gap: 2px 8px;
+  }
+
+  /* 手机上没有右键，「右键 K 线上的均线也可以删除」这句提示没意义 */
+  .pop__tip {
+    display: none;
+  }
+
+  /* 手机上工具条收窄一点，少占 K 线宽度 */
+  .pane-tools {
+    right: 1px;
+    gap: 0;
+  }
+
+  .toolbtn {
+    width: 30px;
+    height: 28px;
+  }
+
+  .toolbtn svg {
+    width: 16px;
+    height: 16px;
   }
 
   .chart__ind--macd {
     right: 84px;
     font-size: 11px;
+  }
+
+  /* 手机上右侧价格轴已经去掉，MACD 图例不用再给它让位 */
+  .mob .chart__ind--macd {
+    right: 10px;
   }
 
   .chart__ind-params {
@@ -2139,8 +3171,445 @@ body.page-trade {
 
 /* 手机竖屏：右轴在 JS 里收窄到 74px，图内数值同步让位 */
 @media (max-width: 520px) {
-  .page-trade .chart__inds,
+  .page-trade .chart__inds {
+    right: 192px;
+  }
+
   .page-trade .chart__ind--macd {
     right: 84px;
   }
 }
+
+/* ---------------------------- 走势币种搜索 ---------------------------- */
+.chart__sym {
+  margin-right: 4px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.order__watch {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(138, 127, 104, .12);
+  color: var(--text-sec);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.order__watch b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.symsearch {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+}
+
+.symsearch__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--text-sec);
+  font-size: 12px;
+}
+
+.symsearch__head b {
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: .02em;
+}
+
+.symsearch__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #FBF6E9;
+}
+
+.symsearch__field svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--text-sec);
+}
+
+.symsearch__field input {
+  width: 100%;
+  padding: 7px 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.symsearch__field input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.symsearch__list {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 100%;
+  top: auto;
+  margin-bottom: 2px;
+  max-height: 560px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #F7F0DE;
+  box-shadow: 0 10px 30px rgba(60, 50, 30, .18);
+  z-index: 40;
+}
+
+.sym-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sym-row__pick {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sym-row__pick:hover {
+  background: var(--tint-bg);
+}
+
+.sym-row__pick b {
+  font-weight: 600;
+}
+
+.sym-row__pick span {
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  color: var(--text-sec);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sym-row__star {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-hint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sym-row__star:hover,
+.sym-row__star.is-on {
+  background: var(--tint-bg);
+  color: #B08A2E;
+}
+
+.symsearch__empty {
+  padding: 10px 8px;
+  color: var(--text-sec);
+  font-size: 12px;
+}
+
+.symsearch__note {
+  margin: 6px 0 0;
+  color: var(--text-sec);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 持仓概览：四个指标下面的小搜索框 */
+/* 持仓概览下边缘：自选条（左侧折叠，右侧搜索图标） */
+.watch-head {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  background: var(--tint-bg);
+}
+
+.watch-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 14px;
+  border: 0;
+  background: none;
+  color: var(--text-sec);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.watch-toggle:hover {
+  color: var(--text);
+}
+
+.watch-search-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 26px;
+  margin-right: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-sec);
+  cursor: pointer;
+}
+
+.watch-search-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.watch-search-btn:hover {
+  background: rgba(0, 0, 0, .05);
+  color: var(--text);
+}
+
+.watch-search {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 3px;
+  bottom: 3px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--tint-bg);
+}
+
+.watch-search__ico {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--text-sec);
+}
+
+.watch-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.watch-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.watch-search__close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-sec);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.watch-search__close:hover {
+  background: rgba(0, 0, 0, .06);
+  color: var(--text);
+}
+
+/* 自选：钉在合并列的**最下边缘**。展开时浮在它上方，不挤压上面的开仓 / 概览 /
+   仓位计算；右侧一列内容超高（矮屏笔记本）时也贴着面板底边，滚到底就能看到。
+   （吸底主要靠上面 .pos-calc 的 margin-top:auto，把这一组一起推到底部） */
+.watch-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  flex: none;
+  background: var(--card);
+}
+
+.watch-box {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 30;
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--card);
+  box-shadow: 0 -10px 24px rgba(60, 50, 30, .12);
+}
+
+.watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+}
+
+.watch-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.watch-row__sym {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.watch-row__sym:hover,
+.watch-row__sym.is-on {
+  background: var(--tint-bg);
+  font-weight: 600;
+}
+
+/* 名称 DOGE/USDT 吃掉剩余宽度，太长就省略；价格和涨跌幅靠右排成两列 */
+.watch-row__sym b {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.watch-row__quote {
+  color: var(--text-sec);
+  font-weight: 500;
+}
+
+/* 自选行里名称后面的最新价（原来是重复的 DOGEUSDT 全名） */
+.watch-row__price {
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 涨跌幅固定一列，价格右侧才对得齐 */
+.watch-row .sym-chg {
+  flex: 0 0 auto;
+  width: 54px;
+  margin-left: 0;
+  padding-left: 0;
+  text-align: right;
+}
+
+.watch-row__del {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: #B08A2E;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.watch-row__del:hover {
+  background: var(--tint-bg);
+}
+
+/* 自选 / 搜索结果里的 24h 涨跌幅 */
+.sym-chg {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+  color: var(--text-sec);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sym-chg.is-up {
+  color: var(--up);
+}
+
+.sym-chg.is-down {
+  color: var(--down);
+}
+
+.watch-empty {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--text-hint);
+  font-size: 11px;
+}
+

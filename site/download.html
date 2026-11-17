@@ -2,13 +2,14 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<script>if(window.self!==window.top)document.documentElement.classList.add('is-embedded');</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>下载 {{SITE_NAME}} · Android 官方安装包</title>
-<meta name="description" content="下载 {{SITE_NAME}} {{PLATFORM}} 官方安装包 v{{VERSION}}。{{MIN_ANDROID}}，安装包 {{APK_SIZE}}，免费无广告，附安装说明与常见问题。">
+<meta name="description" content="下载 {{SITE_NAME}} {{PLATFORM}} 官方安装包 v{{VERSION}}。{{MIN_ANDROID}}，安装包 {{APK_SIZE}}，支持离线阅读，附安装说明与常见问题。">
 <meta name="theme-color" content="#F4ECD9">
 <meta property="og:type" content="website">
 <meta property="og:title" content="下载 {{SITE_NAME}} v{{VERSION}}">
-<meta property="og:description" content="{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 免费无广告">
+<meta property="og:description" content="{{MIN_ANDROID}} · 安装包 {{APK_SIZE}} · 支持离线阅读">
 <meta property="og:image" content="{{BASE_URL}}/assets/icon.png">
 <meta property="og:url" content="{{BASE_URL}}/download.html">
 <link rel="icon" type="image/png" href="assets/icon.png">
@@ -19,24 +20,14 @@
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
 
-<header class="nav">
-  <div class="nav__inner">
-    <a class="nav__brand" aria-label="首页" href="index.html">
-      <img class="nav__logo" src="{{BRAND_LOGO}}?v={{BRAND_LOGO_VER}}" alt="" width="24" height="24">
-    </a>
-    <nav class="nav__links" aria-label="主导航">
-      <a href="{{REL}}index.html">BTC 行情</a>
-      <a href="{{REL}}app/index.html">燃灯 App</a>
-    </nav>
-  </div>
-</header>
+{{SITE_NAV}}
 
 <main id="main">
 
   <div class="page-head">
     <div class="container">
       <h1>下载 {{SITE_NAME}}</h1>
-      <p>官方直接分发的安装包，无广告、无内购，永久免费更新</p>
+      <p>官方直接分发的安装包，不经第三方应用商店，更新在 App 内提示</p>
     </div>
   </div>
 

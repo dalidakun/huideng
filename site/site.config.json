@@ -11,9 +11,9 @@
   "icpNumber": "豫ICP备2026050494号",
   "icpNumberNote": "工信部 ICP 备案号（格式：省简称+ICP备+序列号，如 粤ICP备12345678号），构建后自动挂在全站页脚并链接至 beian.miit.gov.cn。公安联网备案通过后把公安备案号填到 policeRecordNumber。",
 
-  "policeRecordNumber": "",
+  "policeRecordNumber": "桂公网安备45010202000937号",
   "policeDataCode": "3f409a09e27825de5dba8be2e7235816",
-  "policeNote": "公安联网备案：数据码已填。公安备案号格式如 粤公网安备 440XXX号，通过审核后填入 policeRecordNumber 即会与 ICP 备案号一起挂在页脚。",
+  "policeNote": "公安联网备案：已通过审核，备案号已挂全站页脚并链接公安部查询页；数据码仅在办理/变更时使用，留档备查。",
 
   "baseUrl": "https://aibuilder.top",
   "baseUrlNote": "已指向正式备案域名 https://aibuilder.top。CloudBase 静态托管地址已挪入 mirrors 作备用下载源（.tcb.qcloud.la 旧域名已失效(418)，正确域名是 .tcloudbaseapp.com）。",

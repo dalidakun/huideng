@@ -281,7 +281,7 @@ h1.title {
 <header class="topbar">
   <div class="topbar__inner">
     <span class="brand"><b>{{SITE_NAME}}</b> · 菩提空间</span>
-    <a class="topbar__open" href="{{BASE_URL}}/app/index.html">打开 App</a>
+    <a class="topbar__open" href="{{BASE_URL}}/index.html#app">打开 App</a>
   </div>
 </header>
 
@@ -527,9 +527,9 @@ h1.title {
     app.appendChild(stats);
 
     var cta = make('a', 'cta', '打开 {{SITE_NAME}}，查看更多笔记');
-    // 落到燃灯 App 页（自带下载入口）：站点首页现在是 BTC 行情页，
+    // 落到站点首页的 #app 视图（同一个页面，不再单独跳 /app/index.html）：
     // 分享出去的笔记/祈福页要把人引到 App，而不是行情盘。
-    cta.href = '{{BASE_URL}}/app/index.html';
+    cta.href = '{{BASE_URL}}/index.html#app';
     app.appendChild(cta);
 
     app.appendChild(make('p', 'foot', '燃一盏灯，看见自己，照亮别人'));

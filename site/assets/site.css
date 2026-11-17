@@ -51,6 +51,31 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* 细滚动条：缠论读书会与大正藏经页统一用这一套，和侧栏目录的滚动条同款
+   （细、圆角、浅色拇指、透明轨道）。*/
+html.page-chan,
+html.page-app {
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+
+html.page-chan::-webkit-scrollbar,
+html.page-app::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+html.page-chan::-webkit-scrollbar-thumb,
+html.page-app::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 8px;
+}
+
+html.page-chan::-webkit-scrollbar-track,
+html.page-app::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 body {
   font-family: var(--font);
   background: var(--bg);
@@ -110,6 +135,12 @@ a:hover {
 
 .skip-link:focus {
   left: 0;
+}
+
+/* 页面被首页的「燃灯」面板以 iframe 嵌入时，隐藏重复的顶部导航 */
+.is-embedded .nav,
+.is-embedded .skip-link {
+  display: none !important;
 }
 
 /* ============================ 顶部导航 ============================ */
@@ -1151,6 +1182,294 @@ a:hover {
 .footer__beian a:hover {
   color: var(--text-main);
   text-decoration: underline;
+}
+
+/* 极简页脚：只留两条政策链接、联系方式和备案号，一行放完，不占两块版面。
+   缠论读书会、大正藏经这类以内容为主的页面用它；整体靠左、字号比正文小一号。 */
+.lite-foot {
+  padding: 10px 16px 18px;
+}
+
+.lite-foot__inner {
+  max-width: var(--container);
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 3px 16px;
+  font-size: 11.5px;
+  color: var(--text-hint);
+}
+
+.lite-foot__inner a {
+  color: var(--text-hint);
+}
+
+.lite-foot__inner a:hover {
+  color: var(--accent-deep);
+}
+
+.lite-foot__beian {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+/* 「联系我们」弹层（assets/js/contact.js）：本机没配邮件客户端时也能看到邮箱 */
+.mail-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(36, 31, 22, 0.34);
+}
+
+.mail-dialog[hidden] {
+  display: none;
+}
+
+.mail-dialog__box {
+  position: relative;
+  width: min(360px, 100%);
+  padding: 24px 22px 20px;
+  background: var(--bg);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(36, 31, 22, 0.24);
+  text-align: center;
+}
+
+.mail-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mail-dialog__addr {
+  margin: 10px 0 18px;
+  font-size: 14px;
+  color: var(--text-sec);
+  word-break: break-all;
+  user-select: all;
+}
+
+.mail-dialog__acts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.mail-dialog__btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mail-dialog__btn:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.mail-dialog__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff !important;
+}
+
+.mail-dialog__btn--primary:hover {
+  background: var(--accent-deep);
+}
+
+.mail-dialog__close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-hint);
+  cursor: pointer;
+}
+
+.mail-dialog__close:hover {
+  background: var(--tint-bg);
+  color: var(--text);
+}
+
+/* ============================ 顶部横向菜单 ============================ */
+
+.topnav {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  flex: 0 0 auto;
+  background: var(--nav-bg);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.topnav__inner {
+  max-width: 1600px;
+  margin: 0 auto;
+  height: 44px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 左上角账户头像 + 弹出菜单 */
+.topnav__account {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.topnav__account .avatar-btn {
+  width: 30px;
+  height: 30px;
+}
+
+.topnav__account .acct-menu {
+  position: absolute;
+  left: 0;
+  right: auto;
+  top: calc(100% + 8px);
+  min-width: 196px;
+}
+
+.topnav__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--primary);
+}
+
+.topnav__brand:hover {
+  text-decoration: none;
+}
+
+.topnav__logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.topnav__menu {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.topnav__menu::-webkit-scrollbar {
+  display: none;
+}
+
+.topnav__item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-sec);
+  white-space: nowrap;
+}
+
+.topnav__item:hover {
+  background: var(--tint-bg);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.topnav__item.is-on,
+.topnav__item[aria-current="page"] {
+  background: var(--tint-bg);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.topnav__ico {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+@media (max-width: 720px) {
+  .topnav__inner {
+    height: 40px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .topnav__brand span {
+    display: none;
+  }
+
+  .topnav__item {
+    padding: 0 7px;
+    gap: 4px;
+    font-size: 12.5px;
+  }
+
+  .topnav__ico {
+    width: 14px;
+    height: 14px;
+    flex-basis: 14px;
+  }
+}
+
+@media (max-width: 560px) {
+  .topnav__inner {
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .topnav__account .avatar-btn {
+    width: 26px;
+    height: 26px;
+  }
+
+  .topnav__menu {
+    gap: 2px;
+  }
+
+  .topnav__item {
+    padding: 0 5px;
+    gap: 3px;
+    font-size: 12px;
+  }
+
+  .topnav__ico {
+    width: 13px;
+    height: 13px;
+    flex-basis: 13px;
+  }
+}
+
+/* 内嵌在行情页 iframe 里的燃灯页不重复显示侧边栏 */
+html.is-embedded .topnav {
+  display: none !important;
 }
 
 /* ============================ 响应式 ============================ */

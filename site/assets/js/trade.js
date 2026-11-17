@@ -26,19 +26,31 @@
 
   // ---------------------------------------------------------------- 常量
   var SYMBOL = 'BTCUSDT';
-  var LIMIT = 1000;
-  var TF = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d', '1w', '1M'];
+  var LIMIT = 5000;
+  var PAGE = 1000;
+  var TF = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '10h', '12h', '1d', '3d', '5d', '1w', '1M'];
   var TF_LABEL = {
-    '1m': '1 分钟', '5m': '5 分钟', '15m': '15 分钟', '30m': '30 分钟',
-    '1h': '1 小时', '2h': '2 小时', '4h': '4 小时', '8h': '8 小时', '12h': '12 小时',
-    '1d': '1 天', '1w': '1 周', '1M': '1 月'
+    '1m': '1 分钟', '3m': '3 分钟', '5m': '5 分钟', '15m': '15 分钟', '30m': '30 分钟',
+    '1h': '1 小时', '2h': '2 小时', '4h': '4 小时', '6h': '6 小时', '8h': '8 小时',
+    '10h': '10 小时', '12h': '12 小时', '1d': '1 天', '3d': '3 天', '5d': '5 天',
+    '1w': '1 周', '1M': '1 月'
   };
   // 1M 用 28 天，只给「断档补齐」当阈值用，避免月末 31 天被误判成断档
   var TF_MS = {
-    '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
-    '1h': 3600000, '2h': 7200000, '4h': 14400000, '8h': 28800000, '12h': 43200000,
-    '1d': 86400000, '1w': 604800000, '1M': 2419200000
+    '1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000,
+    '1h': 3600000, '2h': 7200000, '4h': 14400000, '6h': 21600000,
+    '8h': 28800000, '10h': 36000000, '12h': 43200000,
+    '1d': 86400000, '3d': 259200000, '5d': 432000000,
+    '1w': 604800000, '1M': 2419200000
   };
+  // 交易所没有 10h / 5d 这两个 interval，用 base 周期的 group 根合成：
+  // 10h = 5 x 2h，5d = 5 x 1d（6h、3d Binance 原生就有）。
+  var TF_SYNTH = {
+    '10h': { iv: '2h', group: 5 },
+    '5d': { iv: '1d', group: 5 }
+  };
+  // 图表右侧留白（根）。换周期还原视口时也按它算最右能到哪。
+  var RIGHT_OFFSET = 6;
 
   var REST_HOSTS = [
     'https://data-api.binance.vision',
@@ -78,6 +90,11 @@
   var WS_STALL_MS = 12000;     // 这么久没收到任何帧 = 假死
   var WS_RETRY_MIN = 800;
   var WS_RETRY_MAX = 8000;
+  // 握手就失败的源（境内被墙的 stream.binance.com）晾一分钟再试：
+  // 以前每次断线都按顺序轮换，三次里两次撞墙，每次白等 WS_OPEN_MS，
+  // 状态条就长时间停在「轮询模式 / 行情源不可用」。
+  // 只晾一分钟：网络切好（开代理）后能很快回到可用源。
+  var WS_COOLDOWN_MS = 60 * 1000;
   var HEAL_MIN_MS = 3000;      // 两次补数据的最小间隔
 
   var UP = '#7E1319';
@@ -99,6 +116,7 @@
     min_notional: '名义价值需 ≥ 10 USDT',
     bad_qty: '数量不合法',
     bad_price: '价格不合法',
+    bad_amount: '重置金额不合法',
     price_deviation: '价格偏离过大，请稍后重试',
     rate_limited: '操作太频繁，请稍后再试',
     username_taken: '用户名已被占用',
@@ -119,13 +137,33 @@
     code_expired: '验证码过期了，请重新获取',
     code_wrong: '验证码不对，请核对后重填',
     verify_failed: '验证码校验失败，请重新获取',
-    phone_not_bound: '这个手机号还没绑定账号'
+    phone_not_bound: '这个手机号还没绑定账号',
+    bad_image: '图片格式不支持，请换 JPG / PNG',
+    too_large: '图片太大，换一张再试'
   };
 
   var cfg = { api: '', key: '', rel: '' };
-  var state = { iv: '1m', price: 0, ticker: null, bars: [], firstLoad: true, seq: 0, lastTick: 0 };
+  var state = {
+    iv: '1m', price: 0, ticker: null, bars: [], firstLoad: true, seq: 0,
+    lastTick: 0, olderTimer: 0,
+    // 换周期时暂存切换前的视口（时间区间），新周期数据到了再还原
+    view: null,
+    // 走势图当前看的币种（默认 BTC）；模拟交易只做 SYMBOL
+    symbol: SYMBOL,
+    // 走势图这一根/这一天的涨跌，用来给价格浮标上色（BTC 用行情 ticker，其他币单独拉）
+    chartPct: 0,
+    // 自选标的（本地保存）与折叠状态
+    watch: null,
+    watchOpen: true,
+    // 各标的 24h 涨跌幅缓存：symbol -> { pct, t }
+    pct: {}
+  };
   var Account = { mode: 'guest', token: '', username: '', data: null };
-  var orderMode = 'open'; // open=开仓 / close=平仓
+  var avatarLoaded = false;
+  // 未登录点头像菜单里的「交易笔记」：先弹登录，登录成功后直接跳过去。
+  var pendingNotes = false;
+  // 从交易页右下角「交易笔记」按钮进入：未登录先弹登录，登录后滑出子页面。
+  var pendingNotesSlide = false;
 
   // ---------------------------------------------------------------- 工具
   function $(id) { return document.getElementById(id); }
@@ -141,6 +179,22 @@
   }
 
   function fmtPrice(n) { return Number.isFinite(+n) ? group(+n, 2) : '--'; }
+  /**
+   * 走势图价格的小数位：按当前价量级自动加，PEPE 这类低价币不会显示成 0.00。
+   * 账户/下单相关的金额仍用 fmtPrice（BTC 两位小数）。
+   */
+  function chartDigits() {
+    var b = state.bars[state.bars.length - 1];
+    var a = Math.abs(b ? b.close : state.price);
+    if (!Number.isFinite(a) || a <= 0) return 2;
+    if (a >= 1000) return 2;
+    if (a >= 1) return 4;
+    if (a >= 0.1) return 5;
+    if (a >= 0.01) return 6;
+    if (a >= 0.0001) return 7;
+    return 8;
+  }
+  function fmtAxis(n) { return Number.isFinite(+n) ? group(+n, chartDigits()) : '--'; }
   function fmtQty(n) {
     if (!Number.isFinite(+n)) return '--';
     var v = +n;
@@ -309,11 +363,85 @@
     });
   }
 
-  function klinePath(iv, limit) {
-    return '/api/v3/klines?symbol=' + SYMBOL + '&interval=' + iv + '&limit=' + (limit || LIMIT);
+  function klinePath(iv, limit, endTime) {
+    var path = '/api/v3/klines?symbol=' + state.symbol + '&interval=' + iv + '&limit=' + (limit || LIMIT);
+    if (endTime) path += '&endTime=' + Math.round(endTime);
+    return path;
   }
   function tickerPath() {
     return '/api/v3/ticker/24hr?symbol=' + SYMBOL;
+  }
+
+  /** 合成周期的历史深度小一些：一次 1000 根要拉 group 倍的 base K 线。 */
+  function limitOf(iv) {
+    return TF_SYNTH[iv] ? 2000 : LIMIT;
+  }
+
+  /**
+   * 把 base 周期的原始 K 线压成 bucketSec 一根（10h / 5d 这类交易所没有的周期）。
+   * 时间取 bucket 起点；最早那根如果缺了 bucket 前半段就丢掉，等更早的一页
+   * 从 bucket 起点往回拉，避免留一根开高低收都不对的历史 K 线。
+   */
+  function aggregateKlines(rows, bucketSec) {
+    var list = (rows || []).slice().sort(function (a, b) { return +a[0] - +b[0]; });
+    var out = [];
+    var cur = null;
+    var firstT = null;
+    var prevT = null;
+    for (var i = 0; i < list.length; i += 1) {
+      var r = list[i];
+      var tSec = Math.floor(+r[0] / 1000);
+      // 分页边界可能带回重复的一根，跳过，否则成交量会重复累加
+      if (tSec === prevT) continue;
+      var t = Math.floor(tSec / bucketSec) * bucketSec;
+      var close = +r[4];
+      if (!Number.isFinite(t) || !Number.isFinite(close)) continue;
+      prevT = tSec;
+      if (firstT == null) firstT = tSec;
+      if (!cur || cur[0] !== t * 1000) {
+        cur = [t * 1000, r[1], r[2], r[3], r[4], r[5]];
+        out.push(cur);
+      } else {
+        cur[2] = Math.max(+cur[2], +r[2]);
+        cur[3] = Math.min(+cur[3], +r[3]);
+        cur[4] = r[4];
+        cur[5] = String(+cur[5] + +r[5]);
+      }
+    }
+    if (out.length && firstT != null && firstT > out[0][0] / 1000) out.shift();
+    return out;
+  }
+
+  /**
+   * 统一的 K 线取数：原生周期直接拉；合成周期先拉一页，再按这页最早一根的时间
+   * 并行拉前面的页，合并成目标周期。endTime 是毫秒，和 klinePath 一致。
+   */
+  function fetchKlines(iv, limit, endTime) {
+    var spec = TF_SYNTH[iv];
+    if (!spec) return restGet(klinePath(iv, limit, endTime));
+    var baseStep = TF_MS[spec.iv] || 60000;
+    var want = limit * spec.group;
+    var firstLimit = Math.min(1000, want);
+    return restGet(klinePath(spec.iv, firstLimit, endTime)).then(function (first) {
+      first = first || [];
+      var pages = [first];
+      var rest = want - firstLimit;
+      if (rest <= 0 || !first.length) return pages;
+      var oldest = +first[0][0];
+      var more = [];
+      for (var k = 0; k * 1000 < rest; k += 1) {
+        var take = Math.min(1000, rest - k * 1000);
+        var end = oldest - 1 - k * 1000 * baseStep;
+        more.push(restGet(klinePath(spec.iv, take, end)));
+      }
+      return Promise.all(more).then(function (extra) {
+        return pages.concat(extra);
+      });
+    }).then(function (pages) {
+      var rows = [];
+      pages.forEach(function (page) { rows = rows.concat(page || []); });
+      return aggregateKlines(rows, (TF_MS[iv] || 60000) / 1000);
+    });
   }
 
   function mapKlines(rows) {
@@ -365,6 +493,8 @@
     state.price = price;
     state.lastTick = Date.now();
     state.ticker = { price: price, pct: pct, high: high, low: low, vol: vol };
+    // BTC 的涨跌也用在 BTC 走势图的浮标上；看别的币时浮标用那个币自己的涨跌
+    if (state.symbol === SYMBOL) state.chartPct = pct;
 
     var eP = $('lastPrice');
     var eC = $('chg24');
@@ -380,6 +510,7 @@
 
     maybeSync(price);
     scheduleRender();
+    updatePriceTag();
     sourceText(); // 首帧到达时把「正在连接」换成实时/轮询，别等下一次重连
   }
 
@@ -395,12 +526,21 @@
       renderTables();
       renderSummary();
       renderEst();
+      renderPosCalc();
     }, RENDER_MS);
   }
 
   /** 每秒刷新「更新于 / X 秒前」，行情停了要一眼看得出来。 */
+  var clockTick = 0;
   function startClock() {
     setInterval(function () {
+      clockTick += 1;
+      // 自选开着时：价格文字每秒对一次（BTC 走实时 ticker），
+      // 其余币种每 12 秒强制拉一次最新价和 24h 涨跌。
+      if (state.watchOpen && state.watch.length) {
+        refreshWatchPrices();
+        if (clockTick % 12 === 0) loadPct(state.watch, true);
+      }
       var el = $('updatedAt');
       if (!state.lastTick) {
         if (el) el.textContent = '等待行情…';
@@ -437,13 +577,10 @@
     bars.sort(byTime);
 
     if (replace || !state.bars.length) {
-      state.bars = bars.slice(-LIMIT);
+      state.bars = bars.slice(-limitOf(state.iv));
       chartSet(state.bars);
-      // 只有拿到成段的历史才自动缩放到全图；单根先别 fit，否则会放大成一根蜡烛
-      if (state.firstLoad && Chart.chart && state.bars.length > 2) {
-        Chart.chart.timeScale().fitContent();
-        state.firstLoad = false;
-      }
+      // 首次加载铺满全图；换周期则回到切换前的视口（见 settleView）
+      settleView();
       hideMsg();
       refreshLegend();
       return;
@@ -476,7 +613,7 @@
       chartUpdate(b);
     } else if (b.time > tail.time) {
       state.bars.push(b);
-      if (state.bars.length > LIMIT) state.bars.shift();
+      if (state.bars.length > limitOf(state.iv)) state.bars.shift();
       chartUpdate(b);
     }
   }
@@ -499,12 +636,9 @@
     var map = {};
     state.bars.forEach(function (b) { map[b.time] = b; });
     fresh.forEach(function (b) { map[b.time] = b; });
-    state.bars = Object.keys(map).map(function (k) { return map[k]; }).sort(byTime).slice(-LIMIT);
+    state.bars = Object.keys(map).map(function (k) { return map[k]; }).sort(byTime).slice(-limitOf(state.iv));
     chartSet(state.bars);
-    if (state.firstLoad && Chart.chart) {
-      Chart.chart.timeScale().fitContent();
-      state.firstLoad = false;
-    }
+    settleView();
   }
 
   // 补数据：掉线重连 / 回到前台 / 发现断档时调用。
@@ -529,7 +663,7 @@
     var full = heal.full;
     heal.full = false;
     var iv = state.iv;
-    restGet(klinePath(iv, full ? 300 : 60)).then(function (rows) {
+    fetchKlines(iv, full ? 300 : 60).then(function (rows) {
       if (iv !== state.iv) return;
       var bars = mapKlines(rows);
       if (!bars.length) return;
@@ -543,34 +677,99 @@
     }).catch(function () {}).then(function () { heal.busy = false; });
   }
 
-  /** 拉整段历史（首次加载、切周期），seq 变了就丢弃结果。 */
+  /** 拉最近一页历史（首次加载、切周期），seq 变了就丢弃结果。 */
   function loadBars(iv, seq) {
-    return restGet(klinePath(iv, LIMIT)).then(function (rows) {
+    if (state.olderTimer) {
+      clearTimeout(state.olderTimer);
+      state.olderTimer = 0;
+    }
+    return fetchKlines(iv, PAGE).then(function (rows) {
       if (iv !== state.iv || seq !== state.seq) return;
       var bars = mapKlines(rows);
       if (!bars.length) return;
-      state.bars = bars.sort(byTime).slice(-LIMIT);
+      state.bars = bars.sort(byTime).slice(-limitOf(iv));
       chartSet(state.bars);
       hideMsg();
       refreshLegend();
-      if (state.firstLoad && Chart.chart) {
-        Chart.chart.timeScale().fitContent();
-        state.firstLoad = false;
+      // 换周期后回到切换前的视口；首次加载才铺满全图
+      settleView();
+      // 先把最近 1000 根显示出来，再在后台一页页补更早的历史；
+      // 补数据时保持当前视口不动，图上不会突然跳。
+      if (state.bars.length >= PAGE && state.bars.length < limitOf(iv)) {
+        state.olderTimer = setTimeout(function () {
+          state.olderTimer = 0;
+          loadOlderBars(iv, seq);
+        }, 700);
       }
+    });
+  }
+
+  /** 继续往左补更早的 K 线，直到 limitOf 根或交易所没有更早数据。 */
+  function loadOlderBars(iv, seq) {
+    if (iv !== state.iv || seq !== state.seq) return;
+    if (!state.bars.length || state.bars.length >= limitOf(iv)) return;
+    var oldest = state.bars[0].time;
+    fetchKlines(iv, PAGE, oldest * 1000 - 1).then(function (rows) {
+      if (iv !== state.iv || seq !== state.seq) return;
+      var older = mapKlines(rows).filter(function (b) { return b.time < oldest; });
+      if (!older.length) return;
+      var oldLen = state.bars.length;
+      var map = {};
+      older.concat(state.bars).forEach(function (b) { map[b.time] = b; });
+      state.bars = Object.keys(map).map(function (k) { return map[k]; }).sort(byTime).slice(-limitOf(iv));
+      var shift = state.bars.length - oldLen;
+      var range = Chart.chart && Chart.chart.timeScale
+        ? Chart.chart.timeScale().getVisibleLogicalRange()
+        : null;
+      chartSet(state.bars);
+      if (range && shift > 0 && Chart.chart) {
+        try {
+          Chart.chart.timeScale().setVisibleLogicalRange({
+            from: range.from + shift,
+            to: range.to + shift
+          });
+        } catch (e) {}
+      }
+      hideMsg();
+      refreshLegend();
+      if (state.bars.length < limitOf(iv)) {
+        state.olderTimer = setTimeout(function () {
+          state.olderTimer = 0;
+          loadOlderBars(iv, seq);
+        }, 250);
+      }
+    }).catch(function () {
+      // 更早的历史拉不到不影响当前行情
     });
   }
 
   // ---------------------------------------------------------------- WebSocket
   var WS = {
-    sock: null, host: '', idx: 0, fails: 0, opened: false,
+    sock: null, host: '', fails: 0, opened: false,
     retry: null, guard: null, ping: null, lastMsg: 0
   };
+  // 握手阶段就失败的源 → 冷却到期时间（见 wsFail）
+  var wsDown = {};
 
-  function wsHost() { return WS_HOSTS[WS.idx % WS_HOSTS.length]; }
+  function wsHost() {
+    var now = Date.now();
+    var last = '';
+    try { last = readLS(LS.ws) || ''; } catch (e) {}
+    // 上次连通的源优先；它刚失败过就跳过，按顺序取第一个没进冷却的。
+    if (last && WS_HOSTS.indexOf(last) >= 0 && !(wsDown[last] > now)) return last;
+    for (var i = 0; i < WS_HOSTS.length; i += 1) {
+      if (!(wsDown[WS_HOSTS[i]] > now)) return WS_HOSTS[i];
+    }
+    return WS_HOSTS[0];
+  }
 
   function wsUrl(iv) {
-    var s = SYMBOL.toLowerCase();
-    return wsHost() + '/stream?streams=' + s + '@ticker/' + s + '@kline_' + iv;
+    var s = state.symbol.toLowerCase();
+    // ticker 始终订阅 BTC（模拟盘按 BTC 结算），K 线流跟着走势图币种走；
+    // 合成周期（10h / 5d）没有对应的 kline 流，只订阅 ticker，K 线走 REST 轮询
+    var streams = 'btcusdt@ticker';
+    if (!TF_SYNTH[iv]) streams += '/' + s + '@kline_' + iv;
+    return wsHost() + '/stream?streams=' + streams;
   }
 
   function wsConnect() {
@@ -579,9 +778,9 @@
     wsAbort();
 
     var url;
-    try { url = wsUrl(state.iv); } catch (e) { wsFail(); return; }
+    try { url = wsUrl(state.iv); } catch (e) { wsFail(false); return; }
     var ws;
-    try { ws = new WebSocket(url); } catch (e) { wsFail(); return; }
+    try { ws = new WebSocket(url); } catch (e) { wsFail(false); return; }
 
     WS.sock = ws;
     WS.opened = false;
@@ -592,7 +791,7 @@
     WS.guard = setTimeout(function () {
       if (WS.sock !== ws || WS.opened) return;
       wsAbort();
-      wsFail();
+      wsFail(false);
     }, WS_OPEN_MS);
 
     ws.onopen = function () {
@@ -603,6 +802,7 @@
       if (WS.guard) { clearTimeout(WS.guard); WS.guard = null; }
       writeLS(LS.ws, WS.host);
       stopPoll();
+      startSynthPoll();
       sourceText();
       startPing();
       healBars(); // 断线期间漏的 K 线补回来，图上不留洞
@@ -628,11 +828,12 @@
 
     ws.onclose = function () {
       if (WS.sock !== ws) return;
+      var wasOpen = WS.opened;
       WS.sock = null;
       WS.opened = false;
       if (WS.guard) { clearTimeout(WS.guard); WS.guard = null; }
       stopPing();
-      wsFail();
+      wsFail(wasOpen);
     };
   }
 
@@ -651,13 +852,15 @@
     stopPing();
   }
 
-  /** 失败后换源重连：0.8s→8s 退避 + 抖动，期间轻量轮询保着行情。 */
-  function wsFail() {
+  /** 失败后换源重连：0.8s→8s 退避 + 抖动，期间轻量轮询保着行情。
+   *  wasOpen=false 表示这次根本没握手成功（多半是被墙/域名不可达），
+   *  把该源晾 WS_COOLDOWN_MS，下次直接跳过，不再每次都白等握手超时。 */
+  function wsFail(wasOpen) {
     WS.fails += 1;
     WS.opened = false;
+    if (!wasOpen && WS.host) wsDown[WS.host] = Date.now() + WS_COOLDOWN_MS;
     startPoll();
     sourceText();
-    WS.idx = (WS.idx + 1) % WS_HOSTS.length;
     var wait = Math.min(WS_RETRY_MAX, WS_RETRY_MIN * Math.pow(2, Math.min(WS.fails - 1, 4)));
     wait = Math.round(wait * (0.75 + Math.random() * 0.5));
     if (WS.retry) clearTimeout(WS.retry);
@@ -686,7 +889,7 @@
       if (!ws || ws.readyState !== 1) return;
       if (Date.now() - WS.lastMsg < WS_STALL_MS) return;
       wsAbort();
-      wsFail();
+      wsFail(true); // 是「连着但不来数据」，不是源不可达，不进冷却
     }, 4000);
   }
 
@@ -707,6 +910,7 @@
       klinePollTimer = setInterval(pollKlines, KLINE_POLL_MS);
       pollKlines();
     }
+    stopSynthPoll(); // 降级轮询已经包含合成周期的 K 线，别重复跑
     sourceText();
   }
 
@@ -725,11 +929,560 @@
 
   function pollKlines() {
     var iv = state.iv;
-    restGet(klinePath(iv, state.bars.length ? 3 : LIMIT)).then(function (rows) {
+    fetchKlines(iv, state.bars.length ? 3 : PAGE).then(function (rows) {
       if (iv !== state.iv) return;
       applyKlines(rows, !state.bars.length);
     }).catch(function () {});
   }
+
+  // 合成周期（10h / 5d）没有 kline 流：WS 正常时也每 5 秒拉一小段 base K 线回来
+  // 合并，最后一根蜡烛跟得上；WS 断了走 startPoll 里的 pollKlines，不重复跑。
+  var synthTimer = null;
+
+  function startSynthPoll() {
+    stopSynthPoll();
+    if (document.hidden || !TF_SYNTH[state.iv]) return;
+    synthTimer = setInterval(function () {
+      var iv = state.iv;
+      var seq = state.seq;
+      if (document.hidden || !TF_SYNTH[iv]) return;
+      fetchKlines(iv, 3).then(function (rows) {
+        if (iv !== state.iv || seq !== state.seq) return;
+        applyKlines(rows, !state.bars.length);
+      }).catch(function () {});
+    }, KLINE_POLL_MS);
+  }
+
+  function stopSynthPoll() {
+    if (synthTimer) { clearInterval(synthTimer); synthTimer = null; }
+  }
+
+  // ---------------------------------------------------------------- 币种搜索 / 切换
+  // 走势图可以看任意币安现货 USDT 交易对的 K 线；模拟盘仍然只做 BTCUSDT。
+  // 切到别的币时价格浮标、OHLC 图例、均线/MACD 都跟着换，账户与下单仍是 BTC。
+  var HOT_SYMBOLS = [
+    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT',
+    'AVAXUSDT', 'LINKUSDT', 'LTCUSDT', 'TRXUSDT', 'DOTUSDT', 'NEARUSDT', 'SUIUSDT',
+    'APTUSDT', 'ARBUSDT', 'OPUSDT', 'PEPEUSDT', 'SHIBUSDT', 'TONUSDT'
+  ];
+  // 常见币的中文名，方便搜「以太坊」「狗狗币」
+  var SYM_NAMES = {
+    BTC: '比特币', ETH: '以太坊', BNB: '币安币', SOL: 'Solana', XRP: '瑞波',
+    DOGE: '狗狗币', ADA: '艾达币', AVAX: '雪崩', LINK: 'Chainlink', LTC: '莱特币',
+    TRX: '波场', DOT: '波卡', NEAR: 'Near', SUI: 'Sui', APT: 'Aptos',
+    ARB: 'Arbitrum', OP: 'Optimism', PEPE: 'Pepe', SHIB: '柴犬', TON: 'Toncoin',
+    BCH: '比特现金', ETC: '以太经典', FIL: 'Filecoin', ATOM: 'Cosmos', UNI: 'Uniswap',
+    POL: 'Polygon', MATIC: 'Polygon', AAVE: 'Aave', INJ: 'Injective', TIA: 'Celestia'
+  };
+  // 常见币的英文别名，方便搜 ethereum / dogecoin 这种全名
+  var SYM_ALIAS = {
+    BTC: 'bitcoin', ETH: 'ethereum', BNB: 'bnb', SOL: 'solana', XRP: 'ripple',
+    DOGE: 'dogecoin', ADA: 'cardano', AVAX: 'avalanche', LINK: 'chainlink', LTC: 'litecoin',
+    TRX: 'tron', DOT: 'polkadot', NEAR: 'near', SUI: 'sui', APT: 'aptos',
+    ARB: 'arbitrum', OP: 'optimism', PEPE: 'pepe', SHIB: 'shiba inu', TON: 'toncoin',
+    BCH: 'bitcoin cash', ETC: 'ethereum classic', FIL: 'filecoin', ATOM: 'cosmos',
+    UNI: 'uniswap', POL: 'polygon', MATIC: 'polygon', AAVE: 'aave', INJ: 'injective'
+  };
+  var LS_SYM = 'huideng.trade.syms';
+  var symState = { list: null, loading: false, open: false };
+
+  function isTradingSymbol() { return state.symbol === SYMBOL; }
+
+  function cachedSymbols() {
+    try {
+      var o = JSON.parse(readLS(LS_SYM) || 'null');
+      if (o && o.list && o.list.length && o.list.indexOf('BTCUSDT') >= 0 &&
+        o.t && Date.now() - o.t < 24 * 3600 * 1000) return o.list;
+    } catch (e) {}
+    return null;
+  }
+
+  /** 拉一次全量交易对（约 160 KB），只留 USDT 现货；本地缓存 24 小时。 */
+  function loadSymbols(done) {
+    if (symState.list) { done(); return; }
+    var cached = cachedSymbols();
+    if (cached) { symState.list = cached; done(); return; }
+    if (symState.loading) return;
+    symState.loading = true;
+    restGet('/api/v3/ticker/price').then(function (rows) {
+      var list = (rows || []).filter(function (r) {
+        // base 只要 2 位以上：BTC/ETH 这种三位代码不能漏（之前写成 4 位，BTC 自己搜不到）
+        return r && typeof r.symbol === 'string' && /^[A-Z0-9]{2,}USDT$/.test(r.symbol);
+      }).map(function (r) { return r.symbol; }).sort();
+      if (list.length) {
+        symState.list = list;
+        writeLS(LS_SYM, JSON.stringify({ t: Date.now(), list: list }));
+      }
+    }).catch(function () {}).then(function () {
+      symState.loading = false;
+      done();
+    });
+  }
+
+  /** 搜索：精确代码 > 前缀 > 中文名 / 包含。 */
+  function matchSymbols(list, q) {
+    q = String(q || '').trim().toUpperCase();
+    if (!q) {
+      var hot = HOT_SYMBOLS.filter(function (s) { return list === HOT_SYMBOLS || list.indexOf(s) >= 0; });
+      return hot.slice(0, 12);
+    }
+    var seen = {};
+    var exact = [];
+    var starts = [];
+    var other = [];
+    function push(arr, sym) {
+      if (seen[sym]) return;
+      seen[sym] = 1;
+      arr.push(sym);
+    }
+    list.forEach(function (sym) {
+      var base = sym.slice(0, -4);
+      var name = (SYM_NAMES[base] || '') + ' ' + (SYM_ALIAS[base] || '');
+      if (base === q || sym === q) push(exact, sym);
+      else if (base.indexOf(q) === 0) push(starts, sym);
+      else if (name.toUpperCase().indexOf(q) >= 0 || sym.indexOf(q) >= 0) push(other, sym);
+    });
+    return exact.concat(starts, other).slice(0, 20);
+  }
+
+  /** 走势图换币种后的界面：图例币种、价格浮标、自选高亮；非 BTC 时开仓 / 平仓按钮置灰。 */
+  function setSymbolUI() {
+    var cs = $('chartSym');
+    if (cs) cs.textContent = state.symbol;
+    updateOrderUI();
+    updatePriceTag();
+    renderWatch();
+    drawSchedule();
+  }
+
+  /** 图例旁边的「重置」：回到 BTCUSDT 的 1 分钟走势。 */
+  /** 图例旁边的「重置」：当前周期的走势恢复默认（撤销右侧压扁/拉伸，视图铺满）。 */
+  function resetChart() {
+    if (!Chart.ready || !Chart.chart) return;
+    // 价格轴恢复自动缩放：右侧上下拖拽造成的压扁/拉伸回到默认
+    try {
+      if (Chart.candle && Chart.candle.priceScale) {
+        Chart.candle.priceScale().applyOptions({ autoScale: true });
+      }
+      if (Chart.chart.priceScale) {
+        Chart.chart.priceScale('right').applyOptions({ autoScale: true });
+      }
+    } catch (e) {}
+    // 副图的压扁也一起恢复
+    try {
+      if (Chart.hist && Chart.hist.priceScale) {
+        Chart.hist.priceScale().applyOptions({ autoScale: true });
+      }
+      if (Chart.macd && Chart.macd.priceScale) {
+        Chart.macd.priceScale('right').applyOptions({ autoScale: true });
+      }
+    } catch (e) {}
+    // 时间轴保持当前视图，只把价格轴恢复到自动缩放
+    state.view = null;
+    state.firstLoad = false;
+    // 右边缘长按压扁 / 拉伸过的，也一并回到默认比例
+    Scale.squash = 0;
+    applyChartMargins();
+    drawSchedule();
+    toast('已重置当前周期走势');
+  }
+
+  /** 换币种先把旧图清掉，别让上一只币的 K 线停在下面。 */
+  function chartClear() {
+    if (!Chart.ready) return;
+    Chart.clearing = true;
+    try {
+      Chart.candle.setData([]);
+      Chart.vol.setData([]);
+      Object.keys(Chart.ma).forEach(function (k) { Chart.ma[k].setData([]); });
+      if (Chart.dif) {
+        Chart.dif.setData([]);
+        Chart.dea.setData([]);
+        Chart.hist.setData([]);
+      }
+    } catch (e) {}
+    Ind.data = null;
+    Ind.times = [];
+    // 顶部图例只留「涨跌 / 量」，开高低收不显示
+    ['lgChg', 'lgV'].forEach(function (id) {
+      var e = $(id);
+      if (e) { e.textContent = '--'; e.className = ''; }
+    });
+    Object.keys(Legend.ma).forEach(function (k) {
+      if (Legend.ma[k] && Legend.ma[k].b) Legend.ma[k].b.textContent = '--';
+    });
+    Draw.measure = null; // 换标的后测距的涨跌幅不再成立
+    Draw.pending = null;
+    Draw.hover = null;
+    paintChartBg();
+    updatePriceTag();
+    drawSchedule();
+  }
+
+  /** 非 BTC 的走势图也要给价格浮标上色，单独拉一次它的 24h 涨跌。 */
+  function loadChartPct(sym) {
+    restGet('/api/v3/ticker/24hr?symbol=' + sym).then(function (o) {
+      if (state.symbol !== sym) return;
+      state.chartPct = +(o && o.priceChangePercent) || 0;
+      updatePriceTag();
+    }).catch(function () {});
+  }
+
+  function switchSymbol(sym) {
+    sym = String(sym || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{5,20}$/.test(sym) || sym === state.symbol) return;
+    if (state.olderTimer) {
+      clearTimeout(state.olderTimer);
+      state.olderTimer = 0;
+    }
+    state.symbol = sym;
+    state.seq += 1;
+    state.firstLoad = true;
+    state.chartPct = 0;
+    state.bars = [];
+    state.view = null;
+    chartClear();
+    setSymbolUI();
+    showMsg('正在加载 ' + sym + ' K 线…');
+    loadBars(state.iv, state.seq).catch(function () {
+      if (state.symbol !== sym) return;
+      showMsg('K 线加载失败，请重新选择币种');
+    });
+    if (sym !== SYMBOL) loadChartPct(sym);
+    else if (state.ticker) state.chartPct = state.ticker.pct;
+    wsConnect(); // kline 流换成新币种，ticker 仍订阅 BTC
+  }
+
+  // 自选标的：本地保存，搜索结果点 ☆ 加入，点自选行直接看走势
+  var LS_WATCH = 'huideng.trade.watch';
+
+  function watchValid(sym) {
+    return typeof sym === 'string' && /^[A-Z0-9]{5,20}$/.test(sym);
+  }
+
+  function loadWatch() {
+    try {
+      var arr = JSON.parse(readLS(LS_WATCH) || 'null');
+      if (arr && arr.length) {
+        var out = arr.filter(watchValid);
+        if (out.length) return out;
+      }
+    } catch (e) {}
+    return ['BTCUSDT'];
+  }
+
+  function saveWatch() { writeLS(LS_WATCH, JSON.stringify(state.watch)); }
+
+  function inWatch(sym) { return state.watch.indexOf(sym) >= 0; }
+
+  // 各标的 24h 涨跌幅：自选/搜索结果里显示，批量拉、缓存 60 秒
+  var PCT_TTL = 60 * 1000;
+  var pctWant = [];
+  var pctForce = false;
+  var pctTimer = 0;
+
+  function pctOf(sym) {
+    // BTC 有 WebSocket 实时 ticker，直接用它的 24h 涨跌，比 60 秒缓存的新
+    if (sym === SYMBOL && state.ticker && Number.isFinite(+state.ticker.pct)) return +state.ticker.pct;
+    var e = state.pct[sym];
+    return e && Number.isFinite(e.pct) ? e.pct : null;
+  }
+
+  function pctText(sym) {
+    var p = pctOf(sym);
+    return p == null ? '--' : fmtPct(p);
+  }
+
+  function pctClass(sym) {
+    var p = pctOf(sym);
+    if (p == null) return '';
+    return p > 0 ? 'is-up' : p < 0 ? 'is-down' : '';
+  }
+
+  /** 价格小数位：按这个币自己的价位决定，和走势图当前看的币无关。 */
+  function priceDigits(v) {
+    var a = Math.abs(+v);
+    if (!Number.isFinite(a) || a <= 0) return 2;
+    if (a >= 10) return 2;
+    if (a >= 1) return 4;
+    if (a >= 0.1) return 5;
+    if (a >= 0.01) return 6;
+    if (a >= 0.0001) return 7;
+    return 8;
+  }
+
+  /** 自选里的最新价：BTC 走实时 ticker，其余用批量 24h ticker 的 lastPrice。 */
+  function priceOf(sym) {
+    if (sym === SYMBOL && state.ticker && state.ticker.price) return +state.ticker.price;
+    var e = state.pct[sym];
+    return e && Number.isFinite(e.last) ? e.last : null;
+  }
+
+  function priceText(sym) {
+    var v = priceOf(sym);
+    if (!Number.isFinite(v)) return '--';
+    return group(v, priceDigits(v));
+  }
+
+  /** 批量补 24h 涨跌幅 + 最新价（一次最多 100 个），拿不到就保持 --。 */
+  function ensurePct(symbols, done, force) {
+    var now = Date.now();
+    var need = [];
+    symbols.forEach(function (s) {
+      if (!s) return;
+      var e = state.pct[s];
+      if (force || !e || now - e.t > PCT_TTL) {
+        if (need.indexOf(s) < 0) need.push(s);
+      }
+    });
+    if (!need.length) { if (done) done(false); return; }
+    var url = '/api/v3/ticker/24hr?symbols=' + encodeURIComponent(JSON.stringify(need.slice(0, 100)));
+    restGet(url).then(function (rows) {
+      var list = Object.prototype.toString.call(rows) === '[object Array]' ? rows : [rows];
+      var hit = false;
+      list.forEach(function (o) {
+        if (!o || !o.symbol) return;
+        var p = parseFloat(o.priceChangePercent);
+        if (!Number.isFinite(p)) return;
+        var last = parseFloat(o.lastPrice);
+        state.pct[o.symbol] = { pct: p, last: Number.isFinite(last) ? last : null, t: Date.now() };
+        hit = true;
+      });
+      if (done) done(hit);
+    }).catch(function () { if (done) done(false); });
+  }
+
+  /** 防抖合并请求，回来重画自选 / 搜索结果。force = 跳过 60 秒缓存。 */
+  function loadPct(symbols, force) {
+    pctWant = pctWant.concat(symbols || []);
+    if (force) pctForce = true;
+    if (pctTimer) return;
+    pctTimer = setTimeout(function () {
+      pctTimer = 0;
+      var want = pctWant;
+      var forced = pctForce;
+      pctWant = [];
+      pctForce = false;
+      ensurePct(want, function (changed) {
+        if (!changed) return;
+        renderWatch();
+        if (symState.open) renderSymResults();
+      }, forced);
+    }, 260);
+  }
+
+  /** 自选开着时每秒把价格文字对一遍：BTC 是秒级实时，其它币种等 12 秒一次的批量刷新。 */
+  function refreshWatchPrices() {
+    var listEl = $('watchList');
+    if (!listEl || !state.watchOpen || !listEl.querySelectorAll) return;
+    Array.prototype.forEach.call(listEl.querySelectorAll('[data-price]'), function (el) {
+      var sym = el.getAttribute('data-price');
+      var txt = priceText(sym);
+      if (el.textContent !== txt) el.textContent = txt;
+    });
+  }
+
+  function toggleWatch(sym) {
+    var i = state.watch.indexOf(sym);
+    if (i >= 0) state.watch.splice(i, 1);
+    else state.watch.push(sym);
+    saveWatch();
+    renderWatch();
+    if (symState.open) renderSymResults();
+  }
+
+  /** DOGEUSDT → DOGE / USDT；认不出计价币就整串当名字。 */
+  var SYM_QUOTES = ['USDT', 'USDC', 'FDUSD', 'TUSD', 'BUSD', 'BTC', 'ETH', 'BNB', 'EUR', 'TRY', 'BRL'];
+  function splitSymbol(sym) {
+    var s = String(sym || '');
+    for (var i = 0; i < SYM_QUOTES.length; i += 1) {
+      var q = SYM_QUOTES[i];
+      if (s.length > q.length && s.slice(-q.length) === q) {
+        return { base: s.slice(0, -q.length), quote: q };
+      }
+    }
+    return { base: s, quote: '' };
+  }
+
+  function renderWatch() {
+    var listEl = $('watchList');
+    var box = $('watchBox');
+    var empty = $('watchEmpty');
+    var toggle = $('watchToggle');
+    if (box) box.hidden = !state.watchOpen;
+    if (toggle) toggle.setAttribute('aria-expanded', state.watchOpen ? 'true' : 'false');
+    if (empty) empty.hidden = state.watch.length > 0;
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    state.watch.forEach(function (sym) {
+      var sp = splitSymbol(sym);
+      var row = document.createElement('div');
+      row.className = 'watch-row';
+      var pick = document.createElement('button');
+      pick.type = 'button';
+      pick.className = 'watch-row__sym' + (sym === state.symbol ? ' is-on' : '');
+      pick.setAttribute('data-sym', sym);
+      // 名称写成 DOGE/USDT（计价币淡一点），后面是实时价和 24h 涨跌
+      pick.innerHTML = '<b>' + sp.base +
+        (sp.quote ? '<span class="watch-row__quote">/' + sp.quote + '</span>' : '') + '</b>' +
+        '<em class="watch-row__price" data-price="' + sym + '">' + priceText(sym) + '</em>' +
+        '<em class="sym-chg ' + pctClass(sym) + '">' + pctText(sym) + '</em>';
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'watch-row__del';
+      del.setAttribute('data-del', sym);
+      del.setAttribute('aria-label', '移出自选');
+      del.textContent = '★';
+      row.appendChild(pick);
+      row.appendChild(del);
+      listEl.appendChild(row);
+    });
+    loadPct(state.watch);
+  }
+
+  /** 搜索结果：点行看走势，点 ☆ 加入 / 移出自选。 */
+  function renderSymResults() {
+    var input = $('symInput');
+    var listEl = $('symList');
+    if (!input || !listEl) return;
+    var search = $('watchSearch');
+    if (search && search.hidden) {
+      // 搜索框已经收起，晚到的币种列表别再弹出来
+      listEl.hidden = true;
+      symState.open = false;
+      return;
+    }
+    var list = symState.list || HOT_SYMBOLS;
+    var matches = matchSymbols(list, input.value);
+    listEl.innerHTML = '';
+    if (!matches.length) {
+      var empty = document.createElement('div');
+      empty.className = 'symsearch__empty';
+      empty.textContent = symState.loading ? '币种列表加载中…' : '没找到，换个关键词试试';
+      listEl.appendChild(empty);
+    } else {
+      matches.forEach(function (sym) {
+        var base = sym.slice(0, -4);
+        var row = document.createElement('div');
+        row.className = 'sym-row';
+        var pick = document.createElement('button');
+        pick.type = 'button';
+        pick.className = 'sym-row__pick';
+        pick.setAttribute('data-sym', sym);
+        pick.innerHTML = '<b>' + base + '</b><span>' + sym + '</span>' +
+          '<em class="sym-chg ' + pctClass(sym) + '">' + pctText(sym) + '</em>';
+        var star = document.createElement('button');
+        star.type = 'button';
+        star.className = 'sym-row__star' + (inWatch(sym) ? ' is-on' : '');
+        star.setAttribute('data-star', sym);
+        star.setAttribute('aria-label', inWatch(sym) ? '移出自选' : '加入自选');
+        star.textContent = inWatch(sym) ? '★' : '☆';
+        row.appendChild(pick);
+        row.appendChild(star);
+        listEl.appendChild(row);
+      });
+    }
+    listEl.hidden = false;
+    loadPct(matches);
+    symState.open = true;
+  }
+
+  function closeSymResults() {
+    var listEl = $('symList');
+    if (listEl) listEl.hidden = true;
+    symState.open = false;
+  }
+
+  /** 点自选条右侧的搜索图标：自选条变成搜索框。 */
+  function openSymbolSearch() {
+    var box = $('watchSearch');
+    var input = $('symInput');
+    var listEl = $('symList');
+    var head = $('watchHead');
+    var aside = $('deskSide');
+    if (!box || !input) return;
+    box.hidden = false;
+    // 结果向上展开，最多铺到右侧面板顶部（总资产那一块）
+    if (listEl && head && aside && typeof head.getBoundingClientRect === 'function') {
+      var room = head.getBoundingClientRect().top - aside.getBoundingClientRect().top - 6;
+      listEl.style.maxHeight = Math.max(180, Math.min(560, room)) + 'px';
+    }
+    loadSymbols(renderSymResults);
+    renderSymResults();
+    try { input.focus(); } catch (e) {}
+  }
+
+  function closeSymbolSearch() {
+    var box = $('watchSearch');
+    var input = $('symInput');
+    if (box) box.hidden = true;
+    if (input) input.value = '';
+    closeSymResults();
+  }
+
+  function pickSymbol(sym) {
+    closeSymbolSearch();
+    switchSymbol(sym);
+  }
+
+  function bindSymbolSearch() {
+    var input = $('symInput');
+    var listEl = $('symList');
+    var watchList = $('watchList');
+    var toggle = $('watchToggle');
+    var searchBtn = $('watchSearchBtn');
+    var closeBtn = $('symClose');
+    var head = $('watchHead');
+    if (!input || !listEl) return;
+
+    function load() {
+      if (symState.list || symState.loading) return;
+      loadSymbols(renderSymResults);
+    }
+    if (searchBtn) searchBtn.addEventListener('click', openSymbolSearch);
+    if (closeBtn) closeBtn.addEventListener('click', closeSymbolSearch);
+    input.addEventListener('focus', function () { load(); renderSymResults(); });
+    input.addEventListener('input', function () { load(); renderSymResults(); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeSymbolSearch();
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        var first = listEl.querySelector('.sym-row__pick');
+        if (first) pickSymbol(first.getAttribute('data-sym'));
+      }
+    });
+    listEl.addEventListener('click', function (e) {
+      var star = e.target && e.target.closest ? e.target.closest('button[data-star]') : null;
+      if (star) { toggleWatch(star.getAttribute('data-star')); return; }
+      var b = e.target && e.target.closest ? e.target.closest('button[data-sym]') : null;
+      if (b) pickSymbol(b.getAttribute('data-sym'));
+    });
+    if (watchList) {
+      watchList.addEventListener('click', function (e) {
+        var del = e.target && e.target.closest ? e.target.closest('button[data-del]') : null;
+        if (del) { toggleWatch(del.getAttribute('data-del')); return; }
+        var b = e.target && e.target.closest ? e.target.closest('button[data-sym]') : null;
+        if (b) switchSymbol(b.getAttribute('data-sym'));
+      });
+    }
+    if (toggle) {
+      toggle.addEventListener('click', function () {
+        if (!$('watchSearch').hidden) closeSymbolSearch();
+        state.watchOpen = !state.watchOpen;
+        renderWatch();
+      });
+    }
+    document.addEventListener('click', function (e) {
+      if (!symState.open) return;
+      if (head && e.target && head.contains && head.contains(e.target)) return;
+      closeSymbolSearch();
+    });
+    renderWatch();
+    var box = $('watchSearch');
+    if (box) box.hidden = true;
+    closeSymResults();
+  }
+
 
   // ---------------------------------------------------------------- 技术指标
   // 均线可改周期、可增删（右键 K 线上的均线也能删），MACD / 成交量副图可开关。
@@ -867,7 +1620,7 @@
 
   function fmtInd(v) {
     if (!Number.isFinite(+v)) return '--';
-    return (+v > 0 ? '+' : '') + group(+v, 2);
+    return (+v > 0 ? '+' : '') + group(+v, chartDigits());
   }
 
   function indexOfTime(t) {
@@ -907,7 +1660,7 @@
       var cell = Legend.ma[m.p];
       if (!cell) return;
       var v = ind.ma[m.p] ? ind.ma[m.p][i] : null;
-      cell.b.textContent = v == null || !Number.isFinite(v) ? '--' : fmtPrice(v);
+      cell.b.textContent = v == null || !Number.isFinite(v) ? '--' : fmtAxis(v);
     });
 
     if (Legend.dif) Legend.dif.textContent = fmtInd(ind.dif[i]);
@@ -961,40 +1714,40 @@
     return { span: sp, i: i, b: b };
   }
 
+  /** 图例里的均线读数：一直显示（隐藏的也是，按 is-off 变淡），点一下改周期 / 颜色 / 隐藏 / 删除。 */
   function buildMaLegend() {
-    var box = $('maList');
+    var box = $('maLegend');
     if (!box) return;
     box.innerHTML = '';
     Legend.ma = {};
     Ind.ma.forEach(function (m) {
-      var row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'ma-row' + (m.hidden ? ' is-off' : '');
-      row.setAttribute('data-ma', String(m.p));
-      row.title = m.hidden ? '点击显示 ' + maLabel(m.p) : '点击隐藏 ' + maLabel(m.p);
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'ma-chip' + (m.hidden ? ' is-off' : '');
+      chip.setAttribute('data-ma', String(m.p));
+      chip.title = (m.hidden ? '已隐藏 · ' : '') + '点击设置 ' + maLabel(m.p);
       var i = document.createElement('i');
       i.textContent = maLabel(m.p);
       i.style.color = m.c;
       var b = document.createElement('b');
       b.textContent = '--';
-      row.appendChild(i);
-      row.appendChild(b);
-      row.onclick = function () { setMaHidden(m.p, !m.hidden); };
-      row.oncontextmenu = function (e) {
+      chip.appendChild(i);
+      chip.appendChild(b);
+      chip.onclick = function (e) {
+        // 别让 document 上的「点空白处关浮层」立刻把它关上
+        if (e && e.stopPropagation) e.stopPropagation();
+        openMaPop(m.p, chip);
+      };
+      chip.oncontextmenu = function (e) {
         e.preventDefault();
         e.stopPropagation();
-        openMaPop(m.p, row);
+        // 手机上长按图例不再弹编辑页：点一下数值就能打开
+        if (DRAW_DEV === 'm') return;
+        openMaPop(m.p, chip);
       };
-      box.appendChild(row);
-      Legend.ma[m.p] = { span: row, i: i, b: b };
+      box.appendChild(chip);
+      Legend.ma[m.p] = { span: chip, i: i, b: b };
     });
-
-    var addRow = document.createElement('button');
-    addRow.type = 'button';
-    addRow.className = 'ma-row ma-row--add';
-    addRow.textContent = '＋ 添加均线';
-    addRow.onclick = function () { openMaPop(0, addRow); };
-    box.appendChild(addRow);
   }
 
   function setMaHidden(period, on) {
@@ -1008,7 +1761,7 @@
     var row = Legend.ma[m.p];
     if (row) {
       row.span.classList.toggle('is-off', !!m.hidden);
-      row.span.title = m.hidden ? '点击显示 ' + maLabel(m.p) : '点击隐藏 ' + maLabel(m.p);
+      row.span.title = (m.hidden ? '已隐藏 · ' : '') + '点击设置 ' + maLabel(m.p);
     }
     syncMaHideBtn();
     saveIndPrefs();
@@ -1096,11 +1849,11 @@
   }
 
   function closeMenus(except) {
-    ['maPop', 'ctxMenu', 'acctMenu'].forEach(function (id) {
+    ['maPop', 'ctxMenu', 'acctMenu', 'lineMenu'].forEach(function (id) {
       var el = $(id);
       if (el && el !== except) el.hidden = true;
     });
-    var openBtn = document.querySelector ? document.querySelector('.ma-row.is-open') : null;
+    var openBtn = document.querySelector ? document.querySelector('.ma-chip.is-open') : null;
     if (openBtn) openBtn.classList.remove('is-open');
     var btn = $('btnMenu');
     if (btn) btn.setAttribute('aria-expanded', 'false');
@@ -1282,6 +2035,15 @@
   function onChartCtx(e) {
     if (!Chart.ready || !Chart.chart) return;
     e.preventDefault();
+    // 右键在直线上：直线菜单（删除 / 锁定 / 颜色）；否则是均线菜单
+    var ln = lineAtPoint(e.clientX, e.clientY);
+    if (DRAW_DEV === 'm') {
+      // 手机长按只留十字线：不再弹「添加均线」菜单（双击屏幕才是入口），
+      // 但长按在直线上还是给直线菜单，否则手机上删不了单条直线。
+      if (ln && !Draw.active) openLineCtx(e.clientX, e.clientY, ln);
+      return;
+    }
+    if (ln) { openLineCtx(e.clientX, e.clientY, ln); return; }
     var box = $('chart');
     if (!box) return;
     var r = box.getBoundingClientRect();
@@ -1379,6 +2141,126 @@
 
   // ---------------------------- 账户菜单 ----------------------------
 
+  /** 交易页右下角的「交易笔记」子页面：从右侧滑入，左侧留一段走势图。 */
+  function openNotesSlide() {
+    if (Account.mode !== 'cloud') {
+      pendingNotesSlide = true;
+      openModal();
+      return;
+    }
+    var slide = $('notesSlide');
+    var frame = $('notesFrame');
+    var btn = $('btnNotes');
+    if (!slide) return;
+    if (frame && !frame.getAttribute('src')) {
+      frame.setAttribute('src', (cfg.rel || '') + 'notes/index.html?embed=1');
+    }
+    slide.classList.add('is-open');
+    slide.setAttribute('aria-hidden', 'false');
+    if (btn) {
+      btn.classList.add('is-on');
+      btn.setAttribute('aria-expanded', 'true');
+    }
+    closeMenus();
+  }
+
+  function closeNotesSlide() {
+    var slide = $('notesSlide');
+    var btn = $('btnNotes');
+    if (!slide) return;
+    slide.classList.remove('is-open');
+    slide.setAttribute('aria-hidden', 'true');
+    if (btn) {
+      btn.classList.remove('is-on');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function resetNotesFrame() {
+    var frame = $('notesFrame');
+    if (frame) frame.removeAttribute('src');
+  }
+
+  function toggleNotesSlide() {
+    var slide = $('notesSlide');
+    if (slide && slide.classList.contains('is-open')) closeNotesSlide();
+    else openNotesSlide();
+  }
+
+  function applyTradeAvatar(src) {
+    var img = document.querySelector('#btnMenu img');
+    if (img) img.src = src || ((cfg.rel || '') + 'assets/icon.png');
+  }
+
+  function loadTradeAvatar(force) {
+    if (Account.mode !== 'cloud') {
+      avatarLoaded = false;
+      applyTradeAvatar('');
+      return;
+    }
+    if (avatarLoaded && !force) return;
+    avatarLoaded = true;
+    api('tradeAvatarGet', {})
+      .then(function (j) {
+        if (j && j.avatar) applyTradeAvatar(j.avatar);
+      })
+      .catch(function () {});
+  }
+
+  function compressAvatar(file) {
+    return new Promise(function (resolve, reject) {
+      if (!file || !/^image\/(jpeg|png|webp)$/i.test(file.type || '')) {
+        reject(err('bad_image'));
+        return;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        reject(err('too_large'));
+        return;
+      }
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        try {
+          var size = 96;
+          var c = document.createElement('canvas');
+          c.width = size;
+          c.height = size;
+          var ctx = c.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, size, size);
+          var scale = Math.max(size / img.width, size / img.height);
+          var w = img.width * scale;
+          var h = img.height * scale;
+          ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+          resolve(c.toDataURL('image/jpeg', 0.82));
+        } catch (e) {
+          reject(err('bad_image'));
+        }
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(err('bad_image'));
+      };
+      img.src = url;
+    });
+  }
+
+  function setTradeAvatar(file) {
+    compressAvatar(file)
+      .then(function (dataUrl) {
+        if (dataUrl.length > 60000) throw err('too_large');
+        return api('tradeAvatarSet', { avatar: dataUrl }).then(function () {
+          avatarLoaded = true;
+          applyTradeAvatar(dataUrl);
+          toast('头像已更新');
+        });
+      })
+      .catch(function (e) {
+        toast(msgOf(e && e.code));
+      });
+  }
+
   function renderAccountMenu() {
     var who = $('menuWho');
     if (who) {
@@ -1389,29 +2271,87 @@
     var login = $('menuLogin');
     var logout = $('menuLogout');
     var phone = $('menuPhone');
+    var sync = $('menuSync');
+    var avatar = $('menuAvatar');
     if (login) login.hidden = Account.mode === 'cloud';
     if (logout) logout.hidden = Account.mode !== 'cloud';
+    if (sync) sync.hidden = Account.mode !== 'cloud';
+    if (avatar) avatar.hidden = Account.mode !== 'cloud';
     if (phone) {
       phone.hidden = Account.mode !== 'cloud';
       var bound = (Account.data && Account.data.phone) || Phone.bound || '';
-      phone.textContent = bound ? '手机已绑定 ' + bound : '绑定手机号';
+      phone.textContent = bound ? '更换手机号' : '绑定手机号';
+      phone.title = bound ? '当前绑定 ' + bound : '绑定手机号';
     }
+    loadTradeAvatar(false);
   }
 
   // ---------------------------------------------------------------- 图表
   var Chart = {
     chart: null, candle: null, vol: null,
     macd: null, hist: null, dif: null, dea: null,
-    ma: {}, ready: false, hover: null
+    ma: {}, ready: false, hover: null, clearing: false
   };
+
+  // 鼠标当前所在的十字线像素位置（数据更新后把横线钉回这里，避免价格轴自动缩放让它漂走）
+  var Cross = { on: false, mx: 0, my: 0, re: false, timer: 0 };
+
+  function crosshairReanchor() {
+    if (!Cross.on || !Chart.chart || !Chart.candle || !Draw.canvas) return;
+    try {
+      var r = Draw.canvas.getBoundingClientRect();
+      var vx = r.left + Cross.mx;
+      var vy = r.top + Cross.my;
+      var el = document.elementFromPoint ? document.elementFromPoint(vx, vy) : null;
+      var target = el && el.dispatchEvent ? el : Draw.canvas;
+      // 用一次真实的 mousemove 让库在鼠标像素处重画十字线，
+      // 比 setCrosshairPosition 精确：不会把竖线吸到 K 线上
+      Cross.re = true;
+      try {
+        target.dispatchEvent(new MouseEvent('mousemove', { clientX: vx, clientY: vy, bubbles: true }));
+      } finally {
+        Cross.re = false;
+      }
+    } catch (e) {
+      Cross.re = false;
+    }
+  }
 
   // ---------------------------------------------------------------- 画线
   // 覆盖在 K 线上的 canvas：存 (时间, 价格) 而不是像素，缩放/平移后能跟着走。
   var Draw = {
     canvas: null, ctx: null, lines: [], undo: [],
-    active: false, drawing: null, raf: 0,
+    active: false, drawing: null, drag: null, raf: 0,
+    tool: 'free', measure: null, pending: null, hover: null,
     showTrades: false, trades: [], flash: null, flashTimer: 0
   };
+
+  // 当前是手机还是电脑：手机上只显示手机上画的线，电脑上只显示电脑上画的线。
+  // 手绘笔画存的是画布相对位置，跨屏幕尺寸本来就对不齐，分开存反而更干净。
+  var DRAW_DEV = (function () {
+    var nav = (typeof navigator !== 'undefined' && navigator) || {};
+    var ua = nav.userAgent || '';
+    var coarse = false;
+    try {
+      coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    } catch (e) {}
+    var touch = (nav.maxTouchPoints || 0) > 1;
+    // iPadOS 的 UA 伪装成 Mac，靠 pointer:coarse + 多点触控认出来
+    return /Android|iPhone|iPad|iPod|Windows Phone|HarmonyOS|Mobile/i.test(ua) || (coarse && touch) ? 'm' : 'd';
+  })();
+
+  /** 一条线属于哪个设备；老数据没有 dev，按电脑（手机端一律不显示它们）。 */
+  function lineDev(ln) {
+    return ln && ln.dev === 'm' ? 'm' : 'd';
+  }
+
+  // 手机上挂个 <html class="mob">：横屏全屏后宽度会超过 760px，
+  // 只靠媒体查询会退回到桌面样式，这几个手机专属样式按设备走更稳。
+  try {
+    if (DRAW_DEV === 'm' && document.documentElement && document.documentElement.classList) {
+      document.documentElement.classList.add('mob');
+    }
+  } catch (e) {}
 
   // 历史开平仓点统一用黑色
   var TRADE_COLOR = '#1A1A1A';
@@ -1421,13 +2361,259 @@
     var r = Draw.canvas.getBoundingClientRect();
     var x = e.clientX - r.left;
     var y = e.clientY - r.top;
-    var t = Chart.chart.timeScale().coordinateToTime(x);
+    var ts = Chart.chart.timeScale();
+    var t = ts.coordinateToTime(x);
+    var l = ts.coordinateToLogical ? ts.coordinateToLogical(x) : null;
+    var x0 = t != null ? ts.timeToCoordinate(t) : null;
+    var dx = x0 != null ? x - x0 : 0;
     var p = Chart.candle.coordinateToPrice(y);
     if (t == null || p == null || !Number.isFinite(p)) return null;
-    return { x: x, y: y, t: t, p: p };
+    // 自由画必须保存「柱时间 + 柱心到鼠标的小数像素偏移 dx」。
+    // 只存时间/逻辑下标会被吸附到 K 线柱子上，重绘后立刻变成锯齿。
+    return {
+      x: x, y: y, t: t, p: p, l: l, dx: dx,
+      u: r.width ? x / r.width : 0,
+      v: r.height ? y / r.height : 0
+    };
   }
 
-  function strokePath(ctx, pts) {
+  /** 绘图区宽度（不含右侧价格轴）：画线层铺满整个 pane，坐标得按绘图区算。 */
+  function plotWidth() {
+    var w = 0;
+    try { w = Chart.chart && Chart.chart.paneSize ? Chart.chart.paneSize().width : 0; } catch (e) {}
+    if (!w) {
+      w = Draw.canvas ? Draw.canvas.clientWidth : 0;
+      try {
+        var ps = Chart.chart.priceScale('right');
+        if (ps && ps.width) w -= ps.width() || 0;
+      } catch (e) {}
+    }
+    return w;
+  }
+
+  /**
+   * 逻辑下标 → 画线层上的像素 x。
+   * 用图表库自己的刻度标定两根可见 K 线再线性外推：视野外的点也能算出真实 x
+   * （库的 logicalToCoordinate 会把左侧越界坐标夹成 0），而且和蜡烛严丝合缝。
+   * 以前直接拿「整块画布宽度」乘以逻辑比例，右侧价格轴那 78px 没扣掉，
+   * 越靠右的端点偏得越多（桌面端最右能差 70-80px，正好一根 K 线的位置就错了）。
+   */
+  function logicalToX(ts, idx, w) {
+    var bars = state.bars || [];
+    var r = null;
+    try { r = ts.getVisibleLogicalRange ? ts.getVisibleLogicalRange() : null; } catch (e) {}
+    if (r && bars.length && Number.isFinite(r.from) && Number.isFinite(r.to) && r.to > r.from) {
+      var i0 = Math.max(0, Math.ceil(r.from));
+      var i1 = Math.min(bars.length - 1, Math.floor(r.to));
+      if (i1 > i0) {
+        var x0 = null;
+        var x1 = null;
+        try {
+          x0 = ts.timeToCoordinate(bars[i0].time);
+          x1 = ts.timeToCoordinate(bars[i1].time);
+        } catch (e) {}
+        if (x0 != null && x1 != null) {
+          return x0 + (idx - i0) * ((x1 - x0) / (i1 - i0));
+        }
+      }
+      if (w) return (idx - r.from) / (r.to - r.from) * w;
+    }
+    try { return ts.logicalToCoordinate(idx); } catch (e) { return null; }
+  }
+
+  /** 直线端点存的是 (时间, 价格) 图表坐标，平移/缩放/换周期时跟着走。 */
+  function lineCoord(pt) {
+    if (!pt || !Chart.chart || !Chart.candle || !state.bars.length) return null;
+    var ts = Chart.chart.timeScale();
+    var step = (TF_MS[state.iv] || 60000) / 1000;
+    var idx = logicalAtTime(state.bars, step, pt.t);
+    var x = logicalToX(ts, idx, plotWidth());
+    var y = Chart.candle.priceToCoordinate(pt.p);
+    if (x == null || y == null) return null;
+    return { x: x, y: y };
+  }
+
+  /** 测距只关心价位：右侧空白区没有时间也能量。 */
+  function drawMeasurePoint(e) {
+    if (!Chart.chart || !Chart.candle || !Draw.canvas) return null;
+    var r = Draw.canvas.getBoundingClientRect();
+    var x = e.clientX - r.left;
+    var y = e.clientY - r.top;
+    var p = Chart.candle.coordinateToPrice(y);
+    if (p == null || !Number.isFinite(p)) return null;
+    return {
+      x: x, y: y, p: p,
+      t: Chart.chart.timeScale().coordinateToTime(x),
+      u: r.width ? x / r.width : 0,
+      v: r.height ? y / r.height : 0
+    };
+  }
+
+  // 画线持久化：本地 + 登录后同步到云端（换设备/换浏览器还在）
+  var LS_DRAW = 'huideng.trade.draw';
+  var DRAW_KEEP = 60;
+  var DRAW_BUDGET = 3000;
+  var drawCloudTimer = 0;
+
+  function serializeDrawings() {
+    var out = [];
+    // 手机、电脑各算各的额度，互不挤占
+    var budget = { m: DRAW_BUDGET, d: DRAW_BUDGET };
+    Draw.lines.forEach(function (ln) {
+      if (!ln || !ln.points || ln.points.length < 2) return;
+      var dev = lineDev(ln);
+      var pts = [];
+      if (ln.infinite) {
+        ln.points.slice(0, 2).forEach(function (p) {
+          if (!isFinite(p.t) || !isFinite(p.p)) return;
+          var o = { t: p.t, p: p.p };
+          if (p.note) o.note = String(p.note).slice(0, 80);
+          pts.push(o);
+        });
+      } else {
+        var stride = Math.max(1, Math.ceil(ln.points.length / Math.max(1, budget[dev])));
+        ln.points.forEach(function (p, i) {
+          if (i % stride === 0) {
+            if (isFinite(p.t) && isFinite(p.p) && isFinite(p.dx)) {
+              pts.push({ t: p.t, p: p.p, dx: p.dx });
+            } else if (isFinite(p.l) && isFinite(p.p)) {
+              pts.push({ l: p.l, p: p.p });
+            } else if (isFinite(p.t) && isFinite(p.p)) {
+              pts.push({ t: p.t, p: p.p });
+            } else {
+              pts.push({ u: p.u, v: p.v });
+            }
+          }
+        });
+        budget[dev] -= pts.length;
+      }
+      if (pts.length < 2) return;
+      out.push({
+        infinite: !!ln.infinite,
+        points: pts,
+        color: ln.color || '',
+        locked: !!ln.locked,
+        tfs: ln.tfs && ln.tfs.length ? ln.tfs : null,
+        dev: dev
+      });
+    });
+    // 每台设备各留最近 DRAW_KEEP 条：手机画线不会把电脑上的挤掉
+    var kept = [];
+    ['d', 'm'].forEach(function (dev) {
+      var mine = out.filter(function (o) { return o.dev === dev; });
+      if (mine.length > DRAW_KEEP) mine = mine.slice(mine.length - DRAW_KEEP);
+      kept = kept.concat(mine);
+    });
+    return kept;
+  }
+
+  function parseDrawings(arr) {
+    if (!arr || !arr.length) return [];
+    var out = [];
+    arr.forEach(function (o) {
+      if (!o || !o.points || o.points.length < 2) return;
+      var ln = {
+        infinite: !!o.infinite,
+        points: [],
+        color: o.color || '',
+        locked: !!o.locked,
+        tfs: o.tfs || null,
+        dev: o.dev === 'm' ? 'm' : 'd'
+      };
+      o.points.forEach(function (p) {
+        if (!p) return;
+        if (ln.infinite) {
+          if (!isFinite(p.t) || !isFinite(p.p)) return;
+          var pt = { t: +p.t, p: +p.p };
+          if (p.note) pt.note = String(p.note).slice(0, 80);
+          ln.points.push(pt);
+        } else if (isFinite(p.t) && isFinite(p.p) && isFinite(p.dx)) {
+          ln.points.push({ t: +p.t, p: +p.p, dx: +p.dx });
+        } else if (isFinite(p.l) && isFinite(p.p)) {
+          ln.points.push({ l: +p.l, p: +p.p });
+        } else if (isFinite(p.t) && isFinite(p.p)) {
+          ln.points.push({ t: +p.t, p: +p.p });
+        } else if (isFinite(p.u) && isFinite(p.v)) {
+          ln.points.push({ u: +p.u, v: +p.v });
+        }
+      });
+      if (ln.points.length >= 2) out.push(ln);
+    });
+    return out;
+  }
+
+  function saveDrawings() {
+    var arr = [];
+    try {
+      arr = serializeDrawings();
+      writeLS(LS_DRAW, JSON.stringify(arr));
+    } catch (e) {}
+    cloudDrawPush(false);
+  }
+
+  function loadDrawings() {
+    var raw = readLS(LS_DRAW);
+    if (!raw) return [];
+    var arr = null;
+    try { arr = JSON.parse(raw); } catch (e) { return []; }
+    return parseDrawings(arr);
+  }
+
+  /** 登录后拉云端画线；云端为空而本地有，就把本地上传上去。 */
+  function cloudDrawPull() {
+    if (Account.mode !== 'cloud' || !Account.token) return;
+    api('tradeDrawGet', {}).then(function (j) {
+      var arr = j && j.drawings;
+      if (Array.isArray(arr) && arr.length) {
+        Draw.lines = parseDrawings(arr);
+        try { writeLS(LS_DRAW, JSON.stringify(serializeDrawings())); } catch (e) {}
+        if (Chart.ready) drawRedraw();
+      } else if (Draw.lines.length) {
+        cloudDrawPush(true);
+      }
+    }).catch(function () {});
+  }
+
+  /** 画线改动后合并成一次上传，避免每拖一下就发请求。 */
+  function cloudDrawPush(now) {
+    if (Account.mode !== 'cloud' || !Account.token) return;
+    if (drawCloudTimer) {
+      clearTimeout(drawCloudTimer);
+      drawCloudTimer = 0;
+    }
+    var run = function () {
+      drawCloudTimer = 0;
+      try {
+        api('tradeDrawSet', { drawings: serializeDrawings() }).catch(function () {});
+      } catch (e) {}
+    };
+    if (now) run();
+    else drawCloudTimer = setTimeout(run, 1500);
+  }
+
+  /** 关页面 / 退出登录时立即把画线推到云端（keepalive，减少被中断）。 */
+  function cloudDrawFlush() {
+    if (Account.mode !== 'cloud' || !Account.token) return;
+    if (drawCloudTimer) {
+      clearTimeout(drawCloudTimer);
+      drawCloudTimer = 0;
+    }
+    try {
+      var body = JSON.stringify({ action: 'tradeDrawSet', token: Account.token, drawings: serializeDrawings() });
+      fetch(cfg.api, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + cfg.key,
+          'x-device-id': 'web'
+        },
+        body: body,
+        keepalive: true
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  function strokePath(ctx, pts, color) {
     if (!pts || pts.length < 2) return;
     ctx.save();
     ctx.lineCap = 'round';
@@ -1440,7 +2626,7 @@
       else ctx.lineTo(pt.x, pt.y);
     });
     ctx.stroke();
-    ctx.strokeStyle = '#1E5AA8';
+    ctx.strokeStyle = color || '#1E5AA8';
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     pts.forEach(function (pt, i) {
@@ -1451,8 +2637,7 @@
     ctx.restore();
   }
 
-  function drawDot(ctx, x, y, color, r, ring) {
-    if (ring) {
+  function drawDot(ctx, x, y, color, r, ring) {    if (ring) {
       ctx.beginPath();
       ctx.arc(x, y, r + 5, 0, Math.PI * 2);
       ctx.strokeStyle = color;
@@ -1469,6 +2654,406 @@
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
+  }
+
+  // 测距：两点之间的涨跌幅（按两点的价格算，和画线一样存画布相对位置）
+  var DRAW_UP = '#7E1319';
+  var DRAW_DOWN = '#305C38';
+
+  function measurePct(p1, p2) {
+    return p1 ? (p2 - p1) / p1 * 100 : 0;
+  }
+
+  /** 两点直线延长到画布四边（返回 [x1,y1,x2,y2]）。 */
+  function extendLine(x1, y1, x2, y2, w, h) {
+    var dx = x2 - x1;
+    var dy = y2 - y1;
+    if (!dx && !dy) return null;
+    var tMin = -1e9;
+    var tMax = 1e9;
+    function clip(p, d, lo, hi) {
+      if (Math.abs(d) < 1e-9) return;
+      var a = (lo - p) / d;
+      var b = (hi - p) / d;
+      if (a > b) { var t = a; a = b; b = t; }
+      if (a > tMin) tMin = a;
+      if (b < tMax) tMax = b;
+    }
+    clip(x1, dx, 0, w);
+    clip(y1, dy, 0, h);
+    if (tMin > tMax) return null;
+    return [x1 + dx * tMin, y1 + dy * tMin, x1 + dx * tMax, y1 + dy * tMax];
+  }
+
+  /** 「直线」工具画的是无限直线，两个端点可拖动调整；命中返回 {line, idx}。 */
+  function lineHandleAt(x, y) {
+    if (!Draw.canvas) return null;
+    for (var i = Draw.lines.length - 1; i >= 0; i--) {
+      var ln = Draw.lines[i];
+      if (!ln.infinite || ln.locked || !lineShown(ln)) continue;
+      for (var j = 0; j < ln.points.length && j < 2; j++) {
+        var c = lineCoord(ln.points[j]);
+        if (!c) continue;
+        var dx = x - c.x;
+        var dy = y - c.y;
+        if (dx * dx + dy * dy <= 144) return { line: ln, idx: j };
+      }
+    }
+    return null;
+  }
+
+  var LINE_COLORS = ['#1E5AA8', '#7E1319', '#305C38', '#B08A2E', '#8E5A9E', '#1A1A1A'];
+
+  /** 直线在当前周期是否可见（tfs 为空表示所有周期都显示）；设备不对的一律不显示。 */
+  function lineShown(ln) {
+    if (lineDev(ln) !== DRAW_DEV) return false;
+    return !ln.tfs || !ln.tfs.length || ln.tfs.indexOf(state.iv) >= 0;
+  }
+
+  var LineDlg = { mode: '', line: null, idx: 0, sel: {} };
+
+  function renderLineTfs() {
+    var box = $('lineDlgTfs');
+    if (!box) return;
+    box.innerHTML = '';
+    TF.forEach(function (iv) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'line-dlg__tf' + (LineDlg.sel[iv] ? ' is-on' : '');
+      b.textContent = TF_LABEL[iv] || iv;
+      b.setAttribute('data-tf', iv);
+      b.onclick = function () {
+        if (LineDlg.sel[iv]) delete LineDlg.sel[iv];
+        else LineDlg.sel[iv] = 1;
+        renderLineTfs();
+      };
+      box.appendChild(b);
+    });
+  }
+
+  /** 直线的弹窗：mode='price' 输入价位；mode='tfs' 选可见周期。 */
+  function openLineDlg(mode, line, idx) {
+    var dlg = $('lineDlg');
+    if (!dlg || !line) return;
+    var pt = line.points[idx == null ? 0 : idx];
+    if (!pt) return;
+    LineDlg.mode = mode;
+    LineDlg.line = line;
+    LineDlg.idx = idx == null ? 0 : idx;
+    var title = $('lineDlgTitle');
+    var hint = $('lineDlgHint');
+    var field = $('lineDlgField');
+    var noteWrap = $('lineDlgNoteWrap');
+    var noteInput = $('lineDlgNote');
+    var tfs = $('lineDlgTfs');
+    var quick = $('lineDlgQuick');
+    if (mode === 'price') {
+      if (title) title.textContent = '输入价位';
+      if (hint) hint.textContent = '给直线第 ' + (LineDlg.idx + 1) + ' 个定点设置价位。设置后它会固定在这个价格上，平移、缩放都跟着走势走。';
+      if (field) field.hidden = false;
+      if (noteWrap) noteWrap.hidden = false;
+      if (tfs) tfs.hidden = true;
+      if (quick) quick.hidden = true;
+      var input = $('lineDlgInput');
+      if (input) input.value = fmtAxis(pt.p);
+      if (noteInput) noteInput.value = pt.note || '';
+    } else {
+      if (title) title.textContent = '可见周期';
+      if (hint) hint.textContent = '勾选的周期会显示这条直线，取消勾选的周期上不显示。';
+      if (field) field.hidden = true;
+      if (noteWrap) noteWrap.hidden = true;
+      if (tfs) tfs.hidden = false;
+      if (quick) quick.hidden = false;
+      LineDlg.sel = {};
+      // 默认只勾选「画线所在的周期」，其他周期浅色，可再勾选
+      var vis = line.tfs && line.tfs.length ? line.tfs : [state.iv];
+      vis.forEach(function (k) { LineDlg.sel[k] = 1; });
+      renderLineTfs();
+    }
+    dlg.hidden = false;
+    if (mode === 'price') {
+      var inp = $('lineDlgInput');
+      setTimeout(function () { try { inp.focus(); inp.select(); } catch (e) {} }, 30);
+    }
+  }
+
+  function closeLineDlg() {
+    var dlg = $('lineDlg');
+    if (dlg) dlg.hidden = true;
+    LineDlg.mode = '';
+    LineDlg.line = null;
+  }
+
+  function confirmLineDlg() {
+    var line = LineDlg.line;
+    if (!line) { closeLineDlg(); return; }
+    if (LineDlg.mode === 'price') {
+      var pt = line.points[LineDlg.idx];
+      if (!pt) { closeLineDlg(); return; }
+      var input = $('lineDlgInput');
+      var raw = input ? input.value : '';
+      var price = parseFloat(String(raw).replace(/,/g, ''));
+      if (!isFinite(price) || price <= 0) { toast('价格格式不对'); return; }
+      pt.p = price;
+      var noteEl = $('lineDlgNote');
+      pt.note = noteEl && noteEl.value ? String(noteEl.value).trim().slice(0, 80) : '';
+      saveDrawings();
+      closeLineDlg();
+      drawRedraw();
+      toast('已把点 ' + (LineDlg.idx + 1) + ' 设到 ' + fmtAxis(price));
+      return;
+    }
+    var sel = Object.keys(LineDlg.sel);
+    line.tfs = sel.length >= TF.length ? null : sel;
+    saveDrawings();
+    closeLineDlg();
+    drawRedraw();
+    toast(sel.length ? '这条直线只在 ' + sel.length + ' 个周期显示' : '这条直线已全部隐藏');
+  }
+
+  /** 命中直线本体（右键菜单用），锁定的也算。 */
+  function lineAtPoint(clientX, clientY) {
+    if (!Draw.canvas) return null;
+    var r = Draw.canvas.getBoundingClientRect();
+    var x = clientX - r.left;
+    var y = clientY - r.top;
+    for (var i = Draw.lines.length - 1; i >= 0; i--) {
+      var ln = Draw.lines[i];
+      if (!ln.infinite || !ln.points.length || !lineShown(ln)) continue;
+      var ca = lineCoord(ln.points[0]);
+      var cb = lineCoord(ln.points[1] || ln.points[0]);
+      if (!ca || !cb) continue;
+      var dx = cb.x - ca.x;
+      var dy = cb.y - ca.y;
+      var len = Math.sqrt(dx * dx + dy * dy);
+      if (!len) continue;
+      var d = Math.abs(dy * x - dx * y + cb.x * ca.y - cb.y * ca.x) / len;
+      if (d <= 8) return ln;
+    }
+    return null;
+  }
+
+  /** 直线的右键菜单：删除 / 锁定 / 输入价位 / 可见周期 / 颜色。 */
+  function openLineCtx(x, y, line, idx) {
+    if (!line) return;
+    closeMenus();
+    var menu = $('lineMenu');
+    if (!menu) return;
+    menu.innerHTML = '';
+    var del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'is-danger';
+    del.textContent = '删除直线';
+    del.onclick = function () {
+      Draw.lines = Draw.lines.filter(function (ln) { return ln !== line; });
+      Draw.undo = Draw.undo.filter(function (a) { return !(a.type === 'add' && a.line === line); });
+      saveDrawings();
+      closeMenus();
+      drawRedraw();
+      toast('已删除直线');
+    };
+    menu.appendChild(del);
+    var lock = document.createElement('button');
+    lock.type = 'button';
+    lock.textContent = line.locked ? '解锁直线' : '锁定直线';
+    lock.onclick = function () {
+      line.locked = !line.locked;
+      saveDrawings();
+      closeMenus();
+      drawRedraw();
+      toast(line.locked ? '直线已锁定，不能拖动' : '直线已解锁');
+    };
+    menu.appendChild(lock);
+    // 输入价位：默认取离右键位置最近的那个端点
+    var targetIdx = idx;
+    if (targetIdx == null && Draw.canvas) {
+      var cr = Draw.canvas.getBoundingClientRect();
+      var best = 0;
+      var bestD = Infinity;
+      line.points.forEach(function (pt, i) {
+        var c = lineCoord(pt);
+        if (!c) return;
+        var dx = c.x + cr.left - x;
+        var dy = c.y + cr.top - y;
+        var d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      targetIdx = best;
+    }
+    var priceBtn = document.createElement('button');
+    priceBtn.type = 'button';
+    priceBtn.textContent = '输入价位';
+    priceBtn.onclick = function () {
+      closeMenus();
+      promptLinePrice(line, targetIdx);
+    };
+    menu.appendChild(priceBtn);
+    var tfBtn = document.createElement('button');
+    tfBtn.type = 'button';
+    tfBtn.textContent = '可见周期' + (line.tfs && line.tfs.length ? '（' + line.tfs.length + '）' : '');
+    tfBtn.onclick = function () {
+      closeMenus();
+      openLineDlg('tfs', line, targetIdx);
+    };
+    menu.appendChild(tfBtn);
+    ctxSep(menu);
+    ctxLabel(menu, '颜色');
+    var row = document.createElement('div');
+    row.className = 'line-ctx__colors';
+    var cur = normColor(line.color || '') || LINE_COLORS[0];
+    LINE_COLORS.forEach(function (c) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'line-ctx__swatch' + (c === cur ? ' is-on' : '');
+      b.style.background = c;
+      b.title = c;
+      b.onclick = function () {
+        line.color = c;
+        saveDrawings();
+        closeMenus();
+        drawRedraw();
+      };
+      row.appendChild(b);
+    });
+    menu.appendChild(row);
+    menu.hidden = false;
+    placeCtx(menu, x, y);
+  }
+
+  /** 端点上的价格标签。 */
+  function drawPriceLabel(ctx, x, y, text, color) {
+    var cw = Draw.canvas.clientWidth || 0;
+    ctx.save();
+    ctx.font = '600 11px ' + (getComputedStyle(document.body).fontFamily || 'sans-serif');
+    var tw = ctx.measureText(text).width;
+    var bx = Math.min(x + 9, cw - tw - 18);
+    var by = Math.max(2, y - 22);
+    ctx.fillStyle = 'rgba(255, 253, 246, 0.96)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(bx, by, tw + 12, 18, 5);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(bx, by, tw + 12, 18);
+      ctx.strokeRect(bx, by, tw + 12, 18);
+    }
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx + 6, by + 9.5);
+    ctx.restore();
+  }
+
+  /** 测距时的十字虚线，方便对齐位置。 */
+  function drawCrosshair(x, y, w, h) {
+    var ctx = Draw.ctx;
+    ctx.save();
+    ctx.setLineDash([4, 5]);
+    ctx.strokeStyle = 'rgba(36, 31, 22, .32)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** 测距端点上的价位小牌。 */
+  function drawMeasureTag(x, y, text, color, above) {
+    var ctx = Draw.ctx;
+    if (!ctx) return;
+    var cw = Draw.canvas.clientWidth || 0;
+    var ch = Draw.canvas.clientHeight || 0;
+    ctx.save();
+    ctx.font = '600 11px ' + (getComputedStyle(document.body).fontFamily || 'sans-serif');
+    var tw = ctx.measureText(text).width;
+    var bw = tw + 12;
+    var bh = 18;
+    var bx = Math.max(3, Math.min(x - bw / 2, cw - bw - 3));
+    var by = above ? y - bh - 7 : y + 7;
+    if (by < 3) by = y + 7;
+    if (by + bh > ch - 3) by = y - bh - 7;
+    ctx.fillStyle = 'rgba(255, 253, 246, 0.96)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 5);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeRect(bx, by, bw, bh);
+    }
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx + 6, by + bh / 2);
+    ctx.restore();
+  }
+
+  function drawMeasure(m) {
+    if (!m || !Draw.ctx || !Draw.canvas) return;
+    var w = Draw.canvas.clientWidth || 0;
+    var h = Draw.canvas.clientHeight || 0;
+    if (!w || !h) return;
+    var ts = Chart.chart ? Chart.chart.timeScale() : null;
+    var x1 = m.t1 != null && ts ? ts.timeToCoordinate(m.t1) : m.u1 * w;
+    var y1 = m.p1 != null && Chart.candle ? Chart.candle.priceToCoordinate(m.p1) : m.v1 * h;
+    var x2 = m.t2 != null && ts ? ts.timeToCoordinate(m.t2) : m.u2 * w;
+    var y2 = m.p2 != null && Chart.candle ? Chart.candle.priceToCoordinate(m.p2) : m.v2 * h;
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+    var pct = measurePct(m.p1, m.p2);
+    var color = pct >= 0 ? DRAW_UP : DRAW_DOWN;
+    var ctx = Draw.ctx;
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.lineWidth = 3.6;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawDot(ctx, x1, y1, color, 3.2);
+    drawDot(ctx, x2, y2, color, 3.2);
+    // 两端显示价位，方便看测的是哪两个价格
+    drawMeasureTag(x1, y1, fmtAxis(m.p1), color, true);
+    drawMeasureTag(x2, y2, fmtAxis(m.p2), color, false);
+    var label = (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
+    ctx.font = '600 12px ' + (getComputedStyle(document.body).fontFamily || 'sans-serif');
+    var tw = ctx.measureText(label).width;
+    var bx = (x1 + x2) / 2 + 10;
+    var by = (y1 + y2) / 2 - 12;
+    bx = Math.max(4, Math.min(w - tw - 22, bx));
+    by = Math.max(4, Math.min(h - 28, by));
+    ctx.fillStyle = 'rgba(255, 253, 246, 0.96)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(bx, by, tw + 16, 24, 6);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(bx, by, tw + 16, 24);
+      ctx.strokeRect(bx, by, tw + 16, 24);
+    }
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, bx + 8, by + 12.5);
+    ctx.restore();
   }
 
   /** 开平仓时间是毫秒时间戳，吸到最近的一根 K 线上，坐标才换得出来。 */
@@ -1519,25 +3104,91 @@
 
   function drawRedraw() {
     if (!Draw.ctx || !Draw.canvas || !Chart.chart) return;
+    // 切周期清数据的那一瞬间不要碰图表坐标，等新数据回来再画
+    if (!state.bars.length) return;
     var w = Draw.canvas.clientWidth || 0;
     var h = Draw.canvas.clientHeight || 0;
     Draw.ctx.clearRect(0, 0, w, h);
     var ts = Chart.chart.timeScale();
+    var w = Draw.canvas.clientWidth || 0;
+    var h = Draw.canvas.clientHeight || 0;
     Draw.lines.forEach(function (ln) {
+      // 设备不对（电脑上画的线跑到手机上，或反过来）就直接跳过
+      if (!lineShown(ln)) return;
+      if (ln.infinite) {
+        // 直线：存的是 (时间, 价格)，和走势图一起平移/缩放
+        var ca = lineCoord(ln.points[0]);
+        var cb = lineCoord(ln.points[1]);
+        if (!ca || !cb) return;
+        var lc = ln.color || '#1E5AA8';
+        var ext = extendLine(ca.x, ca.y, cb.x, cb.y, w, h);
+        if (ext) strokePath(Draw.ctx, [{ x: ext[0], y: ext[1] }, { x: ext[2], y: ext[3] }], lc);
+        // 直线的两个定位点：拖动它们可以调整直线的位置和角度
+        drawDot(Draw.ctx, ca.x, ca.y, lc, ln.locked ? 2.6 : 3.4);
+        drawDot(Draw.ctx, cb.x, cb.y, lc, ln.locked ? 2.6 : 3.4);
+        return;
+      }
       var pts = [];
       ln.points.forEach(function (pt) {
-        var x = ts.timeToCoordinate(pt.t);
-        var y = Chart.candle.priceToCoordinate(pt.p);
+        var x = null;
+        var y = null;
+        if (pt.t != null && pt.p != null && pt.dx != null) {
+          x = ts.timeToCoordinate(pt.t);
+          if (x != null) x += pt.dx;
+          y = Chart.candle.priceToCoordinate(pt.p);
+        } else if (pt.l != null && pt.p != null) {
+          x = ts.logicalToCoordinate ? ts.logicalToCoordinate(pt.l) : null;
+          if (x == null && pt.t != null) x = ts.timeToCoordinate(pt.t);
+          y = Chart.candle.priceToCoordinate(pt.p);
+        } else if (pt.t != null && pt.p != null) {
+          x = ts.timeToCoordinate(pt.t);
+          y = Chart.candle.priceToCoordinate(pt.p);
+          if (x != null && ts.coordinateToLogical) pt.l = ts.coordinateToLogical(x);
+        } else {
+          x = pt.u != null ? pt.u * w : null;
+          y = pt.v != null ? pt.v * h : null;
+          // 旧版自由画存的是画布相对位置，换算成逻辑坐标后跟着 K 线走。
+          if (x != null && y != null) {
+            var pp = Chart.candle.coordinateToPrice(y);
+            if (pp != null) {
+              pt.p = pp;
+              if (ts.coordinateToLogical) pt.l = ts.coordinateToLogical(x);
+            }
+          }
+        }
         if (x == null || y == null) return;
         pts.push({ x: x, y: y });
       });
       if (pts.length > 1) strokePath(Draw.ctx, pts);
     });
-    if (Draw.drawing && Draw.drawing.points.length > 1) {
+    if (Draw.drawing && Draw.drawing.points.length > 1 && Draw.tool !== 'measure') {
       strokePath(Draw.ctx, Draw.drawing.points);
     }
-    if (Draw.showTrades && Draw.trades.length) drawTradesOn(Draw.trades, false);
+    // 直线的第一个点已定：预览一条穿过起点和鼠标的无限直线
+    if (Draw.pending) {
+      var pa = lineCoord(Draw.pending);
+      if (pa) {
+        var pb = Draw.hover ? lineCoord(Draw.hover) : null;
+        if (pb) {
+          var pext = extendLine(pa.x, pa.y, pb.x, pb.y, w, h);
+          if (pext) strokePath(Draw.ctx, [{ x: pext[0], y: pext[1] }, { x: pext[2], y: pext[3] }]);
+        }
+        drawDot(Draw.ctx, pa.x, pa.y, '#1E5AA8', 3.4);
+        if (pb && (pb.x !== pa.x || pb.y !== pa.y)) drawCrosshair(pb.x, pb.y, w, h);
+      }
+    }
+    if (Draw.measure) drawMeasure(Draw.measure);
+    if (Draw.drawing && Draw.tool === 'measure') {
+      var mc = Draw.drawing.points[Draw.drawing.points.length - 1];
+      drawCrosshair(mc.x, mc.y, w, h);
+      if (Draw.drawing.points.length > 1) {
+        var ma = Draw.drawing.points[0];
+        drawMeasure({ u1: ma.u, v1: ma.v, p1: ma.p, u2: mc.u, v2: mc.v, p2: mc.p });
+      }
+    }
+    if (Draw.showTrades && Draw.trades.length && isTradingSymbol()) drawTradesOn(Draw.trades, false);
     if (Draw.flash) drawTradesOn([Draw.flash.trip], true);
+    syncHandles();
   }
 
   function drawSchedule() {
@@ -1565,16 +3216,27 @@
     drawRedraw();
   }
 
-  function setDrawActive(on) {
+  function setDrawActive(on, tool) {
     Draw.active = !!on;
-    if (!on) Draw.drawing = null;
-    var btn = $('btnDraw');
-    if (btn) {
-      btn.classList.toggle('is-active', Draw.active);
-      btn.setAttribute('aria-pressed', Draw.active ? 'true' : 'false');
+    if (tool) Draw.tool = tool;
+    if (!on) {
+      Draw.drawing = null;
+      Draw.drag = null;
+      Draw.pending = null;
+      Draw.hover = null;
     }
+    var map = { btnDraw: 'free', btnLine: 'line', btnMeasure: 'measure' };
+    Object.keys(map).forEach(function (id) {
+      var b = $(id);
+      var now = Draw.active && Draw.tool === map[id];
+      if (b) {
+        b.classList.toggle('is-active', now);
+        b.setAttribute('aria-pressed', now ? 'true' : 'false');
+      }
+    });
     var pane = document.querySelector ? document.querySelector('.pane--main') : null;
     if (pane) pane.classList.toggle('is-drawing', Draw.active);
+    if (!Draw.active && Draw.canvas) Draw.canvas.style.cursor = '';
     if (Chart.ready) drawRedraw();
   }
 
@@ -1587,6 +3249,88 @@
     }
     if (Draw.showTrades) Draw.trades = roundTrips();
     drawRedraw();
+  }
+
+  /** 把当前 chartwrap 里所有可见 canvas 合成为一张截图（K 线、坐标轴、画线、交易点都在）。 */
+  function captureChartCanvas() {
+    var wrap = document.querySelector ? document.querySelector('.chartwrap') : null;
+    if (!wrap) return null;
+    var rect = wrap.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    var dpr = Math.min(2, +(global.devicePixelRatio || 1));
+    var out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(rect.width * dpr));
+    out.height = Math.max(1, Math.round(rect.height * dpr));
+    var ctx = out.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#F4ECD9';
+    ctx.fillRect(0, 0, out.width, out.height);
+
+    var canvases = wrap.querySelectorAll('canvas');
+    for (var i = 0; i < canvases.length; i += 1) {
+      var c = canvases[i];
+      var cs = null;
+      try { cs = global.getComputedStyle(c); } catch (e) {}
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0)) continue;
+      var cr = c.getBoundingClientRect();
+      if (!cr.width || !cr.height) continue;
+      try {
+        ctx.drawImage(
+          c,
+          (cr.left - rect.left) * dpr,
+          (cr.top - rect.top) * dpr,
+          cr.width * dpr,
+          cr.height * dpr
+        );
+      } catch (e) {}
+    }
+    return out;
+  }
+
+  function screenshotChart() {
+    var btn = $('btnShot');
+    var canvas = captureChartCanvas();
+    if (!canvas) {
+      toast('走势图还没准备好，稍后再试');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    function finish() {
+      if (btn) btn.disabled = false;
+    }
+    function download(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'chart-' + Date.now() + '.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+      toast('浏览器不支持复制图片，截图已下载');
+      finish();
+    }
+    canvas.toBlob(function (blob) {
+      if (!blob) {
+        toast('截图生成失败，请重试');
+        finish();
+        return;
+      }
+      if (global.navigator && global.navigator.clipboard &&
+          global.navigator.clipboard.write && global.ClipboardItem) {
+        try {
+          var item = new global.ClipboardItem({ 'image/png': blob });
+          global.navigator.clipboard.write([item]).then(function () {
+            toast('截图已复制，按 Ctrl+V 粘贴到交易笔记');
+            finish();
+          }, function () {
+            download(blob);
+          });
+          return;
+        } catch (e) {}
+      }
+      download(blob);
+    }, 'image/png');
   }
 
   /** 点成交记录某一行：把那一笔的开/平仓点在图上闪一下。 */
@@ -1606,8 +3350,44 @@
 
   function onDrawDown(e) {
     if (!Draw.active || !Draw.ctx) return;
-    var pt = drawPoint(e);
+    if (e.button != null && e.button > 0) return; // 右键留给直线菜单
+    var pt = Draw.tool === 'measure' ? drawMeasurePoint(e) : drawPoint(e);
     if (!pt) return;
+    // 直线：两点式。第一次点确定起点并实时预览，第二次点定下直线；
+    // 端点随时可以拖（先判断是不是抓住了已有直线的端点）。
+    if (Draw.tool === 'line') {
+      var r = Draw.canvas.getBoundingClientRect();
+      var hit = lineHandleAt(e.clientX - r.left, e.clientY - r.top);
+      if (hit) {
+        e.preventDefault();
+        Draw.drag = hit;
+        if (Draw.canvas.setPointerCapture) {
+          try { Draw.canvas.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+        return;
+      }
+      e.preventDefault();
+      if (!Draw.pending) {
+        Draw.pending = { t: pt.t, p: pt.p };
+        Draw.hover = { t: pt.t, p: pt.p };
+        drawRedraw();
+        return;
+      }
+      var pa = lineCoord(Draw.pending);
+      if (pa && (Math.abs(pa.x - pt.x) + Math.abs(pa.y - pt.y) >= 4)) {
+        var seg = { points: [{ t: Draw.pending.t, p: Draw.pending.p }, { t: pt.t, p: pt.p }], infinite: true, tfs: [state.iv], dev: DRAW_DEV };
+        Draw.lines.push(seg);
+        Draw.undo.push({ type: 'add', line: seg });
+        if (Draw.undo.length > 200) Draw.undo.shift();
+        saveDrawings();
+      }
+      Draw.pending = null;
+      Draw.hover = null;
+      // 画完两个点自动退出工具，鼠标恢复正常；端点热区仍然可以拖
+      setDrawActive(false);
+      drawRedraw();
+      return;
+    }
     e.preventDefault();
     Draw.drawing = { points: [pt] };
     if (Draw.canvas.setPointerCapture) {
@@ -1617,12 +3397,32 @@
   }
 
   function onDrawMove(e) {
+    if (Draw.active && Draw.tool === 'line' && Draw.canvas) {
+      var hr = Draw.canvas.getBoundingClientRect();
+      Draw.canvas.style.cursor = lineHandleAt(e.clientX - hr.left, e.clientY - hr.top) ? 'default' : 'crosshair';
+    }
+    if (Draw.pending) {
+      var hpt = drawPoint(e);
+      if (!hpt) return;
+      Draw.hover = { t: hpt.t, p: hpt.p };
+      drawRedraw();
+      return;
+    }
+    if (Draw.drag) {
+      var dpt = drawPoint(e);
+      if (!dpt) return;
+      var handle = Draw.drag.line.points[Draw.drag.idx];
+      handle.t = dpt.t;
+      handle.p = dpt.p;
+      drawRedraw();
+      return;
+    }
     if (!Draw.drawing) return;
-    var pt = drawPoint(e);
+    var pt = Draw.tool === 'measure' ? drawMeasurePoint(e) : drawPoint(e);
     if (!pt) return;
     var pts = Draw.drawing.points;
-    if (e.shiftKey) {
-      // 按住 Shift：只留起点和当前点，画直线
+    if (Draw.tool !== 'free' || e.shiftKey) {
+      // 直线 / 测距 / Shift 自由画：只留起点和当前点
       Draw.drawing.points = [pts[0], pt];
     } else {
       var last = pts[pts.length - 1];
@@ -1634,11 +3434,44 @@
   }
 
   function onDrawUp(e) {
+    if (Draw.drag) {
+      Draw.drag = null;
+      saveDrawings();
+      drawRedraw();
+      return;
+    }
     if (!Draw.drawing) return;
     var pts = Draw.drawing.points;
     var first = pts[0];
     var last = pts[pts.length - 1];
-    var pt = drawPoint(e) || last;
+    var pt = (Draw.tool === 'measure' ? drawMeasurePoint(e) : drawPoint(e)) || last;
+    var moved = (Math.abs(pt.x - first.x) + Math.abs(pt.y - first.y)) >= 4;
+
+    // 直线：按下拖到终点，松手成一条两点直线（渲染时延长到整块画布）
+    if (Draw.tool === 'line') {
+      Draw.drawing = null;
+      if (moved) {
+        var seg = { points: [{ t: first.t, p: first.p }, { t: pt.t, p: pt.p }], infinite: true, dev: DRAW_DEV };
+        Draw.lines.push(seg);
+        Draw.undo.push({ type: 'add', line: seg });
+        if (Draw.undo.length > 200) Draw.undo.shift();
+      }
+      setDrawActive(false);
+      drawRedraw();
+      return;
+    }
+
+    // 测距：松手后保留这条测距线，显示两点之间的涨跌幅
+    if (Draw.tool === 'measure') {
+      Draw.drawing = null;
+      if (moved) {
+        Draw.measure = { t1: first.t, t2: pt.t, u1: first.u, v1: first.v, p1: first.p, u2: pt.u, v2: pt.v, p2: pt.p };
+      }
+      setDrawActive(false);
+      drawRedraw();
+      return;
+    }
+
     if (e.shiftKey) {
       pts = [first, pt];
     } else if (pt.x !== last.x || pt.y !== last.y) {
@@ -1658,10 +3491,16 @@
     });
 
     if (pts.length >= 2 && (maxX - minX) + (maxY - minY) >= 4) {
-      var line = { points: pts.map(function (p) { return { t: p.t, p: p.p }; }) };
+      var line = {
+        points: pts.map(function (p) {
+          return { t: p.t, p: p.p, dx: p.dx, l: p.l, u: p.u, v: p.v };
+        }),
+        dev: DRAW_DEV
+      };
       Draw.lines.push(line);
       Draw.undo.push({ type: 'add', line: line });
       if (Draw.undo.length > 200) Draw.undo.shift();
+      saveDrawings();
       setDrawActive(false); // 画完一笔自动退出，下一次要重新点
     }
     drawRedraw();
@@ -1673,15 +3512,124 @@
     drawRedraw();
   }
 
+  /** 给某个端点输入价位（走页面内弹窗，不再用系统 prompt）。 */
+  function promptLinePrice(line, idx) {
+    openLineDlg('price', line, idx);
+  }
+
+  function bindLineDlg() {
+    var dlg = $('lineDlg');
+    if (!dlg) return;
+    var cancel = $('lineDlgCancel');
+    if (cancel) cancel.addEventListener('click', closeLineDlg);
+    var ok = $('lineDlgOk');
+    if (ok) ok.addEventListener('click', confirmLineDlg);
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg) closeLineDlg();
+    });
+    var input = $('lineDlgInput');
+    if (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); confirmLineDlg(); }
+      });
+    }
+    var quick = $('lineDlgQuick');
+    if (quick) {
+      quick.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('[data-tfq]') : null;
+        if (!b) return;
+        var q = b.getAttribute('data-tfq');
+        LineDlg.sel = {};
+        if (q === 'all') TF.forEach(function (k) { LineDlg.sel[k] = 1; });
+        else LineDlg.sel[state.iv] = 1;
+        renderLineTfs();
+      });
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !dlg.hidden) closeLineDlg();
+    });
+  }
+
+  /** 端点热区：按下就拖，右键出直线菜单。 */
+  function onHandleDown(e) {
+    var el = e.currentTarget;
+    var line = el && el._line;
+    if (!line || line.locked) return;
+    if (e.button != null && e.button > 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    Draw.drag = { line: line, idx: el._idx };
+    if (el.setPointerCapture) {
+      try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+  }
+
+  function onHandleCtx(e) {
+    var el = e.currentTarget;
+    if (!el || !el._line) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openLineCtx(e.clientX, e.clientY, el._line, el._idx);
+  }
+
+  /** 把直线的两个端点同步成 DOM 热区（这样工具没激活也能悬停/拖动）。 */
+  function syncHandles() {
+    var layer = $('lineHandles');
+    if (!layer) return;
+    var items = [];
+    Draw.lines.forEach(function (ln) {
+      if (!ln.infinite || !lineShown(ln)) return;
+      ln.points.forEach(function (pt, idx) {
+        items.push({ ln: ln, idx: idx, c: lineCoord(pt) });
+      });
+    });
+    while (layer.children.length < items.length) {
+      var d = document.createElement('div');
+      d.className = 'line-handle';
+      d.addEventListener('pointerdown', onHandleDown);
+      d.addEventListener('contextmenu', onHandleCtx);
+      layer.appendChild(d);
+    }
+    while (layer.children.length > items.length) layer.removeChild(layer.lastChild);
+    items.forEach(function (it, i) {
+      var el = layer.children[i];
+      el._line = it.ln;
+      el._idx = it.idx;
+      el.classList.toggle('is-locked', !!it.ln.locked);
+      el.style.display = it.c ? 'block' : 'none';
+      if (it.c) {
+        el.style.left = (it.c.x - 9) + 'px';
+        el.style.top = (it.c.y - 9) + 'px';
+      }
+    });
+  }
+
+  /** 画线层上的右键：命中直线就开直线菜单。 */
+  function onCanvasCtx(e) {
+    if (!Draw.canvas) return;
+    e.preventDefault();
+    var ln = lineAtPoint(e.clientX, e.clientY);
+    if (ln) openLineCtx(e.clientX, e.clientY, ln);
+    else closeMenus();
+  }
+
   function eraseDrawings() {
-    if (!Draw.lines.length) {
-      toast('还没有画线');
+    // 只擦当前这台设备上的画线，另一台设备的原样留着
+    var mine = Draw.lines.filter(function (ln) { return lineDev(ln) === DRAW_DEV; });
+    var free = mine.filter(function (ln) { return !ln.infinite; });
+    if (!free.length && !Draw.measure) {
+      if (mine.length) toast('直线请右键删除');
+      else toast('还没有画线');
       return;
     }
-    Draw.undo.push({ type: 'clear', lines: Draw.lines.slice() });
-    Draw.lines = [];
+    if (free.length) Draw.undo.push({ type: 'clear', lines: free });
+    Draw.lines = Draw.lines.filter(function (ln) {
+      return ln.infinite || lineDev(ln) !== DRAW_DEV;
+    });
+    Draw.measure = null;
+    saveDrawings();
     drawRedraw();
-    toast('已擦除全部画线');
+    toast('已擦除自由画线');
   }
 
   function undoDrawings() {
@@ -1694,8 +3642,12 @@
       var i = Draw.lines.indexOf(act.line);
       if (i >= 0) Draw.lines.splice(i, 1);
     } else if (act.type === 'clear') {
-      Draw.lines = act.lines.slice();
+      // 只把擦掉的这些补回来，别把另一台设备的画线覆盖掉
+      act.lines.forEach(function (ln) {
+        if (Draw.lines.indexOf(ln) < 0) Draw.lines.push(ln);
+      });
     }
+    saveDrawings();
     drawRedraw();
   }
 
@@ -1711,6 +3663,13 @@
     if (e.key === 'Escape') setDrawActive(false);
   }
 
+  /** 点画布别处 / 页面其他区域，测距自动消失（不必点橡皮擦）。 */
+  function onDocPointerDown() {
+    if (!Draw.measure) return;
+    Draw.measure = null;
+    drawRedraw();
+  }
+
   function drawInit() {
     Draw.canvas = $('drawLayer');
     if (!Draw.canvas || !Chart.chart || typeof Draw.canvas.getContext !== 'function') return;
@@ -1724,10 +3683,12 @@
     }
     window.addEventListener('resize', drawResize);
     Draw.canvas.addEventListener('pointerdown', onDrawDown);
+    Draw.canvas.addEventListener('contextmenu', onCanvasCtx);
     window.addEventListener('pointermove', onDrawMove);
     window.addEventListener('pointerup', onDrawUp);
     window.addEventListener('pointercancel', onDrawCancel);
     document.addEventListener('keydown', onDrawKey);
+    document.addEventListener('pointerdown', onDocPointerDown, true);
   }
 
   function showMsg(text) {
@@ -1745,10 +3706,8 @@
     if (!bar) return;
     var up = bar.close >= bar.open;
     var cls = up ? 'is-up' : 'is-down';
-    set('lgO', fmtPrice(bar.open), cls);
-    set('lgH', fmtPrice(bar.high), cls);
-    set('lgL', fmtPrice(bar.low), cls);
-    set('lgC', fmtPrice(bar.close), cls);
+    // 顶部图例不再显示开高低收，只留涨跌幅和成交量
+    set('lgChg', fmtPct(bar.open ? (bar.close - bar.open) / bar.open * 100 : 0), cls);
     set('lgV', fmtQty(bar.volume), '');
     function set(id, text, cls) {
       var e = $(id);
@@ -1771,20 +3730,26 @@
       showMsg('图表组件加载失败，请刷新重试。行情数据仍然可用。');
       return;
     }
+    // 手机：右侧那 78px 透明价格轴纯属留白，直接收掉，K 线一直画到屏幕右边；
+    // 上下压扁/拉伸改由右边缘长按拖动接手（见 bindScaleStrip）。
+    var mobileChart = DRAW_DEV === 'm';
+    var rightOffset = mobileChart ? 4 : RIGHT_OFFSET;
     var fontFamily = getComputedStyle(document.body).fontFamily;
-    // 主图和副图的右轴取同一个最小宽度，绘图区才会左右对齐
-    var psMin = (window.innerWidth || 1024) < 520 ? 74 : 88;
-    var tickFmt = function (time) {
+    var tickFmt = function (time, type) {
       var d = new Date(time * 1000);
-      if (state.iv === '1M') return (d.getFullYear() % 100) + '/' + (d.getMonth() + 1);
-      if (state.iv === '1w' || state.iv === '1d') return (d.getMonth() + 1) + '/' + d.getDate();
+      if (state.iv === '1M') return type === 0 ? String(d.getFullYear()) : (d.getFullYear() % 100) + '/' + (d.getMonth() + 1);
+      // type：0 年 / 1 月 / 2 日 / 3 时 / 4 时分秒。日线以上只给日期，长区间才看得清
+      if (type === 0) return String(d.getFullYear());
+      if (type === 1 || type === 2) return (d.getMonth() + 1) + '/' + d.getDate();
       return pad(d.getHours()) + ':' + pad(d.getMinutes());
     };
-    // 十字线的时间标签：月线只到年月，周线只到月日
+    // 十字线的时间标签：月线只到年月，3/5 日线和周线只到月日
     var crossTime = function (t) {
       var d = new Date(t * 1000);
       if (state.iv === '1M') return d.getFullYear() + '/' + (d.getMonth() + 1);
-      if (state.iv === '1w') return (d.getMonth() + 1) + '/' + d.getDate();
+      if (state.iv === '1w' || state.iv === '3d' || state.iv === '5d') {
+        return (d.getMonth() + 1) + '/' + d.getDate();
+      }
       return fmtDateTime(t * 1000);
     };
 
@@ -1800,34 +3765,49 @@
           fontFamily: fontFamily,
           attributionLogo: false
         },
-        // 只有横向虚线，竖向网格线去掉
+        // 横向网格线由页面自己画（见 drawPriceAxis），这样刻度疏密可控
         grid: {
           vertLines: { color: 'rgba(0, 0, 0, 0)' },
-          horzLines: { color: '#E7DCC3', style: (LightweightCharts.LineStyle && LightweightCharts.LineStyle.Dashed) || 2 }
+          horzLines: { color: 'rgba(0, 0, 0, 0)' }
         },
-        rightPriceScale: { borderColor: 'rgba(0, 0, 0, 0)', minimumWidth: psMin, scaleMargins: { top: 0.08, bottom: 0.26 } },
+        // 右侧价格轴：桌面留出宽度（当上下拖拽的压扁/拉伸区），
+        // 刻度数字由 drawPriceAxis 画，库自带的刻度关掉（太密）。
+        // 手机不占宽度（右边缘长按那条手势带负责压扁）。
+        rightPriceScale: {
+          visible: !mobileChart,
+          borderVisible: false,
+          ticksVisible: false,
+          textColor: mobileChart ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0)',
+          entireTextOnly: true,
+          alignLabels: true,
+          minimumWidth: mobileChart ? 0 : 70,
+          scaleMargins: { top: 0.08, bottom: 0.26 }
+        },
         timeScale: {
           borderColor: '#E1D5B9',
           timeVisible: true,
           secondsVisible: false,
-          rightOffset: 6,
+          rightOffset: rightOffset,
           // 有副图时时间轴只画在副图上，两个图共用一条
           visible: !Ind.macd,
           tickMarkFormatter: tickFmt
         },
         crosshair: {
-          mode: (LightweightCharts.CrosshairMode && LightweightCharts.CrosshairMode.Magnet) || 1,
+          // Normal：十字线严格跟着鼠标，横纵交点就在指针上；Magnet 会把横线吸到收盘价
+          mode: (LightweightCharts.CrosshairMode && LightweightCharts.CrosshairMode.Normal) || 0,
           vertLine: { color: '#B8B8B8', width: 1, style: 3, labelBackgroundColor: '#1C1C1C' },
-          horzLine: { color: '#B8B8B8', width: 1, style: 3, labelBackgroundColor: '#1C1C1C' }
+          // 横线价格标签由页面自己画（#hoverTag），关掉库自带标签，避免灰色标签外再套一层黑色
+          horzLine: { color: '#B8B8B8', width: 1, style: 3, labelVisible: false }
         },
         localization: {
           locale: 'zh-CN',
-          priceFormatter: function (p) { return group(p, 2); },
+          priceFormatter: function (p) { return fmtAxis(p); },
           // 图表库传进来的是秒；月/周线只显示到月或日
           timeFormatter: crossTime
         },
+        // 右侧价格轴上下拖拽可以压扁/拉伸走势（时间轴拖拽不开）
         handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-        handleScale: { axisPressedMouseMove: true }
+        handleScale: { axisPressedMouseMove: { time: false, price: true }, mouseWheel: true, pinch: true }
       });
 
       Chart.candle = Chart.chart.addCandlestickSeries({
@@ -1837,12 +3817,12 @@
         borderDownColor: DOWN,
         wickUpColor: UP,
         wickDownColor: DOWN,
-        // 当前实时价：一条虚线横穿图表，右轴同时给出价格标签
+        // 当前实时价：一条虚线横穿图表；价格标签用页面自定义的 #priceTag，别让库再画一个
         priceLineVisible: true,
         priceLineWidth: 1,
         priceLineStyle: (LightweightCharts.LineStyle && LightweightCharts.LineStyle.Dashed) || 2,
         priceLineColor: '#8A7F68',
-        lastValueVisible: true
+        lastValueVisible: false
       });
 
       Chart.vol = Chart.chart.addHistogramSeries({
@@ -1887,27 +3867,35 @@
           vertLines: { color: 'rgba(0, 0, 0, 0)' },
           horzLines: { color: '#EADFC7', style: (LightweightCharts.LineStyle && LightweightCharts.LineStyle.Dashed) || 2 }
         },
-        rightPriceScale: { borderColor: 'rgba(0, 0, 0, 0)', minimumWidth: psMin, scaleMargins: { top: 0.16, bottom: 0.12 } },
+        rightPriceScale: {
+          visible: !mobileChart,
+          borderVisible: false,
+          ticksVisible: false,
+          textColor: 'rgba(0,0,0,0)',
+          scaleMargins: { top: 0.16, bottom: 0.12 }
+        },
         timeScale: {
           borderColor: '#E1D5B9',
           timeVisible: true,
           secondsVisible: false,
-          rightOffset: 6,
+          rightOffset: rightOffset,
           tickMarkFormatter: tickFmt
         },
         crosshair: {
-          mode: (LightweightCharts.CrosshairMode && LightweightCharts.CrosshairMode.Magnet) || 1,
+          // 和主图一样用 Normal，副图的纵线才不会跳格；横线不画
+          mode: (LightweightCharts.CrosshairMode && LightweightCharts.CrosshairMode.Normal) || 0,
           // 副图不显示横向价格线，只借它的竖向准星和时间标签
           vertLine: { color: '#B8B8B8', width: 1, style: 3, labelBackgroundColor: '#1C1C1C' },
           horzLine: { visible: false, labelVisible: false }
         },
         localization: {
           locale: 'zh-CN',
-          priceFormatter: function (p) { return group(p, 2); },
+          priceFormatter: function (p) { return fmtAxis(p); },
           timeFormatter: crossTime
         },
+        // 副图同样支持右侧价格轴上下拖拽缩放
         handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-        handleScale: { axisPressedMouseMove: true }
+        handleScale: { axisPressedMouseMove: { time: false, price: true }, mouseWheel: true, pinch: true }
       });
 
       Chart.hist = Chart.macd.addHistogramSeries({
@@ -1952,16 +3940,29 @@
     // 十字线联动：主图 ↔ 副图，同一根 K 线两边同时对齐
     Chart.chart.subscribeCrosshairMove(function (param) {
       if (Ind.syncing) return;
-      handleCrosshair(param);
+      if (!Cross.re) Cross.on = !!(param && param.point);
+      handleCrosshair(param, true);
       mirrorCrosshair(Chart.macd, param && param.time, 0, Chart.dif);
     });
+    // 记录鼠标真实像素位置：滚轮缩放时用它把十字线钉回光标处（capture 先于图表库的监听）
+    if (Chart.chart) {
+      var pane = document.querySelector ? document.querySelector('.pane--main') : null;
+      if (pane && pane.addEventListener) {
+        pane.addEventListener('mousemove', function (e) {
+          if (!Draw.canvas) return;
+          var r = Draw.canvas.getBoundingClientRect();
+          Cross.mx = e.clientX - r.left;
+          Cross.my = e.clientY - r.top;
+        }, true);
+        pane.addEventListener('mouseleave', function () { Cross.on = false; });
+      }
+    }
     if (Chart.macd) {
       Chart.macd.subscribeCrosshairMove(function (param) {
         if (Ind.syncing) return;
-        handleCrosshair(param);
-        var t = param && param.time;
-        var i = t == null ? -1 : indexOfTime(t);
-        mirrorCrosshair(Chart.chart, t, i >= 0 ? state.bars[i].close : 0, Chart.candle);
+        handleCrosshair(param, false);
+        // 不再把副图时间反写回主图：反写时只能拿到收盘价，会导致主图横线
+        // 在拖动过程中先吸到 K 线又弹回鼠标，表现为横线来回跳。
       });
     }
 
@@ -1973,6 +3974,19 @@
     var scaleApi = Chart.chart.timeScale();
     if (scaleApi && typeof scaleApi.subscribeVisibleLogicalRangeChange === 'function') {
       scaleApi.subscribeVisibleLogicalRangeChange(paintChartBg);
+      // 走势图左右平移/缩放时，画线层必须按新的时间坐标重画，否则线会停在原地
+      scaleApi.subscribeVisibleLogicalRangeChange(function () {
+        if (Chart.ready && !Chart.clearing) drawRedraw();
+      });
+      // 滚轮缩放/平移后，等图表这一帧画完，再把十字线钉回鼠标像素位置
+      scaleApi.subscribeVisibleLogicalRangeChange(function () {
+        if (!Cross.on) return;
+        if (Cross.timer) clearTimeout(Cross.timer);
+        Cross.timer = setTimeout(function () {
+          Cross.timer = 0;
+          crosshairReanchor();
+        }, 30);
+      });
     }
 
     setMacdVisible(Ind.macd, false);
@@ -1996,16 +4010,17 @@
    */
   function applyChartTimeFormat(iv) {
     if (!Chart.chart) return;
-    var tick = function (time) {
+    var tick = function (time, type) {
       var d = new Date(time * 1000);
-      if (iv === '1M') return (d.getFullYear() % 100) + '/' + (d.getMonth() + 1);
-      if (iv === '1w' || iv === '1d') return (d.getMonth() + 1) + '/' + d.getDate();
+      if (iv === '1M') return type === 0 ? String(d.getFullYear()) : (d.getFullYear() % 100) + '/' + (d.getMonth() + 1);
+      if (type === 0) return String(d.getFullYear());
+      if (type === 1 || type === 2) return (d.getMonth() + 1) + '/' + d.getDate();
       return pad(d.getHours()) + ':' + pad(d.getMinutes());
     };
     var cross = function (t) {
       var d = new Date(t * 1000);
       if (iv === '1M') return d.getFullYear() + '/' + (d.getMonth() + 1);
-      if (iv === '1w') return (d.getMonth() + 1) + '/' + d.getDate();
+      if (iv === '1w' || iv === '3d' || iv === '5d') return (d.getMonth() + 1) + '/' + d.getDate();
       return fmtDateTime(t * 1000);
     };
     try {
@@ -2018,7 +4033,8 @@
     }
   }
 
-  function handleCrosshair(param) {
+  function handleCrosshair(param, onMain) {
+    updateHoverTag(param, !!onMain);
     if (!param || !param.time || !param.seriesData) {
       Chart.hover = null;
       var last = state.bars[state.bars.length - 1];
@@ -2059,7 +4075,8 @@
     function mirror(src, dst) {
       if (!src || !dst || typeof src.subscribeVisibleLogicalRangeChange !== 'function') return;
       src.subscribeVisibleLogicalRangeChange(function (range) {
-        if (lock || !range) return;
+        // 切周期清数据的那一瞬间不做同步，避免往空图里写可见范围
+        if (lock || !range || !state.bars.length || Chart.clearing) return;
         lock = true;
         try { dst.setVisibleLogicalRange(range); } catch (e) {}
         lock = false;
@@ -2081,13 +4098,26 @@
     try { mt.setVisibleLogicalRange(r); } catch (e) {}
   }
 
-  /** 成交量筒收起时，把主图下方空出来的位置还给 K 线。 */
+  // 右边缘长按拖动：手机上用来压扁 / 拉伸走势（squash 越大，K 线越扁）
+  var Scale = { squash: 0, active: false, timer: 0, startY: 0, startSquash: 0, hintShown: false };
+
+  /** 成交量筒收起时，把主图下方空出来的位置还给 K 线；同时叠上用户压扁/拉伸的量。 */
   function applyChartMargins() {
     if (!Chart.chart) return;
+    var s = Math.max(0, Math.min(0.34, Scale.squash || 0));
+    var top = Math.min(0.44, 0.08 + s);
+    var bottom = Math.min(0.5, (Ind.vol ? 0.26 : 0.06) + s);
+    if (top + bottom > 0.82) {
+      var over = top + bottom - 0.82;
+      top -= over / 2;
+      bottom -= over / 2;
+    }
+    var opts = { scaleMargins: { top: top, bottom: bottom } };
     try {
-      Chart.chart.applyOptions({
-        rightPriceScale: { scaleMargins: { top: 0.08, bottom: Ind.vol ? 0.26 : 0.06 } }
-      });
+      // 真正生效的是 K 线自己那条价格轴：图表级 rightPriceScale 只是默认值，
+      // 改了不会动到已经建好的 series（原来成交量收起时的让位就一直没生效）。
+      if (Chart.candle && Chart.candle.priceScale) Chart.candle.priceScale().applyOptions(opts);
+      else Chart.chart.applyOptions({ rightPriceScale: opts });
     } catch (e) {}
   }
 
@@ -2138,12 +4168,17 @@
     if (macdBox) {
       macdBox.addEventListener('contextmenu', function (e) {
         e.preventDefault();
+        // 手机上长按只留十字线，不弹「添加均线」菜单（双击屏幕才是入口）
+        if (DRAW_DEV === 'm') return;
         openCtx(e.clientX, e.clientY, null);
       });
     }
 
     var apply = $('maApply');
     if (apply) apply.addEventListener('click', applyMaInput);
+
+    var resetBtn = $('btnReset');
+    if (resetBtn) resetBtn.addEventListener('click', resetChart);
 
     var hideMa = $('maHide');
     if (hideMa) {
@@ -2169,26 +4204,270 @@
       });
     }
 
-    // 均线数值下拉：默认收起，点箭头展开；每行点一下隐藏 / 显示
+    // 均线数值已经挪到图例里了，这个按钮只剩「添加一条均线」
     var maToggle = $('maToggle');
-    var maList = $('maList');
-    if (maToggle && maList) {
+    if (maToggle) {
       maToggle.addEventListener('click', function (e) {
         e.stopPropagation();
-        var open = maList.hidden;
-        maList.hidden = !open;
-        maToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        maToggle.textContent = open ? '均线 ▴' : '均线 ▾';
+        openMaPop(0, maToggle);
       });
     }
 
-    // 历史开平仓点 / 画线 / 擦除
+    // 历史开平仓点 / 画线 / 擦除 / 截图
     var histBtn = $('btnHist');
     if (histBtn) histBtn.addEventListener('click', function () { setHistActive(!Draw.showTrades); });
+    var shotBtn = $('btnShot');
+    if (shotBtn) shotBtn.addEventListener('click', screenshotChart);
     var drawBtn = $('btnDraw');
-    if (drawBtn) drawBtn.addEventListener('click', function () { setDrawActive(!Draw.active); });
+    if (drawBtn) drawBtn.addEventListener('click', function () {
+      setDrawActive(!(Draw.active && Draw.tool === 'free'), 'free');
+    });
+    var lineBtn = $('btnLine');
+    if (lineBtn) lineBtn.addEventListener('click', function () {
+      // 可以画多条直线，重新点按钮只是切换工具，不清空旧直线
+      var on = Draw.active && Draw.tool === 'line';
+      setDrawActive(!on, 'line');
+      if (!on) toast('点图上两个点画直线');
+    });
+    var measureBtn = $('btnMeasure');
+    if (measureBtn) measureBtn.addEventListener('click', function () {
+      setDrawActive(!(Draw.active && Draw.tool === 'measure'), 'measure');
+    });
+    bindLineDlg();
     var eraseBtn = $('btnErase');
     if (eraseBtn) eraseBtn.addEventListener('click', eraseDrawings);
+  }
+
+  // ---------------------------- 手机手势 ----------------------------
+
+  /** 手机：双击走势图打开「添加均线」（长按已经不再弹菜单）。 */
+  function bindDoubleTapAddMa() {
+    var wrap = $('chartWrap');
+    if (!wrap || DRAW_DEV !== 'm') return;
+    var last = 0;
+    var lx = 0;
+    var ly = 0;
+    wrap.addEventListener('pointerup', function (e) {
+      if (e.pointerType && e.pointerType !== 'touch') return;
+      if (Draw.active) return; // 画线 / 测距时两次点击另有含义
+      var t = e.target;
+      if (t && t.closest && t.closest(
+        'button, a, input, textarea, select, #chartInds, .pane-tools, .scale-strip, ' +
+        '#maPop, #ctxMenu, #lineMenu, #lineDlg, .modal'
+      )) return;
+      var pop = $('maPop');
+      if (pop && !pop.hidden) return;
+      var now = Date.now();
+      if (now - last < 340 && Math.abs(e.clientX - lx) < 44 && Math.abs(e.clientY - ly) < 44) {
+        last = 0;
+        openMaPop(0, $('maToggle') || wrap);
+        return;
+      }
+      last = now;
+      lx = e.clientX;
+      ly = e.clientY;
+    });
+  }
+
+  /** 手机：右边缘长按后上下拖，压扁 / 拉伸走势（顶替原来那条看不见的价格轴）。 */
+  function bindScaleStrip() {
+    var strip = $('scaleStrip');
+    if (!strip || DRAW_DEV !== 'm') return;
+    var pid = null;
+
+    function stopArm() {
+      if (Scale.timer) { clearTimeout(Scale.timer); Scale.timer = 0; }
+    }
+
+    function end() {
+      stopArm();
+      if (!Scale.active) return;
+      Scale.active = false;
+      strip.classList.remove('is-active');
+      pid = null;
+      drawSchedule();
+    }
+
+    strip.addEventListener('pointerdown', function (e) {
+      if (e.button != null && e.button > 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pid = e.pointerId;
+      Scale.startY = e.clientY;
+      Scale.startSquash = Scale.squash || 0;
+      try { if (strip.setPointerCapture) strip.setPointerCapture(pid); } catch (err) {}
+      stopArm();
+      Scale.timer = setTimeout(function () {
+        Scale.timer = 0;
+        Scale.active = true;
+        strip.classList.add('is-active');
+        if (!Scale.hintShown) {
+          Scale.hintShown = true;
+          toast('按住后上下拖动，可以压扁 / 拉伸走势');
+        }
+      }, 200);
+    });
+
+    strip.addEventListener('pointermove', function (e) {
+      if (!Scale.active) {
+        // 还没长按就滑走了：当滑动，不触发压扁
+        if (Scale.timer && Math.abs(e.clientY - Scale.startY) > 10) stopArm();
+        return;
+      }
+      e.preventDefault();
+      var dy = e.clientY - Scale.startY;
+      Scale.squash = Math.max(0, Math.min(0.34, Scale.startSquash + dy / 520));
+      applyChartMargins();
+      paintChartBg();
+      drawSchedule();
+    });
+
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (type) {
+      strip.addEventListener(type, end);
+    });
+  }
+
+  // 全屏看盘：优先真·全屏（能顺便锁横屏），不支持就用固定层铺满视口
+  var FS = { on: false, home: null };
+
+  /** 全屏对象是 .desk-chart：顶部周期栏 + 走势图一起进全屏，横屏后还能选周期。 */
+  function fsTarget() {
+    var el = document.querySelector ? document.querySelector('.desk-chart') : null;
+    return el || $('chartWrap');
+  }
+
+  /** iOS 这类没有元素全屏的浏览器：先挂到 body 再 fixed，免得被 .page-track 的 transform 和 overflow 困住。 */
+  function fsDetach(el) {
+    if (!el || !el.parentNode || FS.home || !document.body) return;
+    FS.home = { parent: el.parentNode, next: el.nextSibling };
+    try { document.body.appendChild(el); } catch (e) { FS.home = null; }
+  }
+
+  function fsAttach(el) {
+    if (!FS.home) return;
+    try {
+      if (FS.home.parent) FS.home.parent.insertBefore(el, FS.home.next || null);
+    } catch (e) {}
+    FS.home = null;
+  }
+
+  function unlockOrientation() {
+    try {
+      var so = window.screen && window.screen.orientation;
+      if (so && typeof so.unlock === 'function') so.unlock();
+    } catch (e) {}
+  }
+
+  function lockLandscape() {
+    try {
+      var so = window.screen && window.screen.orientation;
+      if (so && typeof so.lock === 'function') {
+        var p = so.lock('landscape');
+        if (p && p.catch) p.catch(function () {});
+      }
+    } catch (e) {}
+  }
+
+  function fsSync(on) {
+    FS.on = !!on;
+    if (!FS.on) fsAttach(fsTarget());
+    var wrap = fsTarget();
+    if (wrap) wrap.classList.toggle('is-fs', FS.on);
+    if (document.body && document.body.classList) document.body.classList.toggle('is-fs', FS.on);
+    var btn = $('btnFs');
+    if (btn) {
+      btn.classList.toggle('is-on', FS.on);
+      btn.setAttribute('aria-pressed', FS.on ? 'true' : 'false');
+      btn.setAttribute('aria-label', FS.on ? '退出全屏' : '全屏查看走势图');
+      btn.title = FS.on ? '退出全屏' : '全屏查看走势图';
+    }
+    // 尺寸变了：图表、背景、画线层都要重新量一次
+    setTimeout(function () {
+      drawResize();
+      paintChartBg();
+      syncRangeFromMain();
+      syncRightPad();
+    }, 60);
+    setTimeout(function () {
+      drawResize();
+      paintChartBg();
+      syncRightPad();
+    }, 260);
+  }
+
+  function toggleChartFullscreen() {
+    var el = fsTarget();
+    if (!el) return;
+    var realFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (FS.on) {
+      if (realFs) {
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+        try { if (exit) exit.call(document); } catch (e) {}
+      }
+      fsAttach(el);
+      unlockOrientation();
+      fsSync(false);
+      return;
+    }
+    var req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!req) {
+      // iOS Safari 没有元素全屏：挂到 body 上再用固定定位铺满，横屏靠用户自己转
+      fsDetach(el);
+      fsSync(true);
+      return;
+    }
+    try {
+      var p = req.call(el, { navigationUI: 'hide' });
+      if (p && p.then) {
+        p.then(function () { fsSync(true); lockLandscape(); }).catch(function () {
+          fsDetach(el);
+          fsSync(true);
+        });
+      } else {
+        fsSync(true);
+        lockLandscape();
+      }
+    } catch (e) {
+      fsDetach(el);
+      fsSync(true);
+    }
+  }
+
+  function bindFullscreen() {
+    var btn = $('btnFs');
+    if (btn) {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleChartFullscreen();
+      });
+    }
+    function sync() {
+      var on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      if (on === FS.on) return;
+      if (!on) unlockOrientation();
+      fsSync(on);
+    }
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || !FS.on) return;
+      // 真全屏时浏览器自己会退出并触发 fullscreenchange
+      if (document.fullscreenElement || document.webkitFullscreenElement) return;
+      unlockOrientation();
+      fsSync(false);
+    });
+  }
+
+  function bindChartGestures() {
+    bindDoubleTapAddMa();
+    bindScaleStrip();
+    bindFullscreen();
+    // 缩放时保持右边那点留白的像素宽度
+    if (DRAW_DEV === 'm' && Chart.chart && Chart.chart.timeScale) {
+      var ts = Chart.chart.timeScale();
+      if (ts.subscribeVisibleLogicalRangeChange) ts.subscribeVisibleLogicalRangeChange(syncRightPad);
+    }
   }
 
   /** 把指标数组画上去：整段就 setData，单根就 update 最后一个点。 */
@@ -2212,7 +4491,7 @@
     var dif = pointsOf(bars, ind.dif);
     var dea = pointsOf(bars, ind.dea);
     var hist = histPointsOf(bars, ind.hist);
-    if (!Chart.dif) return;
+    if (!Chart.dif) { Chart.clearing = false; return; }
     try {
       if (full) {
         Chart.dif.setData(dif);
@@ -2224,6 +4503,31 @@
         Chart.hist.update(hist[hist.length - 1]);
       }
     } catch (e) {}
+    Chart.clearing = false;
+    drawSchedule();
+  }
+
+  /**
+   * 主图和副图是两张独立的图，右侧价格轴各按自己的刻度文字算宽度：
+   * 主图「78,105.58」→ 78px，副图「-35.45」→ 58px，绘图区宽度就差 20px。
+   * 同一个时间点在两张图上的 x 因此差十几像素，竖直的十字线接不上 MACD 柱子。
+   * 给两边同一个 minimumWidth，绘图区就等宽了。返回 true 表示这次真的改了宽度。
+   */
+  function syncPaneWidths() {
+    if (!Chart.chart || !Chart.macd) return false;
+    try {
+      var a = Chart.chart.priceScale('right');
+      var b = Chart.macd.priceScale('right');
+      var wa = a.width();
+      var wb = b.width();
+      if (!(wa >= 0) || !(wb >= 0)) return false;
+      if (Math.abs(wa - wb) < 1) return false;
+      var w = Math.max(wa, wb);
+      a.applyOptions({ minimumWidth: w });
+      b.applyOptions({ minimumWidth: w });
+      return true;
+    } catch (e) {}
+    return false;
   }
 
   /**
@@ -2232,9 +4536,112 @@
    * 主图和副图各画一条，两张图的横坐标一致，分界线也就对得上。
    */
   function paintChartBg() {
+    var widthsChanged = syncPaneWidths();
     paintPaneBg('chart', Chart.chart);
     paintPaneBg('chartMacd', Chart.macd);
+    // 缩放/平移时实时价标签要立刻跟着价格轴走，不能等下一次行情刷新
+    updatePriceTag();
+    schedulePriceTag();
     drawSchedule();
+    drawPriceAxis();
+    if (widthsChanged) {
+      // 价格轴宽度变了，绘图区要等库重排一帧，再补一次底色和浮标
+      setTimeout(function () {
+        paintPaneBg('chart', Chart.chart);
+        paintPaneBg('chartMacd', Chart.macd);
+        updatePriceTag();
+        drawSchedule();
+        drawPriceAxis();
+      }, 60);
+    }
+  }
+
+  // 图表库自己渲染/自动缩放是在下一帧，等它画完再补一次价格标签位置
+  var tagRaf = 0;
+  function schedulePriceTag() {
+    if (tagRaf) return;
+    var raf = window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); };
+    tagRaf = raf(function () {
+      tagRaf = raf(function () {
+        tagRaf = 0;
+        updatePriceTag();
+        drawPriceAxis();
+      });
+    });
+  }
+
+  /**
+   * 右侧价格刻度：自己画横向虚线和价格数字，控制在 5～6 条，不要像库自带那样挤满。
+   * 数字写在右侧那条价格轴的宽度里；那条轴本身还是上下拖拽的压扁 / 拉伸区。
+   */
+  function nicePriceStep(raw) {
+    if (!(raw > 0)) return 0;
+    var p = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var n = raw / p;
+    var m = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+    return m * p;
+  }
+
+  function drawPriceAxis() {
+    var cv = $('axisLayer');
+    if (!cv || !Chart.ready || !Chart.chart || !Chart.candle) return;
+    var box = $('chart');
+    if (!box) return;
+    var w = Math.max(1, box.clientWidth || 0);
+    var h = Math.max(1, box.clientHeight || 0);
+    var dpr = window.devicePixelRatio || 1;
+    var pw = Math.round(w * dpr);
+    var ph = Math.round(h * dpr);
+    if (cv.width !== pw || cv.height !== ph) {
+      cv.width = pw;
+      cv.height = ph;
+    }
+    var ctx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    var scaleW = 0;
+    try {
+      scaleW = Chart.chart.priceScale('right').width() || 0;
+    } catch (e) {}
+    if (scaleW < 30) return; // 手机上不画（右边缘是手势带）
+    var plotW = Math.max(1, w - scaleW);
+
+    var top;
+    var bottom;
+    try {
+      top = Chart.candle.coordinateToPrice(0);
+      bottom = Chart.candle.coordinateToPrice(h);
+    } catch (e) {
+      return;
+    }
+    if (!Number.isFinite(top) || !Number.isFinite(bottom) || top <= bottom) return;
+
+    var step = nicePriceStep((top - bottom) / 5);
+    if (!(step > 0)) return;
+
+    ctx.save();
+    ctx.font = '11px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.lineWidth = 1;
+    var start = Math.ceil(bottom / step) * step;
+    for (var v = start; v <= top + step * 1e-6; v += step) {
+      var y = Chart.candle.priceToCoordinate(v);
+      if (y == null || !Number.isFinite(y) || y < 10 || y > h - 10) continue;
+      var yy = Math.round(y) + 0.5;
+      ctx.strokeStyle = 'rgba(107, 98, 80, 0.22)';
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, yy);
+      ctx.lineTo(plotW, yy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(107, 98, 80, 0.9)';
+      ctx.fillText(fmtAxis(v), plotW + 7, yy);
+    }
+    ctx.restore();
   }
 
   function paintPaneBg(id, chart) {
@@ -2261,6 +4668,208 @@
     if (box.style.background !== bg) box.style.background = bg;
   }
 
+  /**
+   * 右侧价格轴隐藏后，用图表内的浮层标签显示「当前价」和「十字线价格」。
+   * 标签贴着绘图区右边界，不占宽度，横轴能多看好几根 K 线。
+   */
+  function chartBoxHeight() {
+    var box = $('chart');
+    return (box && box.clientHeight) || 0;
+  }
+
+  /** 绘图区高度：扣掉主图底部的时间轴，浮标不要盖到时间刻度上。 */
+  function chartPlotHeight() {
+    var h = chartBoxHeight();
+    if (!h) return 0;
+    try {
+      var ts = Chart.chart && Chart.chart.timeScale();
+      var th = ts && typeof ts.height === 'function' ? ts.height() : 0;
+      if (th > 0 && th < h) h -= th;
+    } catch (e) {}
+    return h;
+  }
+
+  function placeChartTag(tag, y) {
+    var h = chartPlotHeight();
+    if (!h || !Number.isFinite(y) || y < 0 || y > h) { tag.hidden = true; return false; }
+    tag.hidden = false;
+    tag.style.top = Math.max(9, Math.min(h - 9, y)) + 'px';
+    return true;
+  }
+
+  function updatePriceTag() {
+    var tag = $('priceTag');
+    if (!tag) return;
+    var last = state.bars[state.bars.length - 1];
+    var price = last ? +last.close : 0;
+    if (!Chart.candle || typeof Chart.candle.priceToCoordinate !== 'function' || !price) {
+      tag.hidden = true;
+      return;
+    }
+    var y = null;
+    try { y = Chart.candle.priceToCoordinate(price); } catch (e) {}
+    if (y == null || !Number.isFinite(y) || !placeChartTag(tag, y)) return;
+    tag.textContent = fmtAxis(price);
+    var pct = +state.chartPct || 0;
+    tag.classList.toggle('is-up', pct >= 0);
+    tag.classList.toggle('is-down', pct < 0);
+  }
+
+  /**
+   * 十字线价格浮标：鼠标在主图上就显示，包括右侧还没走出 K 线的空白区。
+   * 空白区没有 time / seriesData，但有鼠标坐标，价格直接用坐标换算，
+   * 这样「未来区」也能看到指针所在位置的价位。
+   */
+  function updateHoverTag(param, onMain) {
+    var tag = $('hoverTag');
+    if (!tag) return;
+    var priceTag = $('priceTag');
+    if (!onMain || !param || !param.point || !Chart.candle) {
+      tag.hidden = true;
+      if (priceTag) updatePriceTag();
+      return;
+    }
+    var price = null;
+    try { price = Chart.candle.coordinateToPrice(param.point.y); } catch (e) {}
+    if (!Number.isFinite(price) || !placeChartTag(tag, param.point.y)) {
+      tag.hidden = true;
+      if (priceTag) updatePriceTag();
+      return;
+    }
+    if (priceTag) priceTag.hidden = false;
+    tag.textContent = fmtAxis(price);
+  }
+
+  // ---------------------------------------------------------------- 视口保持
+  // 换周期时图表默认会 fitContent：把新周期的 1000 根全塞进屏幕，K 线缩成一条条
+  // 细线一直铺到右边界，用户之前放大的位置就丢了。这里在切换前记下「可见根数」
+  //（宽度不变时它就等于蜡烛宽度）和「右边界时间」，新周期数据到了按这两样还原：
+  // 根数不变 → 蜡烛宽度不变；右边界时间不变 → 看到的位置不跳。
+  // 贴着最新价时额外记住右侧留白，切完仍是「最新一根 + 同样多根空位」。
+
+  /** 逻辑下标 → 时间（秒）；下标落在数据外时按周期步长外推，右侧留白也算得出来。 */
+  function barTimeAt(bars, step, idx) {
+    var last = bars.length - 1;
+    if (idx <= 0) return bars[0].time + idx * step;
+    if (idx >= last) return bars[last].time + (idx - last) * step;
+    var i = Math.floor(idx);
+    return bars[i].time + (idx - i) * step;
+  }
+
+  /** 时间（秒）→ 逻辑下标，允许小数和越界（数据外的部分按步长外推）。 */
+  function logicalAtTime(bars, step, t) {
+    var last = bars.length - 1;
+    if (t <= bars[0].time) return (t - bars[0].time) / step;
+    if (t >= bars[last].time) return last + (t - bars[last].time) / step;
+    var lo = 0;
+    var hi = last;
+    while (hi - lo > 1) {
+      var mid = (lo + hi) >> 1;
+      if (bars[mid].time <= t) lo = mid;
+      else hi = mid;
+    }
+    return lo + (t - bars[lo].time) / step;
+  }
+
+  /** 切换周期前调一次：记下可见根数、右边界时间、右侧留白。 */
+  function captureView() {
+    if (!Chart.chart || state.bars.length < 3) return null;
+    var r = null;
+    try { r = Chart.chart.timeScale().getVisibleLogicalRange(); } catch (e) {}
+    if (!r || !Number.isFinite(r.from) || !Number.isFinite(r.to) || r.to <= r.from) return null;
+    var step = (TF_MS[state.iv] || 60000) / 1000;
+    var last = state.bars.length - 1;
+    return {
+      count: r.to - r.from,           // 可见根数 = 蜡烛宽度
+      to: barTimeAt(state.bars, step, r.to),
+      atEnd: r.to >= last,            // 右边界在最新一根或它右侧的留白里
+      // 右侧留白按实际根数记：用户可以拖出很大的留白，不能夹到 rightOffset
+      offset: Math.max(0, r.to - last)
+    };
+  }
+
+  /**
+   * 新周期数据画上去之后调：根数不变、右边界停在原来的时间上。
+   * 返回 false 表示没有待还原的视口（首次加载照旧铺满全图）。
+   */
+  function applyViewRestore() {
+    if (!state.view) return false;
+    // 历史是整页拉回来的（PAGE 根）。不足半页多半是换周期后 WS 先推来的一两根，
+    // 拿它换算时间没有意义，先留着视口，等整页数据到了再还原。
+    if (!Chart.chart || state.bars.length < PAGE / 2) return false;
+    var v = state.view;
+    state.view = null; // 只还原一次；之后 WS 推送、补历史仍按原来的逻辑保持视口
+
+    var step = (TF_MS[state.iv] || 60000) / 1000;
+    var last = state.bars.length - 1;
+
+    // 视口宽度（根数）按原样保留：它就是蜡烛宽度，不能因为数据不够就先改它
+    var count = v.count;
+    var to;
+    if (v.atEnd) {
+      // 右边界原来在最新一根右侧：把这段留白按同样的根数搬过来，
+      // 拖出几十根留白也照搬，最后一根到右边界的距离（像素）才不变
+      to = last + v.offset;
+    } else {
+      to = logicalAtTime(state.bars, step, v.to);
+    }
+    var from = to - count;
+
+    // 目标时间比已拉到的第一根还早：右边界整段落在数据外，先贴住最早的数据显示，
+    // 不然是一张空白图（更早的历史补上来后 loadOlderBars 会右移视口）。
+    if (to < 0) {
+      from = 0;
+      to = Math.min(count, last + RIGHT_OFFSET);
+    }
+    if (to <= from) return false;
+
+    var ts = Chart.chart.timeScale();
+    var pin = function () {
+      try { ts.setVisibleLogicalRange({ from: from, to: to }); } catch (e) {}
+    };
+    pin();
+    // setData 之后图表还可能自动贴到最新一根定位一帧，同步设置的视口会被盖掉，下一帧再钉一次
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(pin);
+    return true;
+  }
+
+  /**
+   * 手机右侧留白按「像素」算：约 22px，缩放时换算成对应的根数改 rightOffset。
+   * 用根数写死不行——放大后同样根数会变成一大块空白，缩小后又会贴边。
+   */
+  var RightPad = { px: 22, busy: false };
+
+  function syncRightPad() {
+    if (DRAW_DEV !== 'm' || !Chart.chart || RightPad.busy) return;
+    var ts = Chart.chart.timeScale();
+    var opts = ts.options ? ts.options() : null;
+    if (!opts || !opts.barSpacing) return;
+    var want = Math.max(2, Math.min(240, Math.round(RightPad.px / opts.barSpacing)));
+    if (Math.abs(want - (+opts.rightOffset || 0)) < 2) return;
+    RightPad.busy = true;
+    try { ts.applyOptions({ rightOffset: want }); } catch (e) {}
+    RightPad.busy = false;
+  }
+
+  /** 图表换了一批数据之后：换周期就回到原视口，首次加载才铺满全图。 */
+  function settleView() {
+    if (!Chart.chart || !state.bars.length) return;
+    if (applyViewRestore()) {
+      state.firstLoad = false;
+      return;
+    }
+    // 视口还在等整页数据（见 applyViewRestore 的 PAGE/2 门槛）：先别铺满全图，
+    // 否则会先闪一下整页、再跳回原视口。
+    if (state.view) return;
+    if (state.firstLoad && state.bars.length > 2) {
+      Chart.chart.timeScale().fitContent();
+      state.firstLoad = false;
+      // fitContent 会一路铺到右边界；手机上补一段留白，K 线不要贴着屏幕边
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncRightPad);
+      else syncRightPad();
+    }
+  }
+
   function chartSet(bars) {
     if (!Chart.ready || !bars.length) return;
     try {
@@ -2276,6 +4885,8 @@
       // 极端情况下时间重复/乱序，别把整个图卡死
     }
     paintChartBg();
+    updatePriceTag();
+    crosshairReanchor();
   }
 
   function chartUpdate(bar) {
@@ -2291,11 +4902,21 @@
       chartSet(state.bars);
     }
     paintChartBg();
+    updatePriceTag();
+    crosshairReanchor();
   }
 
   // ---------------------------------------------------------------- 账户
   function newGuest() {
-    return { cash: INITIAL_CASH, positions: [], orders: [], history: [], lastPrice: 0 };
+    return {
+      cash: INITIAL_CASH,
+      baseCash: INITIAL_CASH,
+      totalTrades: 0,
+      positions: [],
+      orders: [],
+      history: [],
+      lastPrice: 0
+    };
   }
 
   function loadGuest() {
@@ -2308,6 +4929,13 @@
           a.orders = a.orders || [];
           a.history = a.history || [];
           normalizePositions(a);
+          // 老账户没有这两个字段：本金按 10 万算，累计单数用历史补上
+          if (!Number.isFinite(+a.baseCash) || +a.baseCash <= 0) a.baseCash = INITIAL_CASH;
+          if (!Number.isFinite(+a.totalTrades)) {
+            a.totalTrades = a.history.filter(function (h) {
+              return h && (h.type === 'close' || h.type === 'liquidated');
+            }).length;
+          }
           return a;
         }
       } catch (e) {}
@@ -2355,6 +4983,36 @@
     }
   }
 
+  // 云端账户最近一次成功快照：网络短暂中断时先用它顶上，避免页面显示成本机
+  // 账户的 100,000 / 0 单，看起来像“登录了但数据全丢了”。
+  var LS_CACHE = 'huideng.trade.cache';
+
+  function cacheCloud() {
+    if (Account.mode !== 'cloud' || !Account.data) return;
+    try {
+      writeLS(LS_CACHE, JSON.stringify({
+        u: Account.username || '',
+        at: Date.now(),
+        data: Account.data
+      }));
+    } catch (e) {}
+  }
+
+  function loadCloudCache() {
+    if (Account.mode !== 'cloud') return;
+    var raw = readLS(LS_CACHE);
+    if (!raw) return;
+    try {
+      var c = JSON.parse(raw);
+      if (c && c.u === (Account.username || '') && c.data && typeof c.data.cash === 'number') {
+        c.data.positions = c.data.positions || [];
+        c.data.orders = c.data.orders || [];
+        c.data.history = c.data.history || [];
+        Account.data = c.data;
+      }
+    } catch (e) {}
+  }
+
   function api(action, params) {
     var body = { action: action, token: Account.token };
     if (params) Object.keys(params).forEach(function (k) { body[k] = params[k]; });
@@ -2376,6 +5034,40 @@
       if (e && e.code) throw e;
       throw err('network');
     });
+  }
+
+  /** 拉云端账户；网络抖动自动重试 3 次，失败时保留本地缓存快照。 */
+  function loadCloudState(announce) {
+    function attempt(n) {
+      return api('tradeState', {}).then(function (j) {
+        Account.data = j.account;
+        renderAll();
+        cloudDrawPull();
+        if (announce) toast('交易记录已同步');
+      }).catch(function (e) {
+        if (e && e.code === 'unauthorized') {
+          dropAuth();
+          toast('登录已过期，请重新登录');
+          return;
+        }
+        if (e && e.code === 'network' && n < 3) {
+          return new Promise(function (resolve) {
+            setTimeout(resolve, 700 * (n + 1));
+          }).then(function () { return attempt(n + 1); });
+        }
+        toast('交易记录同步失败：' + msgOf(e && e.code) + '，可点右上角头像 → 同步交易记录');
+      });
+    }
+    return attempt(0);
+  }
+
+  function syncAccount() {
+    if (Account.mode !== 'cloud') {
+      toast('当前是本机账户，无需同步');
+      return;
+    }
+    toast('正在同步交易记录…');
+    loadCloudState(true);
   }
 
   function unrealized(pos, mark) {
@@ -2484,6 +5176,7 @@
       type: 'close', side: p.side, qty: qty, price: price,
       fee: fee, pnl: pnl, posId: p.id
     });
+    a.totalTrades = (+a.totalTrades || 0) + 1;
     saveAccount();
   }
 
@@ -2511,6 +5204,7 @@
       if (p.margin + unrealized(p, price) > 0) continue;
       a.positions.splice(i, 1);
       pushHistory({ type: 'liquidated', side: p.side, qty: p.qty, price: price, fee: 0, pnl: -p.margin, posId: p.id });
+      a.totalTrades = (+a.totalTrades || 0) + 1;
       toast('有一笔持仓已逐仓强平');
       changed = true;
     }
@@ -2599,6 +5293,11 @@
       toast('登录已过期，请重新登录');
       return;
     }
+    if (code === 'insufficient_balance') {
+      // 云端才是权威余额；本机显示可能过期，提示同步而不是反复自动拉
+      toast('可用余额可能不是最新，请点右上角头像 → 同步交易记录后再试');
+      return;
+    }
     toast(msgOf(code));
   }
 
@@ -2609,28 +5308,83 @@
     Account.token = token;
     Account.username = readLS(LS.user) || '';
     Account.mode = 'cloud';
+    loadCloudCache();
     return true;
   }
 
-  /** 重置资金：现金回到 10 万、清掉持仓/挂单，但历史成交和胜率保留。 */
-  function resetFunds() {
-    if (!window.confirm('重置资金：现金回到 100,000 USDT，清空持仓和挂单；历史成交与胜率保留。继续？')) return;
+  /** 重置资金：金额可选（默认 10 万），清掉持仓/挂单，历史成交、总单数和胜率保留。 */
+  var RESET_MIN = 100;
+  var RESET_MAX = 100000000;
+  var RESET_DEFAULT = 100000;
+
+  function openReset() {
+    var m = $('resetModal');
+    if (!m) return;
+    if ($('resetAmount')) $('resetAmount').value = String(RESET_DEFAULT);
+    if ($('resetErr')) $('resetErr').textContent = '';
+    m.hidden = false;
+    setTimeout(function () {
+      var input = $('resetAmount');
+      if (input && input.focus) input.focus();
+    }, 30);
+  }
+
+  function closeReset() {
+    var m = $('resetModal');
+    if (m) m.hidden = true;
+  }
+
+  function readResetAmount() {
+    var raw = ($('resetAmount') && $('resetAmount').value) || '';
+    var amount = parseFloat(String(raw).replace(/[,\s]/g, ''));
+    if (!Number.isFinite(amount) || amount < RESET_MIN || amount > RESET_MAX) return null;
+    return Math.round(amount * 100) / 100;
+  }
+
+  function pushResetEvent(amount) {
+    try {
+      var raw = window.localStorage.getItem('huideng.trade.resets');
+      var list = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(list)) list = [];
+      list.push({ at: Date.now(), amount: amount });
+      if (list.length > 50) list = list.slice(-50);
+      window.localStorage.setItem('huideng.trade.resets', JSON.stringify(list));
+    } catch (e) {}
+  }
+
+  function doReset() {
+    var amount = readResetAmount();
+    var errBox = $('resetErr');
+    if (amount == null) {
+      if (errBox) errBox.textContent = '请输入 ' + group(RESET_MIN, 0) + ' ~ ' + group(RESET_MAX, 0) + ' 之间的金额';
+      return;
+    }
+    var btn = $('resetSubmit');
+    if (btn) btn.disabled = true;
     if (Account.mode === 'guest') {
       var a = Account.data;
-      a.cash = INITIAL_CASH;
+      a.cash = amount;
+      a.baseCash = amount;
       a.positions = [];
       a.orders = [];
       a.lastPrice = 0;
       saveAccount();
+      pushResetEvent(amount);
       renderAll();
-      toast('资金已重置，历史与胜率保留');
+      closeReset();
+      if (btn) btn.disabled = false;
+      toast('资金已重置为 ' + group(amount, 2) + ' USDT，历史与总单数保留');
       return;
     }
-    api('tradeReset', {}).then(function (j) {
+    api('tradeReset', { amount: amount }).then(function (j) {
       Account.data = j.account;
+      pushResetEvent(amount);
       renderAll();
-      toast('资金已重置，历史与胜率保留');
-    }).catch(showErr);
+      closeReset();
+      toast('资金已重置为 ' + group(amount, 2) + ' USDT，历史与总单数保留');
+    }).catch(showErr).then(function () {
+      if (btn) btn.disabled = false;
+    });
   }
 
   function dropAuth() {
@@ -2651,11 +5405,20 @@
       Account.mode = 'cloud';
       writeLS(LS.token, j.token);
       writeLS(LS.user, Account.username);
-      return api('tradeState', {});
-    }).then(function (j) {
-      Account.data = j.account;
+      return loadCloudState(false);
+    }).then(function () {
+      if (pendingNotes) {
+        pendingNotes = false;
+        window.location.href = (cfg.rel || '') + 'notes/index.html';
+        return;
+      }
+      if (pendingNotesSlide) {
+        pendingNotesSlide = false;
+        closeModal();
+        openNotesSlide();
+        return;
+      }
       closeModal();
-      renderAll();
       toast('已登录，模拟账户跨设备同步');
     });
   }
@@ -2666,43 +5429,91 @@
     renderTables();
     renderSummary();
     renderEst();
+    renderPosCalc();
     updateOrderUI();
     renderAccountMenu();
+    cacheCloud();
   }
 
   /**
-   * 开仓/平仓配成「一单」：历史是新的在前，这里按时间正序用栈配对，
-   * 同方向、同数量的最近一笔开仓优先；没配上的平仓也单独成单。
+   * 开仓/平仓配成「一单」：历史是新的在前，这里按时间正序用栈配对。
+   * 同一持仓 id 的多次开仓会先合成一个成本池，平仓价差按加权成本均价算；
+   * 老数据没有 posId 时仍退回按方向 + 数量配对。
    */
   function roundTrips() {
     var list = (Account.data && Account.data.history) || [];
     var chrono = list.slice().reverse();
-    var opens = [];
+    var opens = [];      // 没有 posId 的旧开仓
+    var pools = {};      // posId -> { side, qty, cost, at }
     var out = [];
+
+    function take(pool, qty) {
+      var before = pool.qty;
+      if (before <= 1e-12) return 0;
+      var n = Math.min(qty, before);
+      var avg = pool.cost / before;
+      pool.qty = round6(before - n);
+      pool.cost = Math.max(0, pool.cost - avg * n);
+      if (pool.qty <= 1e-9) {
+        pool.qty = 0;
+        pool.cost = 0;
+      }
+      return { qty: n, cost: avg * n };
+    }
 
     chrono.forEach(function (h) {
       if (!h) return;
       if (h.type === 'open') {
-        opens.push(h);
+        if (h.posId) {
+          var p = pools[h.posId];
+          if (!p) p = pools[h.posId] = { side: h.side, qty: 0, cost: 0, at: h.at };
+          p.qty += +h.qty || 0;
+          p.cost += (+h.price || 0) * (+h.qty || 0);
+          if (h.at && (!p.at || h.at < p.at)) p.at = h.at;
+        } else {
+          opens.push(h);
+        }
         return;
       }
       if (h.type !== 'close' && h.type !== 'liquidated') return;
 
-      var open = null;
+      var need = +h.qty || 0;
+      var gotQty = 0;
+      var gotCost = 0;
+      var openAt = 0;
       var i;
-      if (h.posId) {
-        // 新数据带持仓 id：部分平仓也能对上同一笔开仓
-        for (i = 0; i < opens.length; i += 1) {
-          if (opens[i].posId === h.posId) {
-            open = opens[i];
-            break;
+
+      if (h.posId && pools[h.posId]) {
+        var main = pools[h.posId];
+        openAt = main.at;
+        var part = take(main, need);
+        gotQty += part.qty;
+        gotCost += part.cost;
+
+        // 老数据同方向曾经合并过持仓，但仍保留多条开仓记录：
+        // 当前成本池不够时，用同方向其它开仓池补齐，成本同样按加权均价。
+        if (need - gotQty > 1e-9) {
+          var extras = [];
+          Object.keys(pools).forEach(function (id) {
+            if (id === h.posId) return;
+            var q = pools[id];
+            if (q.side === h.side && q.qty > 1e-9) extras.push(q);
+          });
+          extras.sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+          for (i = 0; i < extras.length && need - gotQty > 1e-9; i += 1) {
+            var more = take(extras[i], need - gotQty);
+            gotQty += more.qty;
+            gotCost += more.cost;
           }
         }
-      } else {
+      } else if (!h.posId) {
         // 旧数据没有 posId：退回按方向 + 数量配对
         for (i = opens.length - 1; i >= 0; i -= 1) {
           if (opens[i].side === h.side && Math.abs(opens[i].qty - h.qty) < 1e-9) {
-            open = opens.splice(i, 1)[0];
+            var o = opens.splice(i, 1)[0];
+            gotQty = +o.qty || 0;
+            gotCost = (+o.price || 0) * gotQty;
+            openAt = o.at;
             break;
           }
         }
@@ -2710,10 +5521,10 @@
 
       out.push({
         at: h.at,
-        openAt: open ? open.at : 0,
+        openAt: openAt,
         side: h.side,
         qty: h.qty,
-        entry: open ? open.price : null,
+        entry: gotQty > 1e-12 ? round(gotCost / gotQty, 8) : null,
         exit: h.price,
         pnl: h.pnl || 0,
         liquidated: h.type === 'liquidated'
@@ -2723,20 +5534,41 @@
     return out.reverse(); // 新的在前，和原来的记录顺序一致
   }
 
-  /** 胜率 = 盈利单数 / 完成的单数；当日单数 = 最近 24 小时平掉的单数。 */
+  /**
+   * 胜率 = 盈利单数 / 完成的单数；当日单数 = 最近 24 小时平掉的单数。
+   * 盈利的判定：这一笔的收益率 > 0.1%（收益率 = 浮动盈亏 ÷ 开仓金额），
+   * 太小的小赚/打平不算赢。
+   */
+  var WIN_RATE_MIN = 0.001; // 0.1%
+
   function tradeStats() {
     var trips = roundTrips();
     var dayAgo = Date.now() - 24 * 3600 * 1000;
     var wins = 0;
     var today = 0;
     trips.forEach(function (t) {
-      if (t.pnl > 0) wins += 1;
+      var base = t.entry != null ? Math.abs(+t.entry * (+t.qty || 0)) : 0;
+      var rate = base > 0 ? t.pnl / base : 0;
+      if (t.pnl > 0 && rate > WIN_RATE_MIN) wins += 1;
       if (t.at >= dayAgo) today += 1;
+    });
+    // 最近 7 笔的回撤：按开仓价到平仓价的不利方向幅度算，盈利单记为 0。
+    // 模拟盘按 10 倍杠杆，所以价格波动幅度要放大 10 倍。
+    var LEVERAGE = 10;
+    var recent = trips.slice(0, 7);
+    var ddSum = 0;
+    recent.forEach(function (t) {
+      if (!+t.entry || !+t.exit) return;
+      var adverse = t.side === 'long'
+        ? (+t.entry - +t.exit) / +t.entry
+        : (+t.exit - +t.entry) / +t.entry;
+      ddSum += Math.max(0, adverse) * 100 * LEVERAGE;
     });
     return {
       total: trips.length,
       today: today,
-      winRate: trips.length ? (wins / trips.length) * 100 : null
+      winRate: trips.length ? (wins / trips.length) * 100 : null,
+      drawdown: recent.length ? ddSum / recent.length : null
     };
   }
 
@@ -2745,8 +5577,9 @@
     if (!a) return;
     var mark = state.price;
     var eq = equity(mark);
-    var pnl = eq - INITIAL_CASH;
-    var pct = INITIAL_CASH ? (pnl / INITIAL_CASH) * 100 : 0;
+    var base = +a.baseCash > 0 ? +a.baseCash : INITIAL_CASH;
+    var pnl = eq - base;
+    var pct = base ? (pnl / base) * 100 : 0;
     setNum('acctEquity', eq, 2);
     setNum('acctCash', a.cash, 2);
     var ePnl = $('acctPnl');
@@ -2757,8 +5590,16 @@
       ePnl.title = (pnl >= 0 ? '+' : '') + group(pnl, 2) + ' USDT';
     }
     var st = tradeStats();
-    if ($('statToday')) $('statToday').textContent = String(st.today);
-    if ($('statWin')) $('statWin').textContent = st.winRate == null ? '--' : st.winRate.toFixed(1) + '%';
+    var total = Math.max(Number.isFinite(+a.totalTrades) ? +a.totalTrades : 0, st.total);
+    if ($('statOps')) $('statOps').textContent = st.today + '/' + total;
+    if ($('statDD')) {
+      $('statDD').textContent = st.drawdown == null ? '--' : st.drawdown.toFixed(1) + '%';
+      $('statDD').title = '最近 7 笔平均回撤（按 10 倍杠杆）';
+    }
+    if ($('statWin')) {
+      $('statWin').textContent = st.winRate == null ? '--' : st.winRate.toFixed(1) + '%';
+      $('statWin').title = '收益率（盈亏 ÷ 开仓金额）大于 0.1% 的平仓单 ÷ 已平仓单数';
+    }
   }
 
   function setNum(id, v, digits) {
@@ -2769,24 +5610,6 @@
   function renderTables() {
     var a = Account.data;
     if (!a) return;
-    var mark = state.price;
-
-    // 持仓：同方向合并成一单展示，未实现盈亏按合并后的总量计算
-    var posBody = $('tblPos');
-    var grouped = groupPositions(a.positions);
-    if (posBody) {
-      posBody.innerHTML = '';
-      grouped.forEach(function (p) {
-        var pnl = unrealized(p, mark);
-        var pct = p.margin ? (pnl / p.margin) * 100 : 0;
-        posBody.appendChild(row([
-          cell(p.side === 'long' ? '看多' : '看空', p.side === 'long' ? 'is-up' : 'is-down'),
-          cell(fmtQty(p.qty), 'num'),
-          cell((pnl >= 0 ? '+' : '') + group(pnl, 2) + ' (' + fmtPct(pct) + ')', 'num ' + (pnl >= 0 ? 'is-up' : 'is-down')),
-          cell(fmtPrice(p.entry), 'num')
-        ]));
-      });
-    }
 
     // 挂单
     var ordBody = $('tblOrd');
@@ -2804,7 +5627,7 @@
       });
     }
 
-    // 历史记录：一开一平合成一条；全部渲染，行多了在下面的表内滚动
+    // 历史记录：一开一平合成一条；全部渲染，行多了在侧滑面板里滚
     var trips = roundTrips();
     Draw.trades = trips;
     var hisBody = $('tblHis');
@@ -2828,22 +5651,9 @@
         hisBody.appendChild(tr);
       }
     }
+    if ($('hisEmpty')) $('hisEmpty').hidden = trips.length > 0;
+
     if (Draw.showTrades) drawSchedule();
-
-    var nPos = grouped.length;
-    var nOrd = (a.orders || []).length;
-    if ($('cntPos')) $('cntPos').textContent = nPos ? '(' + nPos + ')' : '';
-    if ($('cntOrd')) $('cntOrd').textContent = nOrd ? '(' + nOrd + ')' : '';
-
-    var activeTab = currentTab();
-    var empty = $('tblEmpty');
-    if (empty) {
-      var n = activeTab === 'pos' ? nPos : activeTab === 'ord' ? nOrd : trips.length;
-      empty.hidden = n > 0;
-      empty.textContent = activeTab === 'pos'
-        ? '暂无持仓。在上方选择开仓方向与数量，下一单试试。'
-        : activeTab === 'ord' ? '暂无挂单。' : '暂无历史记录。';
-    }
   }
 
   /** 右侧持仓概览：合计市值 / 未实现盈亏 / 保证金，以及合并后的持仓成本。 */
@@ -2887,36 +5697,27 @@
     if (!a) return;
     var mark = state.price;
     var list = groupPositions(a.positions);
-    var notional = 0;
-    var pnl = 0;
-    var margin = 0;
-
-    list.forEach(function (p) {
-      notional += ((mark || p.entry || 0) * (+p.qty || 0));
-      pnl += unrealized(p, mark);
-      margin += +p.margin || 0;
-    });
-
-    setNum('sumNotional', notional, 2);
-    setNum('sumMargin', margin, 2);
-    setNum('sumCash', a.cash, 2);
-
-    var pnlEl = $('sumPnl');
-    if (pnlEl) {
-      pnlEl.textContent = (pnl >= 0 ? '+' : '') + group(pnl, 2);
-      pnlEl.style.color = pnl > 0 ? UP : pnl < 0 ? DOWN : '';
-    }
-
-    if ($('sumCount')) $('sumCount').textContent = list.length + ' 笔';
 
     var box = $('sidePos');
     if (box) {
       box.innerHTML = '';
       list.forEach(function (p) { box.appendChild(sidePosRow(p, mark)); });
     }
-    if ($('sideEmpty')) $('sideEmpty').hidden = list.length > 0;
+
+    // 没有持仓时整块（明细 + 平仓按钮）都不显示，右侧那点地方留给仓位计算
+    var panel = $('sideSummary');
+    if (panel) panel.hidden = list.length === 0;
+
+    // 有持仓就锁死方向，反向那一侧点不动
+    syncDirLock();
+    syncCloseAllBtn();
   }
 
+  /**
+   * 持仓明细一行：
+   *   第一行：方向 + 开仓金额（USDT）+ 仓位百分比（开仓金额 ÷ 总资产）
+   *   第二行：两个小格子 —— 未实现收益的绝对值、收益率
+   */
   function sidePosRow(p, mark) {
     var row = document.createElement('div');
     row.className = 'side-pos';
@@ -2925,23 +5726,53 @@
     tag.className = 'side-pos__tag ' + (p.side === 'long' ? 'is-up' : 'is-down');
     tag.textContent = p.side === 'long' ? '多' : '空';
 
+    var qty = +p.qty || 0;
+    var entry = +p.entry || 0;
+    var amount = qty * entry;                      // 开仓金额（USDT）
+    var eq = equity(mark) || 0;                    // 总资产
+    var posPct = eq > 0 ? (amount / eq) * 100 : 0; // 仓位占总资产的比例
+    var value = unrealized(p, mark);               // 绝对收益（USDT）
+    var pnlPct = amount > 0 ? (value / amount) * 100 : 0;
+    var tone = value > 0 ? 'is-up' : value < 0 ? 'is-down' : '';
+
+    var head = document.createElement('div');
+    head.className = 'side-pos__head';
+
     var main = document.createElement('div');
     main.className = 'side-pos__main';
-    var qty = document.createElement('b');
-    qty.textContent = fmtQty(p.qty) + ' BTC';
-    var entry = document.createElement('em');
-    entry.textContent = '成本 ' + fmtPrice(p.entry);
-    main.appendChild(qty);
-    main.appendChild(entry);
+    var amountEl = document.createElement('b');
+    amountEl.textContent = fmtPrice(amount) + ' U';
+    amountEl.title = '开仓金额';
+    var pctEl = document.createElement('em');
+    pctEl.textContent = '仓位 ' + posPct.toFixed(2) + '%';
+    pctEl.title = '开仓金额 ÷ 总资产';
+    main.appendChild(amountEl);
+    main.appendChild(pctEl);
+    head.appendChild(tag);
+    head.appendChild(main);
 
-    var value = unrealized(p, mark);
-    var pnl = document.createElement('b');
-    pnl.className = 'side-pos__pnl ' + (value > 0 ? 'is-up' : value < 0 ? 'is-down' : '');
-    pnl.textContent = (value >= 0 ? '+' : '') + group(value, 2);
+    var stats = document.createElement('div');
+    stats.className = 'side-pos__stats';
 
-    row.appendChild(tag);
-    row.appendChild(main);
-    row.appendChild(pnl);
+    function stat(label, text, cls, title) {
+      var box = document.createElement('div');
+      box.className = 'side-pos__stat';
+      var name = document.createElement('span');
+      name.textContent = label;
+      var val = document.createElement('b');
+      val.className = cls || '';
+      val.textContent = text;
+      if (title) val.title = title;
+      box.appendChild(name);
+      box.appendChild(val);
+      return box;
+    }
+
+    stats.appendChild(stat('未实现', (value >= 0 ? '+' : '') + group(value, 2), tone, '未实现收益（USDT）'));
+    stats.appendChild(stat('收益率', (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%', tone, '未实现收益 ÷ 开仓金额'));
+
+    row.appendChild(head);
+    row.appendChild(stats);
     return row;
   }
 
@@ -2969,69 +5800,381 @@
     return tr;
   }
 
-  function currentTab() {
-    var on = document.querySelector('#tabs button.is-on');
-    return on ? on.getAttribute('data-tab') : 'pos';
+  /**
+   * 按可用余额能下的最大金额（USDT）：手续费也在这笔钱里，所以先除 (1 + FEE)，
+   * 再向下取到分，100% 一定下得出去。
+   */
+  function maxAmount() {
+    var a = Account.data;
+    if (!a) return 0;
+    var max = +a.cash > 0 ? +a.cash / (1 + FEE) : 0;
+    return Math.max(0, Math.floor(max * 100) / 100);
   }
 
-  function maxQty() {
-    var price = orderPrice();
-    var a = Account.data;
-    if (!a || !price || price <= 0) return 0;
-    // 向下取到 6 位，避免四舍五入后正好比可用余额多一点点
-    return Math.max(0, Math.floor((a.cash / (price * (1 + FEE))) * 1e6) / 1e6);
+  var OpenPctSlider = null;
+
+  /** 0–100% 任意比例滑杆：横线、5 个节点，可点节点也可拖动。 */
+  function createPctSlider(id, initial, onChange) {
+    var root = $(id);
+    if (!root) return null;
+    var track = root.querySelector('.pct-slider__track');
+    var thumb = root.querySelector('.pct-slider__thumb');
+    var bubble = root.querySelector('.pct-slider__bubble');
+    var dots = root.querySelectorAll('.pct-slider__dot');
+    if (!track || !thumb || !bubble) return null;
+    var value = Math.max(0, Math.min(100, +initial || 0));
+    var dragging = false;
+
+    function paint(notify) {
+      var shown = Math.round(value);
+      thumb.style.left = value + '%';
+      bubble.textContent = shown + '%';
+      root.setAttribute('aria-valuenow', String(shown));
+      Array.prototype.forEach.call(dots, function (dot) {
+        dot.classList.toggle('is-on', Math.abs((+dot.getAttribute('data-pct') || 0) - shown) < 0.5);
+      });
+      if (notify && onChange) onChange(value / 100);
+    }
+
+    function set(v, notify) {
+      value = Math.max(0, Math.min(100, +v || 0));
+      paint(notify);
+    }
+
+    function fromEvent(e) {
+      var r = track.getBoundingClientRect();
+      if (!r.width) return value;
+      return ((e.clientX - r.left) / r.width) * 100;
+    }
+
+    root.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      dragging = true;
+      if (root.setPointerCapture) {
+        try { root.setPointerCapture(e.pointerId); } catch (err) {}
+      }
+      set(fromEvent(e), true);
+    });
+    root.addEventListener('pointermove', function (e) {
+      if (dragging) set(fromEvent(e), true);
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+    }
+    root.addEventListener('pointerup', endDrag);
+    root.addEventListener('pointercancel', endDrag);
+    root.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        set(value - 1, true);
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        set(value + 1, true);
+      }
+    });
+    Array.prototype.forEach.call(dots, function (dot) {
+      dot.addEventListener('click', function (e) {
+        e.stopPropagation();
+        set(+dot.getAttribute('data-pct') || 0, true);
+      });
+    });
+    paint(false);
+    return { set: set, get: function () { return value; } };
   }
 
   function orderPrice() {
     return state.price;
   }
 
+  /** 金额输入框改成 USDT 之后，这里只负责把实时价挂到提示上（其它换算在开仓时做）。 */
   function renderEst() {
-    var a = Account.data;
-    if (!a) return;
-    var price = orderPrice();
-    var qty = parseFloat($('fQty') && $('fQty').value) || 0;
-    var notional = price && qty ? price * qty : 0;
-    setNum('estNotional', notional, 2);
-    setNum('estMargin', notional, 2);
     var hint = $('priceHint');
     if (hint) hint.textContent = '当前 ' + fmtPrice(state.price);
   }
 
-  // ---------------------------------------------------------------- 下单交互
-  function sideLabel(side) {
-    return side === 'long' ? '多' : '空';
+  // ---------------------------------------------------------------- 仓位计算
+  /**
+   * 持仓明细下面的仓位计算（对齐 App 侧边栏底部那套的指标）：
+   *   仓位 = 初始资金 × 单笔风险R ÷ 止损距离（R 和止损距离都按百分比填）
+   *   杠杆 = 仓位 ÷ 初始资金（这里不填杠杆倍数，直接由仓位倒推）
+   * 三个数：
+   *   初始资金 —— 默认跟顶部「总资产」走，也可以自己改来当计算器用（标签上「自动」会消失）；
+   *               手里有持仓时锁死成总资产，不能改；
+   *   单笔风险R —— 填一次就记住（localStorage），刷新页面也不变，除非自己再改；
+   *   止损距离 —— 每单都不一样，每次自己填（不记忆，默认 2%）。
+   */
+  var LS_RISK_R = 'huideng.trade.riskr';
+  var CALC_STOP_DEFAULT = '2'; // 止损距离的初始值（不记忆）
+  var calcManualCapital = '';  // 手填的初始资金（空 = 跟随总资产）
+  var calcWasLocked = false;   // 上一帧是否因为持仓被锁（用来平仓后还回手填值）
+
+  function calcNum(id) {
+    var el = $(id);
+    if (!el) return 0;
+    var n = parseFloat(String(el.value).replace(/[,\s]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
-  function positionsOf(side) {
-    return ((Account.data && Account.data.positions) || []).filter(function (p) {
-      return p.side === side;
+  /** 顶部「总资产」：现金 + 各持仓占用保证金 + 浮动盈亏。 */
+  function calcCapital() {
+    var eq = equity(state.price);
+    return Number.isFinite(eq) && eq > 0 ? eq : 0;
+  }
+
+  function renderPosCalc() {
+    var out = $('calcPosition');
+    if (!out) return;
+
+    var eq = calcCapital();
+    var hasPos = ((Account.data && Account.data.positions) || []).length > 0;
+    var capEl = $('calcCapital');
+    var focused = capEl && document.activeElement === capEl;
+
+    if (capEl) {
+      capEl.readOnly = hasPos;
+      capEl.classList.toggle('is-locked', hasPos);
+      if (hasPos) {
+        capEl.value = eq > 0 ? group(eq, 2) : '0.00';       // 有持仓：锁死跟总资产
+      } else if (!calcManualCapital) {
+        if (!focused) capEl.value = eq > 0 ? group(eq, 2) : '0.00'; // 没手改过：跟着总资产
+      } else if (calcWasLocked) {
+        capEl.value = calcManualCapital;                     // 刚平完仓：把手填的值还回去
+      }
+    }
+
+    var tag = $('calcAutoTag');
+    if (tag) tag.hidden = hasPos || !!calcManualCapital;
+    calcWasLocked = hasPos;
+
+    var capital;
+    if (hasPos || !calcManualCapital) capital = eq;
+    else capital = Math.max(0, parseFloat(String(calcManualCapital).replace(/[,\s]/g, '')) || 0);
+
+    var risk = calcNum('calcRisk');
+    var stop = calcNum('calcStop');
+
+    var position = capital > 0 && risk > 0 && stop > 0 ? (capital * risk) / stop : 0;
+    out.textContent = position > 0 ? group(position, 2) : '0';
+    out.classList.toggle('has-result', position > 0);
+
+    var lev = capital > 0 && position > 0 ? position / capital : 0;
+    var levEl = $('calcLeverage');
+    if (levEl) {
+      levEl.textContent = lev > 0 ? lev.toFixed(2) + 'x' : '--';
+      levEl.classList.toggle('has-result', lev > 0);
+    }
+
+    // 按当前价折成「数量 (BTC)」，照抄进上面的下单框就是算出来的仓位
+    var qtyEl = $('calcQty');
+    if (qtyEl) {
+      var p = state.price;
+      qtyEl.textContent = position > 0 && p > 0 ? '≈ ' + fmtQty(position / p) + ' BTC' : '';
+    }
+  }
+
+  function initPosCalc() {
+    var cap = $('calcCapital');
+    var risk = $('calcRisk');
+    var stop = $('calcStop');
+    if (!risk || !stop) return;
+
+    // 单笔风险R：用上次填过的值，没有才用 2
+    var savedRisk = parseFloat(readLS(LS_RISK_R));
+    risk.value = Number.isFinite(savedRisk) && savedRisk > 0 ? String(round(savedRisk, 2)) : '2';
+    if (!stop.value) stop.value = CALC_STOP_DEFAULT;
+
+    // 初始资金：手改就固定下来，清空又回到「跟总资产」
+    if (cap) {
+      cap.addEventListener('input', function () {
+        if (cap.readOnly) return;
+        calcManualCapital = String(cap.value).trim();
+        renderPosCalc();
+      });
+      cap.addEventListener('change', function () {
+        if (cap.readOnly) return;
+        var n = parseFloat(String(cap.value).replace(/[,\s]/g, ''));
+        if (!Number.isFinite(n) || n <= 0) {
+          calcManualCapital = '';
+        } else {
+          calcManualCapital = String(round(n, 2));
+          cap.value = calcManualCapital;
+        }
+        renderPosCalc();
+      });
+    }
+
+    risk.addEventListener('input', function () {
+      var n = parseFloat(String(risk.value).replace(/[,\s]/g, ''));
+      if (Number.isFinite(n) && n > 0) writeLS(LS_RISK_R, String(n));
+      renderPosCalc();
+    });
+    // 改完（回车 / 失焦）规整一下；清空或填 0 就退回记住的那个值
+    risk.addEventListener('change', function () {
+      var n = parseFloat(String(risk.value).replace(/[,\s]/g, ''));
+      if (!Number.isFinite(n) || n <= 0) {
+        var saved = parseFloat(readLS(LS_RISK_R));
+        n = Number.isFinite(saved) && saved > 0 ? saved : 2;
+      }
+      risk.value = String(round(n, 2));
+      writeLS(LS_RISK_R, String(round(n, 2)));
+      renderPosCalc();
+    });
+
+    stop.addEventListener('input', renderPosCalc);
+    stop.addEventListener('change', function () {
+      var n = parseFloat(String(stop.value).replace(/[,\s]/g, ''));
+      if (!Number.isFinite(n) || n < 0) stop.value = '';
+      else stop.value = String(round(n, 2));
+      renderPosCalc();
+    });
+
+    renderPosCalc();
+  }
+
+  // ---------------------------------------------------------------- 下单交互
+  var orderSide = 'long';   // 方向条当前选的是看多还是看空
+  var orderLockSide = '';   // 有持仓时只能加同一方向：'' 不锁 / 'long' / 'short'
+  var placing = false;      // 「开仓」请求进行中，避免连点
+
+  /** 各方向还有多少持仓（同方向多笔已经合并过，这里再兜一层）。 */
+  function positionSides() {
+    var out = { long: 0, short: 0 };
+    ((Account.data && Account.data.positions) || []).forEach(function (p) {
+      if (p.side === 'long') out.long += +p.qty || 0;
+      else if (p.side === 'short') out.short += +p.qty || 0;
+    });
+    return out;
+  }
+
+  /**
+   * 有持仓时锁方向：手里有多单就只能继续开多，有空单就只能继续开空，
+   * 另一侧按钮置灰点不动（反向开单被禁掉）。
+   */
+  function syncDirLock() {
+    var sides = positionSides();
+    var lock = '';
+    if (sides.long > 0 && sides.short <= 0) lock = 'long';
+    else if (sides.short > 0 && sides.long <= 0) lock = 'short';
+    orderLockSide = lock;
+
+    var seg = $('dirSeg');
+    if (!seg) return;
+    if (lock && orderSide !== lock) setOrderSide(lock);
+    Array.prototype.forEach.call(seg.querySelectorAll('button[data-side]'), function (b) {
+      var side = b.getAttribute('data-side');
+      var blocked = !!lock && side !== lock;
+      b.disabled = blocked;
+      b.title = blocked
+        ? (lock === 'long' ? '手里有多单，只能继续开多' : '手里有空单，只能继续开空')
+        : '';
+    });
+    seg.classList.toggle('is-locked', !!lock);
+  }
+
+  /** 切方向：胶囊里的滑块滑到左 / 右，选中一侧是浅红（多）或浅绿（空）。 */
+  function setOrderSide(side) {
+    if (orderLockSide && side !== orderLockSide) side = orderLockSide;
+    orderSide = side === 'short' ? 'short' : 'long';
+    var seg = $('dirSeg');
+    if (!seg) return;
+    seg.setAttribute('data-side', orderSide);
+    Array.prototype.forEach.call(seg.querySelectorAll('button[data-side]'), function (b) {
+      var on = b.getAttribute('data-side') === orderSide;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
     });
   }
 
+  /** 方向胶囊：点一下切换，按住左右滑也能切，键盘左右键同样可以。 */
+  function initDirSeg() {
+    var seg = $('dirSeg');
+    if (!seg) return;
+    setOrderSide(orderSide);
+
+    function pickAt(clientX) {
+      var r = seg.getBoundingClientRect();
+      if (!r.width) return;
+      setOrderSide(clientX < r.left + r.width / 2 ? 'long' : 'short');
+    }
+
+    var dragging = false;
+    seg.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      dragging = true;
+      pickAt(e.clientX);
+      if (seg.setPointerCapture) {
+        try { seg.setPointerCapture(e.pointerId); } catch (err) {}
+      }
+    });
+    seg.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      pickAt(e.clientX);
+    });
+    function stopDrag() { dragging = false; }
+    seg.addEventListener('pointerup', stopDrag);
+    seg.addEventListener('pointercancel', stopDrag);
+
+    seg.addEventListener('click', function (e) {
+      var b = e.target && e.target.closest ? e.target.closest('button[data-side]') : null;
+      if (b) setOrderSide(b.getAttribute('data-side'));
+    });
+    seg.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      setOrderSide(e.key === 'ArrowRight' ? 'short' : 'long');
+    });
+  }
+
+  /**
+   * 开仓：输入的是**金额（USDT）**，按当前价换算成 BTC 数量再下单。
+   * 数量向下取到 6 位，避免四舍五入后比余额多一点点。
+   */
   function doOpen(side, btn) {
-    var qty = parseFloat($('fQty').value);
+    if (!isTradingSymbol()) return; // 看其他币时按钮是置灰的，这里再兜一层
+    var field = $('fAmount');
+    var amount = parseFloat(String(field ? field.value : '').replace(/[,\s]/g, ''));
     var price = state.price;
 
     if (!Number.isFinite(price) || price <= 0) {
       toast('行情还没连上，稍等一下再下单');
       return;
     }
-    if (!Number.isFinite(qty) || qty <= 0) {
-      toast('请填写数量');
-      $('fQty').focus();
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast('请填写金额');
+      if (field) field.focus();
+      return;
+    }
+    var qty = Math.floor((amount / price) * 1e6) / 1e6;
+    if (!(qty > 0)) {
+      toast('金额太小，不够 0.000001 BTC');
       return;
     }
 
+    // 反向开单：手里有多单就不许开空，反之亦然（只能在原方向上继续加）
+    var sides = positionSides();
+    if (side === 'long' && sides.short > 0 && sides.long <= 0) {
+      toast('手里有空单，只能继续开空');
+      syncDirLock();
+      return;
+    }
+    if (side === 'short' && sides.long > 0 && sides.short <= 0) {
+      toast('手里有多单，只能继续开多');
+      syncDirLock();
+      return;
+    }
+
+    placing = true;
     if (btn) btn.disabled = true;
     place({ kind: 'market', side: side, qty: qty, price: price }).then(function () {
-      toast('已开仓 ' + fmtQty(qty) + ' BTC');
-      $('fQty').value = '';
+      toast('已开仓 ' + fmtQty(qty) + ' BTC（' + fmtPrice(amount) + ' USDT）');
+      if (field) field.value = '';
       renderEst();
-    }).catch(showErr).then(function () { if (btn) btn.disabled = false; });
+    }).catch(showErr).then(function () {
+      placing = false;
+      updateOrderUI();
+    });
   }
-
-  var Close = { side: '', pct: 1 };
 
   function positionById(id) {
     var list = (Account.data && Account.data.positions) || [];
@@ -3041,48 +6184,45 @@
     return null;
   }
 
-  /** 同步平仓比例按钮的选中态与右上角百分比文字。 */
-  function updateClosePctUI() {
-    var pct = Close.pct > 0 ? Close.pct : 1;
-    if ($('closePctText')) $('closePctText').textContent = Math.round(pct * 100) + '%';
-    var box = $('closePctBtns');
-    if (!box || !box.querySelectorAll) return;
-    Array.prototype.forEach.call(box.querySelectorAll('button[data-close-pct]'), function (b) {
-      var on = Math.abs((parseFloat(b.getAttribute('data-close-pct')) || 0) - pct) < 1e-9;
-      b.classList.toggle('is-on', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
+  // 全部平仓进行中（避免连点重复提交）
+  var closingAll = false;
+
+  /** 「平仓」按钮的可用状态：有持仓、有行情、看的是 BTC 才让点。 */
+  function syncCloseAllBtn() {
+    var btn = $('btnCloseAll');
+    if (!btn) return;
+    var has = ((Account.data && Account.data.positions) || []).length > 0;
+    btn.disabled = closingAll || !has || !state.price || !isTradingSymbol();
   }
 
   /**
-   * 平仓模式点「平多 / 平空」：按选中的比例（25/50/75/100%）直接平掉该方向持仓。
-   * 同方向的多笔持仓已在开仓时合并，这里正常只有一笔；老数据有多笔时按同一比例逐笔平。
+   * 持仓明细下面的「平仓」：不再按比例 / 数量平，
+   * 直接按当前价把手里所有持仓 100% 平掉。
    */
-  function openCloseSide(side, btn) {
-    var list = positionsOf(side);
-    if (!list.length) { toast('暂无' + sideLabel(side) + '头持仓'); return; }
-    if (!state.price) { toast('行情还没连上'); return; }
+  function closeAllPositions(btn) {
+    if (!isTradingSymbol()) { toast('切回 BTC 才能平仓'); return; }
+    var a = Account.data;
+    var list = (a && a.positions) || [];
+    if (!list.length) { toast('暂无持仓'); return; }
+    if (!state.price) { toast('行情还没连上，稍等一下再平'); return; }
+    if (closingAll) return;
 
-    var pct = Close.pct > 0 ? Close.pct : 1;
-    var total = 0;
-    list.forEach(function (p) { total += p.qty; });
-    if (total * pct < 1e-9) { toast('可平数量不足'); return; }
-
-    closeMenus();
     var price = state.price;
+    var total = 0;
+    list.forEach(function (p) { total += +p.qty || 0; });
+
+    closingAll = true;
     if (btn) btn.disabled = true;
+
     var chain = Promise.resolve();
-    list.forEach(function (p) {
-      chain = chain.then(function () { return closePos(p.id, price, pct); });
+    list.slice().forEach(function (p) {
+      chain = chain.then(function () { return closePos(p.id, price, 1); });
     });
     chain.then(function () {
-      toast(pct >= 1
-        ? '已平' + sideLabel(side) + ' ' + fmtQty(total) + ' BTC'
-        : '已平' + sideLabel(side) + ' ' + Math.round(pct * 100) + '%（' + fmtQty(total * pct) + ' BTC）');
-      if (btn) btn.disabled = false;
-    }).catch(function (e) {
-      if (btn) btn.disabled = false;
-      showErr(e);
+      toast('已全部平仓 ' + fmtQty(total) + ' BTC');
+    }).catch(showErr).then(function () {
+      closingAll = false;
+      syncCloseAllBtn();
     });
   }
 
@@ -3106,6 +6246,9 @@
   function closeModal() {
     var m = $('authModal');
     if (m) m.hidden = true;
+    // 关掉登录框（取消/点空白）就不再惦记「登录后去笔记页」，避免下次登录被带走。
+    pendingNotes = false;
+    pendingNotesSlide = false;
   }
 
   // ------------------------------------------------- 绑定手机 / 找回密码
@@ -3127,20 +6270,29 @@
     Phone.scene = scene === 'reset' ? 'reset' : 'bind';
     Phone.id = '';
     Phone.phone = '';
+    Phone.bound = (Account.data && Account.data.phone) || Phone.bound || '';
     if (Phone.timer) { clearInterval(Phone.timer); Phone.timer = 0; }
-    $('phoneTitle').textContent = Phone.scene === 'reset' ? '找回密码' : '绑定手机号';
+    var changing = Phone.scene === 'bind' && !!Phone.bound;
+    $('phoneTitle').textContent = Phone.scene === 'reset'
+      ? '找回密码'
+      : changing
+        ? '更换手机号'
+        : '绑定手机号';
     $('phoneIntro').textContent = Phone.scene === 'reset'
       ? '用绑定过的手机号收验证码；验证通过后直接设置新密码，再用新密码登录。'
-      : '绑定后可以用短信验证码重置密码，忘了密码不至于找不回来。';
+      : changing
+        ? '当前绑定 ' + Phone.bound + '。验证新手机号后会替换旧号码，旧号码自动解绑。'
+        : '绑定后可以用短信验证码重置密码，忘了密码不至于找不回来。';
     $('pPwdField').hidden = Phone.scene !== 'reset';
     $('pErr').textContent = '';
     $('pPhone').value = '';
+    $('pPhone').placeholder = changing ? '新手机号' : '11 位手机号';
     $('pCode').value = '';
     $('pNewPwd').value = '';
     $('pHint').textContent = '先填手机号';
     $('pSend').disabled = false;
     $('pSend').textContent = '获取验证码';
-    $('pSubmit').textContent = Phone.scene === 'reset' ? '重置密码' : '绑定';
+    $('pSubmit').textContent = Phone.scene === 'reset' ? '重置密码' : Phone.bound ? '更换' : '绑定';
     m.hidden = false;
     setTimeout(function () { $('pPhone').focus(); }, 30);
   }
@@ -3203,6 +6355,7 @@
     btn.disabled = true;
     api('tradePhoneConfirm', body).then(function (j) {
       var scene = Phone.scene;
+      var wasBound = !!Phone.bound;
       var boundPhone = j.phone || '';
       closePhone();
       if (scene === 'reset') {
@@ -3216,7 +6369,7 @@
         Phone.bound = boundPhone;
         if (Account.data) Account.data.phone = boundPhone;
         renderAccountMenu();
-        toast(boundPhone ? '已绑定 ' + boundPhone : '手机号已绑定');
+        toast(wasBound ? '手机号已更换' : (boundPhone ? '已绑定 ' + boundPhone : '手机号已绑定'));
       }
     }).catch(function (e) {
       err.textContent = msgOf(e && e.code);
@@ -3315,6 +6468,7 @@
         Account.data = j.account;
         closeModal();
         renderAll();
+        cloudDrawPull();
         toast('注册成功，你的账号是 ' + Account.username);
       }).catch(function (e) {
         box.textContent = msgOf(e && e.code);
@@ -3344,7 +6498,6 @@
     var split = $('deskSplit');
     if (!panel || !side || !split || !split.addEventListener) return;
     if (typeof side.getBoundingClientRect !== 'function' || typeof panel.getBoundingClientRect !== 'function') return;
-
     var MIN = 270;
     var MAX = 720;
     var cur = side.getBoundingClientRect().width || 288;
@@ -3407,9 +6560,99 @@
     });
   }
 
+  /**
+   * 走势图 / 持仓区之间的横向分隔条：上下拖动改变持仓区高度（也就是走势图高度），
+   * 拖完写入 localStorage，下次打开直接恢复。
+   * 底部持仓区已经去掉（持仓看右侧、历史记录看右下角悬浮按钮），这里没有元素就直接返回。
+   */
+  function initHSplit() {
+    var main = $('main');
+    var pos = $('posPanel');
+    var split = $('deskHSplit');
+    if (!main || !pos || !split || !split.addEventListener) return;
+    if (split.offsetParent === null) return; // 窄屏隐藏了分隔条
+    if (typeof main.getBoundingClientRect !== 'function' || typeof pos.getBoundingClientRect !== 'function') return;
+
+    // 允许一直缩到只剩「持仓 / 历史记录」两个标签
+    var MIN = 48;
+    var MAX = 620;
+    var KEY = 'huideng.trade.posh';
+    var cur = 0;
+
+    function mainH() {
+      return main.getBoundingClientRect().height || 0;
+    }
+
+    function clampH(h) {
+      var mh = mainH();
+      var max = Math.min(MAX, Math.max(MIN, mh - 260));
+      return Math.max(MIN, Math.min(max, h));
+    }
+
+    function apply(h, persist) {
+      h = clampH(h);
+      cur = h;
+      pos.style.flex = '0 0 ' + h + 'px';
+      split.setAttribute('aria-valuenow', String(Math.round(h)));
+      split.setAttribute('aria-valuemax', String(Math.round(Math.min(MAX, Math.max(MIN, mainH() - 260)))));
+      if (persist) writeLS(KEY, String(Math.round(h)));
+      drawResize();
+      paintChartBg();
+    }
+
+    var saved = parseFloat(readLS(KEY));
+    if (saved >= MIN) cur = saved;
+    if (!cur) cur = pos.getBoundingClientRect().height || 200;
+    apply(cur, false);
+
+    var drag = null;
+    split.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      drag = { y: e.clientY, h: pos.getBoundingClientRect().height };
+      split.classList.add('is-drag');
+      document.body.style.userSelect = 'none';
+      if (split.setPointerCapture) {
+        try { split.setPointerCapture(e.pointerId); } catch (err) {}
+      }
+    });
+
+    window.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      apply(drag.h + drag.y - e.clientY, false);
+    });
+
+    function endDrag() {
+      if (!drag) return;
+      drag = null;
+      split.classList.remove('is-drag');
+      document.body.style.userSelect = '';
+      apply(cur, true);
+    }
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+
+    split.addEventListener('dblclick', function () {
+      apply(Math.max(MIN, Math.min(240, mainH() * 0.2)), true);
+    });
+
+    window.addEventListener('resize', function () {
+      apply(pos.getBoundingClientRect().height, false);
+    });
+  }
+
   function bind() {
     // 图表工具条：均线增删改、成交量 / MACD 开关、右键菜单
     bindChartTools();
+
+    // 手机手势：双击加均线、右边缘长按压扁、右下角全屏
+    bindChartGestures();
+
+    // 走势图币种搜索
+    bindSymbolSearch();
+
+    // 持仓概览下面的仓位计算
+    initPosCalc();
 
     // 周期
     var tf = $('tf');
@@ -3425,75 +6668,103 @@
       });
     }
 
-    // 开仓 / 平仓模式（顶部），底部按钮随模式切换成看多/看空或平空/平多
-    bindSeg('segMode', function (b) {
-      orderMode = b && b.getAttribute('data-mode') === 'close' ? 'close' : 'open';
-      updateOrderUI();
-      renderEst();
-    });
+    // 方向胶囊（看多 / 看空，可点可滑）+ 唯一的「开仓」按钮
+    initDirSeg();
+    var openBtn = $('btnOpen');
+    if (openBtn) {
+      openBtn.addEventListener('click', function () { doOpen(orderSide, openBtn); });
+    }
+
+    // 持仓明细下面的「平仓」：全部 100% 平掉
+    var closeAllBtn = $('btnCloseAll');
+    if (closeAllBtn) {
+      closeAllBtn.addEventListener('click', function () { closeAllPositions(closeAllBtn); });
+    }
     updateOrderUI();
 
-    var orderActions = $('orderActions');
-    if (orderActions) {
-      orderActions.addEventListener('click', function (e) {
-        var b = e.target && e.target.closest ? e.target.closest('button[data-side]') : null;
-        if (!b) return;
-        var side = b.getAttribute('data-side');
-        if (orderMode === 'close') openCloseSide(side, b);
-        else doOpen(side, b);
-      });
+    // 金额 (USDT) + 任意比例滑杆（比例按可用余额算）
+    // 输入框只放数字（右边「USDT」是单独的灰色小字，不参与编辑）
+    var fAmount = $('fAmount');
+    function amountText(n) {
+      return Number.isFinite(n) && n > 0 ? n.toFixed(2) : '';
     }
-
-    // 数量
-    var fQty = $('fQty');
-    if (fQty) fQty.addEventListener('input', renderEst);
-
-    var pct = document.querySelector('#qtyRow .pct');
-    if (pct) {
-      pct.addEventListener('click', function (e) {
-        var b = e.target.closest('button[data-pct]');
-        if (!b) return;
-        var pctVal = parseFloat(b.getAttribute('data-pct'));
-        var price = orderPrice();
-        if (!price) { toast('行情还没连上'); return; }
-        var q = (Account.data.cash * pctVal) / (price * (1 + FEE));
-        // 一律向下取整，100% 时不会因为四舍五入而超出余额
-        q = Math.floor(q * 1e6) / 1e6;
-        $('fQty').value = q > 0 ? q.toFixed(6) : '0';
+    if (fAmount) {
+      fAmount.addEventListener('blur', function () {
+        var n = parseFloat(String(fAmount.value).replace(/[,\sU]/gi, ''));
+        fAmount.value = amountText(n);
+      });
+      fAmount.addEventListener('input', function () {
         renderEst();
+        if (OpenPctSlider) {
+          var max = maxAmount();
+          var amt = parseFloat(String(fAmount.value).replace(/[,\sU]/gi, '')) || 0;
+          OpenPctSlider.set(max > 0 ? (amt / max) * 100 : 0, false);
+        }
       });
     }
 
-    // 平仓比例：只记录选择，点「平多 / 平空」时才按当前价成交
-    var closePct = $('closePctBtns');
-    if (closePct) {
-      closePct.addEventListener('click', function (e) {
-        var b = e.target.closest('button[data-close-pct]');
-        if (!b) return;
-        Close.pct = parseFloat(b.getAttribute('data-close-pct')) || 1;
-        updateClosePctUI();
-      });
+    OpenPctSlider = createPctSlider('openPctSlider', 0, function (ratio) {
+      var a = Account.data;
+      if (!a || !fAmount) return;
+      // 比例是「可用余额的比例」，手续费也含在这笔钱里
+      var amt = Math.floor((a.cash * ratio) / (1 + FEE) * 100) / 100;
+      fAmount.value = amt > 0 ? amt.toFixed(2) : '0';
+      renderEst();
+    });
+
+    // 走势图右下角的「历史」悬浮按钮 → 贴着走势图右边界往左滑出历史记录
+    var hisFab = $('btnHisSlide');
+    var hisSlide = $('hisSlide');
+
+    /** 面板右边界对齐走势图右边界（右侧面板被收起时就贴到页面右边）。 */
+    function placeHisSlide() {
+      if (!hisSlide) return;
+      var chart = $('chartWrap');
+      var right = 0;
+      if (chart && chart.getBoundingClientRect) {
+        right = (window.innerWidth || 0) - chart.getBoundingClientRect().right;
+      }
+      if (!(right > 0)) right = 0;
+      hisSlide.style.right = Math.max(0, Math.round(right)) + 'px';
     }
 
-    // 标签页
-    var tabs = $('tabs');
-    if (tabs) {
-      tabs.addEventListener('click', function (e) {
-        var b = e.target.closest('button[data-tab]');
-        if (!b) return;
-        Array.prototype.forEach.call(tabs.querySelectorAll('button'), function (x) { x.classList.remove('is-on'); });
-        b.classList.add('is-on');
-        var t = b.getAttribute('data-tab');
-        var show = { pos: 'wrapPos', ord: 'wrapOrd', his: 'wrapHis' };
-        Object.keys(show).forEach(function (key) {
-          var box = $(show[key]);
-          if (box) box.hidden = key !== t;
-        });
-        renderTables();
+    function openHisSlide() {
+      if (!hisSlide) return;
+      placeHisSlide();
+      renderTables();
+      hisSlide.classList.add('is-open');
+      hisSlide.setAttribute('aria-hidden', 'false');
+      if (hisFab) {
+        hisFab.classList.add('is-on');
+        hisFab.setAttribute('aria-expanded', 'true');
+      }
+    }
+    function closeHisSlide() {
+      if (!hisSlide) return;
+      hisSlide.classList.remove('is-open');
+      hisSlide.setAttribute('aria-hidden', 'true');
+      if (hisFab) {
+        hisFab.classList.remove('is-on');
+        hisFab.setAttribute('aria-expanded', 'false');
+      }
+    }
+    if (hisFab) {
+      hisFab.addEventListener('click', function () {
+        if (hisSlide && hisSlide.classList.contains('is-open')) closeHisSlide();
+        else openHisSlide();
       });
     }
+    var hisClose = $('hisSlideClose');
+    if (hisClose) hisClose.addEventListener('click', closeHisSlide);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeHisSlide();
+    });
+    placeHisSlide(); // 没展开也先钉在走势图右边界，折叠动画不会越界
+    window.addEventListener('resize', function () {
+      placeHisSlide();
+    });
 
-    // 开仓区折叠 / 展开（TRADE 竖条）
+    // 右侧面板折叠 / 展开（周期栏最右边的 TRADE）
     var tradeTab = $('tradeTab');
     if (tradeTab) {
       tradeTab.addEventListener('click', function () {
@@ -3501,6 +6772,7 @@
         if (!side) return;
         var hidden = side.classList.toggle('is-hidden');
         tradeTab.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+        tradeTab.title = hidden ? '展开右侧面板' : '收起右侧面板';
         var split = $('deskSplit');
         if (split) split.hidden = hidden;
         paintChartBg();
@@ -3508,6 +6780,7 @@
     }
 
     initSplit();
+    initHSplit();
 
     // 账户：登录 / 绑定手机 / 退出都收进右上角头像菜单
     var menuBtn = $('btnMenu');
@@ -3525,6 +6798,23 @@
       });
     }
 
+    // 交易笔记子页面：右下角按钮打开/关闭
+    var notesBtn = $('btnNotes');
+    if (notesBtn) notesBtn.addEventListener('click', toggleNotesSlide);
+
+    var notesClose = $('notesSlideClose');
+    if (notesClose) notesClose.addEventListener('click', closeNotesSlide);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeNotesSlide();
+    });
+
+    var avatarInput = $('avatarInput');
+    if (avatarInput) {
+      avatarInput.addEventListener('change', function () {
+        setTradeAvatar(avatarInput.files && avatarInput.files[0]);
+      });
+    }
+
     var acctMenu = $('acctMenu');
     if (acctMenu) {
       acctMenu.addEventListener('click', function (e) {
@@ -3532,10 +6822,21 @@
         if (!b) return;
         var act = b.getAttribute('data-act');
         closeMenus();
-        if (act === 'login') openModal();
+        if (act === 'avatar') {
+          var avInput = $('avatarInput');
+          if (avInput) {
+            avInput.value = '';
+            avInput.click();
+          }
+        }
+        else if (act === 'login') openModal();
         else if (act === 'phone') openPhone('bind');
-        else if (act === 'reset') resetFunds();
+        else if (act === 'sync') syncAccount();
+        else if (act === 'reset') openReset();
         else if (act === 'logout') {
+          closeNotesSlide();
+          resetNotesFrame();
+          cloudDrawFlush();
           dropAuth();
           toast('已退出，回到本机账户');
         }
@@ -3543,26 +6844,27 @@
     }
 
     // 滚动/缩放后浮层还停在原地就错位了，直接收起
-    window.addEventListener('resize', function () { closeMenus(); });
+    window.addEventListener('resize', function () {
+      closeMenus();
+      updatePriceTag();
+    });
     window.addEventListener('scroll', function () { closeMenus(); }, true);
+    // 关浏览器 / 切后台离开时，把画线一次性推到云端（不会反复同步）
+    window.addEventListener('pagehide', cloudDrawFlush);
+    window.addEventListener('beforeunload', cloudDrawFlush);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') cloudDrawFlush();
+    });
 
     // 点空白处关掉浮层；点工具条按钮本身不关（否则刚开就被关）
     document.addEventListener('click', function (e) {
       var t = e.target;
       if (t && t.closest) {
-        var list = $('maList');
-        if (list && !list.hidden && !t.closest('#chartInds')) {
-          list.hidden = true;
-          var mt = $('maToggle');
-          if (mt) {
-            mt.setAttribute('aria-expanded', 'false');
-            mt.textContent = '均线 ▾';
-          }
-        }
         if (
-          t.closest('#maPop') || t.closest('#ctxMenu') || t.closest('#acctMenu') ||
-          t.closest('#btnMenu') || t.closest('#maTools') ||
-          t.closest('#orderActions') || t.closest('#tblPos')
+          t.closest('#maPop') || t.closest('#ctxMenu') || t.closest('#lineMenu') ||
+          t.closest('#acctMenu') || t.closest('#btnMenu') || t.closest('#maTools') ||
+          t.closest('#dirSeg') || t.closest('#btnOpen') || t.closest('#btnCloseAll') ||
+          t.closest('#btnHisSlide') || t.closest('#hisSlide')
         ) return;
       }
       closeMenus();
@@ -3616,10 +6918,32 @@
     });
     syncAuthMode();
 
+    // 重置资金：默认 10 万，可改金额或点快捷额度
+    var resetCancel = $('resetCancel');
+    if (resetCancel) resetCancel.onclick = closeReset;
+    var resetSubmit = $('resetSubmit');
+    if (resetSubmit) resetSubmit.onclick = doReset;
+    var resetModal = $('resetModal');
+    if (resetModal) resetModal.addEventListener('click', function (e) {
+      if (e.target === resetModal) closeReset();
+    });
+    var resetQuick = $('resetQuick');
+    if (resetQuick) resetQuick.addEventListener('click', function (e) {
+      var b = e.target && e.target.closest ? e.target.closest('button[data-amount]') : null;
+      if (!b) return;
+      if ($('resetAmount')) $('resetAmount').value = b.getAttribute('data-amount');
+      if ($('resetErr')) $('resetErr').textContent = '';
+    });
+    var resetAmount = $('resetAmount');
+    if (resetAmount) resetAmount.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); doReset(); }
+    });
+
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         closeModal();
         closePhone();
+        closeReset();
         closeMenus();
       }
       if (e.key === 'Enter' && document.activeElement && /aUser|aPass|aPhone|aCode/.test(document.activeElement.id)) submitAuth();
@@ -3633,6 +6957,7 @@
       if (document.hidden) {
         wsAbort();
         stopPoll();
+        stopSynthPoll();
         return;
       }
       WS.fails = 0;
@@ -3659,65 +6984,203 @@
       wsConnect();
       healBars();
     });
+
+    bindAppPane();
   }
 
-  function bindSeg(id, cb) {
-    var seg = $(id);
-    if (!seg) return;
-    seg.addEventListener('click', function (e) {
-      var b = e.target.closest('button');
-      if (!b) return;
-      Array.prototype.forEach.call(seg.querySelectorAll('button'), function (x) { x.classList.remove('is-on'); });
-      b.classList.add('is-on');
-      if (cb) cb(b);
+  // ---------------------------------------------------------------- 燃灯页
+  //
+  // 顶部导航固定不动，行情 / 燃灯是并排的两整页，切换时整条轨道左右推拉。
+  // iframe 里的页面会自己识别「被嵌入」并隐藏重复导航；站内首页链接则关掉
+  // 燃灯页，避免在 iframe 里再套一层行情页。
+  // 顶部四个菜单 = 一条横向轨道：交易练习 / 交易复盘 / 缠论读书会 / 大正藏经
+  var PANES = [
+    { key: 'trade', pane: 'tradePane', hash: '' },
+    { key: 'review', pane: 'reviewPane', frame: 'reviewFrame', url: 'review/index.html?embed=1', hash: '#review' },
+    { key: 'chan', pane: 'chanPane', frame: 'chanFrame', url: 'chan/index.html?embed=1', hash: '#chan' },
+    { key: 'app', pane: 'appPane', frame: 'appFrame', url: 'app/index.html', hash: '#app' }
+  ];
+  var PaneView = { index: 0, loaded: {} };
+
+  function paneIndex(key) {
+    for (var i = 0; i < PANES.length; i++) {
+      if (PANES[i].key === key) return i;
+    }
+    return 0;
+  }
+
+  function paneFromHash() {
+    var h = '';
+    try { h = location.hash || ''; } catch (e) { h = ''; }
+    if (h === '#review') return 1;
+    if (h === '#chan') return 2;
+    if (h === '#app') return 3;
+    return 0;
+  }
+
+  function setNavCurrent(key) {
+    var links = document.querySelectorAll('.topnav__menu a[data-view]');
+    Array.prototype.forEach.call(links, function (a) {
+      var active = a.getAttribute('data-view') === key;
+      if (active) {
+        a.setAttribute('aria-current', 'page');
+        a.classList.add('is-on');
+      } else {
+        a.removeAttribute('aria-current');
+        a.classList.remove('is-on');
+      }
     });
   }
 
-  /** 顶部切到开仓/平仓后，底部两个按钮的文案、颜色、数量区跟着换。 */
-  function updateOrderUI() {
-    var isClose = orderMode === 'close';
-    var form = $('orderForm');
-    if (form && form.classList) form.classList.toggle('is-close', isClose);
-
-    var qtyRow = $('qtyRow');
-    if (qtyRow) qtyRow.hidden = isClose;
-
-    var pctRow = $('closePctRow');
-    if (pctRow) pctRow.hidden = !isClose;
-    if (isClose) updateClosePctUI();
-
-    var hint = $('closeHint');
-    if (hint) {
-      hint.hidden = false;
-      if (isClose) {
-        var longQty = 0;
-        var shortQty = 0;
-        positionsOf('long').forEach(function (p) { longQty += p.qty; });
-        positionsOf('short').forEach(function (p) { shortQty += p.qty; });
-        hint.textContent = longQty || shortQty
-          ? '可平空 ' + fmtQty(shortQty) + ' BTC · 可平多 ' + fmtQty(longQty) + ' BTC'
-          : '暂无可平持仓';
-      } else {
-        hint.textContent = '按当前价成交 · 可用 ' + fmtPrice(Account.data ? Account.data.cash : 0) + ' USDT';
-      }
+  function loadPaneFrame(item) {
+    if (!item.frame || PaneView.loaded[item.key]) return;
+    var frame = $(item.frame);
+    if (!frame) return;
+    PaneView.loaded[item.key] = true;
+    if (item.key === 'app') {
+      var loading = $('appLoading');
+      if (loading) loading.hidden = false;
+      frame.addEventListener('load', cleanAppFrame);
     }
-
-    var acts = $('orderActions');
-    if (!acts || !acts.querySelector) return;
-    setActionText(acts, 'long', isClose ? '平多' : '看多');
-    setActionText(acts, 'short', isClose ? '平空' : '看空');
+    if (item.key === 'chan') frame.addEventListener('load', cleanEmbedChrome);
+    if (item.key === 'review') frame.addEventListener('load', cleanEmbedChrome);
+    frame.src = (cfg.rel || '') + item.url;
   }
 
-  function setActionText(acts, side, label) {
-    var b = acts.querySelector('button[data-side="' + side + '"]');
-    if (!b) return;
-    var txt = b.querySelector ? b.querySelector('.ord-act__text') : null;
-    if (txt) txt.textContent = label;
-    b.setAttribute('aria-label', label);
+  function setPane(index, push) {
+    index = Math.min(Math.max(index | 0, 0), PANES.length - 1);
+    var item = PANES[index];
+    loadPaneFrame(item);
+
+    var track = $('pageTrack');
+    if (track) track.setAttribute('data-pane', item.key);
+
+    PANES.forEach(function (p, i) {
+      var el = $(p.pane);
+      if (!el) return;
+      if (i === index) {
+        el.removeAttribute('inert');
+        el.setAttribute('aria-hidden', 'false');
+      } else {
+        el.setAttribute('inert', '');
+        el.setAttribute('aria-hidden', 'true');
+      }
+    });
+
+    PaneView.index = index;
+    setNavCurrent(item.key);
+
+    if (push && typeof history !== 'undefined') {
+      var target = item.hash || location.pathname + location.search;
+      if ((location.hash || '') !== (item.hash || '')) {
+        history.pushState({ pane: item.key }, '', target);
+      }
+    }
+  }
+
+  // iframe 里的页面自己会标 is-embedded；这里再兜一层，防止旧缓存页面还带着顶栏
+  function cleanEmbedChrome() {
+    var ids = ['chanFrame', 'reviewFrame'];
+    ids.forEach(function (id) {
+      var frame = $(id);
+      if (!frame) return;
+      try {
+        var doc = frame.contentDocument;
+        if (!doc || doc.getElementById('embed-hide-nav')) return;
+        var st = doc.createElement('style');
+        st.id = 'embed-hide-nav';
+        st.textContent = '.topnav,.skip-link{display:none!important}';
+        (doc.head || doc.documentElement).appendChild(st);
+        if (doc.documentElement) doc.documentElement.classList.add('is-embedded');
+        // 笔记页里「去登录」这种链到 index.html 的入口，交给顶层跳转，
+        // 别在 iframe 里再套一层行情页
+        doc.addEventListener('click', function (ev) {
+          var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+          if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
+          var url;
+          try { url = new URL(a.href, doc.baseURI); } catch (e) { return; }
+          if (url.origin !== location.origin) return;
+          var path = url.pathname.replace(/\/+$/, '') || '/';
+          if (path === '/' || path === '/index.html' || path === location.pathname) {
+            ev.preventDefault();
+            location.href = url.href;
+          }
+        });
+      } catch (e) {
+        /* 跨域就不管 */
+      }
+    });
+  }
+
+  function cleanAppFrame() {
+    var frame = $('appFrame');
+    if (!frame) return;
+    var loading = $('appLoading');
+    if (loading) loading.hidden = true;
+    try {
+      var doc = frame.contentDocument;
+      if (!doc) return;
+      if (doc.documentElement) doc.documentElement.style.overscrollBehavior = 'contain';
+      if (doc.getElementById('embed-hide-chrome')) return;
+      var st = doc.createElement('style');
+      st.id = 'embed-hide-chrome';
+      st.textContent = '.nav,.topnav,.skip-link{display:none!important}';
+      (doc.head || doc.documentElement).appendChild(st);
+      // 站内首页＝行情页：点它只切回行情轨，不在 iframe 里再套一层行情页
+      doc.addEventListener('click', function (ev) {
+        var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+        if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
+        var url;
+        try { url = new URL(a.href, doc.baseURI); } catch (e) { return; }
+        if (url.origin !== location.origin) return;
+        var path = url.pathname.replace(/\/+$/, '') || '/';
+        if (path === '/' || path === '/index.html' || path === location.pathname) {
+          ev.preventDefault();
+          setPane(0, true);
+        }
+      });
+    } catch (e) {
+      // 跨域页面（理论上不会有）就交给浏览器默认行为
+    }
+  }
+
+  function bindAppPane() {
+    var menu = document.querySelector('.topnav__menu');
+    if (menu) {
+      menu.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a[data-view]') : null;
+        if (!a) return;
+        e.preventDefault();
+        var key = a.getAttribute('data-view');
+        var idx = 0;
+        for (var i = 0; i < PANES.length; i++) {
+          if (PANES[i].key === key) { idx = i; break; }
+        }
+        setPane(idx, true);
+      });
+    }
+    window.addEventListener('popstate', function () {
+      setPane(paneFromHash(), false);
+    });
+    setPane(paneFromHash(), false);
+  }
+
+  /** 下单区：看多 / 看空 直接开仓，这里只负责底部提示和「平仓」按钮的可用状态。 */
+  /** 下单区：胶囊选方向 + 一个「开仓」，这里管底部提示和两个按钮的可用状态。 */
+  function updateOrderUI() {
+    var open = $('btnOpen');
+    if (open) open.disabled = placing || !isTradingSymbol();
+    syncCloseAllBtn();
   }
 
   // ---------------------------------------------------------------- 加载 K 线
   function switchInterval(iv) {
+    // 先记住当前视口（时间区间），新周期的数据到了原地还原。
+    // 加载失败重试时 state.bars 已经清空，不会把刚记下的视口覆盖掉。
+    if (state.bars.length > 2) {
+      var keep = captureView();
+      if (keep) state.view = keep;
+    }
     state.iv = iv;
     applyChartTimeFormat(iv);
     state.seq += 1;
@@ -3743,33 +7206,36 @@
     if (cfg.restBase) REST_HOSTS.unshift(String(cfg.restBase).replace(/\/+$/, ''));
     if (cfg.wsBase) WS_HOSTS.unshift(String(cfg.wsBase).replace(/\/+$/, ''));
 
-    // 上次连通的 WS 源直接优先，别每次刷新都先去撞被墙的那个
-    var lastWs = readLS(LS.ws);
-    if (lastWs) {
-      var wi = WS_HOSTS.indexOf(lastWs);
-      if (wi > 0) WS.idx = wi;
-    }
+    // 上次连通的 WS 源优先：这个判断已经收进 wsHost()，这里不用再摆弄索引。
 
     Account.data = loadGuest();
     restoreAuth();
+    state.watch = loadWatch();
+    state.watchOpen = false; // 自选默认折叠，点标题栏再展开
 
     // 指标偏好要在建图之前读，均线列表 / 成交量 / MACD 的初始状态才对
     loadIndPrefs();
+    Draw.lines = loadDrawings();
     fillLegends();
     renderMaTools();
     chartInit();
     bind();
     renderAll();
+    setSymbolUI();
     showMsg('正在连接行情源…');
 
+    // 从交易笔记页跳过来登录时带 ?next=notes：登录成功后直接回笔记页。
+    var nextParam = '';
+    try {
+      nextParam = new URLSearchParams(window.location.search).get('next') || '';
+    } catch (e) {}
+    if (nextParam === 'notes') pendingNotes = true;
+    if (Account.mode !== 'cloud' && (pendingNotes || window.location.hash === '#login')) {
+      openModal();
+    }
+
     if (Account.mode === 'cloud') {
-      api('tradeState', {}).then(function (j) {
-        Account.data = j.account;
-        renderAll();
-      }).catch(function (e) {
-        if (e && e.code === 'unauthorized') dropAuth();
-        else toast(msgOf(e && e.code));
-      });
+      loadCloudState(false);
     }
 
     // 先 REST 把首屏拿到，不等 WS 握手
@@ -3803,6 +7269,10 @@
     _removeMa: removeMa,
     _setVol: setVolVisible,
     _setMaColor: setMaColor,
+    _switch: switchInterval,
+    _switchSymbol: switchSymbol,
+    _aggregate: aggregateKlines,
+    _synth: TF_SYNTH,
     _tf: TF,
     _trips: roundTrips,
     _stats: tradeStats,
@@ -3811,6 +7281,15 @@
     _groupPositions: groupPositions,
     _localAddPosition: localAddPosition,
     _draw: Draw,
-    _chart: Chart
+    _drawDev: DRAW_DEV,
+    _scale: Scale,
+    _fs: FS,
+    _toggleFs: toggleChartFullscreen,
+    _parseDrawings: parseDrawings,
+    _serializeDrawings: serializeDrawings,
+    _lineShown: lineShown,
+    _chart: Chart,
+    _updateHoverTag: updateHoverTag,
+    _updatePriceTag: updatePriceTag
   };
 })(window);

@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<script>if(window.self!==window.top)document.documentElement.classList.add('is-embedded');</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{LEGAL_TITLE}} · {{SITE_NAME}}</title>
 <meta name="description" content="{{SITE_NAME}}{{LEGAL_TITLE}}全文。{{LEGAL_UPDATED}} 生效。">
@@ -15,17 +16,7 @@
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
 
-<header class="nav">
-  <div class="nav__inner">
-    <a class="nav__brand" aria-label="首页" href="index.html">
-      <img class="nav__logo" src="{{BRAND_LOGO}}?v={{BRAND_LOGO_VER}}" alt="" width="24" height="24">
-    </a>
-    <nav class="nav__links" aria-label="主导航">
-      <a href="{{REL}}index.html">BTC 行情</a>
-      <a href="{{REL}}app/index.html">燃灯 App</a>
-    </nav>
-  </div>
-</header>
+{{SITE_NAV}}
 
 <main id="main">
   <div class="page-head">
