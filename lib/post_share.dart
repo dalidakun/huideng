@@ -1,7 +1,7 @@
 /// 菩提空间帖子分享落地页。
 ///
 /// 分享出去的是 `https://aibuilder.top/post/<id>.html`：这条路径由 CloudBase
-/// HTTP 网关路由到 `api` 云函数（配置见 docs/帖子分享链接卡片方案.md），云函数把
+/// HTTP 网关路由到 `api` 云函数（代码与说明在官网仓库 aibuilder-web），云函数把
 /// 帖子正文和 og:title / og:description / og:image 一起写进**首字节 HTML**。
 ///
 /// 微信收到链接时不执行 JavaScript，只读首字节里的 og 标签来生成聊天里的链接
@@ -9,8 +9,8 @@
 /// 看到的就是这条帖子。所以分享页必须是服务端渲染，纯前端 fetch 的页面抓不到
 /// 内容，卡片只会是站点级的通用标题。
 ///
-/// 站点地址与 `site/site.config.json` 的 `baseUrl` 保持一致，由
-/// `test/post_share_test.dart` 校验。
+/// 站点地址固定为官网域名（官网仓库 aibuilder-web 的 site.config.json 里同一份），
+/// 换域名要两边一起改，由 `test/post_share_test.dart` 守住这个值。
 const String kPostShareBase = 'https://aibuilder.top';
 
 /// 帖子详情页完整地址；[noteId] 为空时退回下载页，保证链接永不落空。

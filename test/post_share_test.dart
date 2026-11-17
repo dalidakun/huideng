@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -51,36 +50,9 @@ void main() {
     expect(hub, isNot(contains('_shareBlessing(')));
   });
 
-  test('kPostShareBase 与 site/site.config.json 的 baseUrl 一致', () {
-    final config = jsonDecode(File('site/site.config.json').readAsStringSync())
-        as Map<String, dynamic>;
-    expect(config['baseUrl'], kPostShareBase,
-        reason: '站点地址改了，请同步 lib/post_share.dart');
-  });
-
-  test('云函数分享页与站点配置一致（域名 / 站点名 / 备案号）', () {
-    final config = jsonDecode(File('site/site.config.json').readAsStringSync())
-        as Map<String, dynamic>;
-    final js = File('cloudfunctions/api/post_page.js').readAsStringSync();
-    expect(js, contains("'$kPostShareBase'"),
-        reason: 'site.config.json 的 baseUrl 变了，post_page.js 里的 BASE_URL 要同步');
-    expect(js, contains("'${config['siteName']}'"),
-        reason: 'site.config.json 的 siteName 变了，post_page.js 里的 SITE_NAME 要同步');
-    expect(js, contains(config['icpNumber'] as String),
-        reason: 'site.config.json 的 icpNumber 变了，post_page.js 里的 ICP_NUMBER 要同步');
-    final police = (config['policeRecordNumber'] as String? ?? '').trim();
-    if (police.isNotEmpty) {
-      expect(js, contains(police),
-          reason: 'site.config.json 的 policeRecordNumber 变了，post_page.js 里的 POLICE_NUMBER 要同步');
-    }
-  });
-
-  test('分享页路由与云函数入口都已接上', () {
-    final parser = File('cloudfunctions/api/post_page.js').readAsStringSync();
-    final index = File('cloudfunctions/api/index.js').readAsStringSync();
-    // 页面要能识别 /post/<id>.html 与旧链接 /post.html?id=
-    expect(parser, contains(r'/^\/post(\.html)?(\/|$)'));
-    expect(index, contains('postPage.handleHttp'),
-        reason: '云函数 index.js 没有把 /post 请求交给分享页处理');
+  test('kPostShareBase 固定为官网域名', () {
+    // 官网已独立成 aibuilder-web 仓库，本仓库不再读站点配置与云函数源码。
+    // 这个域名是分享链接的契约：换域名要同时改官网仓库与这里。
+    expect(kPostShareBase, 'https://aibuilder.top');
   });
 }

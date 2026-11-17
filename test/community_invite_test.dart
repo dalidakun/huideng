@@ -1,6 +1,3 @@
-﻿import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:my_flutter_app/community_invite.dart';
@@ -67,10 +64,9 @@ void main() {
     );
   });
 
-  test('kCommunityInviteBase 与 site/site.config.json 的 baseUrl 一致', () {
-    final config = jsonDecode(File('site/site.config.json').readAsStringSync())
-        as Map<String, dynamic>;
-    expect(config['baseUrl'], kCommunityInviteBase,
-        reason: '站点地址改了，请同步 lib/community_invite.dart');
+  test('kCommunityInviteBase 固定为官网域名', () {
+    // 官网已独立成 aibuilder-web 仓库，本仓库不再读站点配置。
+    // 这个域名是分享落地页的契约：换域名要同时改官网仓库与这里。
+    expect(kCommunityInviteBase, 'https://aibuilder.top');
   });
 }

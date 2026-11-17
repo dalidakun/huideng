@@ -1,21 +1,21 @@
 // 社区分享落地页：slug 表、落地页地址、系统分享文案。
 //
-// 落地页是官网静态站里的一组页面（`site/community.template.html` 渲染成
-// `community/<slug>.html`），由 `tools/build_site.py` 生成——那边直接解析
-// 本文件的 kCommunityInviteSlugs 与 `sect_community_texts.dart` 的
-// kCommunityIntros，所以这两处就是唯一真源，改完跑一次构建脚本即可。
+// 落地页是官网仓库 aibuilder-web 里的静态页（`site/community.template.html`
+// 渲染成 `community/<slug>.html`，数据在那边 `site/data/communities.json`）。
+// 本文件的 kCommunityInviteSlugs 是 App 侧的一份拷贝：新增或改名栏目时，
+// 官网仓库的 JSON 与这里要一起改，否则分享出去的链接会落到下载页。
 // 页面上的「打开 燃灯」按钮把访客带到下载页。
 import 'sect_community_texts.dart';
 
-/// 静态站 baseUrl：与 site/site.config.json 的 `baseUrl` 逐字一致，
-/// 由 test/community_invite_test.dart 对照校验（改站点地址两处一起动）。
+/// 静态站 baseUrl：官网仓库 aibuilder-web 的 `site/site.config.json` 里也是这个值，
+/// 由 test/community_invite_test.dart 守住（改域名两处一起动）。
 const String kCommunityInviteBase = 'https://aibuilder.top';
 
 /// 20 个栏目社区的落地页 slug：键 = `SectInfo.name`，值 = 页面文件名。
 ///
 /// 八大宗派取可读拼音（净土宗与净土法门靠 `jingtuzong` / `jingtu` 区分），
-/// 十二法门沿用图标切图的拼音码。新增栏目时这里补一行，
-/// 再跑 `python tools/build_site.py --sync` 就会多出一页。
+/// 十二法门沿用图标切图的拼音码。新增栏目时这里补一行，官网仓库的
+/// site/data/communities.json 也要补一条（构建时会渲染出对应页面）。
 const Map<String, String> kCommunityInviteSlugs = {
   // ── 八大宗派 ──
   '禅宗': 'chan',

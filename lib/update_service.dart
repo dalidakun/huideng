@@ -160,11 +160,11 @@ enum UpdateInstallResult {
 
 /// App 更新检查与后台下载服务。
 ///
-/// 发布新版流程（需要一台能放静态文件的服务器/对象存储，本项目推荐
-/// 腾讯云开发 CloudBase 静态托管）：
-///  1. 构建新 APK，上传到静态托管，例如 `huideng/downloads/huideng.apk`；
-///  2. 上传 `huideng/download.html`（下载页，见 site/ 目录）；
-///  3. 更新 `huideng/version.json` 中的版本号/链接/说明。
+/// 发布新版流程（官网已独立成 aibuilder-web 仓库：
+/// 腾讯云开发 CloudBase 静态托管 + `tools/update_site.py` 一条命令发版）：
+///  1. 本仓库 `flutter build apk --release` 打包；
+///  2. 在官网仓库运行 `python tools\update_site.py --apk <apk> --version x.y.z+NN`，
+///     它会收包、重建下载页、更新 `huideng/version.json` 并部署。
 ///
 /// 下载流程：用户点「立即下载」后立即交给系统 [DownloadManager]（原生侧
 /// `startApkDownload`），所以收起弹窗、切到后台、甚至杀掉 App 下载都会继续；
