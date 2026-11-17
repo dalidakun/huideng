@@ -98,6 +98,8 @@ function makeEl(id) {
     innerHTML: '',
     className: '',
     hidden: false,
+    clientHeight: 240,
+    clientWidth: 640,
     value: '',
     disabled: false,
     style: {},
@@ -158,12 +160,22 @@ const net = {
   klineStep: 60
 };
 
-function klineRows(limit) {
+// 各周期的秒数，和 trade.js 的 TF_MS 对齐，保证换周期后时间轴能对上
+const TF_SEC = {
+  '1m': 60, '3m': 180, '5m': 300, '15m': 900, '30m': 1800,
+  '1h': 3600, '2h': 7200, '4h': 14400, '6h': 21600,
+  '8h': 28800, '10h': 36000, '12h': 43200,
+  '1d': 86400, '3d': 259200, '5d': 432000,
+  '1w': 604800, '1M': 2419200
+};
+
+function klineRows(limit, stepSec, endSec) {
+  const step = stepSec || net.klineStep;
   const rows = [];
-  const base = Math.floor(clock / 60000) * 60;
-  const start = base - (limit - 1) * net.klineStep;
+  const base = endSec != null ? Math.floor(endSec / step) * step : Math.floor(clock / 60000) * 60;
+  const start = base - (limit - 1) * step;
   for (let i = 0; i < limit; i += 1) {
-    const t = start + i * net.klineStep;
+    const t = start + i * step;
     const open = net.price - 50 + (i % 7);
     rows.push([t * 1000, String(open), String(open + 120), String(open - 80), String(open + 40), String(10 + i)]);
   }
@@ -209,7 +221,12 @@ global.fetch = function fakeFetch(url, init) {
     fakeSetTimeout(() => {
       if (done) return;
       done = true;
-      const body = u.pathname.indexOf('/klines') >= 0 ? klineRows(limit || 1000) : tickerObj();
+      const iv = u.searchParams.get('interval') || '1m';
+      const endParam = u.searchParams.get('endTime');
+      const endSec = endParam ? Number(endParam) / 1000 : null;
+      const body = u.pathname.indexOf('/klines') >= 0
+        ? klineRows(limit || 1000, TF_SEC[iv] || 60, endSec)
+        : tickerObj();
       resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
     }, 40);
   });
@@ -267,7 +284,7 @@ function dispatchWin(type, extra) { (winListeners[type] || []).forEach((f) => f(
 const chart = {
   candle: null, vol: null, fits: 0,
   setDataCount: 0, updateCount: 0, updates: [],
-  lines: [], hists: [], instances: []
+  lines: [], hists: [], instances: [], ranges: []
 };
 
 function series(kind, options) {
@@ -290,16 +307,21 @@ function series(kind, options) {
       if (kind === 'candle') chart.candle = this.data;
     },
     applyOptions(o) { Object.assign(this.options, o); },
+    coordinateToPrice(y) { return 100000 - y; },
     createPriceLine() { return { applyOptions() {} }; }
   };
   return rec;
 }
 
 global.LightweightCharts = {
-  CrosshairMode: { Magnet: 1 },
+  CrosshairMode: { Normal: 0, Magnet: 1 },
   LineStyle: { Dashed: 2 },
-  createChart() {
+  createChart(box, opts) {
     const inst = {
+      _options: opts || {},
+      // 视口就存在实例上，切周期时 trade.js 会先读再写，测试才能验证还原结果
+      _range: { from: 0, to: 100 },
+      _fits: 0,
       addCandlestickSeries(opts) {
         const s = series('candle', opts);
         inst._candleSeries = s;
@@ -321,15 +343,24 @@ global.LightweightCharts = {
       },
       priceScale: () => ({ applyOptions() {}, width: () => 88 }),
       subscribeCrosshairMove(fn) { inst._crosshair = fn; },
-      timeScale: () => ({
-        fitContent() { chart.fits += 1; },
-        getVisibleLogicalRange() { return { from: 0, to: 100 }; },
-        setVisibleLogicalRange() {},
-        subscribeVisibleLogicalRangeChange() {},
-        options() { return { barSpacing: 6 }; },
-        timeToCoordinate() { return 100; },
-        coordinateToTime() { return null; }
-      }),
+      timeScale: () => {
+        if (!inst._timescale) {
+          inst._timescale = {
+            fitContent() { chart.fits += 1; inst._fits += 1; },
+            getVisibleLogicalRange() { return Object.assign({}, inst._range); },
+            setVisibleLogicalRange(r) {
+              inst._range = { from: r.from, to: r.to };
+              chart.ranges.push({ from: r.from, to: r.to });
+            },
+            subscribeVisibleLogicalRangeChange() {},
+            options() { return { barSpacing: 6 }; },
+            timeToCoordinate() { return 100; },
+            coordinateToTime() { return null; },
+            height() { return 0; }
+          };
+        }
+        return inst._timescale;
+      },
       applyOptions() {},
       setCrosshairPosition() {},
       clearCrosshairPosition() {}
@@ -396,6 +427,22 @@ function latestSocket() { return sockets[sockets.length - 1]; }
   assert(Math.abs(ind.dif[4] - (e12[4] - e26[4])) < 1e-12, 'DIF = EMA12 - EMA26');
   assert(Math.abs(ind.hist[4] - (ind.dif[4] - ind.dea[4]) * 2) < 1e-12, 'histogram = 2 x (DIF - DEA)');
 
+  console.log('\n[1b2] crosshair tracks the pointer; price tag also works in the future zone');
+  const mainInst = chart.instances[0];
+  const macdInst = chart.instances[1];
+  assert(mainInst._options.crosshair.mode === 0, 'main chart uses CrosshairMode.Normal');
+  assert(macdInst._options.crosshair.mode === 0, 'MACD chart uses CrosshairMode.Normal');
+
+  const hoverTag = byId('hoverTag');
+  TradePage._updateHoverTag({ point: { y: 100 } }, true);
+  assert(hoverTag.hidden === false, 'price tag shows with pointer position only (no bar under cursor)');
+  assert(hoverTag.textContent === '99,900.00', 'price comes from coordinateToPrice (' + hoverTag.textContent + ')');
+  assert(hoverTag.style.top === '100px', 'tag sits exactly on the pointer y (' + hoverTag.style.top + ')');
+  TradePage._updateHoverTag({}, true);
+  assert(hoverTag.hidden === true, 'leaving the chart hides the tag');
+  TradePage._updateHoverTag({ point: { y: 100 } }, false);
+  assert(hoverTag.hidden === true, 'no price tag over the MACD pane');
+
   console.log('\n[1d] MA add / change / remove, volume toggle');
   const beforeLines = chart.lines.length;
   TradePage._addMa(30);
@@ -421,8 +468,8 @@ function latestSocket() { return sockets[sockets.length - 1]; }
   TradePage._setMaColor(10, '#2F6F8F');
   assert(TradePage._chart.ma[10].options.color.toLowerCase() === '#2f6f8f', 'MA colour can be changed again');
 
-  const newTfs = ['30m', '2h', '8h', '12h', '1w', '1M'];
-  assert(newTfs.every((iv) => TradePage._tf.indexOf(iv) >= 0), '30m/2h/8h/12h/1w/1M are registered');
+  const newTfs = ['3m', '30m', '2h', '6h', '8h', '10h', '12h', '3d', '5d', '1w', '1M'];
+  assert(newTfs.every((iv) => TradePage._tf.indexOf(iv) >= 0), '3m/30m/2h/6h/8h/10h/12h/3d/5d/1w/1M are registered');
 
   console.log('\n[1e] round trips: open+close = one record, win rate / today');
   const hist = TradePage._account.data.history;
@@ -452,6 +499,16 @@ function latestSocket() { return sockets[sockets.length - 1]; }
   const partial = TradePage._trips();
   assert(partial.length === 2, 'two partial closes make two trips');
   assert(partial.every((t) => t.entry === 100 && t.qty === 0.5), 'both partial closes pair with the open');
+
+  // 同方向多次开仓合并后，历史里的开仓价也要用加权成本均价
+  hist.push(
+    { type: 'close', side: 'long', qty: 2, price: 120, pnl: 300, at: nowMs + 1000, posId: 'p2' },
+    { type: 'open', side: 'long', qty: 1, price: 110, pnl: 0, at: nowMs - 1000, posId: 'p2' },
+    { type: 'open', side: 'long', qty: 1, price: 100, pnl: 0, at: nowMs - 2000, posId: 'p2' }
+  );
+  const mergedTrip = TradePage._trips().find((t) => Math.abs(t.entry - 105) < 1e-9);
+  assert(mergedTrip && mergedTrip.qty === 2,
+    'merged opens use the weighted cost in history (' + (mergedTrip && mergedTrip.entry) + ')');
   hist.length = 0;
 
   assert(TradePage._unrealized({ side: 'long', entry: 100, qty: 2 }, 110) === 200,
@@ -506,8 +563,8 @@ function latestSocket() { return sockets[sockets.length - 1]; }
       close: hoverBar.close
     }]])
   });
-  const hoveredOpen = byId('lgO').textContent;
-  assert(hoveredOpen !== '--', 'hover writes OHLC into the legend (' + hoveredOpen + ')');
+  const hoveredChg = byId('lgChg').textContent;
+  assert(hoveredChg !== '--', 'hover writes the readout into the legend (' + hoveredChg + ')');
   const hoveredMa = byId('maLegend').textContent;
   const lastBarNow = state.bars[state.bars.length - 1];
   latestSocket().emit({
@@ -517,7 +574,7 @@ function latestSocket() { return sockets[sockets.length - 1]; }
       k: { t: lastBarNow.time * 1000, i: '1m', o: lastBarNow.open, h: lastBarNow.high, l: lastBarNow.low, c: lastBarNow.close, v: lastBarNow.volume }
     }
   });
-  assert(byId('lgO').textContent === hoveredOpen, 'live tick keeps the hovered OHLC');
+  assert(byId('lgChg').textContent === hoveredChg, 'live tick keeps the hovered readout');
   assert(byId('maLegend').textContent === hoveredMa, 'live tick keeps the hovered MA values');
   mainChart._crosshair({ time: null });
 
@@ -584,6 +641,180 @@ function latestSocket() { return sockets[sockets.length - 1]; }
   const afterShow = latestSocket();
   assert(afterShow.readyState === 1 && /data-stream/.test(afterShow.url), 'reconnects on return');
   assert(chart.setDataCount > 0 && state.bars.length > 0, 'backfills data on return');
+
+  console.log('\n[7] switching period keeps the bar count (candle width) and right-edge time');
+  // 模拟用户放大到 100 根的一段历史，右边界停在 100 根之前，再切到 5 分钟线
+  const mainTs = chart.instances[0];
+  const keepLast = state.bars.length - 1;
+  const viewFrom = keepLast - 200;
+  const viewTo = keepLast - 100;
+  const toTime = state.bars[viewTo].time;
+  mainTs._range = { from: viewFrom, to: viewTo };
+  const fitsBefore = chart.fits;
+
+  TradePage._switch('5m');
+  await advance(500);
+
+  const bars5m = state.bars;
+  assert(state.iv === '5m' && bars5m.length === 1000, '5m candles loaded (' + state.iv + '/' + bars5m.length + ')');
+  assert(chart.fits === fitsBefore, 'no fitContent on switch, the zoom is kept');
+  const r5 = mainTs._range;
+  assert(Math.abs((r5.to - r5.from) - 100) < 0.001,
+    'same number of candles, same candle width (' + (r5.to - r5.from).toFixed(2) + ' bars)');
+  // 右边界时间不变（换周期后时间轴刻度变了，所以从下标反算）
+  const at5 = (idx) => {
+    const i = Math.floor(idx);
+    return bars5m[i].time + (idx - i) * 300;
+  };
+  assert(Math.abs(at5(r5.to) - toTime) < 1.5, 'right edge stays on the same bar time');
+  assert(r5.from >= 0 && r5.to <= bars5m.length - 1 + 6, 'restored range stays inside the loaded data');
+  const span5m = (r5.to - r5.from) * 5;
+  assert(span5m > 100, 'the view now covers 100 x 5m = ' + span5m + ' minutes');
+
+  console.log('\n[7b] a huge timeframe jump keeps the same bar count (no giant candle)');
+  TradePage._switch('1d');
+  await advance(500);
+  const r1d = mainTs._range;
+  assert(state.iv === '1d' && state.bars.length === 1000, '1d candles loaded');
+  assert(chart.fits === fitsBefore, 'still no fitContent on switch');
+  assert(Math.abs((r1d.to - r1d.from) - 100) < 0.001,
+    'still 100 daily bars on screen (' + (r1d.to - r1d.from).toFixed(2) + ')');
+  assert(r1d.from >= 0 && r1d.to <= state.bars.length - 1 + 6, '1d range also stays inside the data');
+
+  console.log('\n[7c] at the live edge the right-hand gutter is kept');
+  const last1d = state.bars.length - 1;
+  const rBeforeEdge = { from: last1d - 99, to: last1d + 6 };
+  mainTs._range = rBeforeEdge;
+  TradePage._switch('1h');
+  await advance(500);
+  const bars1h = state.bars;
+  const r1h = mainTs._range;
+  assert(state.iv === '1h' && bars1h.length === 1000, '1h candles loaded');
+  assert(Math.abs((r1h.to - r1h.from) - 105) < 0.001,
+    'same 100 candles + 6-bar gutter (' + (r1h.to - r1h.from).toFixed(2) + ')');
+  assert(Math.abs(r1h.to - (bars1h.length - 1 + 6)) < 0.001,
+    'right edge sits 6 bars after the newest candle');
+  assert(chart.fits === fitsBefore, 'still no fitContent at the live edge');
+
+  console.log('\n[7d] a small right-hand gap survives even when the left edge is in whitespace');
+  // 用户把最后一根拖到离右边界 1 根的位置（左侧已经进入数据外留白），切周期后
+  // 这根 K 线的位置不能被「左边界夹回 0」的兜底推走
+  const last1h = state.bars.length - 1;
+  mainTs._range = { from: -5, to: last1h + 1 };
+  TradePage._switch('30m');
+  await advance(500);
+  const bars30m = state.bars;
+  const r30 = mainTs._range;
+  assert(state.iv === '30m' && bars30m.length === 1000, '30m candles loaded');
+  assert(Math.abs(r30.to - (bars30m.length - 1 + 1)) < 0.001,
+    'newest candle still sits 1 bar from the right edge (' + r30.to + ')');
+  assert(Math.abs((r30.to - r30.from) - 1005) < 0.001,
+    'bar count / candle width unchanged (' + (r30.to - r30.from).toFixed(2) + ')');
+  assert(r30.from < 0, 'left whitespace is kept instead of being clamped to 0 (' + r30.from.toFixed(2) + ')');
+  assert(chart.fits === fitsBefore, 'still no fitContent in the whitespace case');
+
+  console.log('\n[7e] a large right-hand gutter (dragged far) is preserved too');
+  // 用户可以把图往右拖出几十根留白，切周期后这段留白不能缩回 rightOffset（6 根）
+  const last30 = state.bars.length - 1;
+  mainTs._range = { from: last30 + 62 - 100, to: last30 + 62 };
+  TradePage._switch('5m');
+  await advance(500);
+  const bars5b = state.bars;
+  const r5b = mainTs._range;
+  assert(state.iv === '5m' && bars5b.length === 1000, '5m candles loaded again');
+  assert(Math.abs(r5b.to - (bars5b.length - 1 + 62)) < 0.001,
+    'the 62-bar gutter is kept (' + (r5b.to - (bars5b.length - 1)).toFixed(2) + ' bars)');
+  assert(Math.abs((r5b.to - r5b.from) - 100) < 0.001,
+    'bar count / candle width unchanged (' + (r5b.to - r5b.from).toFixed(2) + ')');
+  assert(chart.fits === fitsBefore, 'still no fitContent with a large gutter');
+
+  console.log('\n[8] 10h / 5d are synthesized from 2h / 1d, 6h / 3d are native');
+  const b0 = 36000 * 100;
+  const agg = TradePage._aggregate([
+    [b0 * 1000, '100', '110', '90', '105', '1'],
+    [(b0 + 7200) * 1000, '105', '120', '100', '118', '2'],
+    [(b0 + 14400) * 1000, '118', '119', '80', '85', '3'],
+    [(b0 + 21600) * 1000, '85', '90', '70', '75', '4'],
+    [(b0 + 28800) * 1000, '75', '95', '60', '90', '5'],
+    [(b0 + 36000) * 1000, '90', '92', '88', '91', '6']
+  ], 36000);
+  assert(agg.length === 2, 'five 2h candles merge into one 10h candle (' + agg.length + ')');
+  assert(+agg[0][1] === 100 && +agg[0][2] === 120 && +agg[0][3] === 60 && +agg[0][4] === 90,
+    'merged OHLC keeps first open / max high / min low / last close');
+  assert(+agg[0][5] === 15, 'merged volume adds up (' + agg[0][5] + ')');
+  const partialAgg = TradePage._aggregate([
+    [(b0 + 7200) * 1000, '1', '1', '1', '1', '1'],
+    [(b0 + 14400) * 1000, '1', '1', '1', '1', '1']
+  ], 36000);
+  assert(partialAgg.length === 0, 'a bucket cut by the page edge is dropped, not emitted half-formed');
+
+  let callsMark = net.calls.length;
+  TradePage._switch('10h');
+  await advance(500);
+  assert(state.iv === '10h' && state.bars.length >= 900, '10h candles loaded (' + state.bars.length + ')');
+  assert(state.bars[1].time - state.bars[0].time === 36000, '10h candles are exactly 10 hours apart');
+  const calls10 = net.calls.slice(callsMark).filter((c) => c.path.indexOf('/klines') >= 0);
+  assert(calls10.filter((c) => /interval=2h/.test(c.path)).length >= 5,
+    '10h is built from 5 pages of 2h candles (' + calls10.length + ' requests)');
+
+  callsMark = net.calls.length;
+  TradePage._switch('5d');
+  await advance(500);
+  assert(state.iv === '5d' && state.bars.length >= 900, '5d candles loaded (' + state.bars.length + ')');
+  assert(state.bars[1].time - state.bars[0].time === 432000, '5d candles are exactly 5 days apart');
+  assert(net.calls.slice(callsMark).some((c) => /interval=1d/.test(c.path)),
+    '5d is built from 1d candles');
+
+  callsMark = net.calls.length;
+  TradePage._switch('6h');
+  await advance(500);
+  assert(state.iv === '6h' && state.bars.length === 1000, '6h candles load natively');
+  assert(net.calls.slice(callsMark).some((c) => /interval=6h/.test(c.path)), '6h uses the native 6h interval');
+
+  callsMark = net.calls.length;
+  TradePage._switch('3d');
+  await advance(500);
+  assert(state.iv === '3d' && state.bars.length === 1000, '3d candles load natively');
+  assert(net.calls.slice(callsMark).some((c) => /interval=3d/.test(c.path)), '3d uses the native 3d interval');
+
+  console.log('\n[9] symbol search switches the chart without touching the BTC account');
+  callsMark = net.calls.length;
+  TradePage._switchSymbol('ETHUSDT');
+  await advance(500);
+  assert(state.symbol === 'ETHUSDT', 'chart symbol switched to ETHUSDT (' + state.symbol + ')');
+  assert(state.bars.length === 1000, 'ETHUSDT candles loaded (' + state.bars.length + ')');
+  assert(net.calls.slice(callsMark).some((c) => /symbol=ETHUSDT/.test(c.path)),
+    'klines are requested for the new symbol');
+  const ethSocket = latestSocket();
+  assert(/ethusdt@kline_3d/.test(ethSocket.url), 'kline stream follows the chart symbol (' + ethSocket.url + ')');
+  assert(/btcusdt@ticker/.test(ethSocket.url), 'ticker stays on BTC for the simulated account');
+  assert(TradePage._state.price > 0 && state.ticker && state.ticker.price > 0,
+    'BTC mark price is untouched by the chart shift');
+
+  TradePage._switchSymbol('BTCUSDT');
+  await advance(500);
+  assert(state.symbol === 'BTCUSDT', 'can switch back to BTCUSDT');
+  assert(net.calls.slice(callsMark).some((c) => /symbol=BTCUSDT/.test(c.path)),
+    'klines are requested for BTC again');
+
+  console.log('\n[10] 画线按设备分开存：手机只显示手机画的，电脑只显示电脑画的');
+  const devLines = TradePage._parseDrawings([
+    { infinite: true, points: [{ t: 1700000000, p: 100 }, { t: 1700000600, p: 120 }], dev: 'm' },
+    { infinite: true, points: [{ t: 1700000000, p: 100 }, { t: 1700000600, p: 120 }], dev: 'd' },
+    { infinite: true, points: [{ t: 1700000000, p: 100 }, { t: 1700000600, p: 120 }] }
+  ]);
+  assert(devLines.length === 3, 'three saved lines are parsed (' + devLines.length + ')');
+  assert(devLines[0].dev === 'm', 'a mobile line keeps dev=m');
+  assert(devLines[1].dev === 'd' && devLines[2].dev === 'd',
+    'desktop lines and legacy data (no dev) count as desktop');
+  const myDev = TradePage._drawDev === 'm' ? 'm' : 'd';
+  assert(devLines.filter(TradePage._lineShown).length === (myDev === 'd' ? 2 : 1),
+    'only this device\'s lines are drawn (' + myDev + ')');
+  TradePage._draw.lines = devLines;
+  const devSaved = TradePage._serializeDrawings();
+  assert(devSaved.length === 3, 'serializing keeps the other device\'s lines too (' + devSaved.length + ')');
+  assert(devSaved.filter((o) => o.dev === 'm').length === 1 && devSaved.filter((o) => o.dev === 'd').length === 2,
+    'every serialized line carries its device tag');
 
   console.log('\n----------------------------------------');
   if (failures) {

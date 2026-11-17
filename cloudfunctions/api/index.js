@@ -534,6 +534,25 @@ exports.main = async (event, context) => {
   if (event && event.httpMethod) {
     const page = await postPage.handleHttp(event, app);
     if (page) return page;
+
+    // 同域 /api 路由：把 HTTP 请求还原成原来的 { action, ... } JSON 协议，
+    // 这样网页只访问 aibuilder.top，不再依赖 api.tcloudbasegateway.com 的跨域连接。
+    if (/^\/api(?:\/|$)/.test(String(event.path || ""))) {
+      let body = event.body;
+      if (typeof body === "string") {
+        try { body = JSON.parse(body); } catch (e) { body = {}; }
+      }
+      if (!body || typeof body !== "object") body = {};
+      const result = await exports.main(body, context);
+      return {
+        statusCode: 200,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store"
+        },
+        body: JSON.stringify(result)
+      };
+    }
   }
 
   const uid = await resolveUid(event, context);
@@ -561,7 +580,7 @@ exports.main = async (event, context) => {
   // 创建失败时退化成「什么都不认」，保证 App 原有功能不受影响。
   let tradeHandle;
   try {
-    tradeHandle = createTrade({ db, ok, fail, hashPassword, normalizeUsername });
+    tradeHandle = createTrade({ db, ok, fail, hashPassword, normalizeUsername, app });
   } catch (e) {
     console.error("[api] createTrade failed:", e && e.stack ? e.stack : e);
     tradeHandle = function () { return undefined; };
@@ -580,7 +599,30 @@ exports.main = async (event, context) => {
   const feedbacks = db.collection("feedbacks");
   const admins = db.collection("admins");
   const verifications = db.collection("userVerifications");
+  // 付费支持者徽标：一个用户一条；expireAt 过期后所有查询都会忽略（旧实名认证记录不再读取）。
+  const supporterBadges = db.collection("supporterBadges");
+  // 交易单号占用表：_id = sha1(channel:txnNo)，保证一个单号只能开通一次。
+  const badgeClaims = db.collection("badgeClaims");
+  // AI 翻译额度：一个用户一条；freeUsed 计“已翻译过的不同段落数”，paidRemaining 为付费剩余次数。
+  const aiQuota = db.collection("aiQuota");
+  // AI 段落核销表：_id = sha1(uid:段落哈希)，同一用户同一段只计一次。
+  const aiUses = db.collection("aiUses");
+  // 人工处罚：_id = uid；存在即禁止该账号使用 AI 翻译/购买徽标。
+  const featureBans = db.collection("featureBans");
+  // 申诉记录：一条一个文档。
+  const featureAppeals = db.collection("featureAppeals");
   const sutraDiscussions = db.collection("sutraDiscussions");
+  // 缠论读书会：跨用户共享的正文注释。一条 = 某一课里选中的一段文字 + 一条注释，
+  // 按 lessonNo 归属，课与课之间互不影响。写注释不需要登录：身份是浏览器本地
+  // 生成的 clientId + secret（未登录也能参与），clientHash 只用于删除自己那条。
+  const chanAnnotations = db.collection("chanAnnotations");
+  // 缠论读书会 · 每课评论：一条文档 = 一条评论/回复。parentId 为空是主楼，
+  // 回复统一挂到主楼（rootId），只做一层楼中楼；pinned 只对主楼生效。
+  const chanComments = db.collection("chanComments");
+  // 读书会管理员：clientId + clientHash 与评论/注释的匿名身份同一套校验。
+  const chanAdmins = db.collection("chanAdmins");
+  // 评论头像：_id = clientId，存用户自己上传的头像（data URL）。
+  const chanProfiles = db.collection("chanProfiles");
   const topicBans = db.collection("topicBans");
   // AI 译文缓存：同一段经文只生成一次，之后所有用户直接复用，避免重复计费。
   const aiTranslations = db.collection("aiTranslations");
@@ -643,6 +685,228 @@ exports.main = async (event, context) => {
     if (m) t = t.slice(0, m.index);
     return t.trim();
   }
+
+  // ── 付费支持者徽标 ───────────────────────────────────────
+  // 单号无法与个人收款账户核验，这里只做“单号格式 + 全站唯一 + 频控”，
+  // 属于自助核销；徽标文案必须写“付费支持”，不得暗示实名/身份认证。
+  const BADGE_PLANS = {
+    // 199 为一次性付费：徽标与“无限翻译”长期有效（100 年，等价永久）。
+    "199": { plan: "199", priceFen: 19900, quota: 0, unlimited: true, days: 36500 },
+  };
+
+  let _supporterCollectionsReady = false;
+
+  async function ensureSupporterCollections() {
+    if (_supporterCollectionsReady) return;
+    for (const name of [
+      "supporterBadges",
+      "badgeClaims",
+      "aiQuota",
+      "aiUses",
+      "featureBans",
+      "featureAppeals",
+    ]) {
+      try {
+        await db.createCollection(name);
+      } catch (e) {
+        // 已存在或权限问题：忽略，后续查询会暴露真实错误。
+      }
+    }
+    _supporterCollectionsReady = true;
+  }
+
+  /// 是否被人工限制 AI 翻译/购买（管理员在 featureBans 里按 uid 记一条）。
+  async function isFeatureBanned(uid) {
+    if (!uid) return false;
+    try {
+      const { data } = await featureBans.doc(uid).get();
+      return !!(data && data[0]);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// 当前有效的支持者徽标（expireAt 已过视为没有；旧实名认证记录不再读取）。
+  async function getActiveBadge(uid) {
+    if (!uid) return null;
+    try {
+      const { data } = await supporterBadges.doc(uid).get();
+      const b = data && data[0];
+      if (b && Number(b.expireAt) > now()) return b;
+    } catch (e) {}
+    return null;
+  }
+
+  /// 批量查有效徽标，供笔记/评论/通知/资料接口附加 authorVerified。
+  async function activeBadgeMap(ids) {
+    const map = {};
+    if (!Array.isArray(ids) || ids.length === 0) return map;
+    for (let i = 0; i < ids.length; i += 100) {
+      try {
+        const { data } = await supporterBadges
+          .where({ uid: _.in(ids.slice(i, i + 100)), expireAt: _.gt(now()) })
+          .get();
+        for (const b of data || []) map[b.uid] = true;
+      } catch (e) {}
+    }
+    return map;
+  }
+
+  // ── AI 翻译额度 ────────────────────────────────────────
+  // 计费口径：同一用户、同一段原文（按段落哈希）只计一次；重复打开同一段不再扣。
+  // 与其他用户是否已缓存译文无关——只要该用户第一次打开这一段，就计一次。
+  const AI_FREE_LIMIT = 1000;
+
+  function quotaView(q) {
+    const stored = Number(q.freeLimit) || 0;
+    const freeLimit = stored > 0 ? Math.max(stored, AI_FREE_LIMIT) : AI_FREE_LIMIT;
+    const freeUsed = Math.max(0, Number(q.freeUsed) || 0);
+    const paidRemaining = Math.max(0, Number(q.paidRemaining) || 0);
+    const unlimitedUntil = Number(q.unlimitedUntil) || 0;
+    const unlimited =
+      q.unlimited === true && (unlimitedUntil === 0 || unlimitedUntil > now());
+    const freeRemaining = Math.max(0, freeLimit - freeUsed);
+    return {
+      freeLimit,
+      freeUsed,
+      freeRemaining,
+      paidRemaining,
+      unlimited,
+      unlimitedUntil,
+      remaining: unlimited ? -1 : freeRemaining + paidRemaining,
+    };
+  }
+
+  async function ensureAiQuota(uid) {
+    await ensureSupporterCollections();
+    try {
+      const { data } = await aiQuota.doc(uid).get();
+      if (data && data.length) return data[0];
+    } catch (e) {}
+    try {
+      await aiQuota.add({
+        _id: uid,
+        uid,
+        freeLimit: AI_FREE_LIMIT,
+        freeUsed: 0,
+        paidRemaining: 0,
+        unlimited: false,
+        unlimitedUntil: 0,
+        updatedAt: now(),
+      });
+    } catch (e) {}
+    try {
+      const { data } = await aiQuota.doc(uid).get();
+      return data && data[0]
+        ? data[0]
+        : { freeLimit: AI_FREE_LIMIT, freeUsed: 0, paidRemaining: 0, unlimited: false };
+    } catch (e) {
+      return { freeLimit: AI_FREE_LIMIT, freeUsed: 0, paidRemaining: 0, unlimited: false };
+    }
+  }
+
+  /// 199 的“无限翻译”只在徽标有效期内生效，徽标过期后自动回落到免费次数。
+  async function effectiveQuota(uid) {
+    const q = await ensureAiQuota(uid);
+    if (q.unlimited === true) {
+      const until = Number(q.unlimitedUntil) || 0;
+      if (until > 0 && until <= now()) {
+        q.unlimited = false;
+      } else if (until === 0) {
+        // 兼容早期没有 unlimitedUntil 的记录：按当前有效徽标判断。
+        const badge = await getActiveBadge(uid);
+        if (!badge) q.unlimited = false;
+      }
+    }
+    return q;
+  }
+
+  async function getQuotaView(uid) {
+    if (!uid) return quotaView({});
+    return quotaView(await effectiveQuota(uid));
+  }
+
+  /// 核销一次“该用户首次打开这一段”。返回 {allowed, quota}。
+  async function consumeAiUse(uid, paragraphHash) {
+    if (!uid) return { allowed: false, quota: quotaView({}) };
+    await ensureSupporterCollections();
+    const useId = crypto
+      .createHash("sha1")
+      .update(uid + "|" + paragraphHash)
+      .digest("hex")
+      .slice(0, 32);
+
+    try {
+      const { data } = await aiUses.doc(useId).get();
+      if (data && data.length) {
+        return { allowed: true, already: true, quota: await getQuotaView(uid) };
+      }
+    } catch (e) {}
+
+    try {
+      await aiUses.add({ _id: useId, uid, h: paragraphHash, at: now() });
+    } catch (e) {
+      // 并发下重复插入：同一段已在计数，直接放行；其它写入错误则拒绝，避免绕过额度。
+      try {
+        const { data } = await aiUses.doc(useId).get();
+        if (data && data.length) {
+          return { allowed: true, already: true, quota: await getQuotaView(uid) };
+        }
+      } catch (e2) {}
+      console.error("[api] aiUses add error:", e && e.message ? e.message : e);
+      return { allowed: false, quota: await getQuotaView(uid) };
+    }
+
+    const before = await effectiveQuota(uid);
+    if (before.unlimited === true) return { allowed: true, quota: quotaView(before) };
+
+    // 条件更新 + 回读校验：不同版本的更新接口返回结构不一致，
+    // 只用返回值的 updated 判断会在“实际成功但没返回 updated”时误判，进而重复扣减。
+    try {
+      await aiQuota
+        .where({ _id: uid, freeUsed: _.lt(AI_FREE_LIMIT) })
+        .update({ freeUsed: _.inc(1), updatedAt: now() });
+    } catch (e) {
+      console.error("[api] aiQuota free update error:", e && e.message ? e.message : e);
+    }
+    let after = await ensureAiQuota(uid);
+    if (Number(after.freeUsed) > Number(before.freeUsed)) {
+      return { allowed: true, quota: quotaView(after) };
+    }
+
+    try {
+      await aiQuota
+        .where({ _id: uid, paidRemaining: _.gt(0) })
+        .update({ paidRemaining: _.inc(-1), updatedAt: now() });
+    } catch (e) {
+      console.error("[api] aiQuota paid update error:", e && e.message ? e.message : e);
+    }
+    after = await effectiveQuota(uid);
+    if (Number(after.paidRemaining) < Number(before.paidRemaining)) {
+      return { allowed: true, quota: quotaView(after) };
+    }
+    if (after.unlimited === true) return { allowed: true, quota: quotaView(after) };
+
+    // 兜底：条件更新在当前数据库版本不生效时，用一次普通更新补上。
+    if (Number(after.freeUsed) < AI_FREE_LIMIT) {
+      try {
+        await aiQuota.doc(uid).update({ freeUsed: _.inc(1), updatedAt: now() });
+        return { allowed: true, quota: await getQuotaView(uid) };
+      } catch (e) {}
+    }
+    if (Number(after.paidRemaining) > 0) {
+      try {
+        await aiQuota.doc(uid).update({ paidRemaining: _.inc(-1), updatedAt: now() });
+        return { allowed: true, quota: await getQuotaView(uid) };
+      } catch (e) {}
+    }
+
+    try {
+      await aiUses.doc(useId).remove();
+    } catch (e) {}
+    return { allowed: false, quota: quotaView(after) };
+  }
+
 
   // 确保 readingParagraphNotes 集合存在。
   async function ensureReadingParagraphNotes() {
@@ -945,6 +1209,19 @@ exports.main = async (event, context) => {
     }
   }
 
+  // 第一管理员：只有账号名为 @randeng 的管理员可以手动开通订阅。
+  async function isRootAdminUser(uid) {
+    if (!uid) return false;
+    try {
+      await ensureUserAccounts();
+      const { data } = await userAccounts.where({ uid }).limit(1).get();
+      const name = data && data[0] ? String(data[0].username || "") : "";
+      return name.toLowerCase() === "randeng";
+    } catch (e) {
+      return false;
+    }
+  }
+
   // 给反馈列表附加反馈者的账号名称（未设置返回空串）。
   async function attachFeedbackUsernames(feedbackList) {
     if (!feedbackList || feedbackList.length === 0) return;
@@ -980,6 +1257,57 @@ exports.main = async (event, context) => {
       await db.createCollection("sutraDiscussions");
     } catch (e) {
       // 已存在或其它错误均忽略，后续真实操作会再报出明确错误。
+    }
+  }
+
+  // 确保 chanAnnotations 集合存在（缠论读书会跨用户注释）。
+  async function ensureChanAnnotations() {
+    try {
+      await db.createCollection("chanAnnotations");
+    } catch (e) {
+      // 已存在或其它错误均忽略，后续真实读写会再报出明确错误。
+    }
+  }
+
+  // 缠论注释的匿名身份指纹：clientId + secret 一起哈希，库里只留哈希。
+  // 未登录用户也能写注释，删除时用同一对值校验，别人拿不到 secret 就删不了。
+  function chanClientHash(clientId, secret) {
+    return crypto
+      .createHash("sha256")
+      .update(String(clientId) + "\n" + String(secret))
+      .digest("hex");
+  }
+
+  // 确保 chanComments / chanAdmins 集合存在（缠论读书会评论与管理员）。
+  async function ensureChanComments() {
+    try {
+      await db.createCollection("chanComments");
+    } catch (e) {}
+  }
+
+  async function ensureChanAdmins() {
+    try {
+      await db.createCollection("chanAdmins");
+    } catch (e) {}
+  }
+
+  async function ensureChanProfiles() {
+    try {
+      await db.createCollection("chanProfiles");
+    } catch (e) {}
+  }
+
+  // 管理员校验：clientId 必须能在 chanAdmins 里找到，且 secret 哈希一致。
+  // 和评论/注释共用同一套浏览器本地匿名身份，不需要额外账号密码。
+  async function isChanAdmin(clientId, secret) {
+    if (!clientId || !secret) return false;
+    try {
+      await ensureChanAdmins();
+      const res = await chanAdmins.where({ clientId }).limit(1).get();
+      const row = res.data && res.data[0];
+      return !!(row && row.clientHash === chanClientHash(clientId, secret));
+    } catch (e) {
+      return false;
     }
   }
 
@@ -1050,7 +1378,7 @@ exports.main = async (event, context) => {
 
   const _ = db.command;
 
-  // 消息中心「收到的互动」类型：点赞/评论/回复评论/转发/收藏/关注/@提及。
+  // 消息中心「收到的互动」类型：点赞/评论/回复评论/转发/收藏/关注/@提及/订阅开通。
   const receivedTypes = [
     "like_me",
     "reply",
@@ -1059,6 +1387,7 @@ exports.main = async (event, context) => {
     "favorite_me",
     "follow_me",
     "mention",
+    "subscription",
   ];
 
   // 截取文本前 N 个字符作为帖子摘要（通知列表展示用）。
@@ -1106,24 +1435,13 @@ exports.main = async (event, context) => {
     }
   }
 
-  // 给笔记列表附加作者实名认证标记（authorVerified），供客户端展示认证图标。
+  // 给笔记列表附加作者「支持者徽标」标记（authorVerified），供客户端展示徽标。
+  // 只认 supporterBadges 且 expireAt > now()，旧 userVerifications 实名记录一律忽略。
   async function attachAuthorVerified(noteList) {
     if (!noteList || noteList.length === 0) return;
     const ids = [...new Set(noteList.map((n) => n.ownerUserId).filter(Boolean))];
     if (ids.length === 0) return;
-    const verified = {};
-    try {
-      await ensureVerifications();
-    } catch (e) {}
-    for (let i = 0; i < ids.length; i += 100) {
-      const chunk = ids.slice(i, i + 100);
-      try {
-        const { data } = await verifications
-          .where({ uid: _.in(chunk) })
-          .get();
-        for (const v of data || []) verified[v.uid] = true;
-      } catch (e) {}
-    }
+    const verified = await activeBadgeMap(ids);
     for (const n of noteList) {
       n.authorVerified = !!verified[n.ownerUserId];
     }
@@ -1180,17 +1498,7 @@ exports.main = async (event, context) => {
         for (const a of data || []) accounts[a.uid] = a.username || "";
       }
     } catch (e) {}
-    const verified = {};
-    try {
-      await ensureVerifications();
-      for (let i = 0; i < ids.length; i += 100) {
-        const chunk = ids.slice(i, i + 100);
-        const { data } = await verifications
-          .where({ uid: _.in(chunk) })
-          .get();
-        for (const v of data || []) verified[v.uid] = true;
-      }
-    } catch (e) {}
+    const verified = await activeBadgeMap(ids);
     for (const c of commentList) {
       c.authorAccount = accounts[c.authorId] || "";
       c.authorVerified = !!verified[c.authorId];
@@ -2485,15 +2793,7 @@ exports.main = async (event, context) => {
         const ids = (Array.isArray(event.ids) ? event.ids.map(String) : [])
           .filter(Boolean)
           .slice(0, 200);
-        const verified = {};
-        if (ids.length > 0) {
-          try {
-            const { data } = await verifications
-              .where({ uid: _.in(ids) })
-              .get();
-            for (const v of data || []) verified[v.uid] = true;
-          } catch (e) {}
-        }
+        const verified = ids.length > 0 ? await activeBadgeMap(ids) : {};
         // 账号名称：userAccounts 中登记的 username；阅藏进度：同表 canonRead/canonTotal；
         // 读经时长：同表 readingSeconds（他人主页徽章点亮依据）；
         // ★ userAccounts.createdAt：用户首次创建 @账户 时写入，比同步 prefs 更接近真实注册时间。
@@ -3289,10 +3589,8 @@ exports.main = async (event, context) => {
             }
           } catch (e) {}
           try {
-            const { data: vd } = await verifications
-              .where({ uid: _.in(actorIds) })
-              .get();
-            for (const v of vd || []) verified[v.uid] = true;
+            const vmap = await activeBadgeMap(actorIds);
+            for (const id of Object.keys(vmap)) verified[id] = true;
           } catch (e) {}
           try {
             const { data: ud } = await userData
@@ -3473,6 +3771,284 @@ exports.main = async (event, context) => {
         hotDiscussionsCache = null;
         hotSutraMentionsCache = null;
         return ok({});
+      }
+
+      // ==================== 缠论读书会 · 跨用户注释 ====================
+      // 同一课所有用户的注释共享一份；课与课之间按 lessonNo 隔离，互不混淆。
+      // 读公开；写不需要登录（浏览器本地匿名 clientId），删除只允许删自己那条。
+
+      case "getChanAnnotations": {
+        const lessonNo = Number(event.lessonNo);
+        if (!(lessonNo >= 1 && lessonNo <= 108)) return fail("bad_request");
+        await ensureChanAnnotations();
+        const limit = Math.min(Math.max(Number(event.limit) || 300, 1), 500);
+        const res = await chanAnnotations
+          .where({ lessonNo })
+          .orderBy("createdAt", "desc")
+          .limit(limit)
+          .get();
+        const clientId = String(event.clientId || "").slice(0, 64);
+        const annotations = (res.data || []).map((d) => ({
+          id: d._id,
+          quote: d.quote || "",
+          note: d.note || "",
+          name: d.name || "匿名读者",
+          anchor: d.anchor || null,
+          createdAt: d.createdAt || 0,
+          mine: !!clientId && d.clientId === clientId,
+        }));
+        return ok({ annotations });
+      }
+
+      case "createChanAnnotation": {
+        const lessonNo = Number(event.lessonNo);
+        if (!(lessonNo >= 1 && lessonNo <= 108)) return fail("bad_request");
+        const quote = String(event.quote || "").trim().slice(0, 400);
+        const note = String(event.note || "").trim().slice(0, 1000);
+        const name = String(event.name || "").trim().slice(0, 24) || "匿名读者";
+        const clientId = String(event.clientId || "").trim().slice(0, 64);
+        const secret = String(event.clientSecret || "").trim().slice(0, 128);
+        if (!quote) return fail("empty_quote");
+        if (!note) return fail("empty_note");
+        if (!clientId || !secret) return fail("bad_request");
+        await ensureChanAnnotations();
+        // 轻量频控：同一浏览器 10 分钟最多 20 条。集合还没有组合索引时这项
+        // 查询可能报错，忽略即可，不能因为频控失败挡住正常发表。
+        try {
+          const recent = await chanAnnotations
+            .where({ clientId, createdAt: _.gt(now() - 10 * 60 * 1000) })
+            .count();
+          if (recent && recent.total >= 20) return fail("rate_limited");
+        } catch (e) {}
+        // 锚点：课内文本流偏移。s/e 不合法就存 null，客户端再用 quote 兜底定位。
+        let anchor = null;
+        if (event.anchor && typeof event.anchor === "object") {
+          const s = Number(event.anchor.s);
+          const e = Number(event.anchor.e);
+          if (Number.isFinite(s) && Number.isFinite(e) && s >= 0 && e > s && e <= 200000) {
+            anchor = { s: Math.round(s), e: Math.round(e) };
+          }
+        }
+        const createdAt = now();
+        const res = await chanAnnotations.add({
+          lessonNo,
+          lessonTitle: String(event.lessonTitle || "").slice(0, 120),
+          quote,
+          note,
+          name,
+          anchor,
+          clientId,
+          clientHash: chanClientHash(clientId, secret),
+          createdAt,
+        });
+        return ok({ id: res.id, createdAt, name });
+      }
+
+      case "deleteChanAnnotation": {
+        const id = String(event.id || "");
+        const clientId = String(event.clientId || "").trim().slice(0, 64);
+        const secret = String(event.clientSecret || "").trim().slice(0, 128);
+        if (!id || !clientId || !secret) return fail("bad_request");
+        await ensureChanAnnotations();
+        const doc = chanAnnotations.doc(id);
+        const existing = await doc.get();
+        const item = existing.data && existing.data[0];
+        if (!item || !item._id) return ok({ deleted: true });
+        if (
+          item.clientId !== clientId ||
+          item.clientHash !== chanClientHash(clientId, secret)
+        ) {
+          return fail("forbidden");
+        }
+        await doc.remove();
+        return ok({ deleted: true });
+      }
+
+      // ==================== 缠论读书会 · 每课评论 ====================
+      // 任何用户都能评论/回复；randeng 等管理员可置顶、删除。
+      // 只做一层楼中楼：所有回复挂在主楼（rootId）下，回复的回复也回到主楼。
+
+      case "getChanComments": {
+        const lessonNo = Number(event.lessonNo);
+        if (!(lessonNo >= 1 && lessonNo <= 108)) return fail("bad_request");
+        await ensureChanComments();
+        const res = await chanComments
+          .where({ lessonNo })
+          .orderBy("createdAt", "asc")
+          .limit(500)
+          .get();
+        const clientId = String(event.clientId || "").slice(0, 64);
+        const secret = String(event.clientSecret || "").slice(0, 128);
+        const admin = await isChanAdmin(clientId, secret);
+        // 删掉的评论不再返回：主楼删掉时，它下面的回复也一起不显示
+        const all = res.data || [];
+        const deletedRoots = new Set(
+          all.filter((d) => d.deleted && !d.parentId).map((d) => d._id)
+        );
+        const visible = all.filter((d) => {
+          if (d.deleted) return false;
+          if (d.parentId && deletedRoots.has(d.rootId || d.parentId)) return false;
+          return true;
+        });
+        const comments = visible.map((d) => ({
+          id: d._id,
+          parentId: d.parentId || "",
+          rootId: d.rootId || "",
+          content: d.content || "",
+          name: d.name || "匿名读者",
+          clientId: d.clientId || "",
+          replyToName: d.replyToName || "",
+          pinned: !!d.pinned,
+          pinnedAt: d.pinnedAt || 0,
+          deleted: false,
+          createdAt: d.createdAt || 0,
+          mine: !!clientId && d.clientId === clientId,
+        }));
+        const total = comments.length;
+
+        // 头像按 clientId 批量取，一次返回 profiles 映射，避免每条评论重复头像
+        await ensureChanProfiles();
+        const ids = [...new Set(visible.map((d) => d.clientId).filter(Boolean))];
+        const profiles = {};
+        for (let i = 0; i < ids.length; i += 50) {
+          const chunk = ids.slice(i, i + 50);
+          let rows = [];
+          try {
+            const pr = await chanProfiles
+              .where({ _id: _.in(chunk) })
+              .limit(50)
+              .get();
+            rows = pr.data || [];
+          } catch (e) {
+            // 没有 _id 组合索引时退化成逐条取，评论量小，慢一点但能用
+            for (const id of chunk) {
+              try {
+                const one = await chanProfiles.doc(id).get();
+                if (one.data && one.data[0]) rows.push(one.data[0]);
+              } catch (e2) {}
+            }
+          }
+          for (const p of rows) {
+            if (p && p.avatar) profiles[p._id] = p.avatar;
+          }
+        }
+        return ok({ comments, total, admin, profiles });
+      }
+
+      case "createChanComment": {
+        const lessonNo = Number(event.lessonNo);
+        if (!(lessonNo >= 1 && lessonNo <= 108)) return fail("bad_request");
+        const content = String(event.content || "").trim().slice(0, 1000);
+        const name = String(event.name || "").trim().slice(0, 24) || "匿名读者";
+        const clientId = String(event.clientId || "").trim().slice(0, 64);
+        const secret = String(event.clientSecret || "").trim().slice(0, 128);
+        if (!content) return fail("empty_comment");
+        if (!clientId || !secret) return fail("bad_request");
+        await ensureChanComments();
+        // 频控：同一浏览器 10 分钟最多 30 条
+        try {
+          const recent = await chanComments
+            .where({ clientId, createdAt: _.gt(now() - 10 * 60 * 1000) })
+            .count();
+          if (recent && recent.total >= 30) return fail("rate_limited");
+        } catch (e) {}
+
+        let parentId = String(event.parentId || "");
+        let rootId = "";
+        let replyToName = "";
+        if (parentId) {
+          const pDoc = await chanComments.doc(parentId).get();
+          const parent = pDoc.data && pDoc.data[0];
+          if (!parent || parent.lessonNo !== lessonNo) return fail("bad_request");
+          if (parent.deleted) return fail("parent_deleted");
+          rootId = parent.rootId || parent._id;
+          replyToName = parent.name || "匿名读者";
+          // 回复的回复也挂回主楼，保证只做一层
+          parentId = parent.parentId ? parent.parentId : parent._id;
+        }
+
+        const createdAt = now();
+        const res = await chanComments.add({
+          lessonNo,
+          parentId,
+          rootId,
+          replyToName,
+          content,
+          name,
+          clientId,
+          clientHash: chanClientHash(clientId, secret),
+          pinned: false,
+          pinnedAt: 0,
+          deleted: false,
+          createdAt,
+        });
+        return ok({ id: res.id, createdAt });
+      }
+
+      // 保存评论头像（用户自己上传的头像 data URL）。同一个 clientId 首次可写，
+      // 之后必须带同一个 secret 才能覆盖，避免别人改头像。
+      case "saveChanAvatar": {
+        const clientId = String(event.clientId || "").trim().slice(0, 64);
+        const secret = String(event.clientSecret || "").trim().slice(0, 128);
+        const avatar = String(event.avatar || "");
+        if (!clientId || !secret) return fail("bad_request");
+        if (!/^data:image\/(jpeg|png|webp);base64,/i.test(avatar)) {
+          return fail("bad_image");
+        }
+        if (avatar.length > 60000) return fail("too_large");
+        await ensureChanProfiles();
+        const doc = chanProfiles.doc(clientId);
+        const existing = await doc.get();
+        const row = existing.data && existing.data[0];
+        const hash = chanClientHash(clientId, secret);
+        if (row && row.clientHash && row.clientHash !== hash) {
+          return fail("forbidden");
+        }
+        await doc.set({ avatar, clientHash: hash, updatedAt: now() });
+        return ok({ saved: true });
+      }
+
+      case "deleteChanComment": {
+        const id = String(event.id || "");
+        const clientId = String(event.clientId || "").trim().slice(0, 64);
+        const secret = String(event.clientSecret || "").trim().slice(0, 128);
+        if (!id || !clientId || !secret) return fail("bad_request");
+        await ensureChanComments();
+        const doc = chanComments.doc(id);
+        const existing = await doc.get();
+        const item = existing.data && existing.data[0];
+        if (!item || !item._id) return ok({ deleted: true });
+        const admin = await isChanAdmin(clientId, secret);
+        if (!admin) return fail("forbidden");
+        if (item.deleted) return ok({ deleted: true });
+        await doc.update({
+          deleted: true,
+          content: "",
+          pinned: false,
+          pinnedAt: 0,
+          deletedAt: now(),
+          deletedBy: "admin",
+        });
+        return ok({ deleted: true, admin });
+      }
+
+      case "pinChanComment": {
+        const id = String(event.id || "");
+        const clientId = String(event.clientId || "").trim().slice(0, 64);
+        const secret = String(event.clientSecret || "").trim().slice(0, 128);
+        if (!id || !clientId || !secret) return fail("bad_request");
+        const admin = await isChanAdmin(clientId, secret);
+        if (!admin) return fail("forbidden");
+        await ensureChanComments();
+        const doc = chanComments.doc(id);
+        const existing = await doc.get();
+        const item = existing.data && existing.data[0];
+        if (!item || !item._id) return fail("not_found");
+        if (item.parentId) return fail("bad_request");
+        if (item.deleted) return fail("bad_request");
+        const pinned = event.pinned !== false;
+        await doc.update({ pinned, pinnedAt: pinned ? now() : 0 });
+        return ok({ pinned });
       }
 
       // ==================== 管理员编辑经文 / 用户更新排版 ====================
@@ -4223,9 +4799,14 @@ exports.main = async (event, context) => {
       }
 
       // 当前登录用户是否为管理员（admins 集合中登记了 uid）。
+      // isRootAdmin 仅 @randeng 为 true，用于控制「手动开通订阅」入口。
       case "isAdmin": {
         await ensureAdmins();
-        return ok({ isAdmin: await isAdminUser(uid) });
+        const admin = await isAdminUser(uid);
+        return ok({
+          isAdmin: admin,
+          isRootAdmin: admin ? await isRootAdminUser(uid) : false,
+        });
       }
 
       // 管理员拉取反馈列表（分页，新反馈优先）。status 可选：new | handled，缺省返回全部。
@@ -4391,47 +4972,275 @@ exports.main = async (event, context) => {
         return ok({});
       }
 
-      // ==================== 实名认证 ====================
+      // ==================== 支持者徽标（付费） ====================
+      // 说明：个人收款码没有支付回调，本接口只做“单号格式 + 全站唯一 + 频控”的自助核销，
+      // 不能证明款项真实到账。徽标是“付费支持”标识，不代表实名/身份认证。
+      // 旧实名认证接口保留但停用，历史 userVerifications 记录不再参与任何展示。
 
-      // 提交实名认证：服务端再次校验姓名与身份证号格式（地区码/出生日期/校验位），
-      // 只保存姓名的脱敏形式与身份证号哈希，不保存明文；同一账号只认证一次（幂等）。
       case "verifyIdentity": {
-        if (!uid) return fail("unauthorized");
-        await ensureVerifications();
-        const realName = String(event.realName || "").trim();
-        const idCard = String(event.idCard || "").trim().toUpperCase();
-        const nameErr = validateRealName(realName);
-        if (nameErr) return fail(nameErr);
-        const idErr = validateIdCard(idCard);
-        if (idErr) return fail(idErr);
-        const existing = await verifications.where({ uid }).limit(1).get();
-        if (existing.data.length > 0) {
-          const v = existing.data[0];
-          return ok({ verified: true, realNameMasked: v.realNameMasked || "" });
-        }
-        const masked = maskRealName(realName);
-        const idHash = crypto.createHash("sha256").update(idCard).digest("hex");
-        await verifications.add({
-          uid,
-          realNameMasked: masked,
-          idHash,
-          verifiedAt: now(),
-        });
-        return ok({ verified: true, realNameMasked: masked });
+        return fail("实名认证已停用，请使用「支持者徽标」");
       }
 
-      // 查询当前登录用户的实名认证状态。
       case "getMyVerification": {
         if (!uid) return ok({ verified: false });
-        await ensureVerifications();
-        const { data } = await verifications.where({ uid }).limit(1).get();
-        const v = data && data[0];
+        const b = await getActiveBadge(uid);
+        const banned = await isFeatureBanned(uid);
         return ok({
-          verified: !!v,
-          realNameMasked: v ? v.realNameMasked || "" : "",
-          verifiedAt: v ? v.verifiedAt || 0 : 0,
+          verified: !!b,
+          realNameMasked: "",
+          verifiedAt: b ? b.startAt || 0 : 0,
+          expireAt: b ? b.expireAt || 0 : 0,
+          plan: b ? String(b.plan || "") : "",
+          banned,
         });
       }
+
+      // 旧的「付款后填交易单号自动开通」入口：已停用。
+      // 保留 action 名以兼容旧客户端，统一返回人工开通提示。
+      case "submitBadgeTxn": {
+        // 旧的「自助填写交易单号自动开通」已停用：个人收款码无法验证单号真伪，
+        // 改为用户付款时备注账户名/手机号，由管理员在 App 内核对后手动开通。
+        return fail("订阅已改为人工开通：请在「订阅服务」页付款并备注账户名或手机号，管理员核对后为你开通。");
+      }
+
+      // 查询当前用户的 AI 翻译额度。
+      case "getMyAiQuota": {
+        if (!uid) return ok({ quota: quotaView({}) });
+        return ok({ quota: await getQuotaView(uid) });
+      }
+
+      // 管理员切换某用户「禁止使用 AI 翻译/购买」状态。
+      case "adminToggleFeatureBan": {
+        if (!uid) return fail("unauthorized");
+        try {
+          const { data: adminRows } = await admins.where({ uid }).limit(1).get();
+          if (!adminRows || adminRows.length === 0) return fail("not_admin");
+        } catch (e) {
+          return fail("not_admin");
+        }
+        const targetUid = String(event.userId || "").trim();
+        if (!targetUid) return fail("缺少用户");
+        if (targetUid === uid) return fail("不能限制自己");
+        await ensureSupporterCollections();
+        let banned = false;
+        try {
+          const { data } = await featureBans.doc(targetUid).get();
+          if (data && data.length) {
+            await featureBans.doc(targetUid).remove();
+            banned = false;
+          } else {
+            await featureBans.doc(targetUid).set({
+              uid: targetUid,
+              by: uid,
+              at: now(),
+            });
+            banned = true;
+          }
+        } catch (e) {
+          return fail("操作失败，请稍后重试");
+        }
+        return ok({ banned });
+      }
+
+      // 第一管理员（@randeng）按账号名/手机号/用户ID 手动开通订阅。
+      // 只有 @randeng 能调用；订阅开通后不可取消。
+      case "adminSetSubscription": {
+        if (!uid) return fail("unauthorized");
+        try {
+          const { data: adminRows } = await admins.where({ uid }).limit(1).get();
+          if (!adminRows || adminRows.length === 0) return fail("not_admin");
+        } catch (e) {
+          return fail("not_admin");
+        }
+        if (!(await isRootAdminUser(uid))) return fail("forbidden");
+        if (event.enabled === false) return fail("订阅开通后不可取消");
+        // 容忍管理员直接粘贴付款备注里的「@账户名」或带空格的手机号。
+        const input = String(event.input || "")
+          .trim()
+          .replace(/^@+/, "")
+          .replace(/\s+/g, "");
+        if (!input) return fail("请输入账号名、手机号或用户ID");
+        const phoneInput = input.replace(/^(\+?86)/, "");
+        await ensureUserAccounts();
+        let row = null;
+        try {
+          const { data } = await userAccounts.where({ uid: input }).limit(1).get();
+          if (data && data.length) row = data[0];
+        } catch (e) {}
+        if (!row) {
+          try {
+            const { data } = await userAccounts
+              .where({ usernameKey: input.toLowerCase() })
+              .limit(1)
+              .get();
+            if (data && data.length) row = data[0];
+          } catch (e) {}
+        }
+        if (!row) {
+          try {
+            const { data } = await userAccounts.where({ phone: phoneInput }).limit(1).get();
+            if (data && data.length) row = data[0];
+          } catch (e) {}
+        }
+        if (!row || !row.uid) return fail("未找到该用户，请确认账号名、手机号或用户ID");
+
+        const targetUid = String(row.uid);
+        await ensureSupporterCollections();
+        let alreadyActive = false;
+        try {
+          const { data } = await supporterBadges.doc(targetUid).get();
+          alreadyActive = !!(
+            data &&
+            data.length &&
+            Number(data[0].expireAt) > now()
+          );
+        } catch (e) {}
+        const expireAt = now() + 36500 * 24 * 60 * 60 * 1000;
+        await supporterBadges.doc(targetUid).set({
+          uid: targetUid,
+          plan: "199",
+          priceFen: 19900,
+          channel: String(event.channel || "manual"),
+          txnNo: "manual-" + now(),
+          startAt: now(),
+          expireAt,
+          updatedAt: now(),
+        });
+        await ensureAiQuota(targetUid);
+        await aiQuota.doc(targetUid).update({
+          unlimited: true,
+          unlimitedUntil: expireAt,
+          plan: "199",
+          updatedAt: now(),
+        });
+        // 在「消息」页生成一条系统信息（重复开通不重复发送）。
+        if (!alreadyActive) {
+          try {
+            await activities.add({
+              userId: targetUid,
+              type: "subscription",
+              direction: "in",
+              actorId: "",
+              actorName: "",
+              noteId: "",
+              content: "恭喜你获得无限翻译和认证徽标。",
+              viewed: false,
+              createdAt: now(),
+            });
+          } catch (e) {
+            console.error(
+              "[api] subscription activity error:",
+              e && e.message ? e.message : e
+            );
+          }
+        }
+        return ok({
+          uid: targetUid,
+          account: String(row.username || ""),
+          phone: String(row.phone || ""),
+        });
+      }
+
+      // 用户上报自己的手机号，供管理员按手机号开通订阅。
+      case "reportMyPhone": {
+        if (!uid) return fail("unauthorized");
+        const phone = String(event.phone || "").replace(/\s+/g, "");
+        if (!/^1\d{10}$/.test(phone)) return fail("手机号格式不正确");
+        await ensureUserAccounts();
+        const { data } = await userAccounts.where({ uid }).limit(1).get();
+        if (!data || !data.length) return ok({ saved: false });
+        try {
+          await userAccounts.doc(data[0]._id).update({ phone, updatedAt: now() });
+        } catch (e) {
+          return ok({ saved: false });
+        }
+        return ok({ saved: true });
+      }
+
+
+      case "submitFeatureAppeal": {
+        if (!uid) return fail("请先登录");
+        const reason = String(event.reason || "").trim().slice(0, 500);
+        if (!reason) return fail("请填写申诉说明");
+        await ensureSupporterCollections();
+        const since = now() - 24 * 60 * 60 * 1000;
+        try {
+          const { data } = await featureAppeals
+            .where({ uid, createdAt: _.gt(since) })
+            .limit(1)
+            .get();
+          if (data && data.length) return fail("今天已提交过申诉，请等待处理");
+        } catch (e) {}
+        try {
+          await featureAppeals.add({
+            uid,
+            reason,
+            status: "pending",
+            createdAt: now(),
+          });
+        } catch (e) {
+          return fail("提交失败，请稍后重试");
+        }
+        return ok({ submitted: true });
+      }
+
+      // 管理员一次性清理：删除所有用户的徽标 + 旧实名认证记录，并重置管理员自己的额度。
+      // 不保留任何徽标——清空后管理员本人也回到“未开通”状态，便于完整走一遍付费流程。
+      case "adminResetBadges": {
+        if (!uid) return fail("unauthorized");
+        try {
+          const { data: adminRows } = await admins.where({ uid }).limit(1).get();
+          if (!adminRows || adminRows.length === 0) return fail("not_admin");
+        } catch (e) {
+          return fail("not_admin");
+        }
+        await ensureSupporterCollections();
+
+        let removedBadges = 0;
+        let removedVerifications = 0;
+        async function clearAll(coll) {
+          let n = 0;
+          for (let round = 0; round < 50; round++) {
+            let data = [];
+            try {
+              const res = await coll.limit(100).get();
+              data = res.data || [];
+            } catch (e) {
+              break;
+            }
+            if (!data.length) break;
+            for (const d of data) {
+              try {
+                await coll.doc(d._id).remove();
+                n++;
+              } catch (e) {}
+            }
+            if (data.length < 100) break;
+          }
+          return n;
+        }
+
+        removedBadges = await clearAll(supporterBadges);
+        removedVerifications = await clearAll(verifications);
+
+        // 清空管理员自己的徽标额度状态，方便从 1000 次免费重新测试。
+        await ensureAiQuota(uid);
+        await aiQuota.doc(uid).update({
+          unlimited: false,
+          unlimitedUntil: 0,
+          freeUsed: 0,
+          paidRemaining: 0,
+          plan: "",
+          updatedAt: now(),
+        });
+
+        return ok({
+          removedBadges,
+          removedVerifications,
+          cleared: true,
+        });
+      }
+
 
       // ==================== 阅藏进度上报（广场帖子百分比） ====================
 
@@ -4504,6 +5313,16 @@ exports.main = async (event, context) => {
         // 同一段经文只生成一次译文，之后所有用户直接复用（省 API 费用）。
         const paraHash = paragraphTranslationHash(paragraph);
 
+        // 额度按“用户 + 段落”计：同一用户重复打开同一段不再扣；
+        // 无论其他用户是否已缓存译文，该用户第一次打开都要计一次。
+        if (!uid) return fail("请先登录后使用 AI 翻译");
+        if (await isFeatureBanned(uid)) return fail("feature_banned");
+        let useInfo = null;
+        if (mode !== "discuss") {
+          useInfo = await consumeAiUse(uid, paraHash);
+          if (!useInfo.allowed) return fail("ai_quota_exhausted");
+        }
+
         // 白话翻译提示词：重点是「重组语序的意译」而不是逐词对译，
         // 否则译文会残留文言句式、读起来仍然费解。
         const sysPrompt =
@@ -4572,7 +5391,13 @@ exports.main = async (event, context) => {
             const { data } = await aiTranslations.where({ h: paraHash }).limit(1).get();
             if (data && data.length > 0) cachedDoc = data[0];
             if (cachedDoc && cachedDoc.text && !cachedDoc.text.includes("\uFFFD")) {
-              return ok({ text: cachedDoc.text, type: "translate", done: true, cached: true });
+              return ok({
+                text: cachedDoc.text,
+                type: "translate",
+                done: true,
+                cached: true,
+                quota: useInfo ? useInfo.quota : undefined,
+              });
             }
           } catch (e) {
             // 缓存查询失败不阻塞：当作未命中继续调用 API。
@@ -4607,7 +5432,13 @@ exports.main = async (event, context) => {
             console.log("[api] aiTranslate 缓存写入失败（不影响本次返回）:", e.message);
           }
 
-          return ok({ text: cleaned, type: "translate", done: true, cached: false });
+          return ok({
+            text: cleaned,
+            type: "translate",
+            done: true,
+            cached: false,
+            quota: useInfo ? useInfo.quota : undefined,
+          });
         } catch (e) {
           console.error("[api] aiTranslate error:", e && e.message ? e.message : e);
           return fail(e && e.message ? e.message : "AI翻译失败，请稍后重试");
@@ -4620,15 +5451,23 @@ exports.main = async (event, context) => {
       case "getParagraphTranslation": {
         const paragraph = String(event.paragraph || "").trim();
         if (!paragraph) return fail("缺少需要查询的经文段落");
+        if (!uid) return fail("请先登录后使用 AI 翻译");
         try {
+          if (await isFeatureBanned(uid)) return fail("feature_banned");
           const paraHash = paragraphTranslationHash(paragraph);
+          const useInfo = await consumeAiUse(uid, paraHash);
+          if (!useInfo.allowed) return fail("ai_quota_exhausted");
           await ensureAiTranslations();
           const { data } = await aiTranslations.where({ h: paraHash }).limit(1).get();
           // 含替换字符的缓存视为未命中，让客户端走重新生成以自愈。
           if (data && data.length > 0 && data[0].text && !data[0].text.includes("\uFFFD")) {
-            return ok({ text: cleanAiTranslation(data[0].text), found: true });
+            return ok({
+              text: cleanAiTranslation(data[0].text),
+              found: true,
+              quota: useInfo.quota,
+            });
           }
-          return ok({ text: "", found: false });
+          return ok({ text: "", found: false, quota: useInfo.quota });
         } catch (e) {
           console.error("[api] getParagraphTranslation error:", e && e.message ? e.message : e);
           return ok({ text: "", found: false });

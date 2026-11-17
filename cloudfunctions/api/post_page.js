@@ -25,10 +25,12 @@ const SITE_NAME = '燃灯';
 const BASE_URL = 'https://aibuilder.top';
 const SITE_TAGLINE = '燃一盏灯，看见自己，照亮别人。';
 const ICP_NUMBER = '豫ICP备2026050494号';
+const POLICE_NUMBER = '桂公网安备45010202000937号';
 const SHARE_IMAGE = BASE_URL + '/assets/share-cover.png';
-// 页面上「打开 App」与底部「打开燃灯，查看更多笔记」都进燃灯 App 子页。
-// 站点首页现在是 BTC 行情页，不能再回 `/`，否则分享卡片点开会落在行情盘。
-const APP_HOME = BASE_URL + '/app/index.html';
+// 页面上「打开 App」与底部「打开燃灯，查看更多笔记」都进首页的 #app 视图。
+// 站点首页现在是 BTC 行情页，不能再回 `/`，否则分享卡片点开会落在行情盘；
+// 也不要再写 /app/index.html（那个地址现在只作为 iframe 内容并会重定向）。
+const APP_HOME = BASE_URL + '/index.html#app';
 const COMMUNITY_NAME = '菩提空间';
 
 const HTML_HEADERS = {
@@ -463,6 +465,10 @@ const VERIFIED_SVG =
 const BEIAN_HTML =
   '<a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">' +
   ICP_NUMBER +
+  '</a>' +
+  '&nbsp;·&nbsp;' +
+  '<a href="https://beian.mps.gov.cn/#/query/webSearch?code=45010202000937" target="_blank" rel="noopener noreferrer">' +
+  POLICE_NUMBER +
   '</a>';
 
 function shell(opts) {

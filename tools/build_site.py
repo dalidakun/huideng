@@ -68,7 +68,9 @@ LEGAL_DOCS = {
 # 协议页由 assets/agreements/ 现场生成，模板本身不部署。
 # 社区邀请页同理：community.template.html 只当模板，逐栏目渲染成
 # dist/community/<slug>.html（slug 真源是 lib/community_invite.dart）。
-TEMPLATES = {"legal.template.html", "community.template.html"}
+# 缠论读书会也一样：chan.template.html + site/data/chan-lessons.json
+# 渲染成 dist/chan/index.html，正文数据由 tools/extract_chan.py 从 Word 抽出。
+TEMPLATES = {"legal.template.html", "community.template.html", "chan.template.html"}
 
 
 def site_html_sources() -> list[pathlib.Path]:
@@ -598,6 +600,233 @@ def build_communities(common: dict) -> int:
 
 
 # --------------------------------------------------------------------------
+# 全站侧边栏导航：顶部菜单栏统一改成左侧可折叠侧边栏
+# --------------------------------------------------------------------------
+
+SIDE_ICONS = {
+    "trade": '<path d="M4 19.5V4.5"/><path d="M4 19.5h16"/><path d="M7.5 15.5l4-4.5 3 3 4.5-6"/>',
+    "review": (
+        '<path d="M7 3.8h10a1.6 1.6 0 0 1 1.6 1.6V20H5.4V5.4A1.6 1.6 0 0 1 7 3.8Z"/>'
+        '<path d="M9 3.8h6v2.6H9z"/><path d="M8.6 11h6.8"/><path d="M8.6 14.6h6.8"/>'
+        '<path d="M8.6 18.2h4"/>'
+    ),
+    "chan": (
+        '<path d="M12 6.6C10.5 5.3 8.4 4.7 5.6 4.7V18c2.8 0 4.9.6 6.4 1.9'
+        ' 1.5-1.3 3.6-1.9 6.4-1.9V4.7c-2.8 0-4.9.6-6.4 1.9Z"/><path d="M12 6.6V20"/>'
+    ),
+    "app": (
+        '<path d="M12 3.6 20 7.3l-8 3.7-8-3.7z"/><path d="M4 12l8 3.7 8-3.7"/>'
+        '<path d="M4 16.4l8 3.7 8-3.7"/>'
+    ),
+}
+
+SIDE_LINKS = (
+    ("trade", "index.html", "交易练习", ""),
+    ("review", "review/index.html", "交易复盘", ""),
+    ("chan", "chan/index.html", "缠中说禅", ""),
+    ("app", "index.html#app", "大正藏经", ""),
+)
+
+# 哪个页面高亮哪一项
+NAV_CURRENT = {
+    "index.html": "trade",
+    "review/index.html": "review",
+    "chan/index.html": "chan",
+    "app/index.html": "app",
+}
+
+# 交易练习页把账户菜单挪进侧边栏底部，登录 / 换头像 / 重置资金都还在。
+TRADE_ACCOUNT_SIDE = """<div class="topnav__account">
+      <button type="button" class="avatar-btn" id="btnMenu" aria-label="账户菜单" aria-haspopup="menu" aria-expanded="false" aria-controls="acctMenu">
+        <img src="{rel}assets/icon.png" alt="">
+      </button>
+      <div class="acct-menu" id="acctMenu" role="menu" aria-label="账户" hidden>
+        <div class="acct-menu__who" id="menuWho">未登录 · 本机账户</div>
+        <button type="button" role="menuitem" data-act="avatar" id="menuAvatar" hidden>更换头像</button>
+        <button type="button" role="menuitem" data-act="login" id="menuLogin">登录 / 注册</button>
+        <button type="button" role="menuitem" data-act="phone" id="menuPhone" hidden>绑定手机号</button>
+        <button type="button" role="menuitem" data-act="sync" id="menuSync" hidden>同步交易记录</button>
+        <button type="button" role="menuitem" data-act="reset" id="menuReset">重置资金</button>
+        <button type="button" role="menuitem" data-act="logout" id="menuLogout" hidden>退出登录</button>
+      </div>
+    </div>"""
+
+
+def render_side(common: dict, rel: str, current: str, extra: str = "", views: bool = False) -> str:
+    """渲染全站统一的顶部横向菜单。
+
+    current 决定哪一项高亮；extra 放左上角那块（交易练习页是账户头像）；
+    views=True 是交易练习页（单页四条轨道），四项都带 data-view。
+    """
+    items = []
+    for key, href, label, extra_attrs in SIDE_LINKS:
+        on = key == current
+        attrs = f' data-nav="{key}"' + extra_attrs
+        if views:
+            attrs += f' data-view="{key}"'
+        if on:
+            attrs += ' aria-current="page"'
+        cls = "topnav__item is-on" if on else "topnav__item"
+        items.append(
+            f'<a class="{cls}" href="{rel}{href}"{attrs}>'
+            f'<svg class="topnav__ico" viewBox="0 0 24 24" aria-hidden="true" fill="none"'
+            f' stroke="currentColor" stroke-width="1.7" stroke-linecap="round"'
+            f' stroke-linejoin="round">{SIDE_ICONS[key]}</svg>'
+            f'<span>{label}</span></a>'
+        )
+    menu = "\n      ".join(items)
+
+    return f"""<header class="topnav">
+  <div class="topnav__inner">
+    {extra}
+    <nav class="topnav__menu" aria-label="主导航">
+      {menu}
+    </nav>
+  </div>
+</header>"""
+
+
+# --------------------------------------------------------------------------
+# 缠论读书会（/chan/）：108 课正文全部写进一个静态页面
+# --------------------------------------------------------------------------
+
+CHAN_TPL = SITE / "chan.template.html"
+CHAN_DATA = SITE / "data" / "chan-lessons.json"
+
+
+def _chan_paragraph(block: dict, fig_no: list[int], rel: str) -> str:
+    kind = block["t"]
+    if kind == "p":
+        return f'<p>{html.escape(block["x"])}</p>'
+    if kind == "date":
+        return f'<p class="chan-stamp">{html.escape(block["x"])}</p>'
+    if kind == "h":
+        # 书里的小标题：缠论点睛 / 投资微言 / 注释
+        return f'<p class="chan-subhead">{html.escape(block["x"])}</p>'
+    if kind == "note":
+        # 脚注：小字、浅底，跟在每课末尾
+        return f'<p class="chan-footnote">{html.escape(block["x"])}</p>'
+    if kind == "img":
+        fig_no[0] += 1
+        w, h = block.get("w") or 0, block.get("h") or 0
+        inline = bool(w) and w < 120
+        size = f' width="{w}" height="{h}"' if w and h else ""
+        if block.get("cap"):
+            caption = f'<figcaption>{html.escape(block["cap"])}</figcaption>'
+        elif inline:
+            caption = ""
+        else:
+            caption = f"<figcaption>图 {fig_no[0]}</figcaption>"
+        cls = "chan-fig chan-fig--inline" if inline else "chan-fig"
+        return (
+            f'<figure class="{cls}">'
+            f'<img src="{rel}{block["src"]}"{size} loading="lazy" decoding="async"'
+            f' alt="本课插图 {fig_no[0]}">'
+            f"{caption}</figure>"
+        )
+    if kind == "table":
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{html.escape(c)}</td>" for c in row) + "</tr>"
+            for row in block.get("rows", [])
+        )
+        return f'<table class="chan-table">{rows}</table>'
+    return ""
+
+
+def _chan_lesson_html(lesson: dict, rel: str) -> str:
+    no = lesson["no"]
+    title = html.escape(lesson["short"], quote=True)
+    first = ' is-on' if no == 1 else ""
+    meta = []
+    if lesson.get("date"):
+        day, _, clock = lesson["date"].partition(" ")
+        meta.append(
+            f'<time datetime="{day}T{clock}">{lesson["date"]}</time>'
+        )
+    minutes = max(1, round(lesson["chars"] / 480))
+    meta.append(f"<span>约 {minutes} 分钟</span>")
+    meta.append(f"<span>{lesson['chars']:,} 字</span>")
+
+    fig_no = [0]
+    body = "".join(_chan_paragraph(b, fig_no, rel) for b in lesson["blocks"])
+
+    return (
+        f'<section class="chan-lesson{first}" id="l{no:03d}" data-no="{no}"'
+        f' data-title="第 {no} 课 · {title}">\n'
+        f'  <header class="chan-lesson__head">\n'
+        f'    <p class="chan-lesson__eyebrow">第 {no} 课</p>\n'
+        f'    <h2 class="chan-lesson__title">{title}</h2>\n'
+        f'    <p class="chan-lesson__meta">{"".join(meta)}</p>\n'
+        f'  </header>\n'
+        f'  <div class="chan-prose">\n{body}\n  </div>\n'
+        f'  <section class="chan-comments" data-lesson-comments="{no}"'
+        f' aria-label="第 {no} 课评论"></section>\n'
+        f"</section>"
+    )
+
+
+def _chan_toc_html(lessons: list[dict]) -> str:
+    rows = []
+    for lesson in lessons:
+        no = lesson["no"]
+        search = f'第{no}课 第 {no} 课 {lesson["title"]} {lesson["short"]}'.lower()
+        rows.append(
+            f'<li><a href="#l{no:03d}" data-no="{no}"'
+            f' data-search="{html.escape(search, quote=True)}">'
+            f'<span class="chan-toc__no">{no:02d}</span>'
+            f'<span class="chan-toc__txt">{html.escape(lesson["short"])}</span></a></li>'
+        )
+    return "\n".join(rows)
+
+
+def build_chan(common: dict) -> int:
+    """渲染 108 课单页到 dist/chan/index.html。
+
+    正文数据来自 tools/extract_chan.py 抽出的 JSON；这里只做 HTML 拼装，
+    正文、插图、翻页链接全在构建期定死，部署后没有任何接口依赖。
+    """
+    if not CHAN_DATA.is_file():
+        raise SystemExit(
+            f"缺 {CHAN_DATA.relative_to(ROOT)}，先跑：python tools/extract_chan.py"
+        )
+
+    lessons = json.loads(CHAN_DATA.read_text(encoding="utf-8"))
+    tpl = CHAN_TPL.read_text(encoding="utf-8")
+
+    articles = []
+    rel = "../"
+    for lesson in lessons:
+        articles.append(_chan_lesson_html(lesson, rel))
+
+    chars = sum(l["chars"] for l in lessons)
+    toc = _chan_toc_html(lessons)
+    values = {
+        **common,
+        "REL": rel,
+        "CHAN_COUNT": str(len(lessons)),
+        "CHAN_CHARS": f"{chars / 10000:.1f} 万",
+        "CHAN_ARTICLES": "\n".join(articles),
+        "CHAN_TOC": toc,
+        "SITE_NAV": render_side(common, rel, "chan"),
+    }
+    out = tpl
+    for key, value in values.items():
+        out = out.replace("{{" + key + "}}", str(value))
+    left = sorted(set(re.findall(r"\{\{([A-Z_]+)\}\}", out)))
+    if left:
+        raise SystemExit(f"chan/index.html 还有未替换的占位符：{left}")
+
+    target = DIST / "chan" / "index.html"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(out, encoding="utf-8")
+    print(
+        f"缠论页    {len(lessons)} 课 / {chars:,} 字 -> chan/index.html"
+        f"  {target.stat().st_size / 1024:.0f} KB"
+    )
+    return 1
+
+
+# --------------------------------------------------------------------------
 # 构建
 # --------------------------------------------------------------------------
 
@@ -764,6 +993,12 @@ def build(args: argparse.Namespace) -> pathlib.Path:
         # 否则部署后点下载会 404。
         page["APK_HREF"] = rel + apk_href
 
+        nav_key = NAV_CURRENT.get(rel_path.as_posix(), "")
+        extra = TRADE_ACCOUNT_SIDE.format(rel=rel) if rel_path.as_posix() == "index.html" else ""
+        page["SITE_NAV"] = render_side(
+            common, rel, nav_key, extra=extra, views=nav_key == "trade"
+        )
+
         out = src.read_text(encoding="utf-8")
         for key, value in page.items():
             out = out.replace("{{" + key + "}}", str(value))
@@ -791,6 +1026,7 @@ def build(args: argparse.Namespace) -> pathlib.Path:
             "LEGAL_BODY": md_to_html(md),
             "LEGAL_NAV_A": ' aria-current="page"' if slug == "privacy" else "",
             "LEGAL_NAV_B": ' aria-current="page"' if slug == "terms" else "",
+            "SITE_NAV": render_side(common, "", ""),
         }.items():
             out = out.replace("{{" + key + "}}", value)
         (DIST / f"{slug}.html").write_text(out, encoding="utf-8")
@@ -799,6 +1035,9 @@ def build(args: argparse.Namespace) -> pathlib.Path:
     # 栏目邀请页：20 个社区各一页 + 各自图标（须在 copy_assets 之后，
     # 因为 copy_assets 会整个重建 dist/assets/）。
     pages += build_communities(common)
+
+    # 缠论读书会：108 课正文一张静态页。
+    pages += build_chan(common)
 
     # App 内更新检查用的版本信息。
     (DIST / "version.json").write_text(
