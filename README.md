@@ -19,6 +19,8 @@ App 运行时不引用官网源码，只通过固定 URL 使用官网服务：
 
 ## 官网仓库
 
+- 线上：<https://aibuilder.top/>
+- GitHub：<https://github.com/dalidakun/aibuilder-web>
 - 本地：`E:\aibuilder-web`
 - 内容：`site/`、`cloudfunctions/api/`、构建与部署脚本、官网文档
 - 发版流程：本仓库 `flutter build apk --release` → 在官网仓库运行
