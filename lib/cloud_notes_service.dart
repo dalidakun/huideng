@@ -637,16 +637,23 @@ class MyCounts {
   const MyCounts({this.following = 0, this.followers = 0, this.unread = 0});
 }
 
-/// 实名认证状态：是否已认证 + 脱敏姓名 + 认证时间。
+/// 支持者徽标状态：是否有效 + 到期时间 + 套餐。
+/// 字段名沿用旧的 VerificationInfo，避免大范围改调用方；realNameMasked 恒为空。
 class VerificationInfo {
   final bool verified;
   final String realNameMasked;
   final int verifiedAt;
+  final int expireAt;
+  final String plan;
+  final bool banned;
 
   const VerificationInfo({
     this.verified = false,
     this.realNameMasked = '',
     this.verifiedAt = 0,
+    this.expireAt = 0,
+    this.plan = '',
+    this.banned = false,
   });
 }
 
@@ -926,6 +933,21 @@ class CloudNotesService {
     String action = 'translate',
     List<Map<String, String>> history = const [],
   }) async {
+    final res = await aiTranslateWithQuota(
+      paragraph: paragraph,
+      action: action,
+      history: history,
+    );
+    return res['text'] as String;
+  }
+
+  /// 与 [aiTranslate] 相同，但一并返回最新的翻译额度快照（quota）。
+  /// 额度由服务端按「用户 + 段落」核销，本方法只负责展示与透传。
+  Future<Map<String, dynamic>> aiTranslateWithQuota({
+    required String paragraph,
+    String action = 'translate',
+    List<Map<String, String>> history = const [],
+  }) async {
     final res = await _call(
       'aiTranslate',
       params: {
@@ -941,7 +963,79 @@ class CloudNotesService {
     if (text.isEmpty) {
       throw const CloudApiException('AI 未返回内容，请稍后重试');
     }
-    return text;
+    final rawQuota = res['quota'];
+    return {
+      'text': text,
+      'quota': rawQuota is Map
+          ? Map<String, dynamic>.from(rawQuota)
+          : const <String, dynamic>{},
+    };
+  }
+
+  /// 管理员一次性清理：删除所有用户的订阅徽标与旧实名认证记录，
+  /// 并重置管理员自己的翻译额度（含免费次数）。
+  Future<Map<String, dynamic>> adminResetBadges() async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    return _call('adminResetBadges');
+  }
+
+  /// 第一管理员（@randeng）按账号名/手机号/用户ID 手动开通订阅。
+  /// 订阅开通后不可取消，因此不再提供取消参数。
+  Future<Map<String, dynamic>> adminGrantSubscription({
+    required String input,
+  }) async {
+    return _call('adminSetSubscription', params: {
+      'input': input,
+      'enabled': true,
+    });
+  }
+
+  /// 上报本机登录用户的手机号，供管理员按手机号查找并开通订阅。
+  Future<void> reportMyPhone(String phone) async {
+    if (!AuthService.instance.isLoggedIn) return;
+    await _call('reportMyPhone', params: {'phone': phone});
+  }
+
+  /// 被限制的用户提交申诉。
+  Future<void> submitFeatureAppeal(String reason) async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    await _call('submitFeatureAppeal', params: {'reason': reason});
+  }
+
+  /// 管理员切换某用户的 AI 使用限制，返回切换后的状态（true=已限制）。
+  Future<bool> toggleFeatureBan(String userId) async {
+    final res = await _call('adminToggleFeatureBan', params: {'userId': userId});
+    return res['banned'] == true;
+  }
+
+  /// 查询当前用户的 AI 翻译额度。
+  /// 返回 {freeLimit, freeUsed, freeRemaining, paidRemaining, unlimited, remaining}。
+  Future<Map<String, dynamic>> getMyAiQuota() async {
+    if (!AuthService.instance.isLoggedIn) return const <String, dynamic>{};
+    final res = await _call('getMyAiQuota');
+    final q = res['quota'];
+    return q is Map ? Map<String, dynamic>.from(q) : const <String, dynamic>{};
+  }
+
+  /// 旧版「提交交易单号自动开通」接口：**已停用**。
+  /// 服务端统一返回人工开通提示；订阅改为付款备注账户名/手机号后由管理员开通。
+  Future<Map<String, dynamic>> submitBadgeTxn({
+    required String channel,
+    required String plan,
+    required String txnNo,
+  }) async {
+    if (!AuthService.instance.isLoggedIn) {
+      throw const CloudApiException('请先登录');
+    }
+    return _call('submitBadgeTxn', params: {
+      'channel': channel,
+      'plan': plan,
+      'txnNo': txnNo,
+    });
   }
 
   /// 读取某段经文已缓存的白话翻译（其他同修/自己之前翻译过的结果）。
@@ -2296,6 +2390,16 @@ class CloudNotesService {
     }
   }
 
+  /// 是否第一管理员（账号名 @randeng）：决定是否显示「手动开通订阅」入口。
+  Future<bool> isRootAdmin() async {
+    try {
+      final res = await _call('isAdmin');
+      return res['isRootAdmin'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 取某部经文的编辑版元信息（是否有管理员编辑版及其更新时间 updatedAt）。
   /// 返回 null 表示查询失败；否则 Map 含 found / updatedAt。
   Future<Map<String, dynamic>?> sutraEditMeta(String id) async {
@@ -2467,14 +2571,17 @@ class CloudNotesService {
     return res['verified'] == true;
   }
 
-  /// 查询当前用户实名认证状态（未登录/未认证返回未认证）。
+  /// 查询当前用户的支持者徽标状态（未登录/未开通/已过期返回未开通）。
   Future<VerificationInfo> getMyVerification() async {
     if (!AuthService.instance.isLoggedIn) return const VerificationInfo();
     final res = await _call('getMyVerification');
     return VerificationInfo(
       verified: res['verified'] == true,
-      realNameMasked: res['realNameMasked']?.toString() ?? '',
+      realNameMasked: '',
       verifiedAt: (res['verifiedAt'] as num?)?.toInt() ?? 0,
+      expireAt: (res['expireAt'] as num?)?.toInt() ?? 0,
+      plan: res['plan']?.toString() ?? '',
+      banned: res['banned'] == true,
     );
   }
 }

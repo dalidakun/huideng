@@ -24,6 +24,8 @@ import 'note_sutra_links.dart';
 import 'sutra_title_overrides.dart';
 
 import 'app_palette.dart';
+import 'app_state.dart';
+import 'pull_reveal.dart';
 import 'sutra_descriptions.dart';
 import 'my_page.dart' show slideInFromLeft;
 import 'reading_stage_data.dart';
@@ -777,6 +779,14 @@ class SutraListPage extends StatefulWidget {
   /// 右下角「宗门」入口点击回调：打开宗门/法门列表页。
   final VoidCallback? onOpenSect;
 
+  /// 是否启用「顶部下拉露出善知识页」。
+  ///
+  /// 只有底部菜单里常驻的那个经藏页（见 MainPage）打开它：下拉露出的善知识页
+  /// 由 MainPage 负责承载在身后。从别处 push 进来的经藏页（如修学页
+  /// 「浏览经藏」）没有这层承载，开启会让手势去驱动一个看不见的页面，
+  /// 因此默认关闭。
+  final bool enableShanZhiShiReveal;
+
   const SutraListPage({
     super.key,
     this.activeTab,
@@ -784,6 +794,7 @@ class SutraListPage extends StatefulWidget {
     this.onOpenReadingStats,
     this.onOpenReadingHistory,
     this.onOpenSect,
+    this.enableShanZhiShiReveal = false,
   });
 
   @override
@@ -802,6 +813,9 @@ class SutraListPageState extends State<SutraListPage>
   final FocusNode _searchFocusNode = FocusNode();
   /// 主页内容滚动控制器：双击顶部 AppBar 时回到顶部。
   final ScrollController _scrollController = ScrollController();
+
+  /// 经藏页顶部下拉露出善知识页（与主页下拉露出 DeepSeek 同一套手势与动画）。
+  late final PullRevealTracker _pullReveal;
   bool _drawerOpen = false;
   late final AnimationController _drawerController;
   late final Animation<Offset> _drawerSlide;
@@ -1155,6 +1169,18 @@ class SutraListPageState extends State<SutraListPage>
     final exists = best != null;
     _resolvedPathExistsCache[resolved] = exists;
     return !exists;
+  }
+
+  /// 仅当经藏页停在顶部、且没有搜索/抽屉/底部面板时，下拉才露出善知识页。
+  /// 与主页下拉露出 DeepSeek 的判定口径一致：只有真正在页面顶端才接管。
+  bool _canStartPullReveal() {
+    // 只有底部菜单里的经藏页（身后挂着善知识页）才接管下拉；
+    // 从别处 push 进来的经藏页没有承载页，不能触发露出。
+    if (!widget.enableShanZhiShiReveal) return false;
+    if (_searchActive || _drawerOpen) return false;
+    if (_shelfExpanded || _shelfFolder != null) return false;
+    if (_shelfController.value > 0) return false;
+    return !_scrollController.hasClients || _scrollController.offset <= 0;
   }
 
   void _dismissKeyboard() {
@@ -1652,6 +1678,11 @@ class SutraListPageState extends State<SutraListPage>
   @override
   void initState() {
     super.initState();
+    _pullReveal = PullRevealTracker(
+      reveal: shanzhishiReveal,
+      scrub: shanzhishiRevealScrub,
+      canStart: _canStartPullReveal,
+    );
     _initFolders();
     _loadSutras();
     _loadLastRead();
@@ -4838,8 +4869,9 @@ class SutraListPageState extends State<SutraListPage>
             ),
             actions: [
               // 素白外观：右上角（原 DeepSeek 位置）改放搜索图标，点击后顶部悬浮展开搜索框。
-              // 注意：本页的「顶部下拉露出 DeepSeek」手势已移除，素白外观下本页不再有
-              // DeepSeek 入口；米黄外观仍保留下方「助手」图标。首页下拉入口不受影响。
+              // 注意：本页顶部下拉现在是露出「善知识」页（与主页下拉露出 DeepSeek
+              // 同一套手势）；素白外观下本页不再有 DeepSeek 入口，米黄外观仍保留下方
+              // 「助手」图标。首页下拉入口不受影响。
               if (AppPalette.instance.isPlain && !_searchActive)
                 Padding(
                   padding: const EdgeInsets.only(right: 14),
@@ -4872,6 +4904,10 @@ class SutraListPageState extends State<SutraListPage>
           ),
           body: Listener(
             behavior: HitTestBehavior.translucent,
+            onPointerDown: _pullReveal.onPointerDown,
+            onPointerMove: _pullReveal.onPointerMove,
+            onPointerUp: _pullReveal.onPointerUp,
+            onPointerCancel: _pullReveal.onPointerCancel,
             child: Stack(
               children: [
                 Column(
@@ -4884,8 +4920,9 @@ class SutraListPageState extends State<SutraListPage>
                           ? _buildSearchResults()
                           : SingleChildScrollView(
                               controller: _scrollController,
-                              // 顶部始终可拖动（下拉回弹）。
-                              physics: const AlwaysScrollableScrollPhysics(),
+                              // 顶部始终可拖动（下拉回弹）；露出期间冻结本页滚动。
+                              physics: const PullRevealLockPhysics(
+                                  parent: AlwaysScrollableScrollPhysics()),
                               // 底部留出常驻「全部经典」入口的高度，避免内容被遮住。
                               padding: const EdgeInsets.only(bottom: 96),
                               child: Column(

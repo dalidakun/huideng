@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
+import 'certification_page.dart';
 import 'cloud_notes_service.dart';
 
 /// AI 白话翻译底部弹层：展示某段经文的 AI 白话译文。
@@ -103,6 +106,10 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
   bool _loading = true;
   String? _translation;
   String? _error;
+  bool _quotaExhausted = false;
+
+  /// 额度用完弹窗只弹一次；用户点「重试」时重置。
+  bool _quotaDialogShown = false;
   bool _diagLoading = false;
   String? _diagText;
 
@@ -116,11 +123,13 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
   }
 
   /// 请求白话翻译（面板打开后 / 重试时调用）。
-  /// 优先本地缓存 → 共享云端缓存 → 调 API 生成。
+  /// 本地缓存 → 云端（服务端先按“用户 + 段落”核销额度，再查共享缓存/生成）。
   Future<void> _translate() async {
     setState(() {
       _loading = true;
       _error = null;
+      _quotaExhausted = false;
+      _quotaDialogShown = false;
     });
     try {
       // 本地缓存键带译文版本号：提示词升级后（云端 AI_TRANSLATE_PROMPT_VERSION
@@ -128,7 +137,7 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
       final cacheKey = 'ai_translate_v2_${_hashParagraph(widget.paragraph)}';
       final prefs = await SharedPreferences.getInstance();
 
-      // 1. 优先读本地缓存（最快）。
+      // 1. 优先读本地缓存（最快）。同一段重复打开不重复扣额度。
       // 含替换字符（历史解码 bug 产生的问号）的缓存视为脏数据，跳过重新取。
       final local = prefs.getString(cacheKey);
       if (local != null && local.isNotEmpty && !local.contains('\uFFFD')) {
@@ -139,36 +148,76 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
         return;
       }
 
-      // 2. 共享云端缓存（其他同修翻译过的结果）。
-      final cached = await CloudNotesService.instance
-          .getCachedParagraphTranslation(widget.paragraph);
+      // 2. 云端：服务端核销“该用户首次打开这一段”的额度，并返回共享缓存或新译文。
+      final res = await CloudNotesService.instance.aiTranslateWithQuota(
+        paragraph: widget.paragraph,
+      );
       if (!mounted) return;
-      if (cached != null && cached.isNotEmpty) {
-        await prefs.setString(cacheKey, cached);
-        setState(() {
-          _translation = _stripAnnotation(cached);
-          _loading = false;
-        });
-        return;
-      }
-
-      // 3. 调 AI API 生成。
-      final text =
-          await CloudNotesService.instance.aiTranslate(paragraph: widget.paragraph);
-      if (!mounted) return;
+      final text = res['text'] as String;
       // 脏结果不落本地缓存，避免问号被反复展示。
       if (!text.contains('\uFFFD')) await prefs.setString(cacheKey, text);
       setState(() {
         _translation = _stripAnnotation(text);
         _loading = false;
+        _quotaExhausted = false;
       });
     } catch (e) {
       if (!mounted) return;
+      final msg = e is CloudApiException ? e.message : '翻译失败，请稍后重试';
+      final banned = msg.contains('feature_banned');
+      final exhausted = msg.contains('ai_quota_exhausted') || msg.contains('额度');
       setState(() {
         _loading = false;
-        _error = e is CloudApiException ? e.message : '翻译失败，请稍后重试';
+        _quotaExhausted = exhausted && !banned;
+        _error = banned
+            ? '当前账号已被限制使用 AI 翻译，可在「订阅服务」页提交申诉。'
+            : exhausted
+                ? '免费翻译额度已用完。开通订阅服务后，可无限次使用 AI 翻译。'
+                : msg;
       });
+      // 额度用完不再在顶部显示剩余次数，直接弹窗引导开通订阅。
+      if (exhausted && !banned) unawaited(_showQuotaDialog());
     }
+  }
+
+  /// 免费额度用完：弹窗提示开通订阅服务（AI 无限翻译 + 附赠徽标）。
+  Future<void> _showQuotaDialog() async {
+    if (!mounted || _quotaDialogShown) return;
+    _quotaDialogShown = true;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppPalette.p.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          '免费翻译额度已用完',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: AppPalette.p.text,
+          ),
+        ),
+        content: Text(
+          '开通订阅服务后，可无限次使用 AI 白话翻译，全经藏段落通用，并附赠支持者徽标。',
+          style: TextStyle(fontSize: 14, height: 1.6, color: AppPalette.p.textSec),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('稍后再说', style: TextStyle(color: AppPalette.p.textSec)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppPalette.p.accent,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('去开通'),
+          ),
+        ],
+      ),
+    );
+    if (go == true && mounted) await _openBadge();
   }
 
   /// 段落文本哈希，用作本地缓存键（避免原文过长）。
@@ -228,6 +277,19 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
     Navigator.of(context).pop();
   }
 
+  Future<void> _openBadge() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CertificationPage()),
+    );
+    if (!mounted || !_quotaExhausted) return;
+    // 只有订阅真正生效（无限额度）才自动重译；否则保留错误页，等用户自己点重试，
+    // 避免从订阅页返回后立刻又弹一次额度用完的窗口。
+    try {
+      final quota = await CloudNotesService.instance.getMyAiQuota();
+      if (quota['unlimited'] == true && mounted) await _translate();
+    } catch (_) {}
+  }
+
   void _onVerticalDragStart(DragStartDetails d) {
     _dragY = 0;
   }
@@ -285,6 +347,17 @@ class _AiTranslatePageState extends State<AiTranslatePage> {
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.redAccent, fontSize: 15),
             ),
+            if (_quotaExhausted) ...[
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: _openBadge,
+                style: FilledButton.styleFrom(
+                  backgroundColor: p.accent,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('开通订阅服务'),
+              ),
+            ],
             const SizedBox(height: 12),
             TextButton.icon(
               onPressed: _translate,

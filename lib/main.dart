@@ -47,6 +47,11 @@ import 'note_sutra_links.dart' show NoteSutraCatalog;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+/// 善知识页状态引用：该页现由经藏页下拉露出（不再是底部菜单页），
+/// 云端同步后重读、返回手势收起底部面板都通过它调用。
+final GlobalKey<ShanZhiShiPageState> shanZhiShiPageKey =
+    GlobalKey<ShanZhiShiPageState>();
+
 /// 桌面快捷方式（「继续阅读」/「新建笔记」）专用全屏遮盖层：位于 Navigator 之上，
 /// 从冷/热启动到目标页就绪之前一直遮住主页，避免先闪一下主页。就绪后置为 false 移除遮盖。
 final ValueNotifier<bool> readingShortcutCover = ValueNotifier<bool>(false);
@@ -107,9 +112,22 @@ const double _readingFabSize = 42;
 const double _readingFabRight = 16;
 const double _readingFabGap = 28;
 
+/// 旧「实名认证」徽标迁移：旧版本把 user_verified 永久写死在本地，
+/// 现在徽标改为付费支持且会到期，启动时先清一次旧缓存，之后一律以服务端为准。
+Future<void> _migrateLegacyVerifiedBadge() async {
+  final prefs = await SharedPreferences.getInstance();
+  if (prefs.getBool('paid_badge_migration_v1') == true) return;
+  await prefs.remove('user_verified');
+  await prefs.remove('user_verified_name');
+  await prefs.setBool('paid_badge_migration_v1', true);
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await StudyHubPageState.warmPrefs();
+  // 旧「实名认证」徽标迁移：旧版本把 user_verified 永久写死在本地，
+  // 现在徽标改为付费支持且会到期，启动时先清一次旧缓存，之后一律以服务端为准。
+  await _migrateLegacyVerifiedBadge();
   // 先加载外观偏好（暖黄/素白），再启动应用，避免首帧闪错主题。
   await AppPalette.instance.load();
   // 预加载管理员订正的经名覆盖（纯本地缓存，无网络），保证首帧即显示订正名。
@@ -222,7 +240,21 @@ class _MyAppState extends State<MyApp> {
       builder: (context, child) {
         return Stack(
           children: [
-            if (child != null) _HomeRevealStage(child: child),
+            if (child != null)
+              // 主页下拉露出 DeepSeek：与经藏页下拉露出善知识共用同一套展示层。
+              _PullRevealStage(
+                reveal: homeReveal,
+                scrub: homeRevealScrub,
+                padKeyboard: true,
+                surfaceColor: const Color(0xFFf0f3f8),
+                onClaim: () =>
+                    AssistantSession.instance.claim(AssistantSurface.home),
+                onRelease: () =>
+                    AssistantSession.instance.release(AssistantSurface.home),
+                revealed:
+                    const DiscussionPage(surface: AssistantSurface.home),
+                child: child,
+              ),
             const _AssistantPanelOverlay(),
             const _AssistantRevealOverlay(),
             // 快捷方式「继续阅读」遮盖层：置顶于 Navigator 之上，阅读页就绪前
@@ -254,6 +286,11 @@ class _MyAppState extends State<MyApp> {
                   homeRevealScrub.value = 0;
                   return;
                 }
+                // 经藏页下拉露出善知识到一半：先收回。
+                if (shanzhishiRevealScrub.value > 0) {
+                  shanzhishiRevealScrub.value = 0;
+                  return;
+                }
                 // 主页下拉打开的 DeepSeek 页展开时，先收起它而不是退出应用
                 if (homeReveal.value) {
                   homeReveal.value = false;
@@ -278,6 +315,16 @@ class _MyAppState extends State<MyApp> {
                   nav.pop();
                   return;
                 }
+                // 个人菜单展开时，侧滑返回先收起菜单。
+                if (_mainPageKey.currentState?.closeSideMenuIfOpen() ?? false) {
+                  return;
+                }
+                // 停在「我的」/「时间线」这类内嵌侧边栏页面时，侧滑返回先回主页，
+                // 而不是直接最小化应用。
+                if (_mainPageKey.currentState?.goBackToMainFromSidePage() ??
+                    false) {
+                  return;
+                }
                 // 经藏页底部「全部经典」面板展开时，侧滑返回先收起面板，
                 // 而不是直接最小化应用。
                 if (_mainPageKey.currentState?.collapseSutraShelfIfOpen() ??
@@ -295,6 +342,11 @@ class _MyAppState extends State<MyApp> {
                 if (_mainPageKey.currentState
                         ?.collapseShanZhiShiShelfIfOpen() ??
                     false) {
+                  return;
+                }
+                // 经藏页下拉露出的善知识页展开时，先收起它而不是退出应用。
+                if (shanzhishiReveal.value) {
+                  shanzhishiReveal.value = false;
                   return;
                 }
                 // 最小化应用到后台，模拟从底部滑动的行为
@@ -516,12 +568,18 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage>
     with WidgetsBindingObserver, TickerProviderStateMixin, RouteAware {
   int _currentIndex = 0;
+
+  /// 「我的」「时间线」是内嵌在主页里的页面（不走路由）。
+  /// 记住进入它们之前的主页面索引，系统侧滑返回时先回到那里。
+  int _sidePageReturnIndex = 0;
   final _studyHubKey = GlobalKey<StudyHubPageState>();
   final _bodhiKey = GlobalKey<BodhiSpacePageState>();
   final _myKey = GlobalKey<MyPageState>();
   final _sutraListKey = GlobalKey<SutraListPageState>();
   final _recordKey = GlobalKey<RecordPageState>();
-  final _shanZhiShiKey = GlobalKey<ShanZhiShiPageState>();
+  /// 善知识页是否处于「正在露出/已露出」态：仅此时让星图入场与自转，
+  /// 与原先它作为菜单页时按 tab 激活的口径一致（省电）。
+  final ValueNotifier<int> _shanZhiShiTab = ValueNotifier<int>(-1);
   String? _recentTitle;
   String? _recentFilePath;
   bool _recentLoaded = false;
@@ -577,6 +635,9 @@ class _MainPageState extends State<MainPage>
     _tabIndex = ValueNotifier<int>(0);
     WidgetsBinding.instance.addObserver(this);
     SyncService.instance.dataVersion.addListener(_onCloudDataChanged);
+    // 经藏页下拉露出善知识：露出期间才让星图播放入场/自转。
+    shanzhishiReveal.addListener(_syncShanZhiShiTab);
+    shanzhishiRevealScrub.addListener(_syncShanZhiShiTab);
     // 外观切换时刷新底部导航图标（素白用黑色版本）。
     AppPalette.instance.addListener(_onPaletteChanged);
     // 消息中心未读数轮询（底部「通知」角标实时同步服务器）。
@@ -619,6 +680,9 @@ class _MainPageState extends State<MainPage>
     _checkInReminderTimer?.cancel();
     SyncService.instance.dataVersion.removeListener(_onCloudDataChanged);
     AppPalette.instance.removeListener(_onPaletteChanged);
+    shanzhishiReveal.removeListener(_syncShanZhiShiTab);
+    shanzhishiRevealScrub.removeListener(_syncShanZhiShiTab);
+    _shanZhiShiTab.dispose();
     NotificationCenter.instance.stop();
     WidgetsBinding.instance.removeObserver(this);
     _navCtrlLazy?.dispose();
@@ -639,10 +703,18 @@ class _MainPageState extends State<MainPage>
     _studyHubKey.currentState?.reload();
     _bodhiKey.currentState?.reload();
     _myKey.currentState?.reload();
-    unawaited(_shanZhiShiKey.currentState?.reload() ?? Future<void>.value());
+    unawaited(shanZhiShiPageKey.currentState?.reload() ?? Future<void>.value());
     unawaited(_sutraListKey.currentState?.reload());
     // 通知开关随 prefs 恢复后，重新按本机时区调度打卡提醒。
     unawaited(NotificationService.instance.syncCheckinReminder());
+  }
+
+  /// 善知识页仅在「经藏页下拉露出」时视为激活（播放入场/自转）。
+  void _syncShanZhiShiTab() {
+    final active = _currentIndex == 2 &&
+        (shanzhishiReveal.value || shanzhishiRevealScrub.value > 0);
+    final v = active ? 7 : -1;
+    if (_shanZhiShiTab.value != v) _shanZhiShiTab.value = v;
   }
 
   /// 清理应用文档目录里残留的旧头像/横幅文件（只保留 prefs 当前引用的），
@@ -913,24 +985,8 @@ class _MainPageState extends State<MainPage>
               height: 22),
           label: '',
         ),
-        // 善知识（菜单第 4 位，放在经藏和消息之间）。
-        BottomNavigationBarItem(
-          icon: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/ss1.png'
-                  : 'assets/images/ms1.png',
-              width: 21.5,
-              height: 21.5,
-              filterQuality: FilterQuality.medium),
-          activeIcon: Image.asset(
-              AppPalette.instance.isPlain
-                  ? 'assets/images/ss2.png'
-                  : 'assets/images/ms2.png',
-              width: 21.5,
-              height: 21.5,
-              filterQuality: FilterQuality.medium),
-          label: '',
-        ),
+        // 「善知识」菜单暂时隐藏（视频依赖云端加速，国内无加速用户看不到），
+        // 只保留 首页 / 菩提空间 / 经藏 / 消息 四个菜单。
         BottomNavigationBarItem(
           icon: _NotificationTabIcon(active: false),
           activeIcon: _NotificationTabIcon(active: true),
@@ -947,15 +1003,15 @@ class _MainPageState extends State<MainPage>
         return 1;
       case 2: // 经藏（菜单第 3 位）
         return 2;
-      case 7: // 善知识（菜单第 4 位）
-        return 3;
       case 3: // 助手（入口在经藏页右上角）
         return -1;
-      case 4: // 消息（菜单第 5 位）
-        return 4;
+      case 4: // 消息（菜单第 4 位）
+        return 3;
       case 5: // 我的（入口在左侧菜单）
         return -1;
       case 6: // 记录（入口在左侧菜单）
+        return -1;
+      case 7: // 善知识影音页（菜单已隐藏，不可达）
         return -1;
       default:
         return -1;
@@ -1078,15 +1134,19 @@ class _MainPageState extends State<MainPage>
   /// 先收右下角悬浮球菜单，再收底部面板。
   /// 返回是否消费了本次返回，避免侧滑直接最小化应用。
   bool collapseShanZhiShiShelfIfOpen() {
-    if (_currentIndex != 7) return false;
-    return _shanZhiShiKey.currentState?.collapseShelfIfOpen() ?? false;
+    // 仅当善知识页正被露出（或仍是旧的菜单占位页）时才消费返回。
+    final visible = shanzhishiReveal.value ||
+        shanzhishiRevealScrub.value > 0 ||
+        _currentIndex == 7;
+    if (!visible) return false;
+    return shanZhiShiPageKey.currentState?.collapseShelfIfOpen() ?? false;
   }
 
   void _switchToTab(int index) {
     // 切页前重读最近阅读记录——离开期间可能已从全屏阅读页换了经书。
     unawaited(_loadRecentReading());
     // 已停留在经藏页再次点击经藏菜单图标：处于搜索模式则先退出搜索。
-    // 注意：经藏仍是底部菜单第 3 格（nav 2），插入「善知识」只把「消息」挤到 nav 4。
+    // 菜单只剩 4 格：首页(0) / 菩提空间(1) / 经藏(2) / 消息(3)。
     if (index == 2 && _currentIndex == 2) {
       _sutraListKey.currentState?.exitSearchIfActive();
       _tabIndex.value = 2;
@@ -1098,11 +1158,10 @@ class _MainPageState extends State<MainPage>
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
-    // 底部菜单索引 → 页面索引：善知识(nav3)→7，消息(nav4)→4，其他按顺序映射
+    // 底部菜单索引 → 页面索引：消息(nav3)→4，其他按顺序映射
     final pageIndex = switch (index) {
       2 => 2, // 经藏
-      3 => 7, // 善知识
-      4 => 4, // 消息
+      3 => 4, // 消息（善知识菜单已隐藏）
       _ => index,
     };
     // 已停留在首页再次点击首页菜单图标：刷新并回到顶部。
@@ -1142,6 +1201,7 @@ class _MainPageState extends State<MainPage>
     setState(() {
       _currentIndex = pageIndex;
     });
+    _syncShanZhiShiTab();
     _syncAssistantTab();
     _revealNavBar();
     if (pageIndex == 0) _studyHubKey.currentState?.reload();
@@ -1155,6 +1215,7 @@ class _MainPageState extends State<MainPage>
 
   /// 修学页左上角头像入口：打开「我的」页面。
   void _openMyPage() {
+    _rememberSidePageReturnIndex();
     if (_currentIndex == 2) {
       _sutraListKey.currentState?.deactivateSearch();
     }
@@ -1165,6 +1226,30 @@ class _MainPageState extends State<MainPage>
     _syncAssistantTab();
     _revealNavBar();
     _myKey.currentState?.reload();
+  }
+
+  /// 进入「我的」「时间线」前记住主页面索引（5/6 是这两个内嵌页本身）。
+  void _rememberSidePageReturnIndex() {
+    if (_currentIndex != 5 && _currentIndex != 6) {
+      _sidePageReturnIndex = _currentIndex;
+    }
+  }
+
+  /// 系统返回 / 侧滑返回：当前在「我的」或「时间线」时，先回到进入前的主页面，
+  /// 而不是让根 PopScope 把 App 最小化。返回 true 表示已处理。
+  bool goBackToMainFromSidePage() {
+    if (_currentIndex != 5 && _currentIndex != 6) return false;
+    var target = _sidePageReturnIndex;
+    if (target < 0 || target == 5 || target == 6 || target == 7) target = 0;
+    _tabIndex.value = target;
+    setState(() {
+      _currentIndex = target;
+    });
+    _syncAssistantTab();
+    _revealNavBar();
+    if (target == 0) _studyHubKey.currentState?.reload();
+    if (target == 1) _bodhiKey.currentState?.reload();
+    return true;
   }
 
   /// 经藏页「宗派经典」入口：打开宗门/法门列表页（原底部菜单第 4 项，现作为经藏页
@@ -1190,6 +1275,13 @@ class _MainPageState extends State<MainPage>
       _sideMenuOpen = true;
     });
     _sideMenuCtrl.forward();
+  }
+
+  /// 系统返回时若个人菜单正展开，先收起菜单，不要直接最小化 App。
+  bool closeSideMenuIfOpen() {
+    if (!_sideMenuOpen) return false;
+    unawaited(_closeSideMenu());
+    return true;
   }
 
   // 关闭去重：同一轮关闭里重复调用（遮罩连点等）不再重启 reverse——
@@ -1242,6 +1334,7 @@ class _MainPageState extends State<MainPage>
   /// 切到记录页：重读本地索引（读经页新写的画线/感想、笔记改动即时可见）。
   void _openRecordPage() {
     if (!mounted) return;
+    _rememberSidePageReturnIndex();
     if (_currentIndex == 2) _sutraListKey.currentState?.deactivateSearch();
     _tabIndex.value = 6;
     setState(() => _currentIndex = 6);
@@ -1250,8 +1343,9 @@ class _MainPageState extends State<MainPage>
     unawaited(_recordKey.currentState?.reload());
   }
 
-  /// 抽屉「获得认证」入口：收起面板后进实名认证页，返回时认证状态已写入本地。
-  void _sideMenuCertify() {
+  /// 抽屉「订阅服务」入口：收起面板后进订阅页（无限 AI 翻译 + 附赠徽标）；
+  /// 订阅页会把服务端状态写回本地，返回后侧边栏/个人页同步显示徽标。
+  void _sideMenuOpenSubscription() {
     unawaited(_sideMenuGo(() => Navigator.of(context)
         .push(slideInFromLeft(const CertificationPage()))));
   }
@@ -1458,6 +1552,8 @@ class _MainPageState extends State<MainPage>
       SutraListPage(
         key: _sutraListKey,
         activeTab: _tabIndex,
+        // 这个经藏页身后挂着善知识页（下方 _PullRevealStage）：开启顶部下拉露出。
+        enableShanZhiShiReveal: true,
         onOpenAssistant: _openAssistantPage,
         onOpenReadingStats: _openReadingStats,
         onOpenReadingHistory: _openReadingHistory,
@@ -1467,13 +1563,15 @@ class _MainPageState extends State<MainPage>
       MessagePage(onOpenSideMenu: _openSideMenu, activeTab: _tabIndex),
       MyPage(key: _myKey),
       RecordPage(key: _recordKey, onOpenSideMenu: _openSideMenu),
-      ShanZhiShiPage(key: _shanZhiShiKey, activeTab: _tabIndex, tabIndex: 7),
+      // 「善知识」影音菜单暂时隐藏（视频依赖云端加速），页面不再挂载。
     ];
     // 关闭键盘自适应压缩：WebView（助手/DeepSeek）在 adjustResize 下会被键盘
     // 压成小视口，页面在消息区与输入框之间露出大片空白遮挡内容。
     // 改为不压缩，由 DeepSeek 页面自身处理键盘重叠，输入框保持在键盘上方。
     final navBase = _BottomNavBar.heightOnly(context);
-    return Scaffold(
+    // 经藏页下拉露出善知识页：整个经藏页（含底部菜单）随手指下移，
+    // 与主页下拉露出 DeepSeek 的展示层完全同款。
+    final content = Scaffold(
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
@@ -1570,18 +1668,32 @@ class _MainPageState extends State<MainPage>
                 child: HomeSideMenu(
                   onOpenProfile: _sideMenuOpenProfile,
                   onOpenRecord: _sideMenuOpenRecord,
+                  onOpenSubscription: _sideMenuOpenSubscription,
                   onOpenBookmarks: _sideMenuOpenBookmarks,
                   onOpenFollowing: _sideMenuOpenFollowing,
                   onOpenSettings: _sideMenuOpenSettings,
                   onLogin: _sideMenuLogin,
                   onLogout: _sideMenuLogout,
-                  onCertify: _sideMenuCertify,
                 ),
               ),
             ),
           ],
         ],
       ),
+    );
+    return _PullRevealStage(
+      reveal: shanzhishiReveal,
+      scrub: shanzhishiRevealScrub,
+      // 善知识页自己按 MediaQuery 安全区排版，且自己处理键盘（搜索时不压缩布局）。
+      useSafeArea: false,
+      padKeyboard: false,
+      surfaceColor: AppPalette.p.bg,
+      revealed: ShanZhiShiPage(
+        key: shanZhiShiPageKey,
+        activeTab: _shanZhiShiTab,
+        tabIndex: 7,
+      ),
+      child: content,
     );
   }
 }
@@ -2158,27 +2270,59 @@ class _AssistantRevealOverlayState extends State<_AssistantRevealOverlay>
   }
 }
 
-/// Home page pull-down reveal.
+/// 下拉露出展示层（主页 → DeepSeek、经藏页 → 善知识共用）。
 ///
-/// Wraps the whole app content ([child]). DeepSeek 页固定在主页身后；下拉时主页
-/// 整体往下滑动（与手指 1:1：手指拖多少，主页就下移多少，见
-/// PullRevealTracker.revealDistance），身后的 DeepSeek 页随之逐渐「漏出」
+/// Wraps the page content ([child]). 目标页固定在内容身后；下拉时内容整体往下
+/// 滑动（与手指 1:1：手指拖多少，内容就下移多少，见
+/// PullRevealTracker.revealDistance），身后的页面随之逐渐「漏出」
 /// （上下两个页面互相推拉）：
-/// - 顶部 DeepSeek 页区域先出现一个灰色圆点，随下拉逐渐「裂开」成三个并铺开
-///   到临界位置（进度 [ _crit ] 处）；主页同时逐渐变模糊。
-/// - 越过临界点后继续下拉，DeepSeek 页由朦胧转为清晰；松手时进度过半才自动
-///   展开 DeepSeek，否则主页弹回原位。
-/// 关闭时反向播放；DeepSeek 页顶部中央有一枚关闭 (X) 按钮。
-class _HomeRevealStage extends StatefulWidget {
-  const _HomeRevealStage({required this.child});
+/// - 顶部目标页区域先出现一个灰色圆点，随下拉逐渐「裂开」成三个并铺开到
+///   临界位置（进度 [_crit] 处）；内容同时逐渐变淡。
+/// - 越过临界点后继续下拉，目标页由朦胧转为清晰；松手时进度过半才自动
+///   展开，否则内容弹回原位。
+/// 关闭时反向播放；收起靠上推或侧滑返回（顶部不再放关闭按钮）。
+class _PullRevealStage extends StatefulWidget {
+  const _PullRevealStage({
+    required this.child,
+    required this.reveal,
+    required this.scrub,
+    required this.revealed,
+    required this.surfaceColor,
+    this.useSafeArea = true,
+    this.padKeyboard = false,
+    this.onClaim,
+    this.onRelease,
+  });
 
+  /// 需要跟着下移、露出身后页面的内容（主页整个 App / 经藏页）。
   final Widget child;
 
+  /// 目标页显隐信号与跟手进度。
+  final ValueNotifier<bool> reveal;
+  final ValueNotifier<double> scrub;
+
+  /// 身后被露出的页面。
+  final Widget revealed;
+
+  /// 目标页底层底色（状态栏区域可见）。
+  final Color surfaceColor;
+
+  /// 是否给目标页套 SafeArea（DeepSeek 页需要；善知识页自己按
+  /// MediaQuery 的顶部/底部安全区排版，套上反而会把安全区清零）。
+  final bool useSafeArea;
+
+  /// 是否按键盘高度让出底部（DeepSeek 输入框需要；善知识页自己处理）。
+  final bool padKeyboard;
+
+  /// 露出开始 / 收合结束时回调（DeepSeek 用来申领与释放共享 WebView 会话）。
+  final VoidCallback? onClaim;
+  final VoidCallback? onRelease;
+
   @override
-  State<_HomeRevealStage> createState() => _HomeRevealStageState();
+  State<_PullRevealStage> createState() => _PullRevealStageState();
 }
 
-class _HomeRevealStageState extends State<_HomeRevealStage>
+class _PullRevealStageState extends State<_PullRevealStage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
 
@@ -2193,18 +2337,31 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
       vsync: this,
       duration: const Duration(milliseconds: 420),
     );
-    homeReveal.addListener(_onVisible);
-    homeRevealScrub.addListener(_onScrub);
+    widget.reveal.addListener(_onVisible);
+    widget.scrub.addListener(_onScrub);
   }
 
-  /// 下拉跟手：进度 > 0 时按手指实时露出（并提前挂载 WebView，露出即可见），
+  @override
+  void didUpdateWidget(_PullRevealStage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.reveal != widget.reveal) {
+      oldWidget.reveal.removeListener(_onVisible);
+      widget.reveal.addListener(_onVisible);
+    }
+    if (oldWidget.scrub != widget.scrub) {
+      oldWidget.scrub.removeListener(_onScrub);
+      widget.scrub.addListener(_onScrub);
+    }
+  }
+
+  /// 下拉跟手：进度 > 0 时按手指实时露出（并提前挂载目标页，露出即可见），
   /// 归零（反向上拖到位 / 松手未过半）时按余下距离收合。
   void _onScrub() {
-    if (!mounted || homeReveal.value) return;
-    final v = homeRevealScrub.value;
+    if (!mounted || widget.reveal.value) return;
+    final v = widget.scrub.value;
     if (v > 0) {
       _scrubbing = true;
-      AssistantSession.instance.claim(AssistantSurface.home);
+      widget.onClaim?.call();
       _ctrl.stop();
       _ctrl.value = v.clamp(_ctrl.lowerBound, _ctrl.upperBound);
     } else if (_scrubbing) {
@@ -2215,9 +2372,9 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
 
   void _onVisible() {
     if (!mounted) return;
-    if (homeReveal.value) {
+    if (widget.reveal.value) {
       _scrubbing = false;
-      AssistantSession.instance.claim(AssistantSurface.home);
+      widget.onClaim?.call();
       _ctrl.animateTo(1.0, curve: Curves.easeInOutCubic);
     } else {
       _scrubbing = false;
@@ -2225,68 +2382,76 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
     }
   }
 
-  /// 从当前露出量收合到 0，收完才把 WebView 让给其他入口（否则露出中途会闪没）。
+  /// 从当前露出量收合到 0，收完才把资源让给其他入口（否则露出中途会闪没）。
   void _collapse() {
     _ctrl
         .animateBack(0.0, curve: Curves.easeInOutCubic)
         .whenCompleteOrCancel(() {
-      if (!mounted || homeReveal.value || homeRevealScrub.value > 0) return;
-      AssistantSession.instance.release(AssistantSurface.home);
+      if (!mounted || widget.reveal.value || widget.scrub.value > 0) return;
+      widget.onRelease?.call();
     });
   }
 
   @override
   void dispose() {
-    homeReveal.removeListener(_onVisible);
-    homeRevealScrub.removeListener(_onScrub);
+    widget.reveal.removeListener(_onVisible);
+    widget.scrub.removeListener(_onScrub);
     _ctrl.dispose();
     super.dispose();
   }
 
-  /// 临界点：三个圆点恰好展开到位的位置。越过它松手才会自动展开 DeepSeek，
-  /// 否则弹回主页。与 [PullRevealTracker.commitProgress] 保持一致（0.5）。
+  /// 临界点：三个圆点恰好展开到位的位置。越过它松手才会自动展开目标页，
+  /// 否则弹回原位。与 [PullRevealTracker.commitProgress] 保持一致（0.5）。
   static const double _crit = 0.5;
 
   @override
   Widget build(BuildContext context) {
+    // 键盘高度只在普通重建时读取，动画帧内复用同一个 child，避免整页每帧重建。
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final Widget raw = widget.padKeyboard
+        ? Padding(
+            padding: EdgeInsets.only(bottom: keyboard),
+            child: widget.revealed,
+          )
+        : widget.revealed;
+    final Widget revealed =
+        widget.useSafeArea ? SafeArea(bottom: true, child: raw) : raw;
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (context, _) {
+      child: revealed,
+      builder: (context, revealedChild) {
         final t = _ctrl.value;
         final height = MediaQuery.of(context).size.height;
-        // 键盘弹出高度：输入框激活时 WebView 底部让出，输入框保持在键盘上方
-        //（与经藏页右上角 DeepSeek 展开面板同一处理，否则输入法会盖住输入框）。
-        final keyboard = MediaQuery.viewInsetsOf(context).bottom;
 
-        // 圆点从主页开始下移、顶部露出 DeepSeek 区域时才出现（先是一个圆点），
+        // 圆点从顶部开始下移、目标页区域露出时才出现（先是一个圆点），
         // 展开进度到临界点正好铺成三个。
         const double dotsStart = 0.1;
         final dotsT = ((t - dotsStart) / (_crit - dotsStart)).clamp(0.0, 1.0);
         final dotsIn = (dotsT * 4).clamp(0.0, 1.0);
-        // 越过临界点后圆点淡出，让位给逐渐清晰的 DeepSeek 页。
+        // 越过临界点后圆点淡出，让位给逐渐清晰的目标页。
         final dotsOpacity = t <= _crit
             ? dotsIn
             : (1.0 - (t - _crit) / (1 - _crit)).clamp(0.0, 1.0);
 
-        // 主页跟手整体往下滑动：滑走多少，顶部的 DeepSeek 页就露出多少。
-        final homeShift = height * t;
-        // 淡出：整棵 App 子树做透明度合成已是全屏 saveLayer，成本不低。
-        final homeOpacity = (1.0 - t * 0.35).clamp(0.0, 1.0);
+        // 内容跟手整体往下滑动：滑走多少，顶部的目标页就露出多少。
+        final contentShift = height * t;
+        // 淡出：整棵内容子树做透明度合成已是全屏 saveLayer，成本不低。
+        final contentOpacity = (1.0 - t * 0.35).clamp(0.0, 1.0);
 
         return Stack(
           children: [
-            // DeepSeek 页：全屏浅色底上，把 DeepSeek 页硬裁剪到顶部 t·h 区域。
-            // 主页下移多少，顶部这块就露出多少，两块面积一增一减。
+            // 目标页：全屏底色上，把目标页硬裁剪到顶部 t·h 区域。
+            // 内容下移多少，顶部这块就露出多少，两块面积一增一减。
             Positioned.fill(
               child: IgnorePointer(
                 ignoring: t < 0.99,
                 child: Material(
-                  color: const Color(0xFFf0f3f8),
+                  color: widget.surfaceColor,
                   child: Stack(
                     children: [
-                      // 硬裁剪：DeepSeek 页只在顶部 t·h 区域露出（与主页下移量同步），
-                      // 于是主页下半块的半透明不再「透出整张 DeepSeek 页」。
-                      // 内层 SizedBox 仍按全屏高度布局，WebView 不重排，只做裁剪。
+                      // 硬裁剪：目标页只在顶部 t·h 区域露出（与内容下移量同步），
+                      // 于是内容下半块的半透明不再「透出整张目标页」。
+                      // 内层 SizedBox 仍按全屏高度布局，页面不重排，只做裁剪。
                       Positioned(
                         top: 0,
                         left: 0,
@@ -2298,57 +2463,18 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
                             child: SizedBox(
                               width: double.infinity,
                               height: height,
-                              child: SafeArea(
-                                bottom: true,
-                                child: Padding(
-                                  padding: EdgeInsets.only(bottom: keyboard),
-                                  child: const DiscussionPage(
-                                    surface: AssistantSurface.home,
-                                  ),
-                                ),
-                              ),
+                              child: revealedChild,
                             ),
                           ),
                         ),
                       ),
-                      // 关闭按钮：DeepSeek 已基本漏出时才出现，避免与圆点挤在顶部。
-                      if (t > 0.6)
-                        Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          child: SafeArea(
-                            bottom: false,
-                            child: Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Center(
-                                child: Material(
-                                  color: Colors.white,
-                                  shape: const CircleBorder(),
-                                  elevation: 3,
-                                  child: InkWell(
-                                    customBorder: const CircleBorder(),
-                                    onTap: () => homeReveal.value = false,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8),
-                                      child: Icon(
-                                        Icons.close,
-                                        size: 20,
-                                        color: AppPalette.p.primary,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                      // 关闭方式：侧滑返回 / 上推收回，顶部不再放关闭 (X) 按钮。
                     ],
                   ),
                 ),
               ),
             ),
-            // 下拉指示：位于 DeepSeek 页顶部区域，随下拉逐渐展开成三个圆点。
+            // 下拉指示：位于目标页顶部区域，随下拉逐渐展开成三个圆点。
             if (dotsOpacity > 0.01)
               Positioned.fill(
                 child: IgnorePointer(
@@ -2361,17 +2487,17 @@ class _HomeRevealStageState extends State<_HomeRevealStage>
                   ),
                 ),
               ),
-            // 主页内容：整体下移 + 淡出，露出顶部的 DeepSeek 页。
-            // 只做平移（Transform）与透明度，避免对整棵 App 子树做高斯模糊——
+            // 内容：整体下移 + 淡出，露出顶部的目标页。
+            // 只做平移（Transform）与透明度，避免对整棵子树做高斯模糊——
             // 全屏模糊每帧都要 saveLayer 重新栅格化，是掉帧的主因。
-            // RepaintBoundary 缓存主页位图：露出期间主页被冻结、画面不变，
-            // 每帧只需复用缓存再叠加透明度/平移，避免整棵 App 反复重绘。
+            // RepaintBoundary 缓存内容位图：露出期间内容被冻结、画面不变，
+            // 每帧只需复用缓存再叠加透明度/平移，避免整棵子树反复重绘。
             IgnorePointer(
               ignoring: t > 0.01,
               child: Opacity(
-                opacity: homeOpacity,
+                opacity: contentOpacity,
                 child: Transform.translate(
-                  offset: Offset(0, homeShift),
+                  offset: Offset(0, contentShift),
                   child: RepaintBoundary(child: widget.child),
                 ),
               ),

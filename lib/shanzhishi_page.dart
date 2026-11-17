@@ -811,11 +811,16 @@ class ShanZhiShiPageState extends State<ShanZhiShiPage>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final Size area = Size(constraints.maxWidth, constraints.maxHeight);
-          // 球心：右边缘 16，底部让出菜单栏（含手势条）+ 20。
+          // 球心：右边缘 16，底部让出菜单栏（含手势条）+ 20，
+          // 再上移半个按钮直径，避免贴着手势条显得太靠下。
           final Offset ballCenter = _clampFabCenter(
             Offset(
               area.width - 16 - _fabToggleSize / 2,
-              area.height - mq.padding.bottom - 20 - _fabToggleSize / 2,
+              area.height -
+                  mq.padding.bottom -
+                  20 -
+                  _fabToggleSize / 2 -
+                  _fabToggleSize / 2,
             ),
             area,
           );

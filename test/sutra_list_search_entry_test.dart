@@ -74,7 +74,7 @@ void main() {
         reason: '退出后搜索图标回来');
   });
 
-  testWidgets('素白：下拉不再露出 DeepSeek（手势已移除，回归防线）', (tester) async {
+  testWidgets('素白：下拉不再露出 DeepSeek（改为露出善知识，回归防线）', (tester) async {
     await AppPalette.instance.load();
     expect(AppPalette.instance.isPlain, isTrue);
 
@@ -92,7 +92,7 @@ void main() {
     await tester.drag(scrollable, const Offset(0, 300));
     await tester.pump(const Duration(milliseconds: 100));
     expect(homeReveal.value, isFalse,
-        reason: '经藏页的「下拉露出 DeepSeek」手势已移除，下拉不应打开 DeepSeek');
+        reason: '经藏页下拉改为露出善知识，不应打开 DeepSeek');
     expect(homeRevealScrub.value, 0, reason: '不应有任何露出进度');
 
     // 跟手手势同样不应被接管：没有露出进度，也没有内容被钉死。
@@ -135,7 +135,7 @@ void main() {
     expect(find.text('搜索经文'), findsOneWidget,
         reason: '米黄搜索框仍在「经典入口」标题行右侧');
 
-    // 米黄外观不启用下拉打开 DeepSeek 的手势。
+    // 米黄外观同样不会下拉打开 DeepSeek（改为露出善知识）。
     final scrollable = find.descendant(
         of: find.byType(SingleChildScrollView), matching: find.byType(Scrollable));
     expect(scrollable, findsOneWidget, reason: '应有内容滚动区');

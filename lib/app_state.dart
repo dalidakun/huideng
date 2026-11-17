@@ -20,6 +20,13 @@ final ValueNotifier<bool> homeReveal = ValueNotifier<bool>(false);
 /// 才释放 WebView，避免露出过程中内容闪没）。
 final ValueNotifier<double> homeRevealScrub = ValueNotifier<double>(0);
 
+/// 经藏页下拉露出「善知识」页：显隐信号与实时进度。
+///
+/// 交互与主页下拉露出 DeepSeek 完全一致（同一套 PullRevealTracker、
+/// 阈值与动画），只是身后要露出的页面换成了善知识页。
+final ValueNotifier<bool> shanzhishiReveal = ValueNotifier<bool>(false);
+final ValueNotifier<double> shanzhishiRevealScrub = ValueNotifier<double>(0);
+
 /// 全局夜间模式信号：跟随阅读页「夜间模式」开关。
 /// 消息中心等非阅读页面据此切换浅色/深色配色。
 final ValueNotifier<bool> appDarkMode = ValueNotifier<bool>(false);

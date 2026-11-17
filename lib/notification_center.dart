@@ -180,7 +180,7 @@ class NotificationCenter {
           noteTitle: it.noteTitle,
           noteRepostKind: it.noteRepostKind,
           commentId: it.type == 'follow_me' ? '' : it.commentId,
-          noteContent: it.type == 'follow_me'
+          noteContent: (it.type == 'follow_me' || it.type == 'subscription')
               ? ''
               : (it.content.isNotEmpty ? it.content : it.contentPreview),
           actors: [],
@@ -201,15 +201,19 @@ class NotificationCenter {
       if (!it.viewed) g.hasUnread = true;
       if (it.commentId.isNotEmpty && g.commentId.isEmpty) g.commentId = it.commentId;
       g.activityIds.add(it.id);
-      final exists = g.actors.any((a) => a.userId == it.actorId && it.actorId.isNotEmpty);
-      if (!exists) {
-        g.actors.add(NotificationActor(
-          it.actorId,
-          it.actorName,
-          it.actorAvatar,
-          it.actorAccount,
-          it.actorVerified,
-        ));
+      // 系统信息（订阅开通等）没有互动用户，不生成头像/昵称；标题直接显示动作文案。
+      if (it.actorId.isNotEmpty) {
+        final exists =
+            g.actors.any((a) => a.userId == it.actorId && it.actorId.isNotEmpty);
+        if (!exists) {
+          g.actors.add(NotificationActor(
+            it.actorId,
+            it.actorName,
+            it.actorAvatar,
+            it.actorAccount,
+            it.actorVerified,
+          ));
+        }
       }
     }
     return [for (final k in order) groups[k]!];
@@ -219,7 +223,8 @@ class NotificationCenter {
   /// 一页最多 20 个通知组，按批量（≤8）串行补齐；利用笔记缓存避免重复拉取。
   Future<void> _attachNotePreviews(List<NotificationGroup> groups) async {
     final pending = groups.where((g) {
-      if (g.type == 'follow_me') return false;
+      // 关注与订阅系统信息没有帖子正文，不需要回源补摘要。
+      if (g.type == 'follow_me' || g.type == 'subscription') return false;
       if (g.noteContent.isEmpty) return true;
       // 点赞通知缺少转发类型时回源补齐（区分「喜欢了你的回复」/「点赞了你的帖子」）。
       if (g.type == 'like_me' && g.noteRepostKind.isEmpty) return true;

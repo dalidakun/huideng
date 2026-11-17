@@ -125,12 +125,12 @@ class StudyHubPageState extends State<StudyHubPage>
   /// 历史统计的自定义顺序（类型 key），空表示未自定义。
   List<String> _historyStatsOrder = [];
 
-  /// 功课回向内容（愿我的功课回向）。
+  /// 功课回向内容（愿我的功课回向）：当前回向未到期时用当前回向，
+  /// 到期后自动恢复为默认回向。
   String _dedication = '';
 
-  /// 默认回向文：用户未输入直接保存时使用。
-  static const String _kDefaultDedication =
-      '愿以此功德，回向于法界，庄严佛净土；上报四重恩，下济三途苦；若有见闻者，悉发菩提心。';
+  /// 功课回向的状态小标签：如「剩 5 天」「默认回向」；无期限时为空。
+  String _dedicationNote = '';
 
   /// 首次启动写入第 1 天时的本地标记；云端有累计天数时可覆盖。
   static const String _kProvisionalStudyDay = '_provisional_study_day';
@@ -272,6 +272,9 @@ class StudyHubPageState extends State<StudyHubPage>
 
     final lastDate = prefs.getString('study_last_date') ?? '';
     final today = _today();
+    // 旧版「定时回向」数据先迁移为当前回向，随后清理废弃的定时方案键。
+    await DedicationStore.migrateLegacy(prefs, today: today);
+    await DedicationStore.cleanupLegacyHistory(prefs, today: today);
     if (today != lastDate) {
       final count = prefs.getInt('study_day_count') ?? 0;
       unawaited(prefs.setInt('study_day_count', count + 1));
@@ -391,6 +394,13 @@ class StudyHubPageState extends State<StudyHubPage>
     // 缺失时再从每日阅读历史（随账号同步）兜底恢复，避免进度清零。
     final lastReadProgress = await progressF;
 
+    // 回向对账：到期的当前回向移入历史，首页恢复显示默认回向。
+    final dedicationToday = _today();
+    await DedicationStore.reconcile(prefs, today: dedicationToday);
+    final dedicationEntry = DedicationStore.current(prefs);
+    final dedicationText =
+        DedicationStore.effective(prefs, today: dedicationToday);
+
     if (!mounted) return;
     setState(() {
       _loaded = true;
@@ -409,7 +419,8 @@ class StudyHubPageState extends State<StudyHubPage>
       _todayCheckInsDate = _today();
       _checkinTotalDays = _calcTotalDays(prefs);
       _historyStatsOrder = prefs.getStringList('history_stats_order') ?? [];
-      _dedication = DedicationStore.effective(prefs);
+      _dedication = dedicationText;
+      _dedicationNote = _dedicationNoteFor(dedicationEntry, dedicationToday);
       final customRaw = prefs.getString('custom_checkin_types') ?? '[]';
       _customTypes =
           (jsonDecode(customRaw) as List<dynamic>).cast<Map<String, dynamic>>();
@@ -2246,8 +2257,17 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
+  /// 回向区块的小标签：剩余天数 / 已恢复默认回向。
+  String _dedicationNoteFor(DedicationEntry? entry, String today) {
+    if (entry == null || entry.text.trim().isEmpty) return '';
+    if (DedicationStore.isExpired(entry, today: today)) return '默认回向';
+    if (!entry.hasDuration) return '';
+    final remain = DedicationStore.remainingDays(entry, today: today) ?? 0;
+    return '剩 $remain 天';
+  }
+
   /// 功课回向区块：贴在打卡卡片底部（与卡片同一背景，不另起色块），
-  /// 上方以分割线区分；点击弹出抽屉填写/编辑回向内容。
+  /// 上方以分割线区分；点击弹出抽屉填写/编辑回向内容与持续时间。
   Widget _buildDedicationBlock() {
     final text = _dedication.trim();
     return InkWell(
@@ -2262,11 +2282,23 @@ class StudyHubPageState extends State<StudyHubPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('愿我的功课回向',
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: _textSec)),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text('愿我的功课回向',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: _textSec)),
+                      ),
+                      if (_dedicationNote.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        _blessingTag(_dedicationNote),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 2),
                   Text(text.isEmpty ? '写下回向，点击编辑' : text,
                       maxLines: 1,
@@ -2385,15 +2417,20 @@ class StudyHubPageState extends State<StudyHubPage>
     );
   }
 
-  /// 打开「功德回向」抽屉：顶部为输入框，下方为可选用的回向模板，
-  /// 并支持设置「定时自动更换」的回向方案。文本由抽屉内部持久化。
+  /// 打开「功课回向」抽屉：编辑当前回向正文与持续时间，
+  /// 到期后自动恢复默认回向。文本由抽屉内部持久化。
   Future<void> _openDedicationEditor() async {
-    final text = await showDedicationSheet(
-      context,
-      defaultText: _kDefaultDedication,
-    );
+    final text = await showDedicationSheet(context);
     if (text == null) return;
-    if (mounted) setState(() => _dedication = text);
+    if (!mounted) return;
+    final prefs = _warmPrefs ?? await SharedPreferences.getInstance();
+    _warmPrefs = prefs;
+    final today = _today();
+    setState(() {
+      _dedication = text;
+      _dedicationNote =
+          _dedicationNoteFor(DedicationStore.current(prefs), today);
+    });
   }
 
   /// 汇总各类型自使用以来的累计量，并附每日功课具体内容明细。

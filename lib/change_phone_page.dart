@@ -72,15 +72,18 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
       _showToast('请输入 6 位验证码');
       return;
     }
+    final hadPhone =
+        (AuthService.instance.currentUser.value?.mobilePhoneNumber ?? '')
+            .isNotEmpty;
     setState(() => _confirming = true);
     try {
       await AuthService.instance.confirmPhoneChange(_codeController.text.trim());
       if (mounted) {
-        _showToast('手机号更换成功');
+        _showToast(hadPhone ? '手机号更换成功' : '手机号绑定成功');
         Navigator.of(context).pop();
       }
     } catch (e) {
-      _showToast('更换失败：${e is AuthException ? e.message : e.toString()}');
+      _showToast('${hadPhone ? '更换' : '绑定'}失败：${e is AuthException ? e.message : e.toString()}');
     } finally {
       if (mounted) setState(() => _confirming = false);
     }
@@ -131,14 +134,15 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
   @override
   Widget build(BuildContext context) {
     final phone = AuthService.instance.currentUser.value?.mobilePhoneNumber;
+    final hasPhone = phone != null && phone.isNotEmpty;
     return SettingsPageScaffold(
-      title: '更换手机号',
+      title: hasPhone ? '更换手机号' : '绑定手机号',
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (phone != null && phone.isNotEmpty)
+            if (hasPhone)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
@@ -157,7 +161,7 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                 ),
               ),
             const SizedBox(height: 20),
-            Text('新手机号', style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+            Text(hasPhone ? '新手机号' : '手机号', style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             TextField(
               controller: _phoneController,
@@ -166,7 +170,7 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
               style: TextStyle(fontSize: 16, color: sText),
               decoration: InputDecoration(
                 counterText: '',
-                hintText: '请输入新手机号',
+                hintText: hasPhone ? '请输入新手机号' : '请输入手机号',
                 hintStyle: TextStyle(color: sTextHint),
                 filled: true,
                 fillColor: sCard,
@@ -247,7 +251,7 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
-                    : const Text('确认更换', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    : Text(hasPhone ? '确认更换' : '确认绑定', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(height: 20),
@@ -258,7 +262,9 @@ class _ChangePhonePageState extends State<ChangePhonePage> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '更换手机号不会影响现有账号，云端笔记、收藏与签到记录都会保留。',
+                    hasPhone
+                        ? '更换手机号不会影响现有账号，云端笔记、收藏与签到记录都会保留。'
+                        : '绑定手机号后可用于找回账号，也方便订阅服务核对与联系。',
                     style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.6),
                   ),
                 ),

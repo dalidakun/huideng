@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:my_flutter_app/dedication_store.dart';
 import 'package:my_flutter_app/study_hub_page.dart';
 
 const _pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
@@ -155,6 +156,51 @@ void main() {
     await pumpUntil(tester, find.text('0/1'));
     expect(find.text('0/1'), findsOneWidget,
         reason: '回到前台后应立刻显示新一天未打卡');
+
+    await disposeHome(tester);
+  });
+
+  testWidgets('当前回向到期后，主页自动恢复为默认回向', (tester) async {
+    // 回向在 _day1（2024-05-01）为最后一天，跨天即到期。
+    SharedPreferences.setMockInitialValues({
+      'setting_reading_titles': jsonEncode([
+        {'name': _itemName, 'count': '1'}
+      ]),
+      'checkin_records': jsonEncode([
+        {
+          'date': _day1,
+          'type': 'reading',
+          'label': '诵经',
+          'name': _itemName,
+          'amount': 1,
+        }
+      ]),
+      'checkin_dedication': '愿以此功德，回向给我的母亲。',
+      'checkin_dedication_start': '2024-04-01',
+      'checkin_dedication_end': _day1,
+    });
+
+    await pumpHome(tester);
+
+    expect(find.text('愿以此功德，回向给我的母亲。'), findsOneWidget,
+        reason: '到期当天仍应显示当前回向');
+    expect(find.text('剩 1 天'), findsOneWidget);
+
+    fakeNow = DateTime(2024, 5, 2, 0, 0, 20);
+    await tester.pump(const Duration(seconds: 31));
+    await pumpUntil(tester, find.textContaining('庄严佛净土'));
+
+    expect(find.text('愿以此功德，回向给我的母亲。'), findsNothing,
+        reason: '到期后不应再显示上一条回向');
+    expect(find.textContaining('剩 1 天'), findsNothing,
+        reason: '到期后倒计时标签应消失');
+
+    // 到期的那条自动归入回向历史。
+    final prefs = await SharedPreferences.getInstance();
+    final history = DedicationStore.history(prefs);
+    expect(history, hasLength(1));
+    expect(history.first.text, '愿以此功德，回向给我的母亲。');
+    expect(history.first.endDate, _day1);
 
     await disposeHome(tester);
   });

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'auth_service.dart';
+import 'certification_page.dart';
 import 'cloud_notes_service.dart';
 import 'loading_widgets.dart';
 import 'login_page.dart';
@@ -53,6 +54,9 @@ class _TypeStyle {
     'favorite_me': _TypeStyle.icon(Icons.bookmark_rounded, Color(0xFFC9A227), '收藏了你的帖子'),
     'follow_me': _TypeStyle.icon(Icons.person_add_alt_1_rounded, Color(0xFF5F8A85), '关注了你'),
     'mention': _TypeStyle.icon(Icons.alternate_email_rounded, Color(0xFF9B7FAE), '在评论中@了你'),
+    // 订阅开通：系统信息，无互动用户，右侧正文直接显示贺语。
+    'subscription':
+        _TypeStyle.icon(Icons.celebration, AppPalette.p.accent, '恭喜你获得无限翻译和认证徽标。'),
   };
 
   static _TypeStyle of(String type) =>
@@ -694,6 +698,15 @@ class _MessagePageState extends State<MessagePage> with TickerProviderStateMixin
       if (mounted) setState(() {});
     }
     if (!mounted) return;
+    // 订阅开通系统信息：点开进入订阅服务页查看状态。
+    if (g.type == 'subscription') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const CertificationPage()),
+      );
+      if (mounted) _silentRefresh();
+      return;
+    }
     if (g.type == 'follow_me') {
       if (g.actors.isNotEmpty) {
         final actor = g.actors.first;

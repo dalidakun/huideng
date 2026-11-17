@@ -16,6 +16,8 @@ analyzer:
     # Backup/temporary scratch files (not part of the shipped app); some contain incomplete snippets.
     - lib/reading_page_backup.dart
     - lib/temp_*.dart
+    # Documentation code samples (not compiled with the app; imports are illustrative).
+    - docs/**
 
 linter:
   # The lint rules applied to this project can be customized in the

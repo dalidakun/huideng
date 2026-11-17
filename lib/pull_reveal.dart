@@ -37,23 +37,32 @@ class PullRevealLockPhysics extends ScrollPhysics {
   }
 }
 
-/// DeepSeek「下拉逐渐露出」手势追踪器：主页、菩提空间、经藏页共用。
+/// 「下拉逐渐露出」手势追踪器：主页露出 DeepSeek、经藏页露出善知识共用。
 ///
 /// 直接把页面的指针事件转发给 [onPointerDown] / [onPointerMove] /
 /// [onPointerUp] / [onPointerCancel]：
 /// - 手势开始且列表在顶部（[canStart] 为真）时接管；
-/// - 顶边继续下拉：累计位移，越过 [startThreshold] 后实时写入 [homeRevealScrub]，
-///   DeepSeek 页面跟手逐渐露出，同时冻结底层列表（内容不动）；
-/// - 反向上拖：位移回落，露出量随之收回（回到 0 即完全不显示 DeepSeek）；
-/// - 松手：进度过半才置 [homeReveal] 完全展开，否则把进度归零收合。
+/// - 顶边继续下拉：累计位移，越过 [startThreshold] 后实时写入 [scrub]，
+///   身后的页面跟手逐渐露出，同时冻结底层列表（内容不动）；
+/// - 反向上拖：位移回落，露出量随之收回（回到 0 即完全不显示）；
+/// - 松手：进度过半才置 [reveal] 完全展开，否则把进度归零收合。
 ///
 /// 页面不可用时（搜索态、抽屉展开等）由 [canStart] 拦住；[reset] 归零，
 /// 避免卡在半露出状态。
 class PullRevealTracker {
-  PullRevealTracker({this.canStart});
+  PullRevealTracker({
+    this.canStart,
+    ValueNotifier<bool>? reveal,
+    ValueNotifier<double>? scrub,
+  })  : _reveal = reveal ?? homeReveal,
+        _scrub = scrub ?? homeRevealScrub;
 
   /// 手势开始时是否允许接管（页面态：素白、非搜索、抽屉收起、列表在顶部）。
   final bool Function()? canStart;
+
+  /// 下拉露出页的显隐 / 跟手进度（默认主页的 DeepSeek）。
+  final ValueNotifier<bool> _reveal;
+  final ValueNotifier<double> _scrub;
 
   /// 下拉超过该距离后才开始露出（之前只累计、不露出），小滑动不触发。
   static const double startThreshold = 48;
@@ -108,13 +117,13 @@ class PullRevealTracker {
     _cumulative = 0;
     _cumulativeX = 0;
     _acc = 0;
-    if (homeRevealScrub.value != 0) homeRevealScrub.value = 0;
+    if (_scrub.value != 0) _scrub.value = 0;
     if (pullRevealScrollLocked) pullRevealScrollLocked = false;
   }
 
   void onPointerDown(PointerDownEvent e) {
     if (_pointer != null) return;
-    if (homeReveal.value) return;
+    if (_reveal.value) return;
     if (pullRevealScrollLocked) return;
     if (canStart != null && !canStart!()) return;
     _pointer = e.pointer;
@@ -181,13 +190,13 @@ class PullRevealTracker {
     }
     if (!wasEngaged) return;
     if (progress >= commitProgress) {
-      // 展开：先置 homeReveal（展示层从当前露出量补完余下动画并挂载 WebView），
+      // 展开：先置 reveal（展示层从当前露出量补完余下动画并挂载 WebView），
       // 再归零 scrub —— 展示层此时忽略归零，不会触发收合。
-      homeReveal.value = true;
-      if (homeRevealScrub.value != 0) homeRevealScrub.value = 0;
-    } else if (homeRevealScrub.value != 0) {
+      _reveal.value = true;
+      if (_scrub.value != 0) _scrub.value = 0;
+    } else if (_scrub.value != 0) {
       // 未过半：收回（展示层播收合动画，动画走完释放 WebView）。
-      homeRevealScrub.value = 0;
+      _scrub.value = 0;
     }
   }
 
@@ -201,7 +210,7 @@ class PullRevealTracker {
 
   bool _publish() {
     final p = _progress();
-    if (p != homeRevealScrub.value) homeRevealScrub.value = p;
+    if (p != _scrub.value) _scrub.value = p;
     return false;
   }
 }

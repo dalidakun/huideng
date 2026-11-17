@@ -11,9 +11,9 @@ import 'user_avatar.dart';
 
 /// 左侧滑出的个人菜单面板（约占屏宽 2/3）。
 ///
-/// 自上而下：头像、昵称 + 认证徽章（或「获得认证」提示）与 @账户名（右侧为阅藏进度圆环），
+/// 自上而下：头像、昵称 + 支持者徽标（未开通时什么都不显示）与 @账户名（右侧为阅藏进度圆环），
 /// 其下为累计读经时长（原样式），两者同步更新，
-/// 随后是菜单项：个人资料、时间线、书签、关注、设置、登录或退出登录。
+/// 随后是菜单项：个人资料、时间线、订阅服务、书签、关注、设置、登录或退出登录。
 /// 点击面板外的遮罩即可关闭，面板上不放关闭按钮。
 class HomeSideMenu extends StatefulWidget {
   /// 点击「个人资料」。
@@ -21,6 +21,9 @@ class HomeSideMenu extends StatefulWidget {
 
   /// 点击「时间线」（读经画线/备注/笔记按时间汇成的流水）。
   final VoidCallback onOpenRecord;
+
+  /// 点击「订阅服务」（无限 AI 翻译 + 附赠支持者徽标）。
+  final VoidCallback onOpenSubscription;
 
   /// 点击「书签」（我收藏的笔记）。
   final VoidCallback onOpenBookmarks;
@@ -37,19 +40,16 @@ class HomeSideMenu extends StatefulWidget {
   /// 点击「退出登录」（仅已登录时显示本项）。
   final VoidCallback onLogout;
 
-  /// 点击「获得认证」（仅未认证时显示）。
-  final VoidCallback onCertify;
-
   const HomeSideMenu({
     super.key,
     required this.onOpenProfile,
     required this.onOpenRecord,
+    required this.onOpenSubscription,
     required this.onOpenBookmarks,
     required this.onOpenFollowing,
     required this.onOpenSettings,
     required this.onLogin,
     required this.onLogout,
-    required this.onCertify,
   });
 
   @override
@@ -152,6 +152,13 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                     '时间线',
                     onTap: widget.onOpenRecord,
                   ),
+                  // 订阅服务紧邻时间线：图标用空心徽标（对号），21 号黑色，
+                  // 与同排图标的大小、颜色保持一致。
+                  _buildItem(
+                    (c) => Icon(Icons.verified_outlined, size: 21, color: c),
+                    '订阅服务',
+                    onTap: widget.onOpenSubscription,
+                  ),
                   _buildItem(
                     (_) => const _BookmarkMenuIcon(),
                     '书签',
@@ -233,12 +240,10 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
                                 color: _text),
                           ),
                         ),
+                        // 未开通订阅时不显示任何徽标文案，保持昵称行干净。
                         if (_verified) ...[
                           const SizedBox(width: 4),
                           _buildVerifiedBadge(),
-                        ] else if (_loggedIn) ...[
-                          const SizedBox(width: 8),
-                          _buildCertifyButton(),
                         ],
                       ],
                     ),
@@ -352,35 +357,7 @@ class _HomeSideMenuState extends State<HomeSideMenu> {
     );
   }
 
-  /// 未认证时的提示：与个人主页同款「获得认证」灰底药丸。
-  Widget _buildCertifyButton() {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.onCertify,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: const Color(0xFFEFE9E2),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFBDBDBD)),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.verified_outlined, size: 13, color: Color(0xFF70867A)),
-            SizedBox(width: 3),
-            Text('获得认证',
-                style: TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF70867A),
-                    fontWeight: FontWeight.w500)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 已认证徽章：与菩提空间帖子同款，裸一枚对勾图标，不加任何包裹。
+  /// 已开通订阅：与菩提空间帖子同款，裸一枚对勾图标，不加任何包裹。
   Widget _buildVerifiedBadge() {
     return const Icon(Icons.verified, size: 16, color: Color(0xFF70867A));
   }

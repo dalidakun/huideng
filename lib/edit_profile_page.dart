@@ -8,10 +8,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
+import 'change_phone_page.dart';
 import 'image_crop_page.dart';
+import 'profile_account_info.dart';
 
 import 'app_palette.dart';
-Color get _primaryLight => AppPalette.p.textSec;
 Color get _gold => AppPalette.p.accent;
 Color get _bg => AppPalette.p.bg;
 Color get _card => AppPalette.p.card;
@@ -277,6 +278,15 @@ class _EditProfilePageState extends State<EditProfilePage> {
       if (mounted) _showToast('验证码错误或已过期');
       return false;
     }
+  }
+
+  /// 打开手机号绑定/更换页；返回后重读资料，手机号与绑定提示立即更新。
+  Future<void> _openChangePhone() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ChangePhonePage()),
+    );
+    if (mounted) await _load();
   }
 
   void _showToast(String text) {
@@ -594,6 +604,16 @@ class _EditProfilePageState extends State<EditProfilePage> {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 20),
+                          ProfileAccountInfo(
+                            phone: AuthService.instance.currentUser.value
+                                    ?.mobilePhoneNumber ??
+                                '',
+                            uid: AuthService.instance.currentUser.value?.id ??
+                                '',
+                            onBindPhone: _openChangePhone,
+                          ),
+                          const SizedBox(height: 12),
                         ],
                       ),
                     ),

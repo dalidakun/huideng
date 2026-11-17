@@ -21,6 +21,17 @@ class _AdminManagePageState extends State<AdminManagePage> {
   List<AdminItem> _admins = [];
   List<AnnouncementItem> _announcements = [];
   bool _loading = true;
+  final _subCtrl = TextEditingController();
+  bool _subBusy = false;
+
+  /// 只有第一管理员 @randeng 能看到并操作「订阅服务」区块。
+  bool _canManageSubscription = false;
+
+  @override
+  void dispose() {
+    _subCtrl.dispose();
+    super.dispose();
+  }
 
   String? get _selfUid => AuthService.instance.currentUser.value?.id;
 
@@ -36,11 +47,13 @@ class _AdminManagePageState extends State<AdminManagePage> {
       final results = await Future.wait([
         CloudNotesService.instance.getAdmins(),
         CloudNotesService.instance.getAnnouncements(),
+        CloudNotesService.instance.isRootAdmin(),
       ]);
       if (!mounted) return;
       setState(() {
         _admins = results[0] as List<AdminItem>;
         _announcements = results[1] as List<AnnouncementItem>;
+        _canManageSubscription = results[2] as bool;
         _loading = false;
       });
     } catch (e) {
@@ -67,7 +80,31 @@ class _AdminManagePageState extends State<AdminManagePage> {
     return msg;
   }
 
-  /// 添加管理员：弹出输入框（账号名称或用户 ID）→ 提交。
+  /// 第一管理员手动开通订阅：按账号名、手机号或用户ID 查找用户。
+  /// 订阅开通后不可取消，所以只保留「开通」。
+  Future<void> _grantSubscription() async {
+    final input = _subCtrl.text.trim();
+    if (input.isEmpty) {
+      _showToast('请输入账号名、手机号或用户ID');
+      return;
+    }
+    setState(() => _subBusy = true);
+    try {
+      final res = await CloudNotesService.instance.adminGrantSubscription(
+        input: input,
+      );
+      final who = res['account']?.toString().isNotEmpty == true
+          ? '@${res['account']}'
+          : (res['uid']?.toString() ?? '');
+      _showToast('已开通：$who');
+      _subCtrl.clear();
+    } catch (e) {
+      _showToast(_friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _subBusy = false);
+    }
+  }
+
   Future<void> _addAdmin() async {
     final input = await showModalBottomSheet<String>(
       context: context,
@@ -232,18 +269,65 @@ class _AdminManagePageState extends State<AdminManagePage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
+        if (_canManageSubscription) ...[
+          Text('订阅服务',
+              style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600, color: sText)),
+        const SizedBox(height: 8),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: sGold.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
+            color: sCard,
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Text(
-            '管理员可查看和回复反馈、发布公告、管理其他管理员。第一位管理员需要在云开发控制台数据库中登记（详见说明）。',
-            style: TextStyle(fontSize: 12, color: sTextSec, height: 1.6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '按账号名、手机号或用户ID 查找用户，手动开通 AI 无限翻译 + 徽标。'
+                '可直接粘贴付款备注里的「@账户名」或带空格的手机号。',
+                style: TextStyle(fontSize: 12, color: sTextSec, height: 1.6),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _subCtrl,
+                decoration: InputDecoration(
+                  hintText: '账号名（可带 @）/ 手机号 / 用户ID',
+                  hintStyle: TextStyle(fontSize: 13, color: sTextHint),
+                  isDense: true,
+                  filled: true,
+                  fillColor: sBg,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                style: TextStyle(fontSize: 14, color: sText),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: FilledButton(
+                  onPressed: _subBusy ? null : _grantSubscription,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: sGold,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: Text(_subBusy ? '开通中…' : '开通',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 12),
+        ],
+        const SizedBox(height: 24),
         if (_admins.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 60),

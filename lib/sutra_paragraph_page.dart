@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
+import 'certification_page.dart';
 import 'cloud_notes_service.dart';
 import 'post_rich_content.dart';
 
@@ -32,41 +33,15 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
   @override
   void initState() {
     super.initState();
-    // 自动预询问是否有其他同修翻译过（不生成），命中则展示。
-    _prefetchCached();
   }
 
-  Future<void> _prefetchCached() async {
-    if (widget.paragraph.isEmpty) return;
-    try {
-      final t = await CloudNotesService.instance
-          .getCachedParagraphTranslation(widget.paragraph);
-      if (!mounted || t == null) return;
-      setState(() {
-        _translation = t;
-      });
-    } catch (_) {}
-  }
-
-  /// 点击 AI 翻译：先查共享缓存，未命中自动请求 AI 生成。
+  /// 点击 AI 翻译：服务端核销额度并返回共享缓存或新译文。
   Future<void> _requestTranslate() async {
     if (_translationLoading || widget.paragraph.isEmpty) return;
     setState(() {
       _translationLoading = true;
     });
     try {
-      // 先查缓存（不重复调用 API）。
-      final cached =
-          await CloudNotesService.instance.getCachedParagraphTranslation(widget.paragraph);
-      if (cached != null) {
-        if (!mounted) return;
-        setState(() {
-          _translation = cached;
-          _translationLoading = false;
-        });
-        return;
-      }
-      // 无缓存：请求 AI 生成。
       final text = await CloudNotesService.instance
           .aiTranslate(paragraph: widget.paragraph);
       if (!mounted) return;
@@ -79,7 +54,61 @@ class _SutraParagraphPageState extends State<SutraParagraphPage> {
       setState(() {
         _translationLoading = false;
       });
-      _showToast(e is CloudApiException ? e.message : '翻译失败，请稍后重试');
+      final msg = e is CloudApiException ? e.message : '翻译失败，请稍后重试';
+      final banned = msg.contains('feature_banned');
+      final exhausted = msg.contains('ai_quota_exhausted');
+      if (banned) {
+        _showToast('当前账号已被限制使用 AI 翻译，可在「订阅服务」页提交申诉');
+      } else if (exhausted) {
+        // 免费额度用完：直接弹窗引导开通订阅（不再显示剩余次数提示）。
+        _showQuotaDialog();
+      } else {
+        _showToast(msg);
+      }
+    }
+  }
+
+  /// 免费额度用完：弹窗提示开通订阅服务。
+  Future<void> _showQuotaDialog() async {
+    final p = AppPalette.p;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          '免费翻译额度已用完',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: p.text,
+          ),
+        ),
+        content: Text(
+          '开通订阅服务后，可无限次使用 AI 白话翻译，全经藏段落通用，并附赠支持者徽标。',
+          style: TextStyle(fontSize: 14, height: 1.6, color: p.textSec),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('稍后再说', style: TextStyle(color: p.textSec)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: p.accent,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('去开通'),
+          ),
+        ],
+      ),
+    );
+    if (go == true && mounted) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const CertificationPage()),
+      );
     }
   }
 

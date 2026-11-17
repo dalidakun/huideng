@@ -12,7 +12,6 @@ import 'edit_profile_page.dart';
 import 'change_phone_page.dart';
 import 'forgot_password_page.dart';
 import 'about_page.dart';
-import 'donate_page.dart';
 import 'export_notes_page.dart';
 import 'notification_service.dart';
 import 'settings_widgets.dart';
@@ -28,7 +27,6 @@ import 'post_time_link.dart';
 import 'post_rich_content.dart';
 import 'reply_thread.dart';
 import 'reply_chain.dart';
-import 'certification_page.dart';
 import 'note_stats_center.dart';
 import 'note_store.dart';
 import 'ownership.dart';
@@ -232,18 +230,20 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
         }
       }
       if (info != null) {
-        // 认证状态永久单向：只在云端确认为「已认证」时覆盖为 true，
-        // 绝不因云端误报 false（匿名/降级会话）把已认证清掉。
+        // 支持者徽标以云端为准：到期/未开通时本地也要降级，不能像旧实名认证那样单向保留。
         final localVer = prefs.getBool('user_verified') ?? false;
-        if (info.verified && !localVer) {
-          await prefs.setBool('user_verified', true);
+        if (localVer != info.verified) {
+          await prefs.setBool('user_verified', info.verified);
         }
-        // 认证后的脱敏真名（如「张*三」），显示在昵称下方；一旦写入不再清空。
-        if (info.realNameMasked.isNotEmpty) {
-          final local = prefs.getString('user_verified_name') ?? '';
-          if (local != info.realNameMasked) {
-            await prefs.setString('user_verified_name', info.realNameMasked);
+        if (info.verified) {
+          if (info.realNameMasked.isNotEmpty) {
+            final local = prefs.getString('user_verified_name') ?? '';
+            if (local != info.realNameMasked) {
+              await prefs.setString('user_verified_name', info.realNameMasked);
+            }
           }
+        } else {
+          await prefs.remove('user_verified_name');
         }
       }
       // 重新从 prefs 读一次（可能被上面覆盖了权威值）刷新 UI
@@ -288,22 +288,19 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
     setState(() => _accountName = name);
   }
 
-  /// 实名认证状态：优先取云端，云端失败时回退到本地缓存。
-  /// 注意：认证是永久单向的（同一账号仅可认证一次），
-  /// 因此本地已知「已认证」时绝不因云端误报 false（如匿名/降级会话
-  /// 解析到共享匿名 uid）而降级，避免认证标识莫名消失。
+  /// 支持者徽标状态：以云端为准（到期会自动消失），云端失败时回退本地缓存。
   Future<void> _loadVerification() async {
     final prefs = await SharedPreferences.getInstance();
     var verified = prefs.getBool('user_verified') ?? false;
     if (_isLoggedIn) {
       try {
         final info = await CloudNotesService.instance.getMyVerification();
-        if (info.verified) {
-          verified = true;
-          await prefs.setBool('user_verified', true);
-          if (info.realNameMasked.isNotEmpty) {
-            await prefs.setString('user_verified_name', info.realNameMasked);
-          }
+        verified = info.verified;
+        await prefs.setBool('user_verified', verified);
+        if (verified && info.realNameMasked.isNotEmpty) {
+          await prefs.setString('user_verified_name', info.realNameMasked);
+        } else if (!verified) {
+          await prefs.remove('user_verified_name');
         }
       } catch (_) {}
     } else {
@@ -311,11 +308,6 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
     }
     if (!mounted) return;
     setState(() => _verified = verified);
-  }
-
-  void _openCertification() {
-    Navigator.push(context, slideInFromLeft(const CertificationPage()))
-        .then((_) => _loadVerification());
   }
 
   Future<void> _loadCounts() async {
@@ -675,12 +667,10 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
                                       fontWeight: FontWeight.w700,
                                       color: _text)),
                             ),
+                            // 未开通订阅时不显示任何徽标（旧版灰底「徽标」按钮已移除）。
                             if (_verified) ...[
                               const SizedBox(width: 4),
                               _buildVerifiedBadge(),
-                            ] else ...[
-                              const SizedBox(width: 12),
-                              _buildCertifyButton(),
                             ],
                           ],
                         ),
@@ -781,55 +771,11 @@ class MyPageState extends State<MyPage> with TickerProviderStateMixin {
         context, MaterialPageRoute(builder: (_) => const LoginPage()));
   }
 
-  /// 未认证时昵称旁的「获得认证」按钮：灰色圆角框 + 图标 + 文案。
-  Widget _buildCertifyButton() {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _openCertification,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: const Color(0xFFEFE9E2),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Color(0xFFBDBDBD)),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.verified_outlined, size: 13, color: Color(0xFF70867A)),
-            SizedBox(width: 3),
-            Text('获得认证',
-                style: TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF70867A),
-                    fontWeight: FontWeight.w500)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 已认证时昵称后的认证标识：绿色对勾 + 「已认证」，线圈包裹。
+  /// 已开通订阅时昵称后的徽标：只显示徽标图标（入口统一在侧边栏「订阅服务」）。
   Widget _buildVerifiedBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEAF1EC),
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: const Color(0xFF70867A), width: 0.8),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.verified, size: 13, color: Color(0xFF70867A)),
-          SizedBox(width: 3),
-          Text('已认证',
-              style: TextStyle(
-                  fontSize: 10,
-                  color: Color(0xFF70867A),
-                  fontWeight: FontWeight.w600)),
-        ],
-      ),
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+      child: Icon(Icons.verified, size: 17, color: Color(0xFF70867A)),
     );
   }
 
@@ -1785,6 +1731,11 @@ Future<void> showMoreMenu(
       CloudNotesService.instance.followingUserIds.contains(targetUserId);
   final blocked =
       CloudNotesService.instance.blockedUserIds.contains(targetUserId);
+  var isAdmin = false;
+  try {
+    isAdmin = await CloudNotesService.instance.isAdmin();
+  } catch (_) {}
+  if (!context.mounted) return;
   final choice = await showModalBottomSheet<String>(
     context: context,
     backgroundColor: _card,
@@ -1805,6 +1756,9 @@ Future<void> showMoreMenu(
               Icons.person_add_alt, following ? '取消关注' : '关注该用户'),
           postMenuItem(ctx, blocked ? 'unblock' : 'block', Icons.block_outlined,
               blocked ? '取消屏蔽' : '屏蔽该用户'),
+          if (isAdmin)
+            postMenuItem(ctx, 'toggle_feature_ban', Icons.block,
+                '限制/解除该用户 AI 使用'),
           const SizedBox(height: 8),
         ],
       ),
@@ -1824,6 +1778,11 @@ Future<void> showMoreMenu(
       final ok = await CloudNotesService.instance.toggleBlockUser(targetUserId);
       if (context.mounted) {
         showPostToast(context, ok ? '已屏蔽' : '已取消屏蔽');
+      }
+    } else if (choice == 'toggle_feature_ban') {
+      final banned = await CloudNotesService.instance.toggleFeatureBan(targetUserId);
+      if (context.mounted) {
+        showPostToast(context, banned ? '已限制该用户使用 AI' : '已解除该用户 AI 限制');
       }
     }
   } catch (e) {
@@ -4803,14 +4762,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       SettingsCard(
                         children: [
                           _SettingsLinkTile(
-                            icon: Icons.favorite_outline,
-                            iconColor: _gold,
-                            title: '资助',
-                            subtitle: '捐款资助服务器运行',
-                            page: const DonatePage(),
-                          ),
-                          const SettingsDivider(),
-                          _SettingsLinkTile(
                             icon: Icons.info_outline,
                             iconColor: _primaryLight,
                             title: '关于我们',
@@ -5340,6 +5291,9 @@ class _SettingsPhoneTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_SettingsPageState>()!;
+    final hasPhone =
+        (AuthService.instance.currentUser.value?.mobilePhoneNumber ?? '')
+            .isNotEmpty;
     return InkWell(
       onTap: () {
         if (!AuthService.instance.isLoggedIn) {
@@ -5368,13 +5322,13 @@ class _SettingsPhoneTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('更换手机号',
+                  Text(hasPhone ? '更换手机号' : '绑定手机号',
                       style: TextStyle(
                           fontSize: 16,
                           color: _text,
                           fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text('更换后数据自动保留',
+                  Text(hasPhone ? '更换后数据自动保留' : '用于找回账号与订阅服务核对',
                       style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),

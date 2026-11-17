@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'record_index.dart';
@@ -73,11 +73,11 @@ class RecordCardHead extends StatelessWidget {
                 sutraName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 17,
+                style: TextStyle(
+                  fontSize: 16,
                   height: 1.3,
-                  // 经名是纯黑标题，不随外观变灰。
-                  color: Colors.black,
+                  // 经名不用纯黑：降低色度，和卡片的次要信息保持同一色阶。
+                  color: p.textSec,
                   // 经名加粗，一眼看清是哪部经的记录。
                   fontWeight: FontWeight.w700,
                 ),
@@ -117,7 +117,7 @@ class RecordCardHead extends StatelessWidget {
 /// 类型标记：实心底色 + 白字。画线绿、备注红、笔记黑，同排在经名之前。
 Widget _typeBadge(String label, Color bg) {
   return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
     decoration: BoxDecoration(
       color: bg,
       borderRadius: BorderRadius.circular(4),
@@ -125,7 +125,7 @@ Widget _typeBadge(String label, Color bg) {
     child: Text(
       label,
       style: const TextStyle(
-        fontSize: 12,
+        fontSize: 11,
         height: 1.3,
         fontWeight: FontWeight.w600,
         color: Colors.white,

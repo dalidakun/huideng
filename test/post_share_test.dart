@@ -68,6 +68,11 @@ void main() {
         reason: 'site.config.json 的 siteName 变了，post_page.js 里的 SITE_NAME 要同步');
     expect(js, contains(config['icpNumber'] as String),
         reason: 'site.config.json 的 icpNumber 变了，post_page.js 里的 ICP_NUMBER 要同步');
+    final police = (config['policeRecordNumber'] as String? ?? '').trim();
+    if (police.isNotEmpty) {
+      expect(js, contains(police),
+          reason: 'site.config.json 的 policeRecordNumber 变了，post_page.js 里的 POLICE_NUMBER 要同步');
+    }
   });
 
   test('分享页路由与云函数入口都已接上', () {

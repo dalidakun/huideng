@@ -72,8 +72,6 @@ class SyncService with WidgetsBindingObserver {
   /// 同步时默认规则是"本地已有值就跳过云端"，导致错误值永久固化。
   static const Set<String> _cloudAuthorityKeys = {
     'user_created_at',
-    'user_verified',
-    'user_verified_name',
     'user_account_name',
     'user_nickname',
   };
@@ -90,6 +88,10 @@ class SyncService with WidgetsBindingObserver {
     // 读经会话开始时间戳：本机「阅读进行中」临时标记。同步到新设备会被
     // start() 当作未结束会话，凭空补记最长 6 小时假时长，故不上传。
     'reading_time_session_start_ms',
+    // 认证/徽标状态由服务端实时判定（到期会失效），不随 prefs 备份同步，
+    // 避免旧设备的 user_verified=true 把过期徽标又恢复出来。
+    'user_verified',
+    'user_verified_name',
     // 本地登录身份缓存（设备本地兜底用），不随数据同步上传。
     'user_login_uid',
     'user_login_phone',
@@ -240,6 +242,17 @@ class SyncService with WidgetsBindingObserver {
     final me = AuthService.instance.currentUser.value;
     if (me == null) return;
     final prefs = await SharedPreferences.getInstance();
+    // 手机号上报一次（或换号后重报），供管理员按手机号手动开通订阅。
+    final phone = (me.mobilePhoneNumber ?? '').trim();
+    if (phone.isNotEmpty) {
+      final phoneKey = 'reported_phone_${me.id}';
+      if (prefs.getString(phoneKey) != phone) {
+        try {
+          await CloudNotesService.instance.reportMyPhone(phone);
+          await prefs.setString(phoneKey, phone);
+        } catch (_) {}
+      }
+    }
     bool anyChanged = false;
     try {
       final profiles =
@@ -278,17 +291,20 @@ class SyncService with WidgetsBindingObserver {
     try {
       final info = await CloudNotesService.instance.getMyVerification();
       final localVer = prefs.getBool('user_verified') ?? false;
-      // 认证状态永久单向：只在云端确认为「已认证」时覆盖为 true，
-      // 绝不因云端误报 false（匿名/降级会话解析到共享匿名 uid）把已认证清掉。
-      if (info.verified && !localVer) {
-        await prefs.setBool('user_verified', true);
+      // 支持者徽标以服务端为准：到期/未开通时本地必须降级，不能单向保留。
+      if (localVer != info.verified) {
+        await prefs.setBool('user_verified', info.verified);
         anyChanged = true;
       }
-      // 认证后的脱敏真名（如「张*三」），显示在昵称下方；一旦写入不再清空。
-      if (info.realNameMasked.isNotEmpty) {
+      if (info.verified && info.realNameMasked.isNotEmpty) {
         final local = prefs.getString('user_verified_name') ?? '';
         if (local != info.realNameMasked) {
           await prefs.setString('user_verified_name', info.realNameMasked);
+          anyChanged = true;
+        }
+      } else if (!info.verified) {
+        if ((prefs.getString('user_verified_name') ?? '').isNotEmpty) {
+          await prefs.remove('user_verified_name');
           anyChanged = true;
         }
       }
