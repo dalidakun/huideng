@@ -23,9 +23,9 @@ App 运行时不引用官网源码，只通过固定 URL 使用官网服务：
 - GitHub：<https://github.com/dalidakun/aibuilder-web>
 - 本地：`E:\aibuilder-web`
 - 内容：`site/`、`cloudfunctions/api/`、构建与部署脚本、官网文档
-- 发版流程：本仓库 `flutter build apk --release` → 在官网仓库运行
-  `python tools\update_site.py --apk <这里打出来的 apk> --version x.y.z+NN`
-  （收包、写 `version.json`、重建站点、部署）
+- 发版流程：`flutter build apk --release --target-platform android-arm64` →
+  双击本仓库根目录「发布APK到官网.bat」（或 `python tools\publish_apk.py --cli`）
+  （收包、写 `version.json`、重建站点、部署、回源校验）
 
 ## 开发
 

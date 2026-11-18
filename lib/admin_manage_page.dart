@@ -80,12 +80,12 @@ class _AdminManagePageState extends State<AdminManagePage> {
     return msg;
   }
 
-  /// 第一管理员手动开通订阅：按账号名、手机号或用户ID 查找用户。
+  /// 第一管理员手动开通订阅：按账号名、邮箱或用户ID 查找用户。
   /// 订阅开通后不可取消，所以只保留「开通」。
   Future<void> _grantSubscription() async {
     final input = _subCtrl.text.trim();
     if (input.isEmpty) {
-      _showToast('请输入账号名、手机号或用户ID');
+      _showToast('请输入账号名、邮箱或用户ID');
       return;
     }
     setState(() => _subBusy = true);
@@ -93,9 +93,11 @@ class _AdminManagePageState extends State<AdminManagePage> {
       final res = await CloudNotesService.instance.adminGrantSubscription(
         input: input,
       );
-      final who = res['account']?.toString().isNotEmpty == true
-          ? '@${res['account']}'
-          : (res['uid']?.toString() ?? '');
+      final account = res['account']?.toString() ?? '';
+      final email = res['email']?.toString() ?? '';
+      final who = account.isNotEmpty
+          ? '@$account${email.isNotEmpty ? '（$email）' : ''}'
+          : (email.isNotEmpty ? email : (res['uid']?.toString() ?? ''));
       _showToast('已开通：$who');
       _subCtrl.clear();
     } catch (e) {
@@ -284,15 +286,15 @@ class _AdminManagePageState extends State<AdminManagePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '按账号名、手机号或用户ID 查找用户，手动开通 AI 无限翻译 + 徽标。'
-                '可直接粘贴付款备注里的「@账户名」或带空格的手机号。',
+                '按账号名、邮箱或用户ID 查找用户，手动开通 AI 无限翻译 + 徽标。'
+                '可直接粘贴付款备注里的「@账户名」或邮箱。',
                 style: TextStyle(fontSize: 12, color: sTextSec, height: 1.6),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: _subCtrl,
                 decoration: InputDecoration(
-                  hintText: '账号名（可带 @）/ 手机号 / 用户ID',
+                  hintText: '账号名（可带 @）/ 邮箱 / 用户ID',
                   hintStyle: TextStyle(fontSize: 13, color: sTextHint),
                   isDense: true,
                   filled: true,

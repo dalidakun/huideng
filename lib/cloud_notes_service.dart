@@ -981,7 +981,7 @@ class CloudNotesService {
     return _call('adminResetBadges');
   }
 
-  /// 第一管理员（@randeng）按账号名/手机号/用户ID 手动开通订阅。
+  /// 第一管理员（@randeng）按账号名/邮箱/用户ID 手动开通订阅。
   /// 订阅开通后不可取消，因此不再提供取消参数。
   Future<Map<String, dynamic>> adminGrantSubscription({
     required String input,
@@ -990,12 +990,6 @@ class CloudNotesService {
       'input': input,
       'enabled': true,
     });
-  }
-
-  /// 上报本机登录用户的手机号，供管理员按手机号查找并开通订阅。
-  Future<void> reportMyPhone(String phone) async {
-    if (!AuthService.instance.isLoggedIn) return;
-    await _call('reportMyPhone', params: {'phone': phone});
   }
 
   /// 被限制的用户提交申诉。
@@ -1022,7 +1016,7 @@ class CloudNotesService {
   }
 
   /// 旧版「提交交易单号自动开通」接口：**已停用**。
-  /// 服务端统一返回人工开通提示；订阅改为付款备注账户名/手机号后由管理员开通。
+  /// 服务端统一返回人工开通提示；订阅改为付款备注账户名/邮箱后由管理员开通。
   Future<Map<String, dynamic>> submitBadgeTxn({
     required String channel,
     required String plan,

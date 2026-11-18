@@ -20,8 +20,8 @@ Color get _border => AppPalette.p.border;
 /// 「订阅服务」页：无限次 AI 白话翻译（附赠支持者徽标）。
 ///
 /// 收款流程（个人收款码没有支付回调，不做自动核销）：
-/// 1. 用户扫码付款，并在付款备注里填写自己的账户名或手机号；
-/// 2. 管理员在 App 内「关于我们 → 管理员 → 订阅服务」按账户名/手机号
+/// 1. 用户扫码付款，并在付款备注里填写自己的账户名或邮箱；
+/// 2. 管理员在 App 内「关于我们 → 管理员 → 订阅服务」按账户名/邮箱
 ///    手动开通无限翻译并附赠徽标；
 /// 3. 用户回到本页即可看到「已开通」。
 ///
@@ -40,7 +40,7 @@ class _CertificationPageState extends State<CertificationPage> {
   bool _isRootAdmin = false;
   Map<String, dynamic> _quota = const {};
   String _accountName = '';
-  String _phone = '';
+  String _email = '';
   String _uid = '';
 
   static const String _wechatQr = 'assets/images/weixin.png';
@@ -84,8 +84,9 @@ class _CertificationPageState extends State<CertificationPage> {
     final account = AuthService.instance.isLoggedIn
         ? await AuthService.instance.getAccountName()
         : '';
-    final phone =
-        AuthService.instance.currentUser.value?.mobilePhoneNumber ?? '';
+    final email = AuthService.instance.isLoggedIn
+        ? await AuthService.instance.getAccountEmail()
+        : '';
     final uid = AuthService.instance.currentUser.value?.id ?? '';
     if (!mounted) return;
     setState(() {
@@ -95,7 +96,7 @@ class _CertificationPageState extends State<CertificationPage> {
       _isRootAdmin = isRootAdmin;
       _quota = quota;
       _accountName = account.trim();
-      _phone = phone.trim();
+      _email = email.trim();
       _uid = uid.trim();
     });
   }
@@ -181,7 +182,7 @@ class _CertificationPageState extends State<CertificationPage> {
                             icon: Icons.admin_panel_settings_outlined,
                             iconColor: _gold,
                             title: '订阅服务管理',
-                            subtitle: '按账户名 / 手机号 / 用户ID 开通',
+                            subtitle: '按账户名 / 邮箱 / 用户ID 开通',
                             trailing: Icon(Icons.chevron_right,
                                 color: _textHint, size: 20),
                             onTap: () => Navigator.push(
@@ -416,10 +417,10 @@ class _CertificationPageState extends State<CertificationPage> {
           ),
           const SizedBox(height: 10),
           _infoRow(
-            label: '手机号',
-            value: _phone.isEmpty ? '未绑定' : _phone,
-            copyValue: _phone,
-            copyLabel: '手机号',
+            label: '邮箱',
+            value: _email.isEmpty ? '未绑定' : _email,
+            copyValue: _email,
+            copyLabel: '邮箱',
             emptyHint: loggedIn ? '可只填账户名' : '请先登录',
           ),
           const SizedBox(height: 10),
@@ -441,7 +442,7 @@ class _CertificationPageState extends State<CertificationPage> {
             child: Text(
               loggedIn
                   ? '付款时请务必在[备注]位置，粘贴以上任一信息，方便核对开通服务。'
-                  : '订阅需要绑定账户。请先登录，再回到本页查看你的账户名、手机号和用户ID。',
+                  : '订阅需要绑定账户。请先登录，再回到本页查看你的账户名、邮箱和用户ID。',
               style: TextStyle(
                 fontSize: 11.5,
                 color: loggedIn ? const Color(0xFFC0392B) : _textSec,
@@ -537,8 +538,8 @@ class _CertificationPageState extends State<CertificationPage> {
 
   Widget _stepsCard() {
     final accountHint = _accountName.isEmpty
-        ? '付款时在备注里填写你的手机号或用户ID（账户名可先到「个人资料」设置），方便我们核对。'
-        : '付款时在备注里填写你的账户名 @$_accountName、手机号或用户ID，方便我们核对。';
+        ? '付款时在备注里填写你的邮箱或用户ID（账户名可先到「个人资料」设置），方便我们核对。'
+        : '付款时在备注里填写你的账户名 @$_accountName、邮箱或用户ID，方便我们核对。';
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),

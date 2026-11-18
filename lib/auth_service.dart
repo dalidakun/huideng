@@ -24,13 +24,13 @@ class AuthException implements Exception {
 /// 当前登录用户的信息。
 class AuthUser {
   final String id;
-  final String? mobilePhoneNumber;
+  final String? email;
   final String? nickname;
   final String? tagline;
 
   const AuthUser({
     required this.id,
-    this.mobilePhoneNumber,
+    this.email,
     this.nickname,
     this.tagline,
   });
@@ -39,20 +39,45 @@ class AuthUser {
   String get displayName =>
       (nickname != null && nickname!.isNotEmpty) ? nickname! : '同修';
 
-  /// 手机尾号（用于默认昵称，如「同修 1234」）。
-  String get phoneTail {
-    final p = mobilePhoneNumber ?? '';
-    if (p.isEmpty) return '';
-    final digits = p.replaceAll(RegExp(r'\D'), '');
-    if (digits.isEmpty) return '';
-    return digits.length >= 4 ? digits.substring(digits.length - 4) : digits;
+  /// 邮箱前缀（用于默认昵称，如「同修 1234」）。
+  String get emailPrefix {
+    final e = email ?? '';
+    if (e.isEmpty) return '';
+    final at = e.indexOf('@');
+    return at > 0 ? e.substring(0, at) : e;
   }
+}
+
+/// 注册/找回密码时需要回传给界面的账号信息。
+class RegisteredAccount {
+  final String uid;
+  final String username;
+  final String email;
+
+  const RegisteredAccount({
+    required this.uid,
+    required this.username,
+    required this.email,
+  });
+}
+
+/// 账号资料：账号名称 + 绑定邮箱。
+class AccountProfile {
+  final String username;
+  final String email;
+
+  const AccountProfile({required this.username, required this.email});
+
+  static const AccountProfile empty =
+      AccountProfile(username: '', email: '');
 }
 
 /// 全局认证服务：登录 / 注册 / 退出 / 会话保持。
 ///
 /// 基于腾讯云开发 CloudBase（cloudbase_flutter SDK）实现：
-///  - 手机号 + 短信验证码登录（新号码自动注册）
+///  - 账号 + 密码登录（账号体系见云函数 userAccounts）
+///  - 账号 + 密码注册 / 邮箱注册（账号自动生成），注册需先验证邮箱
+///  - 邮箱验证码找回密码、绑定/更换邮箱
 ///  - 会话由 SDK 自动持久化，[restoreSession] 用于 App 启动时恢复
 ///  - 登录态通过 [currentUser]（ValueNotifier）广播，UI 监听它刷新即可
 class AuthService {
@@ -75,6 +100,10 @@ class AuthService {
   /// 本地昵称缓存：云端同步未完成/失败时兜底，保证重启后昵称不丢失。
   String? _localNickname;
 
+  /// 本地邮箱缓存：账号体系里邮箱存在 userAccounts，CloudBase 会话用户本身
+  /// 不携带邮箱（自定义登录），这里做内存/本地兜底，避免界面上「已绑定却显示空」。
+  String? _localEmail;
+
   CloudBase? _app;
   Future<CloudBase?>? _appFuture;
 
@@ -95,7 +124,7 @@ class AuthService {
   /// 当前 [currentUser] 是否为本地缓存兜底身份（真实会话恢复成功前）。
   bool _currentUserIsCached = false;
 
-  /// 本地登录身份缓存（uid/手机号/昵称）：会话恢复失败时兜底保持登录态。
+  /// 本地登录身份缓存（uid/邮箱/昵称）：会话恢复失败时兜底保持登录态。
   AuthUser? _cachedLogin;
 
   /// 用户是否已显式退出登录。
@@ -107,7 +136,7 @@ class AuthService {
   /// 经藏页新帖检查、App 回到前台续期）都可能走 ensureFreshSession，
   /// 由 [_repairExpiredSession] 从备份重建**真实用户**会话并自动
   /// 「登录」回来——表现就是点了退出、确认了、界面却一直还是已登录。
-  /// 只在真正登录（[loginWithSmsCode] / [loginWithAccount]）时置回 false。
+  /// 只在真正登录（[loginWithAccount]）时置回 false。
   bool _loggedOut = false;
 
   /// 登录态保活定时器：登录期间每 25 分钟主动刷新一次 access token，
@@ -116,7 +145,7 @@ class AuthService {
   Timer? _keepAliveTimer;
 
   static const String _kCachedUid = 'user_login_uid';
-  static const String _kCachedPhone = 'user_login_phone';
+  static const String _kCachedEmail = 'user_login_email';
   static const String _kCachedNickname = 'user_login_nickname';
 
   /// 会话修复备份：过期 access token 修复时暂存会话 JSON，失败时恢复原会话。
@@ -125,20 +154,13 @@ class AuthService {
   /// 登录用户的资料缓存键：退出登录时一并清除，避免残留上一个账号的身份。
   static const List<String> _kProfilePrefKeys = [
     'user_account_name',
+    'user_account_email',
     'user_nickname',
     'user_tagline',
     'user_verified',
     'user_verified_name',
     'user_created_at',
   ];
-
-  /// 最近一次 [requestSmsCode] 返回的验证码校验回调，用于 [loginWithSmsCode]。
-  Future<SignInRes> Function(VerifyOtpParams params)? _pendingVerifyOtp;
-  String? _pendingPhone;
-
-  /// 最近一次 [requestPhoneChange] 返回的换绑校验回调，用于 [confirmPhoneChange]。
-  Future<GetUserRes> Function(UpdateUserVerifyParams params)?
-      _pendingPhoneChangeVerify;
 
   /// 初始化（惰性，幂等）。未配置环境时返回 null。
   /// 用 Future 缓存保证全进程只创建「一个」CloudBase 实例：启动时
@@ -544,7 +566,7 @@ class AuthService {
   /// （当前是缓存兜底身份或未登录）时，一旦会话恢复成功立即补齐真实登录态，
   /// 避免「会话明明有效却一直显示未登录」。
   ///
-  /// 智能比较：只有当 user.id / nickname / phone 与当前值不同时才更新，
+  /// 智能比较：只有当 user.id / nickname / email 与当前值不同时才更新，
   /// 避免 re-entrant 调用导致无限循环（_applyUser → 监听器 → 云调用 → 刷新 → 再进入）。
   void _syncUserFromSession(Session? session) {
     if (_loggedOut) return;
@@ -565,7 +587,7 @@ class AuthService {
         : (localNick != null && localNick.isNotEmpty ? localNick : null);
     final dataChanged = current.id != (user.id ?? '') ||
         current.nickname != effectiveNick ||
-        current.mobilePhoneNumber != user.phone;
+        current.email != _effectiveEmail(user);
     if (dataChanged) {
       _currentUserIsCached = false;
       unawaited(_applyUser(user));
@@ -606,6 +628,13 @@ class AuthService {
     }
   }
 
+  /// 会话用户上的邮箱（CloudBase 身份自带）优先，否则用本地/账号体系里缓存的邮箱。
+  String? _effectiveEmail(User user) {
+    final direct = user.email;
+    if (direct != null && direct.isNotEmpty) return direct;
+    return (_localEmail != null && _localEmail!.isNotEmpty) ? _localEmail : null;
+  }
+
   AuthUser _toAuthUser(User user) {
     final meta = user.userMetadata;
     final serverNick = meta?.nickName;
@@ -616,7 +645,7 @@ class AuthService {
             : null);
     return AuthUser(
       id: user.id ?? '',
-      mobilePhoneNumber: user.phone,
+      email: _effectiveEmail(user),
       nickname: nick,
       tagline: _localTagline,
     );
@@ -638,8 +667,10 @@ class AuthService {
   Future<void> _restoreSession() async {
     final app = await _ensureApp();
     if (app == null) return;
+    await _cleanupLegacyPhonePrefs();
     await _loadLocalTagline();
     await _loadLocalNickname();
+    await _loadLocalEmail();
     _cachedLogin = await _loadCachedLogin();
     try {
       // 先主动刷新：SDK 不会自动刷新，若拿着昨天过期（2h）的 access token
@@ -666,7 +697,6 @@ class AuthService {
         if (ures.data?.user != null) freshUser = ures.data!.user!;
       } catch (_) {}
       await _applyUser(freshUser);
-      unawaited(_ensureDefaultAccount(user.phone ?? ''));
     } catch (e) {
       // 恢复失败：有本地登录身份缓存时保持登录态并安排一次后台重试，
       // 避免瞬时网络/会话刷新失败把用户踢下线；确无缓存才显示未登录。
@@ -765,40 +795,228 @@ class AuthService {
     }
   }
 
-  /// 发送手机号验证码（用于登录/注册）。
-  /// 新手机号验证通过后会自动注册。
-  Future<void> requestSmsCode(String phone) async {
+  /// 发送邮箱验证码并返回 verificationId（注册 / 找回密码 / 绑定邮箱共用）。
+  ///
+  /// 邮件由 CloudBase 自带邮件服务投递；云函数在提交注册/找回时会拿
+  /// verificationId + 验证码去官方接口复核，因此客户端无法伪造「已验邮箱」。
+  Future<String> sendEmailCode(String email) async {
     final app = await _requireApp();
-    // 尽力刷新：已登录但 access token 过期时，直接用旧 token 发验证码会 401
-    // 并把会话清掉。
-    await ensureFreshSession();
-    final res = await app.auth.signInWithOtp(SignInWithOtpReq(phone: phone));
+    final addr = email.trim().toLowerCase();
+    if (!isValidEmail(addr)) {
+      throw AuthException('invalid_email', '请输入正确的邮箱地址');
+    }
+    // 确保有会话（未登录时建匿名会话）：云函数校验验证码时要用 access token。
+    await ensureAnonymousForBrowse();
+    final res = await app.auth.getVerification(email: addr);
     _throwIfFailed(res);
-    _pendingVerifyOtp = res.data?.verifyOtp;
-    _pendingPhone = phone;
+    final id = res.data?.verificationId ?? '';
+    if (id.isEmpty) {
+      throw AuthException('no_verification', '验证码发送失败，请稍后重试');
+    }
+    return id;
   }
 
-  /// 手机号 + 验证码登录。需先调用 [requestSmsCode]。
-  Future<void> loginWithSmsCode(String phone, String smsCode) async {
-    await _requireApp();
-    final verify = _pendingVerifyOtp;
-    if (verify == null || _pendingPhone != phone) {
-      throw AuthException('no_pending_otp', '请先获取验证码');
+  /// 邮箱格式校验（与云端 normalizeEmail 口径一致）。
+  static bool isValidEmail(String email) {
+    final e = email.trim();
+    if (e.isEmpty || e.length > 254) return false;
+    return RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+        .hasMatch(e);
+  }
+
+  /// 账号 + 密码注册（需先调用 [sendEmailCode] 验证邮箱）。
+  ///
+  /// [autoUsername] 为 true 时由服务端自动生成账号名（邮箱注册方式），
+  /// 否则使用 [username]。成功后自动登录并返回账号资料。
+  Future<RegisteredAccount> registerWithAccount({
+    required String email,
+    required String verificationId,
+    required String code,
+    required String password,
+    String? username,
+    bool autoUsername = false,
+  }) async {
+    final app = await _requireApp();
+    final addr = email.trim().toLowerCase();
+    if (!isValidEmail(addr)) {
+      throw AuthException('invalid_email', '请输入正确的邮箱地址');
+    }
+    if (password.length < 6 || password.length > 64) {
+      throw AuthException('invalid_password', '密码长度需为 6-64 位');
+    }
+    if (!autoUsername) {
+      final name = (username ?? '').trim();
+      if (!RegExp(r'^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$').hasMatch(name)) {
+        throw AuthException('invalid_username', '账号名称需为 2-20 位中英文、数字或下划线');
+      }
+    }
+    final res = await CloudNotesService.instance.callApi(
+      'registerWithAccount',
+      // 云端要复核邮箱验证码 + 建账号 + 签票据，弱网下比普通接口慢，放宽超时。
+      timeout: const Duration(seconds: 25),
+      params: {
+        'email': addr,
+        'verificationId': verificationId,
+        'code': code.trim(),
+        'password': password,
+        if (autoUsername) 'autoUsername': true else 'username': username!.trim(),
+      },
+    );
+    final ticket = res['ticket']?.toString() ?? '';
+    final uid = res['uid']?.toString() ?? '';
+    final name = res['username']?.toString() ?? '';
+    final verifiedEmail = res['email']?.toString() ?? addr;
+    if (ticket.isEmpty || uid.isEmpty) {
+      throw AuthException('no_ticket', '注册失败，请稍后重试');
+    }
+    final sr = await app.auth.signInWithCustomTicket(() async => ticket);
+    _throwIfFailed(sr);
+    final user = sr.data?.user;
+    if (user == null) {
+      throw AuthException('no_user', '注册失败，未获取到用户信息');
     }
     _loggedOut = false;
-    _pendingVerifyOtp = null;
-    _pendingPhone = null;
-    await ensureFreshSession();
-    final res = await verify(VerifyOtpParams(token: smsCode.trim()));
-    _throwIfFailed(res);
-    final user = res.data?.user;
-    if (user == null) {
-      throw AuthException('no_user', '登录失败，未获取到用户信息');
-    }
     await _loadLocalTagline();
     await _loadLocalNickname();
+    if (verifiedEmail.isNotEmpty) _localEmail = verifiedEmail;
     await _applyUser(user);
-    await _ensureDefaultAccount(phone);
+    final prefs = await SharedPreferences.getInstance();
+    if (name.isNotEmpty) {
+      await prefs.setString('user_account_name', name);
+    }
+    if (verifiedEmail.isNotEmpty) {
+      await prefs.setString('user_account_email', verifiedEmail);
+    }
+    return RegisteredAccount(uid: uid, username: name, email: verifiedEmail);
+  }
+
+  /// 邮箱找回密码：验证邮箱验证码 → 重设密码 → 自动登录。
+  Future<void> resetPasswordWithEmail({
+    required String email,
+    required String verificationId,
+    required String code,
+    required String newPassword,
+  }) async {
+    final app = await _requireApp();
+    final addr = email.trim().toLowerCase();
+    if (!isValidEmail(addr)) {
+      throw AuthException('invalid_email', '请输入正确的邮箱地址');
+    }
+    if (newPassword.length < 6 || newPassword.length > 64) {
+      throw AuthException('invalid_password', '密码长度需为 6-64 位');
+    }
+    final res = await CloudNotesService.instance.callApi(
+      'resetPasswordByEmail',
+      timeout: const Duration(seconds: 25),
+      params: {
+        'email': addr,
+        'verificationId': verificationId,
+        'code': code.trim(),
+        'newPassword': newPassword,
+      },
+    );
+    final ticket = res['ticket']?.toString() ?? '';
+    if (ticket.isEmpty) {
+      throw AuthException('no_ticket', '重置失败，请稍后重试');
+    }
+    final sr = await app.auth.signInWithCustomTicket(() async => ticket);
+    _throwIfFailed(sr);
+    final user = sr.data?.user;
+    if (user == null) {
+      throw AuthException('no_user', '重置失败，未获取到用户信息');
+    }
+    _loggedOut = false;
+    await _loadLocalTagline();
+    await _loadLocalNickname();
+    _localEmail = addr;
+    await _applyUser(user);
+    final name = res['username']?.toString() ?? '';
+    final prefs = await SharedPreferences.getInstance();
+    if (name.isNotEmpty) {
+      await prefs.setString('user_account_name', name);
+    }
+    await prefs.setString('user_account_email', addr);
+  }
+
+  /// 绑定/更换登录邮箱（需已登录）：邮箱验证码通过后写入账号记录。
+  Future<void> bindEmail({
+    required String email,
+    required String verificationId,
+    required String code,
+  }) async {
+    if (!isLoggedIn) {
+      throw AuthException('not_logged_in', '请先登录');
+    }
+    final addr = email.trim().toLowerCase();
+    if (!isValidEmail(addr)) {
+      throw AuthException('invalid_email', '请输入正确的邮箱地址');
+    }
+    await CloudNotesService.instance.callApi('bindEmail',
+        timeout: const Duration(seconds: 25),
+        params: {
+          'email': addr,
+          'verificationId': verificationId,
+          'code': code.trim(),
+        });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_account_email', addr);
+    _localEmail = addr;
+    final current = currentUser.value;
+    if (current != null) {
+      currentUser.value = AuthUser(
+        id: current.id,
+        email: addr,
+        nickname: current.nickname,
+        tagline: current.tagline,
+      );
+    }
+  }
+
+  /// 读取当前账号资料（账号名称 + 邮箱）；未登录返回空。
+  /// 本地缓存优先（立即返回），云端在后台刷新缓存。
+  Future<AccountProfile> getAccountProfile() async {
+    if (!isLoggedIn) return AccountProfile.empty;
+    final prefs = await SharedPreferences.getInstance();
+    final cachedName = prefs.getString('user_account_name') ?? '';
+    final cachedEmail = prefs.getString('user_account_email') ??
+        currentUser.value?.email ??
+        '';
+    unawaited(() async {
+      try {
+        final app = await _ensureApp();
+        if (app == null) return;
+        // 与 _doCall 一样显式带上 access token：云函数优先用它解析 uid。
+        final token = await getAccessToken();
+        final res = await app.callFunction(name: 'api', data: {
+          'action': 'getMyAccount',
+          if (token != null) '__accessToken': token,
+        });
+        final result = res.result;
+        if (result is Map<String, dynamic>) {
+          final name = result['username']?.toString() ?? '';
+          final mail = result['email']?.toString() ?? '';
+          final p = await SharedPreferences.getInstance();
+          if (name.isNotEmpty) await p.setString('user_account_name', name);
+          if (mail.isNotEmpty) {
+            await p.setString('user_account_email', mail);
+            if (_loggedOut) return;
+            if (_localEmail != mail) _localEmail = mail;
+            final current = currentUser.value;
+            if (current != null && current.email != mail) {
+              currentUser.value = AuthUser(
+                id: current.id,
+                email: mail,
+                nickname: current.nickname,
+                tagline: current.tagline,
+              );
+            }
+          }
+        }
+      } catch (_) {
+        // 静默失败：保留缓存值，下次再试。
+      }
+    }());
+    return AccountProfile(username: cachedName, email: cachedEmail);
   }
 
   /// 更新当前用户昵称/签名。
@@ -829,7 +1047,7 @@ class AuthService {
     if (current != null && nickname != null && nickname.isNotEmpty) {
       currentUser.value = AuthUser(
         id: current.id,
-        mobilePhoneNumber: current.mobilePhoneNumber,
+        email: current.email,
         nickname: nickname,
         tagline: _localTagline,
       );
@@ -846,10 +1064,8 @@ class AuthService {
   /// 放在最后并限时等待，保证弱网下退出也不会卡住不动。
   Future<void> logout() async {
     _loggedOut = true;
-    _pendingVerifyOtp = null;
-    _pendingPhone = null;
-    _pendingPhoneChangeVerify = null;
     _cachedLogin = null;
+    _localEmail = null;
     _stopKeepAlive();
     _restoreRetried = false;
     _currentUserIsCached = false;
@@ -899,34 +1115,10 @@ class AuthService {
     }
   }
 
-  /// 忘记密码：通过手机验证码验证后重置登录密码（未登录也可使用）。
-  /// 需先调用 [requestSmsCode] 向该手机号发送验证码；
-  /// 校验通过后会用验证码完成登录（拿到账号身份），再把账号密码更新为新密码。
-  Future<void> resetPassword({
-    required String phone,
-    required String smsCode,
-    required String newPassword,
-  }) async {
-    if (newPassword.length < 6 || newPassword.length > 64) {
-      throw AuthException('invalid_password', '密码长度需为 6-64 位');
-    }
-    final pending = _pendingVerifyOtp;
-    if (pending == null || _pendingPhone != phone) {
-      throw AuthException('no_pending_otp', '请先获取验证码');
-    }
-    // 校验验证码并建立登录会话（uid 由此确认），新手机号会顺带注册，但需本人持有手机号。
-    await loginWithSmsCode(phone, smsCode);
-    // 登录后必然存在账号名称（无则已由 _ensureDefaultAccount 自动创建），仅更新密码。
-    final name = await getAccountName();
-    if (name.isEmpty) {
-      throw AuthException('no_account', '当前账号未设置账号名称，无法重置密码');
-    }
-    await setAccount(username: name, password: newPassword);
-  }
-
-  /// 使用账号名称 + 密码登录（兼注册）：
+  /// 使用账号名称 + 密码登录：
   /// 云函数校验通过后签发自定义登录票据，再用票据建立 CloudBase 会话。
-  /// 返回 true 表示本次是首次设置密码（注册），false 表示普通登录。
+  /// 返回 true 表示本次登录同时为历史账号设置了密码（老版本手机号登录
+  /// 自动生成的账号没有密码），false 表示普通登录。
   Future<bool> loginWithAccount({
     required String username,
     required String password,
@@ -950,9 +1142,20 @@ class AuthService {
     _loggedOut = false;
     await _loadLocalTagline();
     await _loadLocalNickname();
+    await _loadLocalEmail();
+    final accountName = res['username']?.toString() ?? username.trim();
+    // 用邮箱登录时，把邮箱也作为本地兜底，界面不用等云端刷新就能显示。
+    if (username.contains('@')) {
+      _localEmail = username.trim().toLowerCase();
+    }
     await _applyUser(user);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('user_account_name', username.trim());
+    if (accountName.isNotEmpty) {
+      await prefs.setString('user_account_name', accountName);
+    }
+    if (_localEmail != null && _localEmail!.isNotEmpty) {
+      await prefs.setString('user_account_email', _localEmail!);
+    }
     return res['registered'] == true;
   }
 
@@ -961,141 +1164,33 @@ class AuthService {
   /// 云端调用在后台异步刷新并更新本地缓存——但不通过 callApi 走
   /// ensureAnonymousForBrowse 路径，避免 re-entrant 会话刷新导致死锁。
   Future<String> getAccountName() async {
-    if (!isLoggedIn) return '';
-    final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString('user_account_name') ?? '';
-    // 后台异步刷新云端值：使用 app.callFunction 直接调用，
-    // 绕开 _doCall 中的 ensureAnonymousForBrowse，避免重入。
-    unawaited(() async {
-      try {
-        final app = await _ensureApp();
-        if (app == null) return;
-        final res = await app.callFunction(name: 'api', data: {
-          'action': 'getMyAccount',
-        });
-        final result = res.result;
-        if (result is Map<String, dynamic>) {
-          final name = result['username']?.toString() ?? '';
-          if (name.isNotEmpty) {
-            final p = await SharedPreferences.getInstance();
-            await p.setString('user_account_name', name);
-          }
-        }
-      } catch (_) {
-        // 静默失败：保留缓存值，下次再试。
-      }
-    }());
-    return cached;
+    final profile = await getAccountProfile();
+    return profile.username;
   }
 
-  /// 手机号登录后自动生成默认账号：4 位随机小写字母 + 手机号后四位，并随机生成密码。
-  /// 已有账号（含默认账号）则原样返回、不覆盖；用户可在「设置-安全-忘记密码」重置密码。
-  Future<void> _ensureDefaultAccount(String phone) async {
-    if (!isLoggedIn) return;
-    final tail = _phoneTail(phone);
-    if (tail.isEmpty) return;
-    for (var i = 0; i < 5; i++) {
-      final username = _randomChars(4) + tail;
-      final password = _randomPassword();
-      try {
-        final res = await CloudNotesService.instance.callApi(
-          'ensureDefaultAccount',
-          params: {'username': username, 'password': password},
-        );
-        final name = res['username']?.toString();
-        if (name != null && name.isNotEmpty) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('user_account_name', name);
-        }
-        return;
-      } catch (_) {
-        // 名称被占用则换一组随机数字重试。
-      }
-    }
+  /// 查询当前登录用户绑定的邮箱；未绑定返回空串（本地缓存优先）。
+  Future<String> getAccountEmail() async {
+    final profile = await getAccountProfile();
+    return profile.email;
   }
 
-  /// 随机 n 位小写字母（用于默认账号前缀）。
-  String _randomChars(int n) {
-    const chars = 'abcdefghjkmnpqrstuvwxyz';
-    final r = Random();
-    return String.fromCharCodes(
-        List.generate(n, (_) => chars.codeUnitAt(r.nextInt(chars.length))));
-  }
-
-  /// 随机密码：去掉易混淆字符的字母+数字，长度 10。
-  String _randomPassword() {
-    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
-    final r = Random();
-    return String.fromCharCodes(
-        List.generate(10, (_) => chars.codeUnitAt(r.nextInt(chars.length))));
-  }
-
-  String _phoneTail(String phone) {
-    final digits = phone.replaceAll(RegExp(r'\D'), '');
-    if (digits.isEmpty) return '';
-    return digits.length >= 4 ? digits.substring(digits.length - 4) : digits;
-  }
-
-  /// 更换绑定手机号第一步：向新手机号发送验证码。
-  /// 校验回调保存在内部，随后用 [confirmPhoneChange] 提交验证码完成换绑。
-  /// 注意：换绑前后是同一个账号，云端笔记等数据自动保留，无需迁移。
-  Future<void> requestPhoneChange(String newPhone) async {
-    final app = await _requireApp();
-    await ensureFreshSession();
-    final res = await app.auth.updateUser(UpdateUserReq(phone: newPhone));
-    if (!res.isSuccess) {
-      throw AuthException(
-        res.error?.code ?? 'error',
-        res.error?.message ?? '发送验证码失败',
-      );
-    }
-    final verify = res.data?.verifyOtp;
-    if (verify == null) {
-      throw AuthException('no_verify_otp', '未获取到验证回调，请重试');
-    }
-    _pendingPhoneChangeVerify = verify;
-  }
-
-  /// 更换绑定手机号第二步：提交新手机号收到的验证码完成换绑。
-  Future<void> confirmPhoneChange(String smsCode) async {
-    final verify = _pendingPhoneChangeVerify;
-    if (verify == null) {
-      throw AuthException('no_pending_otp', '请先获取验证码');
-    }
-    _pendingPhoneChangeVerify = null;
-    await ensureFreshSession();
-    final res = await verify(UpdateUserVerifyParams(token: smsCode.trim()));
-    if (!res.isSuccess) {
-      throw AuthException(
-        res.error?.code ?? 'error',
-        res.error?.message ?? '验证码校验失败',
-      );
-    }
-    final user = res.data?.user;
-    if (user != null) currentUser.value = _toAuthUser(user);
-  }
-
-  /// 新用户首次登录时设置默认昵称「同修 + 手机尾号」。
+  /// 新用户首次登录时设置默认昵称「同修 + 4 位随机数字」。
   /// 注意：此方法在 _applyUser 内被调用，而 _applyUser 已处于有效会话上下文中，
   /// 因此不需要再次调用 ensureFreshSession（会导致 re-entrant 死锁）。
   Future<void> _ensureDefaultNickname(User user) async {
     final meta = user.userMetadata;
     if (meta?.nickName != null && meta!.nickName!.isNotEmpty) return;
     // 重读本地昵称：重装/清数据后云同步可能已把用户设置过的昵称恢复到 prefs，
-    // 避免把它误判为空而用「同修+尾号」覆盖云端昵称。
+    // 避免把它误判为空而用默认昵称覆盖。
     await _loadLocalNickname();
     // 本地已保存自定义昵称（云端同步可能未完成/失败）时不覆盖默认昵称。
     if (_localNickname != null && _localNickname!.isNotEmpty) return;
-    final tail = AuthUser(
-      id: user.id ?? '',
-      mobilePhoneNumber: user.phone,
-    ).phoneTail;
-    if (tail.isEmpty) return;
+    final suffix = (1000 + Random().nextInt(9000)).toString();
     final app = _app;
     if (app == null) return;
     try {
       // 注意：此处不再调 ensureFreshSession——调用方 _applyUser 已持有有效会话。
-      final res = await app.auth.updateUser(UpdateUserReq(nickname: '同修$tail'));
+      final res = await app.auth.updateUser(UpdateUserReq(nickname: '同修$suffix'));
       if (!res.isSuccess) return;
       final u = res.data?.user;
       if (u != null) currentUser.value = _toAuthUser(u);
@@ -1110,6 +1205,27 @@ class AuthService {
   Future<void> _loadLocalNickname() async {
     final prefs = await SharedPreferences.getInstance();
     _localNickname = prefs.getString('user_nickname');
+  }
+
+  Future<void> _loadLocalEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    final email = prefs.getString('user_account_email');
+    _localEmail = (email != null && email.isNotEmpty) ? email : null;
+  }
+
+  /// 清理旧版手机号登录/上报残留的本地数据（手机号体系已移除）。
+  Future<void> _cleanupLegacyPhonePrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('user_login_phone');
+      final stale = prefs
+          .getKeys()
+          .where((k) => k.startsWith('reported_phone_'))
+          .toList();
+      for (final key in stale) {
+        await prefs.remove(key);
+      }
+    } catch (_) {}
   }
 
   /// 云同步把本地资料（昵称/签名）恢复到 prefs 后调用：重新读取本地昵称/
@@ -1130,7 +1246,7 @@ class AuthService {
     if (nick == current.nickname && tag == current.tagline) return;
     currentUser.value = AuthUser(
       id: current.id,
-      mobilePhoneNumber: current.mobilePhoneNumber,
+      email: current.email,
       nickname: nick,
       tagline: tag,
     );
@@ -1142,7 +1258,7 @@ class AuthService {
     if (uid == null || uid.isEmpty) return null;
     return AuthUser(
       id: uid,
-      mobilePhoneNumber: prefs.getString(_kCachedPhone),
+      email: prefs.getString(_kCachedEmail),
       nickname: prefs.getString(_kCachedNickname),
       tagline: _localTagline,
     );
@@ -1151,8 +1267,8 @@ class AuthService {
   Future<void> _saveCachedLogin(AuthUser user) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kCachedUid, user.id);
-    if (user.mobilePhoneNumber != null) {
-      await prefs.setString(_kCachedPhone, user.mobilePhoneNumber!);
+    if (user.email != null) {
+      await prefs.setString(_kCachedEmail, user.email!);
     }
     if (user.nickname != null && user.nickname!.isNotEmpty) {
       await prefs.setString(_kCachedNickname, user.nickname!);
@@ -1162,7 +1278,7 @@ class AuthService {
   Future<void> _clearCachedLogin() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kCachedUid);
-    await prefs.remove(_kCachedPhone);
+    await prefs.remove(_kCachedEmail);
     await prefs.remove(_kCachedNickname);
   }
 

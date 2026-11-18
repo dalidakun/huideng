@@ -9,7 +9,7 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'login_page.dart';
 import 'edit_profile_page.dart';
-import 'change_phone_page.dart';
+import 'change_email_page.dart';
 import 'forgot_password_page.dart';
 import 'about_page.dart';
 import 'export_notes_page.dart';
@@ -4743,7 +4743,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           const _SyncStatusBanner(),
                           _SettingsAccountTile(),
                           const SettingsDivider(),
-                          _SettingsPhoneTile(),
+                          _SettingsEmailTile(),
                           const SettingsDivider(),
                           _SettingsExportNotesTile(),
                         ],
@@ -5240,7 +5240,7 @@ class _SettingsReminderTile extends StatelessWidget {
   }
 }
 
-/// 忘记密码行：通过手机验证码重置登录密码，未登录也可使用。
+/// 忘记密码行：通过邮箱验证码重置登录密码，未登录也可使用。
 class _SettingsAccountTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -5274,7 +5274,7 @@ class _SettingsAccountTile extends StatelessWidget {
                           color: _text,
                           fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text('通过手机验证码重置登录密码',
+                  Text('通过绑定邮箱验证码重置登录密码',
                       style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),
@@ -5287,21 +5287,43 @@ class _SettingsAccountTile extends StatelessWidget {
   }
 }
 
-class _SettingsPhoneTile extends StatelessWidget {
+class _SettingsEmailTile extends StatefulWidget {
+  @override
+  State<_SettingsEmailTile> createState() => _SettingsEmailTileState();
+}
+
+class _SettingsEmailTileState extends State<_SettingsEmailTile> {
+  String _email = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _email = AuthService.instance.currentUser.value?.email ?? '';
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!AuthService.instance.isLoggedIn) return;
+    final email = await AuthService.instance.getAccountEmail();
+    if (!mounted || email.isEmpty || email == _email) return;
+    setState(() => _email = email);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_SettingsPageState>()!;
-    final hasPhone =
-        (AuthService.instance.currentUser.value?.mobilePhoneNumber ?? '')
-            .isNotEmpty;
+    final hasEmail = _email.isNotEmpty;
     return InkWell(
       onTap: () {
         if (!AuthService.instance.isLoggedIn) {
           state.requireLogin();
           return;
         }
-        Navigator.push(context, slideInFromLeft(const ChangePhonePage()))
-            .then((_) => state.reloadForSettings());
+        Navigator.push(context, slideInFromLeft(const ChangeEmailPage()))
+            .then((_) {
+          state.reloadForSettings();
+          _load();
+        });
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
@@ -5314,7 +5336,7 @@ class _SettingsPhoneTile extends StatelessWidget {
                 color: _primaryLight.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(Icons.phone_iphone_outlined,
+              child: Icon(Icons.mark_email_read_outlined,
                   color: _primaryLight, size: 20),
             ),
             const SizedBox(width: 14),
@@ -5322,13 +5344,15 @@ class _SettingsPhoneTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(hasPhone ? '更换手机号' : '绑定手机号',
+                  Text(hasEmail ? '更换邮箱' : '绑定邮箱',
                       style: TextStyle(
                           fontSize: 16,
                           color: _text,
                           fontWeight: FontWeight.w500)),
                   SizedBox(height: 2),
-                  Text(hasPhone ? '更换后数据自动保留' : '用于找回账号与订阅服务核对',
+                  Text(hasEmail ? _email : '绑定后可用邮箱找回密码',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: _textHint)),
                 ],
               ),

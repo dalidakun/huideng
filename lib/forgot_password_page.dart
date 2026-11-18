@@ -6,8 +6,8 @@ import 'auth_service.dart';
 import 'cloud_notes_service.dart';
 import 'settings_widgets.dart';
 
-/// 忘记密码：通过绑定手机号接收短信验证码，验证身份后重置登录密码。
-/// 未登录也能使用；已登录时自动带出当前手机号。
+/// 忘记密码：用注册/绑定的邮箱接收验证码，验证后重置登录密码。
+/// 未登录也能使用；已登录时自动带出当前绑定邮箱。
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
 
@@ -16,7 +16,7 @@ class ForgotPasswordPage extends StatefulWidget {
 }
 
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
-  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
   final _codeController = TextEditingController();
   final _pwdController = TextEditingController();
   final _confirmController = TextEditingController();
@@ -26,41 +26,37 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   bool _submitting = false;
   bool _showPwd = false;
   bool _showConfirmPwd = false;
+  String _verificationId = '';
 
   @override
   void initState() {
     super.initState();
-    _phoneController.text = _prefillPhone(
-        AuthService.instance.currentUser.value?.mobilePhoneNumber);
+    _emailController.text =
+        AuthService.instance.currentUser.value?.email ?? '';
+    unawaited(_prefillEmail());
+  }
+
+  /// 已登录时从账号体系补拉绑定邮箱预填（自定义登录的会话用户不带邮箱）。
+  Future<void> _prefillEmail() async {
+    if (_emailController.text.isNotEmpty) return;
+    final email = await AuthService.instance.getAccountEmail();
+    if (!mounted || email.isEmpty) return;
+    if (_emailController.text.isNotEmpty) return;
+    setState(() => _emailController.text = email);
   }
 
   @override
   void dispose() {
     _timer?.cancel();
-    _phoneController.dispose();
+    _emailController.dispose();
     _codeController.dispose();
     _pwdController.dispose();
     _confirmController.dispose();
     super.dispose();
   }
 
-  String get _phone {
-    var p = _phoneController.text.trim().replaceAll(' ', '');
-    if (p.isNotEmpty && !p.startsWith('+')) p = '+86$p';
-    return p;
-  }
-
-  bool get _phoneValid =>
-      RegExp(r'^1[3-9]\d{9}$').hasMatch(_phoneController.text.trim());
-
-  /// 去掉 +86 / 空格，用于预填手机号输入框。
-  String _prefillPhone(String? raw) {
-    if (raw == null || raw.isEmpty) return '';
-    final digits = raw.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.length == 13 && digits.startsWith('86')) return digits.substring(2);
-    if (digits.length == 11 && digits.startsWith('1')) return digits;
-    return raw;
-  }
+  bool get _emailValid =>
+      AuthService.isValidEmail(_emailController.text.trim());
 
   void _startCountdown() {
     setState(() => _countdown = 60);
@@ -77,17 +73,20 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   Future<void> _sendCode() async {
-    if (!_phoneValid) {
-      _showToast('请输入正确的手机号');
+    if (!_emailValid) {
+      _showToast('请输入正确的邮箱地址');
       return;
     }
     setState(() => _sending = true);
     try {
-      await AuthService.instance.requestSmsCode(_phone);
-      _showToast('验证码已发送');
+      final id =
+          await AuthService.instance.sendEmailCode(_emailController.text.trim());
+      if (!mounted) return;
+      setState(() => _verificationId = id);
+      _showToast('验证码已发送到邮箱，请查收（含垃圾邮件）');
       _startCountdown();
     } catch (e) {
-      _showToast('发送失败：${e is AuthException ? e.message : e.toString()}');
+      _showToast('发送失败：${_friendlyError(e)}');
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -95,12 +94,16 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
   Future<void> _reset() async {
     final pwd = _pwdController.text;
-    if (!_phoneValid) {
-      _showToast('请输入正确的手机号');
+    if (!_emailValid) {
+      _showToast('请输入正确的邮箱地址');
       return;
     }
-    if (_codeController.text.trim().length != 6) {
-      _showToast('请输入 6 位验证码');
+    if (_verificationId.isEmpty) {
+      _showToast('请先获取邮箱验证码');
+      return;
+    }
+    if (_codeController.text.trim().length < 4) {
+      _showToast('请输入邮箱验证码');
       return;
     }
     if (pwd.length < 6 || pwd.length > 64) {
@@ -113,13 +116,14 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     }
     setState(() => _submitting = true);
     try {
-      await AuthService.instance.resetPassword(
-        phone: _phone,
-        smsCode: _codeController.text.trim(),
+      await AuthService.instance.resetPasswordWithEmail(
+        email: _emailController.text.trim(),
+        verificationId: _verificationId,
+        code: _codeController.text,
         newPassword: pwd,
       );
       if (!mounted) return;
-      _showToast('密码重置成功，请使用新密码登录');
+      _showToast('密码重置成功，已自动登录');
       Navigator.of(context).pop(true);
     } catch (e) {
       _showToast(_friendlyError(e));
@@ -131,11 +135,21 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     final m = e is CloudApiException
         ? e.message
         : (e is AuthException ? e.message : e.toString());
-    if (m.contains('username_taken')) return '该账号名称已被其他用户使用，请换一个';
-    if (m.contains('invalid_username')) return '账号名称需为 2-20 位中英文、数字或下划线';
+    if (m.contains('email_not_registered')) return '该邮箱尚未注册或未绑定账号';
+    if (m.contains('invalid_email')) return '邮箱格式不正确';
     if (m.contains('invalid_password')) return '密码长度需为 6-64 位';
-    if (m.contains('no_pending_otp')) return '请先获取验证码';
-    if (m.contains('wrong_code') || m.contains('verification_code')) return '验证码错误，请重新输入';
+    if (m.contains('wrong_code') || m.contains('invalid_code')) {
+      return '验证码错误或已过期';
+    }
+    if (m.contains('invalid_verification')) return '验证码已失效，请重新获取';
+    if (m.contains('email_mismatch')) return '邮箱与验证码不匹配，请重新获取';
+    if (m.contains('ticket_error')) return '服务暂不可用，请稍后再试';
+    if (m.contains('unknown action')) return '服务端尚未更新，请稍后再试';
+    if (m.contains('unauthorized')) return '请检查网络后重试';
+    if (m.contains('captcha') || m.contains('频繁')) {
+      return '操作太频繁，请稍后再试';
+    }
+    if (m.contains('请求超时')) return '网络较慢，请稍后重试';
     return m;
   }
 
@@ -177,7 +191,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       },
     );
     overlay.insert(entry);
-    Future.delayed(const Duration(milliseconds: 2000), () {
+    Future.delayed(const Duration(milliseconds: 2200), () {
       if (entry.mounted) entry.remove();
     });
   }
@@ -186,12 +200,15 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     required TextEditingController controller,
     required String hint,
     bool obscure = false,
+    int maxLength = 64,
+    TextInputType? keyboardType,
     VoidCallback? onToggleObscure,
   }) {
     return TextField(
       controller: controller,
       obscureText: obscure,
-      maxLength: 64,
+      maxLength: maxLength,
+      keyboardType: keyboardType,
       style: TextStyle(fontSize: 16, color: sText),
       decoration: InputDecoration(
         counterText: '',
@@ -199,7 +216,8 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
         hintStyle: TextStyle(color: sTextHint),
         filled: true,
         fillColor: sCard,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         suffixIcon: onToggleObscure != null
             ? IconButton(
                 onPressed: onToggleObscure,
@@ -240,84 +258,54 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.verified_user_outlined, size: 18, color: sGold),
+                  Icon(Icons.mark_email_read_outlined, size: 18, color: sGold),
                   SizedBox(width: 8),
                   Expanded(
-                    child: Text('通过绑定手机号接收验证码，验证身份后即可重置登录密码。',
-                        style: TextStyle(fontSize: 13, color: sTextSec, height: 1.5)),
+                    child: Text('通过注册/绑定的邮箱接收验证码，验证身份后即可重置登录密码。',
+                        style:
+                            TextStyle(fontSize: 13, color: sTextSec, height: 1.5)),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 20),
-            Text('手机号',
-                style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+            Text('邮箱',
+                style:
+                    TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
-            TextField(
-              controller: _phoneController,
-              keyboardType: TextInputType.phone,
-              maxLength: 11,
-              style: TextStyle(fontSize: 16, color: sText),
-              decoration: InputDecoration(
-                counterText: '',
-                hintText: '请输入绑定手机号',
-                hintStyle: TextStyle(color: sTextHint),
-                filled: true,
-                fillColor: sCard,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: sGold, width: 1.2),
-                ),
-              ),
+            _field(
+              controller: _emailController,
+              hint: '请输入注册或绑定的邮箱',
+              maxLength: 254,
+              keyboardType: TextInputType.emailAddress,
             ),
             const SizedBox(height: 16),
             Text('验证码',
-                style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+                style:
+                    TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
-                  child: TextField(
+                  child: _field(
                     controller: _codeController,
+                    hint: '邮箱验证码',
+                    maxLength: 8,
                     keyboardType: TextInputType.number,
-                    maxLength: 6,
-                    style: TextStyle(fontSize: 16, color: sText),
-                    decoration: InputDecoration(
-                      counterText: '',
-                      hintText: '6 位验证码',
-                      hintStyle: TextStyle(color: sTextHint),
-                      filled: true,
-                      fillColor: sCard,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 16),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: sGold, width: 1.2),
-                      ),
-                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 SizedBox(
                   height: 52,
                   child: OutlinedButton(
-                    onPressed: (_countdown > 0 || _sending) ? null : _sendCode,
+                    onPressed:
+                        (_countdown > 0 || _sending) ? null : _sendCode,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: sPrimary,
                       side: BorderSide(color: sGold),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
                     ),
                     child: Text(
                       _countdown > 0
@@ -331,7 +319,8 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
             ),
             const SizedBox(height: 16),
             Text('新密码',
-                style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+                style:
+                    TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             _field(
               controller: _pwdController,
@@ -341,7 +330,8 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
             ),
             const SizedBox(height: 16),
             Text('确认新密码',
-                style: TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
+                style:
+                    TextStyle(fontSize: 14, color: sText, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             _field(
               controller: _confirmController,
@@ -383,8 +373,10 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '重置后请使用新密码通过「账号密码登录」登录，云端笔记等数据保持不变。',
-                    style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.6),
+                    '重置成功后会自动登录；云端笔记、收藏与打卡记录都保持不变。'
+                    '没绑定邮箱的老账号，请先用账号密码登录，再到「账号信息」里绑定邮箱。',
+                    style:
+                        TextStyle(fontSize: 12.5, color: sTextSec, height: 1.6),
                   ),
                 ),
               ],

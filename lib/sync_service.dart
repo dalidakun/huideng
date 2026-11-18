@@ -94,7 +94,7 @@ class SyncService with WidgetsBindingObserver {
     'user_verified_name',
     // 本地登录身份缓存（设备本地兜底用），不随数据同步上传。
     'user_login_uid',
-    'user_login_phone',
+    'user_login_email',
     'user_login_nickname',
     // 「精读经文」锁定状态：设备本地的当前精读指针。用户显式解锁后绝不因
     // 云端旧值复活（本地删除不上传，冷启动恢复若从云端补写会让锁又被锁上）。
@@ -242,17 +242,6 @@ class SyncService with WidgetsBindingObserver {
     final me = AuthService.instance.currentUser.value;
     if (me == null) return;
     final prefs = await SharedPreferences.getInstance();
-    // 手机号上报一次（或换号后重报），供管理员按手机号手动开通订阅。
-    final phone = (me.mobilePhoneNumber ?? '').trim();
-    if (phone.isNotEmpty) {
-      final phoneKey = 'reported_phone_${me.id}';
-      if (prefs.getString(phoneKey) != phone) {
-        try {
-          await CloudNotesService.instance.reportMyPhone(phone);
-          await prefs.setString(phoneKey, phone);
-        } catch (_) {}
-      }
-    }
     bool anyChanged = false;
     try {
       final profiles =
@@ -978,10 +967,13 @@ class SyncService with WidgetsBindingObserver {
 
   /// scroll_*/read_*（阅读滚动位置 / 已读标记）只在本机使用，不同步到云端：
   /// 换设备后阅读位置用 progress_*（进度比例）恢复即可，避免挤占同步包体积。
+  /// reported_phone_* 是旧版「手机号上报订阅」的本地标记，手机号体系已移除，
+  /// 不再上传/回填，避免旧手机号随云备份恢复。
   bool _isLocalOnlyRedundantKey(String key) {
     return key.startsWith('scroll_') ||
         key.startsWith('read_') ||
-        key.startsWith('_provisional_');
+        key.startsWith('_provisional_') ||
+        key.startsWith('reported_phone_');
   }
 
   /// 尝试把 prefs/云端值解析为 double，解析不了返回 null。

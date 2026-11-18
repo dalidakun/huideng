@@ -4,21 +4,21 @@ import 'package:flutter/services.dart';
 import 'app_palette.dart';
 
 /// 个人资料 / 编辑资料页共用的账户信息块：
-/// - 当前绑定手机号；未绑定时留空，并给出「绑定手机号」入口；
+/// - 当前绑定邮箱；未绑定时留空，并给出「绑定邮箱」入口（用于找回密码）；
 /// - 注册用户 ID（UID）：注册后不可更改，联系管理员开通无限翻译时会用到。
 class ProfileAccountInfo extends StatelessWidget {
-  final String phone;
+  final String email;
   final String uid;
-  final VoidCallback onBindPhone;
+  final VoidCallback onBindEmail;
 
   const ProfileAccountInfo({
     super.key,
-    required this.phone,
+    required this.email,
     required this.uid,
-    required this.onBindPhone,
+    required this.onBindEmail,
   });
 
-  bool get _hasPhone => phone.trim().isNotEmpty;
+  bool get _hasEmail => email.trim().isNotEmpty;
 
   Future<void> _copyUid(BuildContext context) async {
     final value = uid.trim();
@@ -46,15 +46,15 @@ class ProfileAccountInfo extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.phone_iphone, size: 15, color: p.textHint),
+              Icon(Icons.mark_email_read_outlined, size: 15, color: p.textHint),
               const SizedBox(width: 6),
-              Text('手机号',
+              Text('邮箱',
                   style: TextStyle(fontSize: 12.5, color: p.textSec)),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   // 未绑定时留空，不显示占位文案；下方单独提示绑定。
-                  _hasPhone ? phone.trim() : '',
+                  _hasEmail ? email.trim() : '',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -66,12 +66,12 @@ class ProfileAccountInfo extends StatelessWidget {
               ),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: onBindPhone,
+                onTap: onBindEmail,
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                   child: Text(
-                    _hasPhone ? '更换' : '绑定手机号',
+                    _hasEmail ? '更换' : '绑定邮箱',
                     style: TextStyle(
                       fontSize: 12,
                       color: p.accent,
@@ -82,10 +82,10 @@ class ProfileAccountInfo extends StatelessWidget {
               ),
             ],
           ),
-          if (!_hasPhone) ...[
+          if (!_hasEmail) ...[
             const SizedBox(height: 3),
             Text(
-              '尚未绑定手机号；点右侧「绑定手机号」完成绑定，可用于找回账号与订阅核对。',
+              '尚未绑定邮箱；点右侧「绑定邮箱」完成绑定，用于找回密码与订阅核对。',
               style: TextStyle(fontSize: 10.5, color: p.textHint, height: 1.4),
             ),
           ],

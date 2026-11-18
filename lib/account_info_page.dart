@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,11 +7,12 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
+import 'change_email_page.dart';
 import 'image_crop_page.dart';
 import 'settings_widgets.dart';
 
 import 'app_palette.dart';
-/// 账号信息：头像、昵称、签名、绑定手机号。
+/// 账号信息：头像、昵称、签名、绑定邮箱。
 class AccountInfoPage extends StatefulWidget {
   const AccountInfoPage({super.key});
 
@@ -40,7 +40,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
   String? _bannerPath;
   String _nickname = '同修';
   String _tagline = '燃一盏灯，看见自己，照亮别人。';
-  String _phone = '';
+  String _email = '';
 
   bool get _isLoggedIn => AuthService.instance.isLoggedIn;
 
@@ -70,8 +70,23 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
       _tagline = user?.tagline?.isNotEmpty == true
           ? user!.tagline!
           : prefs.getString('user_tagline') ?? '燃一盏灯，看见自己，照亮别人。';
-      _phone = user?.mobilePhoneNumber ?? '';
+      _email = user?.email ?? prefs.getString('user_account_email') ?? '';
     });
+    // 自定义登录的会话用户不带邮箱：从账号体系补拉一次（本地缓存优先，很快）。
+    final accountEmail = await AuthService.instance.getAccountEmail();
+    if (mounted && accountEmail.isNotEmpty && accountEmail != _email) {
+      setState(() => _email = accountEmail);
+    }
+  }
+
+  /// 打开邮箱绑定/更换页；返回后重读资料，邮箱立即更新。
+  Future<void> _openChangeEmail() async {
+    if (!_isLoggedIn) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ChangeEmailPage()),
+    );
+    if (mounted) await _load();
   }
 
   /// 裁剪请求：选图后页面本体原地切换为裁剪界面（不推路由），
@@ -268,10 +283,6 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
         ),
       );
     }
-    final phoneDisplay = _phone.isNotEmpty
-        ? '${_phone.substring(0, math.min(3, _phone.length))}****${_phone.length >= 7 ? _phone.substring(_phone.length - 4) : ''}'
-        : '';
-
     return Scaffold(
       backgroundColor: sBg,
       body: SafeArea(
@@ -374,7 +385,7 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                       ),
                     ),
                   ),
-                  // name / phone / tagline
+                  // name / email / tagline
                   Transform.translate(
                     offset: const Offset(0, -24),
                     child: Padding(
@@ -385,15 +396,20 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                           Text(_nickname,
                               style: TextStyle(
                                   fontSize: 20, fontWeight: FontWeight.w700, color: sText)),
-                          if (phoneDisplay.isNotEmpty) ...[
+                          if (_email.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             Row(
                               children: [
-                                Icon(Icons.phone_iphone_outlined,
+                                Icon(Icons.mark_email_read_outlined,
                                     size: 13, color: sTextHint),
                                 const SizedBox(width: 4),
-                                Text(phoneDisplay,
-                                    style: TextStyle(fontSize: 13, color: sTextHint)),
+                                Flexible(
+                                  child: Text(_email,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 13, color: sTextHint)),
+                                ),
                               ],
                             ),
                           ],
@@ -428,13 +444,21 @@ class _AccountInfoPageState extends State<AccountInfoPage> {
                         onTap: _editName,
                       ),
                       const SettingsDivider(),
+                      SettingsTile(
+                        icon: Icons.mark_email_read_outlined,
+                        iconColor: sGold,
+                        title: '邮箱',
+                        subtitle: _email.isEmpty ? '未绑定（用于找回密码）' : _email,
+                        onTap: _isLoggedIn ? _openChangeEmail : null,
+                      ),
+                      const SettingsDivider(),
                     ],
                   ),
                   const SizedBox(height: 20),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Text(
-                      _isLoggedIn ? '昵称与签名修改后会同步到云端。' : '登录后可查看并管理账号信息',
+                      _isLoggedIn ? '昵称与签名修改后会同步到云端；邮箱用于找回密码。' : '登录后可查看并管理账号信息',
                       style: TextStyle(fontSize: 12.5, color: sTextSec, height: 1.5),
                     ),
                   ),
